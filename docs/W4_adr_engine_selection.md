@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_2e1fe929c22711f18019525400248c00
+    ReservedCode1: Ggo7eVEh/AlgFnrng2Q2O747THUEvBJPPFIrpGs44zmDzCS2mI0OwD9Z1L04InKJS8JDAxPsJJk6nYOM8u6dxd8WRd5Vz/qIIWmmyhQp3N0hatnNX0gE/dn45ffjq/BgwGiLT9+1sbbvFqGNh7+h4YkiJkdbAIbfd60tfoVcRGUQg33hxXnT2UBwtJc=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_2e1fe929c22711f18019525400248c00
+    ReservedCode2: Ggo7eVEh/AlgFnrng2Q2O747THUEvBJPPFIrpGs44zmDzCS2mI0OwD9Z1L04InKJS8JDAxPsJJk6nYOM8u6dxd8WRd5Vz/qIIWmmyhQp3N0hatnNX0gE/dn45ffjq/BgwGiLT9+1sbbvFqGNh7+h4YkiJkdbAIbfd60tfoVcRGUQg33hxXnT2UBwtJc=
+---
+
 # ADR-004: 存储引擎选型——RocksDB（M1, v2.0-FP）
 
 - 日期：2026-10-07
@@ -72,3 +83,4 @@ M0-lite 阶段需为 OpenXDB 选定单机存储引擎。候选两条路线：
 
 - [E1 存储引擎基准实验记录](experiments/E1_rocksdb_bench.md)（E1a RocksDB / E1b B+Tree）
 - 首发博文：《为什么 OpenXDB 选 RocksDB》
+*（内容由AI生成，仅供参考）*

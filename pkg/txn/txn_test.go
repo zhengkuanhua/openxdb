@@ -1,8 +1,11 @@
 package txn_test
 
 import (
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 	"github.com/zhengkuanhua/openxdb/pkg/storage/rocksdb"
@@ -37,6 +40,173 @@ func newEnv(t *testing.T) *env {
 func (e *env) close() {
 	e.mgr.Close()
 	e.st.Close()
+}
+
+// groupCommitWAL 暴露 B2 组提交观测接口（WAL 接口语义之外的测试辅助）。
+type groupCommitWAL interface {
+	SetGroupCommit(enabled bool)
+	SetFsyncDelay(d time.Duration)
+	FsyncCount() uint64
+}
+
+// TestTxnConcurrentDefaultFsyncBaseline 基线：默认（每记录 fsync）并发提交，
+// fsync 次数 == 事务数，证明旧行为保持且重构无回归。
+func TestTxnConcurrentDefaultFsyncBaseline(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	gc := e.wal.(groupCommitWAL)
+
+	const n = 30
+	runConcurrentCommits(t, e.mgr, n)
+	for i := 0; i < n; i++ {
+		if _, err := e.st.Get([]byte(fmt.Sprintf("ck%d", i))); err != nil {
+			t.Fatalf("st.Get(ck%d): %v", i, err)
+		}
+	}
+	fs := gc.FsyncCount()
+	if fs != n {
+		t.Fatalf("baseline fsync count = %d, want %d (per-append)", fs, n)
+	}
+	t.Logf("baseline (per-append fsync): %d txns -> %d fsyncs (1.00 fsync/txn)", n, fs)
+}
+
+// TestTxnConcurrentGroupCommit 组提交模式下并发提交：全部成功、数据一致、
+// WAL 完整、Recover 幂等（恢复语义不破坏）。
+// fsync 合并的强断言由 WAL 层 TestWALGroupCommitMergesFsync 承担（并发 Append+SyncUpTo
+// 合并为极少数 fsync）；事务层在真机本地盘上 fsync 极快、提交到达率受调度影响，
+// 合并幅度不稳定，这里以日志观测记录实际 fsync 次数供文档对比，并断言不劣于逐条刷盘。
+func TestTxnConcurrentGroupCommit(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	gc := e.wal.(groupCommitWAL)
+	gc.SetGroupCommit(true)
+
+	const n = 100
+	runConcurrentCommits(t, e.mgr, n)
+	// 数据一致：100 个 key 全部可见
+	for i := 0; i < n; i++ {
+		got, err := e.st.Get([]byte(fmt.Sprintf("ck%d", i)))
+		if err != nil || string(got) != fmt.Sprintf("cv%d", i) {
+			t.Fatalf("st.Get(ck%d) = %q, %v; want cv%d", i, got, err, i)
+		}
+	}
+	// 组提交开启后 fsync 不应比逐条刷盘更多（leader 合并至少不劣化）
+	fs := gc.FsyncCount()
+	if fs > n {
+		t.Fatalf("group fsync count = %d, want <= %d (should not exceed per-append)", fs, n)
+	}
+	t.Logf("group commit: %d txns -> %d fsyncs (%.1f%% reduction)", n, fs, 100*(1-float64(fs)/float64(n)))
+	// WAL 应有 n 条 Commit 记录
+	var commits int
+	if err := e.wal.Replay(func(en *wal.WalEntry) {
+		if en.State == wal.StateCommit {
+			commits++
+		}
+	}); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if commits != n {
+		t.Fatalf("commit records = %d, want %d", commits, n)
+	}
+	// Recover 幂等补齐（崩溃恢复语义不破坏）
+	if err := e.mgr.Recover(); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+}
+
+// TestTxnConcurrentGroupCommitRecovery 组提交并发提交后关闭全部，
+// 用全新空存储 + 同一 WAL 重新打开，验证全部提交可从 WAL 恢复。
+func TestTxnConcurrentGroupCommitRecovery(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, "wal.log")
+
+	st, err := rocksdb.Open(filepath.Join(dir, "data1"), true)
+	if err != nil {
+		t.Fatalf("open rocksdb: %v", err)
+	}
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	w.(groupCommitWAL).SetGroupCommit(true)
+	mgr, err := txn.New(st, w)
+	if err != nil {
+		t.Fatalf("new txn manager: %v", err)
+	}
+	const n = 30
+	runConcurrentCommits(t, mgr, n)
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close mgr: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close st: %v", err)
+	}
+
+	// 崩溃恢复：全新空存储 + 同一 WAL（New 内部执行 Recover 重放）
+	st2, err := rocksdb.Open(filepath.Join(dir, "data2"), true)
+	if err != nil {
+		t.Fatalf("open rocksdb2: %v", err)
+	}
+	defer st2.Close()
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatalf("open wal2: %v", err)
+	}
+	defer w2.Close()
+	mgr2, err := txn.New(st2, w2)
+	if err != nil {
+		t.Fatalf("new txn manager2: %v", err)
+	}
+	defer mgr2.Close()
+	for i := 0; i < n; i++ {
+		got, err := st2.Get([]byte(fmt.Sprintf("ck%d", i)))
+		if err != nil || string(got) != fmt.Sprintf("cv%d", i) {
+			t.Fatalf("recovered st.Get(ck%d) = %q, %v; want cv%d", i, got, err, i)
+		}
+	}
+}
+
+// runConcurrentCommits 并发执行 n 个独立事务：Begin → Put(ckN/cvN) → Commit。
+// 使用 start 屏障：所有事务先完成 Begin+Put，再同时发起 Commit，
+// 制造真实的并发提交窗口（高负载下组提交合并 fsync 的效果由此体现）。
+func runConcurrentCommits(t *testing.T, mgr txn.TxnManager, n int) {
+	t.Helper()
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make([]error, n)
+	prepared := make(chan struct{}, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			tx, err := mgr.Begin()
+			if err != nil {
+				errs[i] = err
+				prepared <- struct{}{}
+				<-start
+				return
+			}
+			if err := tx.Put([]byte(fmt.Sprintf("ck%d", i)), []byte(fmt.Sprintf("cv%d", i))); err != nil {
+				errs[i] = err
+				prepared <- struct{}{}
+				<-start
+				return
+			}
+			prepared <- struct{}{}
+			<-start
+			errs[i] = tx.Commit()
+		}(i)
+	}
+	for i := 0; i < n; i++ {
+		<-prepared
+	}
+	close(start)
+	wg.Wait()
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("concurrent commit %d: %v", i, errs[i])
+		}
+	}
 }
 
 func TestTxnCommitPersist(t *testing.T) {

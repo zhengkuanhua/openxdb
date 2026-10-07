@@ -1,8 +1,10 @@
 package wal
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
@@ -169,4 +171,132 @@ func TestWALCorruptionDetected(t *testing.T) {
 		return
 	}
 	// Open 阶段即失败也是可接受的（扫描末尾记录时 CRC 校验不过）
+}
+
+func TestWALGroupCommitDefaultOff(t *testing.T) {
+	_, w := newTestWAL(t)
+	defer w.Close()
+	for i := uint64(1); i <= 5; i++ {
+		e := &WalEntry{LSN: storage.LSN(i), TxnID: i, State: StateCommit,
+			Batch: &storage.WriteBatch{Puts: []storage.KVPair{{Key: []byte("k"), Value: []byte("v")}}}}
+		if err := w.Append(e); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	wi := w.(*walImpl)
+	// 默认模式：每记录一次 fsync（行为与旧版一致）
+	if got := wi.FsyncCount(); got != 5 {
+		t.Fatalf("default fsync count = %d, want 5 (per-append)", got)
+	}
+	// SyncUpTo 在默认模式下必须零额外 fsync（Append 已更新 lastSynced）
+	if err := w.SyncUpTo(5); err != nil {
+		t.Fatalf("syncupto: %v", err)
+	}
+	if got := wi.FsyncCount(); got != 5 {
+		t.Fatalf("fsync count after SyncUpTo = %d, want 5", got)
+	}
+	// SyncUpTo(0) 立即返回
+	if err := w.SyncUpTo(0); err != nil {
+		t.Fatalf("syncupto(0): %v", err)
+	}
+}
+
+func TestWALGroupCommitMergesFsync(t *testing.T) {
+	_, w := newTestWAL(t)
+	defer w.Close()
+	w.SetGroupCommit(true)
+	wi := w.(*walImpl)
+
+	const n = 100
+	lsns := make([]storage.LSN, n)
+	errs := make([]error, n)
+
+	// 阶段 1：并发 Append（只写不 fsync），快速返回分配的 LSN
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			e := &WalEntry{TxnID: uint64(i + 1), State: StateCommit,
+				Batch: &storage.WriteBatch{Puts: []storage.KVPair{{Key: []byte(fmt.Sprintf("k%d", i)), Value: []byte("v")}}}}
+			errs[i] = w.Append(e)
+			lsns[i] = e.LSN
+		}(i)
+	}
+	wg.Wait()
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("append %d: %v", i, errs[i])
+		}
+	}
+	// 全部记录已写入缓冲，尚未刷盘
+	if got := wi.FsyncCount(); got != 0 {
+		t.Fatalf("fsync during buffered append = %d, want 0", got)
+	}
+
+	// 阶段 2：并发 SyncUpTo —— leader 机制应合并为极少数 fsync
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = w.SyncUpTo(lsns[i])
+		}(i)
+	}
+	wg.Wait()
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("syncupto %d (lsn=%d): %v", i, lsns[i], errs[i])
+		}
+	}
+	// 全部 LSN 在阶段 2 前已写入，首个 leader 一次刷盘即可覆盖全部
+	if got := wi.FsyncCount(); got > 3 {
+		t.Fatalf("merged fsync count = %d, want <= 3 for %d txns", got, n)
+	}
+	t.Logf("group commit: %d appends -> %d fsyncs", n, wi.FsyncCount())
+	if last := w.LastLSN(); last != n {
+		t.Fatalf("LastLSN = %d, want %d", last, n)
+	}
+	// 全部记录可完整重放
+	var replayed int
+	if err := w.Replay(func(e *WalEntry) { replayed++ }); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if replayed != n {
+		t.Fatalf("replayed = %d, want %d", replayed, n)
+	}
+}
+
+func TestWALGroupCommitPersistAfterSyncUpTo(t *testing.T) {
+	path, w := newTestWAL(t)
+	w.SetGroupCommit(true)
+	// 组提交模式：Append 只写不刷，SyncUpTo 兜底后才可重开恢复
+	lsns := make([]storage.LSN, 8)
+	for i := uint64(1); i <= 8; i++ {
+		e := &WalEntry{TxnID: i, State: StateCommit,
+			Batch: &storage.WriteBatch{Puts: []storage.KVPair{{Key: []byte(fmt.Sprintf("k%d", i)), Value: []byte("v")}}}}
+		if err := w.Append(e); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+		lsns[i-1] = e.LSN
+	}
+	// 只 SyncUpTo 中间一条，leader 会覆盖到当前已写末尾，全部记录落盘
+	if err := w.SyncUpTo(lsns[3]); err != nil {
+		t.Fatalf("syncupto: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	w2, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer w2.Close()
+	var count int
+	if err := w2.Replay(func(e *WalEntry) { count++ }); err != nil {
+		t.Fatalf("replay after reopen: %v", err)
+	}
+	if count != 8 {
+		t.Fatalf("replayed after reopen = %d, want 8", count)
+	}
 }

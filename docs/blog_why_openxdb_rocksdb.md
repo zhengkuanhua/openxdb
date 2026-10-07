@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_2f1207bcc22711f18019525400248c00
+    ReservedCode1: pSYXr32pd0Ezd3pRfvbjWeK9edbqhw2SqP8Zk6cJX80Me9X7dKalZ3OeSsDtTpfvNTn+SaUbmEbho7XqJ6qM8GM1kMCKfnsUVTy/v1Y96rqlsoBAgxLIEnXaeuODJwis7mDJzSoQJr0A57wm68FmrOBqr+ZS10IAAQN3e155cpnEaI5JFJaOoOjgckE=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_2f1207bcc22711f18019525400248c00
+    ReservedCode2: pSYXr32pd0Ezd3pRfvbjWeK9edbqhw2SqP8Zk6cJX80Me9X7dKalZ3OeSsDtTpfvNTn+SaUbmEbho7XqJ6qM8GM1kMCKfnsUVTy/v1Y96rqlsoBAgxLIEnXaeuODJwis7mDJzSoQJr0A57wm68FmrOBqr+ZS10IAAQN3e155cpnEaI5JFJaOoOjgckE=
+---
+
 # 为什么 OpenXDB 选 RocksDB：一次存储引擎选型的真实实验
 
 > OpenXDB 首发博文 | 2026-10-07 | [github.com/zhengkuanhua/openxdb](https://github.com/zhengkuanhua/openxdb)
@@ -46,3 +57,4 @@ RocksDB 的价值恰恰在看不见的地方：
 如果你的项目也是"从零写数据库"，请记住这次实验的教训：**基准数据要真实跑，但选型决策要看第一性需求**。B+Tree 快 9 倍是事实，可它不落盘也是事实。数据库的地基不是跑分，是数据安全。
 
 OpenXDB 的完整实验记录、实现文档与源码都在 GitHub，欢迎 star、提 issue，一起把它从单机长成分布式。
+*（内容由AI生成，仅供参考）*

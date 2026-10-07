@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 )
@@ -17,8 +19,19 @@ type walImpl struct {
 	f            *os.File
 	path         string
 	nextLSN      storage.LSN
-	syncOnAppend bool
+	lastSynced   storage.LSN // 已 fsync 落盘的最大 LSN（0 = 无已刷记录）
+	syncOnAppend bool        // 默认 true：Append 每记录 fsync（组提交关闭）
 	closed       bool
+
+	// 组提交（leader 合并 fsync）状态。
+	cond    *sync.Cond // 关联 mu
+	waiters int        // 当前等待 SyncUpTo 的 goroutine 数（>0 表示有 leader 正在刷盘）
+	syncErr error      // 上一轮 leader fsync 错误（广播给所有等待者）
+
+	// 观测/测试辅助：累计 fsync 次数。
+	fsyncCount uint64
+	// 测试辅助：注入人工 fsync 延迟（模拟慢盘，放大组提交合并效果；0 = 不延迟）。
+	fsyncDelay time.Duration
 }
 
 // Open 打开（或创建）WAL 文件，并扫描末尾确定 nextLSN。
@@ -33,6 +46,7 @@ func Open(path string) (WAL, error) {
 		return nil, err
 	}
 	w := &walImpl{f: f, path: path, syncOnAppend: true}
+	w.cond = sync.NewCond(&w.mu)
 	if fi.Size() == 0 {
 		if err := w.writeHeader(); err != nil {
 			f.Close()
@@ -54,6 +68,8 @@ func Open(path string) (WAL, error) {
 		return nil, err
 	}
 	w.nextLSN = last + 1
+	// 已有记录来自上次持久化（Close 时已 fsync），视作已刷盘；新 Append 从 last+1 起由 SyncUpTo 覆盖。
+	w.lastSynced = last
 	if _, err := w.f.Seek(0, io.SeekEnd); err != nil {
 		f.Close()
 		return nil, err
@@ -85,9 +101,96 @@ func (w *walImpl) Append(entry *WalEntry) error {
 		return err
 	}
 	if w.syncOnAppend {
-		return w.f.Sync()
+		if err := w.f.Sync(); err != nil {
+			return err
+		}
+		w.fsyncCount++
+		w.lastSynced = w.nextLSN - 1
 	}
 	return nil
+}
+
+// SetGroupCommit 开关组提交。默认关闭（Append 每记录 fsync）；
+// 开启后 Append 仅写缓冲，由 SyncUpTo 兜底刷盘。
+func (w *walImpl) SetGroupCommit(enabled bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.syncOnAppend = !enabled
+}
+
+// SyncUpTo 阻塞直至 lsn 及之前所有已追加记录 fsync 落盘。
+// leader 机制：首个等待者成为 leader，一次 fsync 覆盖当前已写末尾后广播唤醒；
+// 后续等待者发现 lastSynced 已推进则零额外 fsync 直接返回。无后台定时器。
+// 契约：调用方必须先 Append 得到 lsn（事务层在锁内先 Append 再释放锁调本方法）。
+func (w *walImpl) SyncUpTo(lsn storage.LSN) error {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return ErrClosed
+	}
+	for lsn > w.lastSynced {
+		if w.waiters > 0 {
+			// follower：等待当前 leader 刷盘结果，被广播后重新检查。
+			w.waiters++
+			w.cond.Wait()
+			w.waiters--
+			if w.syncErr != nil {
+				err := w.syncErr
+				w.mu.Unlock()
+				return err
+			}
+			continue
+		}
+		// leader：记录进入刷盘前的已写末尾，释放锁执行 fsync（期间 Append 仍可继续写入）。
+		tail := w.lastLSNLocked()
+		if lsn > tail {
+			w.mu.Unlock()
+			return fmt.Errorf("wal: SyncUpTo lsn=%d beyond written tail=%d", lsn, tail)
+		}
+		w.waiters = 1
+		w.syncErr = nil
+		w.mu.Unlock()
+		if w.fsyncDelay > 0 {
+			time.Sleep(w.fsyncDelay)
+		}
+		err := w.f.Sync()
+		w.mu.Lock()
+		w.fsyncCount++
+		if err != nil {
+			w.syncErr = err
+			w.waiters = 0
+			w.cond.Broadcast()
+			w.mu.Unlock()
+			return err
+		}
+		w.lastSynced = tail
+		w.waiters = 0
+		w.cond.Broadcast()
+		// 循环条件 lsn > lastSynced 已为假（tail >= lsn），下一轮退出。
+	}
+	w.mu.Unlock()
+	return nil
+}
+
+// FsyncCount 返回累计 fsync 次数（观测/测试辅助，不属于 WAL 接口语义）。
+func (w *walImpl) FsyncCount() uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.fsyncCount
+}
+
+// SetFsyncDelay 注入人工 fsync 延迟（测试辅助，模拟慢盘放大组提交合并效果；不属于 WAL 接口语义）。
+func (w *walImpl) SetFsyncDelay(d time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.fsyncDelay = d
+}
+
+func (w *walImpl) lastLSNLocked() storage.LSN {
+	if w.nextLSN == 0 {
+		return 0
+	}
+	return w.nextLSN - 1
 }
 
 // Replay 顺序重放全部记录。

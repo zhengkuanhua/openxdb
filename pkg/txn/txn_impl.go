@@ -10,15 +10,19 @@ import (
 )
 
 type txnManager struct {
-	mu     sync.Mutex
-	st     storage.Storage
-	wal    wal.WAL
-	nextID uint64
+	mu        sync.Mutex
+	st        storage.Storage
+	wal       wal.WAL
+	nextID    uint64
+	seqNext   uint64     // 下一个待分配的提交序号（锁内分配；仅 Commit 事务占位）
+	applied   uint64     // 已成功应用到存储的最大提交序号
+	applyCond *sync.Cond // 关联 mu，等待轮到自己按序应用
 }
 
 // New 创建事务管理器并执行启动恢复（重放 WAL 已 Commit 记录）。
 func New(st storage.Storage, w wal.WAL) (TxnManager, error) {
 	m := &txnManager{st: st, wal: w}
+	m.applyCond = sync.NewCond(&m.mu)
 	if err := m.Recover(); err != nil {
 		return nil, err
 	}
@@ -44,17 +48,24 @@ func (m *txnManager) Begin() (Txn, error) {
 
 // Recover 重放 WAL 中所有 StateCommit 记录到存储。
 // 提交顺序为 WAL 先行：崩溃于「WAL 已落盘、存储未应用」时由本方法补齐；重复应用幂等。
+// 恢复后提交序号从已重放 Commit 数之后继续（Rollback 记录只审计、不占提交序号）。
 func (m *txnManager) Recover() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var applyErr error
+	var commits uint64
 	err := m.wal.Replay(func(e *wal.WalEntry) {
 		if e.State == wal.StateCommit && applyErr == nil {
+			commits++
 			applyErr = m.st.Write(e.Batch)
 		}
 	})
 	if err != nil {
 		return err
+	}
+	if applyErr == nil {
+		m.seqNext = commits + 1
+		m.applied = commits
 	}
 	return applyErr
 }
@@ -191,36 +202,70 @@ func (t *txnImpl) Delete(key []byte) error {
 	return nil
 }
 
-// Commit：WAL 先行落盘（StateCommit）→ 存储原子应用 → 释放快照。
-// 提交串行化（全局锁）：单机 MVP 语义为「最后提交者胜」，等价于串行调度。
+// Commit：WAL 先行 → 存储原子应用 → 释放快照。
+// B2 组提交流水线：①锁内 Append 分配 LSN（WAL 顺序 = 锁获取顺序 = 提交顺序）；
+// ②释放锁后 SyncUpTo(lsn)，并发提交在此合并 fsync；③重新加锁，按提交序号排队应用存储，
+// 保持「最后提交者胜」串行语义且 st.Write 顺序与 WAL 顺序严格一致（崩溃恢复重放结果等价）。
+// 说明：提交序号由本层在锁内分配（仅 Commit 事务占位），与 LSN 解耦——
+// Rollback 审计记录也消耗 LSN 但不参与应用队列，避免 LSN 缺口导致的排队死锁。
 func (t *txnImpl) Commit() error {
 	if t.state != TxnActive {
 		return ErrTxnClosed
 	}
 	m := t.mgr
-	m.mu.Lock()
-	defer m.mu.Unlock()
 
+	// 空批次：无需写 WAL / 存储，直接结束（与旧版行为一致，不消耗 LSN 与序号）。
 	if len(t.batch.Puts) == 0 && len(t.batch.Deletes) == 0 {
+		m.mu.Lock()
 		t.finish(TxnCommitted)
+		m.mu.Unlock()
 		return nil
 	}
-	if err := m.wal.Append(&wal.WalEntry{
-		TxnID: t.id,
-		Batch: t.batch,
-		State: wal.StateCommit,
-	}); err != nil {
+
+	// 阶段 1：锁内顺序 Append 拿 LSN，并分配提交序号（快速返回，组提交模式下不 fsync）。
+	m.mu.Lock()
+	entry := &wal.WalEntry{TxnID: t.id, Batch: t.batch, State: wal.StateCommit}
+	if err := m.wal.Append(entry); err != nil {
+		m.mu.Unlock()
 		return err
+	}
+	lsn := entry.LSN
+	seq := m.seqNext
+	m.seqNext++
+	m.mu.Unlock()
+
+	// 阶段 2：锁外 SyncUpTo —— 并发事务在此合并为一次 leader fsync。
+	if err := m.wal.SyncUpTo(lsn); err != nil {
+		// fsync 失败：该事务视为未提交成功。跳过自己的序号，避免后续事务永久等待。
+		m.mu.Lock()
+		m.applied++
+		m.applyCond.Broadcast()
+		m.mu.Unlock()
+		return err
+	}
+
+	// 阶段 3：重新加锁，按提交序号串行应用存储（避免锁重新获取顺序打乱 WAL 顺序）。
+	m.mu.Lock()
+	for seq != m.applied+1 {
+		m.applyCond.Wait()
 	}
 	if err := m.st.Write(t.batch); err != nil {
+		// 应用失败：跳过该序号让后续事务继续（该记录已落 WAL，崩溃恢复会补齐）。
+		m.applied++
+		m.applyCond.Broadcast()
+		m.mu.Unlock()
 		return err
 	}
+	m.applied++
+	m.applyCond.Broadcast()
 	t.finish(TxnCommitted)
+	m.mu.Unlock()
 	return nil
 }
 
 // Rollback：丢弃缓冲并释放快照。未写存储，恢复时不会被重放。
-// 可选写一条 StateRollback 记录留审计（失败不阻断回滚语义）。
+// 写一条 StateRollback 记录留审计；追加后同步 SyncUpTo 确保审计记录落盘
+// （失败不阻断回滚语义，审计非关键路径；默认模式下 Append 已 fsync，SyncUpTo 零额外开销）。
 func (t *txnImpl) Rollback() error {
 	if t.state != TxnActive {
 		return ErrTxnClosed
@@ -228,11 +273,14 @@ func (t *txnImpl) Rollback() error {
 	m := t.mgr
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_ = m.wal.Append(&wal.WalEntry{
+	en := &wal.WalEntry{
 		TxnID: t.id,
 		Batch: t.batch,
 		State: wal.StateRollback,
-	})
+	}
+	if m.wal.Append(en) == nil {
+		_ = m.wal.SyncUpTo(en.LSN)
+	}
 	t.finish(TxnRolledBack)
 	return nil
 }

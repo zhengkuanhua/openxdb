@@ -37,8 +37,16 @@ type WalEntry struct {
 
 // WAL 顺序日志接口。
 type WAL interface {
-	// Append 顺序追加一条记录并落盘（默认 fsync；entry.LSN==0 时自动分配）。
+	// Append 顺序追加一条记录（默认 fsync 落盘；entry.LSN==0 时自动分配）。
+	// 组提交开启后仅写缓冲并快速返回分配的 LSN，持久化由 SyncUpTo 兜底。
 	Append(entry *WalEntry) error
+	// SyncUpTo 阻塞直至 lsn 及之前所有已追加记录 fsync 落盘。
+	// 采用 leader 机制合并 fsync：首个等待者一次刷盘覆盖全部 pending 记录后广播，
+	// 后续等待者发现 lastSynced 已推进则零额外 fsync 直接返回；无后台定时器。
+	SyncUpTo(lsn storage.LSN) error
+	// SetGroupCommit 开关组提交。默认关闭：Append 每记录 fsync，行为与旧版完全一致；
+	// 开启后 Append 只写不刷，由 SyncUpTo（或 Close）保证落盘。
+	SetGroupCommit(enabled bool)
 	// Replay 从文件头顺序重放全部记录，损坏时报错并中止。
 	Replay(apply func(*WalEntry)) error
 	// Truncate 截断 lsn 之前的记录（保留 lsn 及之后；checkpoint 后调用）。

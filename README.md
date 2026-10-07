@@ -99,6 +99,7 @@ All packages pass: `db`, `server`, `sql` (incl. 9 secondary-index cases), `stora
 Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmarks):
 
 - `T1_rocksdb_storage_impl.md`, `T2_wal_impl.md`, `T3_sql_layer.md`, `T3_txn_impl.md`, `T5_cli_impl.md`, `T6_index_layer.md`
+- `B2_group_commit.md` — write-path group commit (batch fsync)
 - `E1_rocksdb_bench.md` — RocksDB write benchmark (E1a), B+Tree comparison (E1b) pending
 
 ## Roadmap
@@ -110,7 +111,7 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 - [x] T6 secondary indexes + ordered scans
 - [x] E1 storage benchmark: RocksDB (E1a) vs in-memory B+Tree (E1b) — see [E1 experiment](docs/experiments/E1_rocksdb_bench.md)
 - [x] W4 ADR + storage engine selection write-up — see [ADR-004](docs/W4_adr_engine_selection.md) and [why RocksDB](docs/blog_why_openxdb_rocksdb.md)
-- [ ] B2 batched commits on the write path
+- [x] B2 batched commits on the write path (group commit / batch fsync) — see [B2 design](docs/B2_group_commit.md)
 - [ ] M2/M3 interface reservations (regions, versions, multi-node)
 
 ## License
