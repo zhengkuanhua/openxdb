@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Setup msys2 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-make
+
+      - name: Build RocksDB static library
+        run: |
+          git clone --depth 1 --branch v11.8.1 https://github.com/facebook/rocksdb.git C:/rocksdb-src
+          cmake -S C:/rocksdb-src -B C:/rocksdb-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 \
+            -DROCKSDB_BUILD_SHARED=OFF -DWITH_TESTS=OFF -DWITH_TOOLS=OFF \
+            -DWITH_BENCHMARK_TOOLS=OFF -DWITH_JNI=OFF \
+            -DWITH_GFLAGS=OFF -DWITH_ZLIB=OFF -DWITH_LZ4=OFF \
+            -DWITH_SNAPPY=OFF -DWITH_ZSTD=OFF -DWITH_BZ2=OFF
+          cmake --build C:/rocksdb-build -j2
+
+      - name: Build
+        run: |
+          export CGO_CFLAGS="-I/C/rocksdb-src/include"
+          export CGO_CXXFLAGS="-I/C/rocksdb-src/include"
+          export CGO_LDFLAGS="-L/C/rocksdb-build -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -static"
+          go build ./...
+
+      - name: Test
+        run: |
+          export CGO_CFLAGS="-I/C/rocksdb-src/include"
+          export CGO_CXXFLAGS="-I/C/rocksdb-src/include"
+          export CGO_LDFLAGS="-L/C/rocksdb-build -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -static"
+          go test ./...

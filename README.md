@@ -11,6 +11,11 @@ AIGC:
 
 # OpenXDB
 
+[![CI](https://github.com/zhengkuanhua/openxdb/actions/workflows/ci.yml/badge.svg)](https://github.com/zhengkuanhua/openxdb/actions/workflows/ci.yml)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
+[![License: MIT](https://img.shields.io/github/license/zhengkuanhua/openxdb)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb/releases)
+
 OpenXDB is a from-scratch, single-node relational database kernel built for learning and experimentation. It implements a storage engine on top of RocksDB via cgo, a write-ahead log (WAL), transactional layer with snapshot isolation, a SQL subset with secondary indexes, and an in-memory B+Tree used as both an LSM comparator and a reference implementation.
 
 > **Status: M1 milestone (v2.0-FP), v0.1.0-alpha.** T1–T6 complete, all test suites green.
@@ -116,5 +121,5 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 
 ## License
 
-MIT (to be confirmed before first release).
+MIT — see [LICENSE](LICENSE).
 *（内容由AI生成，仅供参考）*
