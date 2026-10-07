@@ -108,8 +108,8 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 - [x] T3 SQL layer + transactions
 - [x] T5 protocol + CLI
 - [x] T6 secondary indexes + ordered scans
-- [ ] E1b B+Tree vs RocksDB benchmark comparison
-- [ ] W4 ADR + storage engine selection write-up
+- [x] E1 storage benchmark: RocksDB (E1a) vs in-memory B+Tree (E1b) — see [E1 experiment](docs/experiments/E1_rocksdb_bench.md)
+- [x] W4 ADR + storage engine selection write-up — see [ADR-004](docs/W4_adr_engine_selection.md) and [why RocksDB](docs/blog_why_openxdb_rocksdb.md)
 - [ ] B2 batched commits on the write path
 - [ ] M2/M3 interface reservations (regions, versions, multi-node)
 
