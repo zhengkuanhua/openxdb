@@ -5,8 +5,8 @@ import (
 	"math/rand"
 	"os"
 
-	"github.com/openxdb/openxdb/pkg/storage"
-	"github.com/openxdb/openxdb/pkg/storage/btree"
+	"github.com/zhengkuanhua/openxdb/pkg/storage"
+	"github.com/zhengkuanhua/openxdb/pkg/storage/btree"
 )
 
 func key(i int) []byte { return []byte(fmt.Sprintf("%08d", i)) }

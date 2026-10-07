@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/openxdb/openxdb/pkg/storage"
+	"github.com/zhengkuanhua/openxdb/pkg/storage"
 )
 
 func newTestWAL(t *testing.T) (string, WAL) {

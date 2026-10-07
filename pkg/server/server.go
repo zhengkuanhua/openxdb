@@ -26,9 +26,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openxdb/openxdb/pkg/sql"
-	"github.com/openxdb/openxdb/pkg/storage"
-	"github.com/openxdb/openxdb/pkg/txn"
+	"github.com/zhengkuanhua/openxdb/pkg/sql"
+	"github.com/zhengkuanhua/openxdb/pkg/storage"
+	"github.com/zhengkuanhua/openxdb/pkg/txn"
 )
 
 // Server 协议执行器：线程安全（内部串行化命令处理）。

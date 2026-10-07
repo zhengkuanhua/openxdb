@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 
-	"github.com/openxdb/openxdb/pkg/storage"
+	"github.com/zhengkuanhua/openxdb/pkg/storage"
 )
 
 // 表元数据与 Key 编码（开发手册 §3.2：Key 编码 / §7：MetaFile）。

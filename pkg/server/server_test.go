@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openxdb/openxdb/pkg/db"
+	"github.com/zhengkuanhua/openxdb/pkg/db"
 )
 
 func newTestServer(t *testing.T) (*Server, func()) {

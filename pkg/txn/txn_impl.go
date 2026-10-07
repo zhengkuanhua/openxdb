@@ -5,8 +5,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/openxdb/openxdb/pkg/storage"
-	"github.com/openxdb/openxdb/pkg/wal"
+	"github.com/zhengkuanhua/openxdb/pkg/storage"
+	"github.com/zhengkuanhua/openxdb/pkg/wal"
 )
 
 type txnManager struct {

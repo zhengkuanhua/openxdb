@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"sort"
 
-	"github.com/openxdb/openxdb/pkg/storage"
-	"github.com/openxdb/openxdb/pkg/txn"
+	"github.com/zhengkuanhua/openxdb/pkg/storage"
+	"github.com/zhengkuanhua/openxdb/pkg/txn"
 )
 
 // Executor SQL 执行器（开发手册 §4.2 算子最小集）。

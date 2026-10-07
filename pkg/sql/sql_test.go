@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openxdb/openxdb/pkg/db"
-	"github.com/openxdb/openxdb/pkg/sql"
+	"github.com/zhengkuanhua/openxdb/pkg/db"
+	"github.com/zhengkuanhua/openxdb/pkg/sql"
 )
 
 func newEngine(t *testing.T) *sql.Engine {

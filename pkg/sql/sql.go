@@ -3,7 +3,7 @@ package sql
 import (
 	"strings"
 
-	"github.com/openxdb/openxdb/pkg/txn"
+	"github.com/zhengkuanhua/openxdb/pkg/txn"
 )
 
 // Engine SQL 引擎入口：Parse + Execute 一条语句。

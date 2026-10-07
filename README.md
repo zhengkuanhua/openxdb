@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_17a03bfcc22411f197eb525400393706
+    ReservedCode1: 818bBAZWeB4yMs8kJFTG4LCntQraeH2/Wv2DcRzvXhWG5gfNPTNIfL3mDqmOmzJM2huDpzJsrRet5mm0fHloXWPZZKaY4zjIRzTrGpvtfCn/DUDwdnvUmgB5ASmbIkQTnnKlrZpJUQPQPTkWDRo8NljJZfzo+lvI3lUvyJYcsQ6OvK/nQFtZW9Wb3jI=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_17a03bfcc22411f197eb525400393706
+    ReservedCode2: 818bBAZWeB4yMs8kJFTG4LCntQraeH2/Wv2DcRzvXhWG5gfNPTNIfL3mDqmOmzJM2huDpzJsrRet5mm0fHloXWPZZKaY4zjIRzTrGpvtfCn/DUDwdnvUmgB5ASmbIkQTnnKlrZpJUQPQPTkWDRo8NljJZfzo+lvI3lUvyJYcsQ6OvK/nQFtZW9Wb3jI=
+---
+
 # OpenXDB
 
 OpenXDB is a from-scratch, single-node relational database kernel built for learning and experimentation. It implements a storage engine on top of RocksDB via cgo, a write-ahead log (WAL), transactional layer with snapshot isolation, a SQL subset with secondary indexes, and an in-memory B+Tree used as both an LSM comparator and a reference implementation.
@@ -105,3 +116,4 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 ## License
 
 MIT (to be confirmed before first release).
+*（内容由AI生成，仅供参考）*

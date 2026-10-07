@@ -4,7 +4,7 @@ package wal
 import (
 	"errors"
 
-	"github.com/openxdb/openxdb/pkg/storage"
+	"github.com/zhengkuanhua/openxdb/pkg/storage"
 )
 
 // 记录状态（State 字段取值）。

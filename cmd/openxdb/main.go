@@ -8,8 +8,8 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/openxdb/openxdb/pkg/db"
-	"github.com/openxdb/openxdb/pkg/server"
+	"github.com/zhengkuanhua/openxdb/pkg/db"
+	"github.com/zhengkuanhua/openxdb/pkg/server"
 )
 
 const version = "v0.1.0-alpha"
