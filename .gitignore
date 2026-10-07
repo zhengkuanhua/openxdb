@@ -1,0 +1,30 @@
+# 数据目录（运行时生成）
+data/
+*.db
+
+# 构建产物
+*.exe
+*.a
+*.o
+*.obj
+*.so
+*.dll
+*.lib
+*.out
+
+# 基准实验数据（大文件，不入库）
+tests/bench/e1_data_*/
+tests/bench/*.exe
+
+# IDE / 系统
+.idea/
+.vscode/
+*.suo
+*.user
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 日志与临时文件
+*.log
+temp/
