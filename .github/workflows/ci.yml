@@ -36,6 +36,7 @@ jobs:
           git clone --depth 1 --branch v11.8.1 https://github.com/facebook/rocksdb.git C:/rocksdb-src
           cmake -S C:/rocksdb-src -B C:/rocksdb-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_CXX_FLAGS="-Wno-error=maybe-uninitialized" \
             -DROCKSDB_BUILD_SHARED=OFF -DWITH_TESTS=OFF -DWITH_TOOLS=OFF \
             -DWITH_BENCHMARK_TOOLS=OFF -DWITH_JNI=OFF \
             -DWITH_GFLAGS=OFF -DWITH_ZLIB=OFF -DWITH_LZ4=OFF \
