@@ -42,6 +42,12 @@ type TxnManager interface {
 	Begin() (Txn, error)
 	// Recover 启动恢复：按 LSN 顺序重放 WAL 中已 Commit 记录到存储（幂等，可重复调用）。
 	Recover() error
+	// SetCommitHook 注册提交后回调（M2 复制挂接点）：每次事务提交成功应用存储后，
+	// 在提交串行化锁内按提交顺序调用 hook(lsn, seq, batch)。hook 返回的错误仅
+	// 记录在 HookErr，不影响事务提交成功语义（复制推送为异步）。
+	SetCommitHook(hook func(lsn storage.LSN, seq uint64, batch *storage.WriteBatch) error)
+	// HookErr 返回最近一次提交后回调的错误（无错误返回 nil）。
+	HookErr() error
 	Close() error
 }
 

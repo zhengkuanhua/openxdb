@@ -26,10 +26,18 @@ type ColumnDef struct {
 }
 
 // Cond 过滤条件：col op value（AND 组合，M1 不支持 OR）。
+// Op 支持 = != < > <= >= BETWEEN IN LIKE；Col 可为裸列名或 t.col 限定名（Ref 拆分存放）。
+// LeftCase 非空时表示左操作数为 CASE 表达式（忽略 Col），仍按 Op 与右值比较。
 type Cond struct {
-	Col string
-	Op  string // = != < > <= >=
-	Val Value
+	Ref      string // 限定表名/别名（空 = 未限定）
+	Col      string // 裸列名
+	Op       string // = != < > <= >= BETWEEN IN LIKE
+	Val      Value  // 右值（BETWEEN 下界）
+	Val2     Value  // BETWEEN 上界
+	RightRef string // 右值为列引用（t.col，JOIN ON 场景；空 = 字面量 Val）
+	InList   []Value // IN 列表
+	Sub      *SelectStmt // IN 子查询（右值）
+	LeftCase *CaseWhenClause // 左操作数为 CASE 表达式（P2）
 }
 
 // Where 条件组（全部 AND 语义）。
@@ -79,27 +87,45 @@ type InsertStmt struct {
 
 func (InsertStmt) stmt() {}
 
-// SelectColumn SELECT 目标列：普通列 / 聚合函数。
+// SelectColumn SELECT 目标列：普通列 / 聚合函数 / CASE 表达式（P2）。
 type SelectColumn struct {
-	Raw  string // 原始文本（列名、*、COUNT(*)、SUM(x)、AVG(x)）
-	Agg  string // "" | "COUNT" | "SUM" | "AVG"
-	Col  string // 聚合目标列（COUNT 可为空）
-	Name string // 输出列名
+	Raw   string // 原始文本（列名、*、COUNT(*)、SUM(x)、AVG(x)、CASE 表达式）
+	Agg   string // "" | "COUNT" | "SUM" | "AVG"
+	Ref   string // 限定表名/别名（t.col 时非空；聚合参数亦可限定）
+	Col   string // 聚合目标列 / 裸列名（COUNT 可为空）
+	Name  string // 输出列名
+	Alias string // AS 别名（空 = 默认输出名）
+	Case  *CaseWhenClause // 非空 = 输出 CASE 表达式求值结果（忽略 Col）
+}
+
+// JoinClause JOIN 子句（INNER / LEFT，支持子查询右表）。
+type JoinClause struct {
+	Type     string // "INNER" | "LEFT"
+	Table    string // 右表名（与 Subquery 二选一）
+	Alias    string // 右表别名（空 = 表名）
+	Subquery *SelectStmt
+	On       []Cond // ON 条件（AND 组合）
 }
 
 // SelectStmt SELECT。
 type SelectStmt struct {
-	Columns []SelectColumn
-	From    string
-	Where   *Where
-	OrderBy *OrderBy
-	Limit   int // <=0 不限
+	Columns   []SelectColumn
+	From      string        // 表名（无 JOIN/子查询时）
+	FromAlias string        // FROM 表别名（空 = 表名）
+	Subquery  *SelectStmt   // FROM 子查询
+	SubAlias  string        // FROM 子查询别名（必填）
+	Joins     []JoinClause
+	Where     *Where
+	GroupBy   []string // GROUP BY 列（t.col / col）
+	OrderBy   *OrderBy
+	Limit     int // <=0 不限
 }
 
 func (SelectStmt) stmt() {}
 
 // OrderBy 排序。
 type OrderBy struct {
+	Ref  string // 限定表名/别名（t.col 时非空）
 	Col  string
 	Desc bool
 }
@@ -126,6 +152,87 @@ type DeleteStmt struct {
 }
 
 func (DeleteStmt) stmt() {}
+
+// BeginStmt 开启会话级显式事务（BEGIN）。
+type BeginStmt struct{}
+
+func (BeginStmt) stmt() {}
+
+// CommitStmt 提交会话级显式事务（COMMIT）。
+type CommitStmt struct{}
+
+func (CommitStmt) stmt() {}
+
+// RollbackStmt 回滚会话级显式事务（ROLLBACK）。
+type RollbackStmt struct{}
+
+func (RollbackStmt) stmt() {}
+
+// ExportStmt 导出表数据到 CSV（EXPORT TABLE t [(cols)] TO 'path'）。
+type ExportStmt struct {
+	Table   string
+	Columns []string // 空 = 全部列按定义序
+	Path    string
+}
+
+func (ExportStmt) stmt() {}
+
+// ImportStmt 从 CSV 导入建行（IMPORT INTO t FROM 'path'）。
+type ImportStmt struct {
+	Table string
+	Path  string
+}
+
+func (ImportStmt) stmt() {}
+
+// ---- P2：运维语句 ----
+
+// ShowTablesStmt SHOW TABLES：列出全部表（含列定义/主键/索引概要）。
+type ShowTablesStmt struct{}
+
+func (ShowTablesStmt) stmt() {}
+
+// ShowIndexStmt SHOW INDEX FROM t：列出指定表的全部二级索引。
+type ShowIndexStmt struct {
+	Table string
+}
+
+func (ShowIndexStmt) stmt() {}
+
+// ShowSlowQueriesStmt SHOW SLOWQUERIES：查看慢查询记录列表。
+type ShowSlowQueriesStmt struct{}
+
+func (ShowSlowQueriesStmt) stmt() {}
+
+// ExplainStmt EXPLAIN <SELECT>：输出执行计划文本（不实际执行查询）。
+type ExplainStmt struct {
+	Select *SelectStmt
+}
+
+func (ExplainStmt) stmt() {}
+
+// SlowQueryRecord 慢查询记录（内存保留最近 slowQueryMax 条）。
+type SlowQueryRecord struct {
+	SQL      string // SQL 原文
+	Duration int64  // 耗时（毫秒）
+	At       string // 触发时间 YYYY-MM-DD HH:MM:SS
+}
+
+// ---- P2：CASE WHEN 表达式 ----
+
+// CaseBranch CASE 的一个 WHEN 分支：条件（AND 组合）+ THEN 结果。
+type CaseBranch struct {
+	Conds Where // WHEN 条件组（AND 组合；非空）
+	Then  Value // THEN 值
+}
+
+// CaseWhenClause CASE WHEN ... THEN ... [ELSE ...] END。
+// 无匹配分支且无 ELSE 时返回空串（TEXT）。
+type CaseWhenClause struct {
+	Branches []CaseBranch
+	Else     Value
+	HasElse  bool
+}
 
 // Result 执行结果（面向协议层/CLI 输出）。
 type Result struct {

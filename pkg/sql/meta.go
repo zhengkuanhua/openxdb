@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"strings"
 
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 )
@@ -81,14 +82,22 @@ func IndexTableRange(tableID uint64) (start, end []byte) {
 	return start, end
 }
 
-// idxBytes 索引列值 → 排序友好字节（INT 翻转符号位；TEXT 原字节）。
+// idxBytes 索引列值 → 排序友好字节（INT/DECIMAL 翻转符号位定长 8B；BLOB 解码 hex 原字节；DATE/TEXT 原字节）。
 func idxBytes(v Value) ([]byte, error) {
-	if v.Kind == "INT" {
+	switch v.Kind {
+	case "INT":
 		b := make([]byte, 8)
 		binary.BigEndian.PutUint64(b, uint64(v.I)^(1<<63))
 		return b, nil
+	case "DECIMAL":
+		b := make([]byte, 8)
+		binary.BigEndian.PutUint64(b, uint64(v.I)^(1<<63))
+		return b, nil
+	case "BLOB":
+		return decodeHex(v.S)
+	default:
+		return []byte(v.S), nil
 	}
-	return []byte(v.S), nil
 }
 
 // TableRange 表数据扫描范围：[s{tableID}, s{tableID+1})
@@ -98,31 +107,50 @@ func TableRange(tableID uint64) (start, end []byte) {
 	return start, end
 }
 
-// pkBytes 主键列值 → 行键后缀字节（INT 定长 Big Endian；TEXT 原字节）。
+// pkBytes 主键列值 → 行键后缀字节。
+// INT：定长 Big Endian（既有行为）；DECIMAL：翻转符号位 8 字节（与索引键一致）；
+// DATE/TEXT：原字节；BLOB：解码后的原始字节（主键列为 BLOB 时，TEXT 字面量按 hex 解码）。
 func pkBytes(t *TableMeta, v Value) ([]byte, error) {
-	if v.Kind == "INT" {
+	// 主键列为 BLOB：无论输入 Kind 是 TEXT（WHERE 字面量）还是 BLOB，一律 hex 解码。
+	if t != nil && t.PK != "" {
+		for _, c := range t.Columns {
+			if c.Name == t.PK && c.Type == "BLOB" {
+				return decodeHex(strings.ToUpper(v.S))
+			}
+		}
+	}
+	switch v.Kind {
+	case "INT":
 		b := make([]byte, 8)
 		binary.BigEndian.PutUint64(b, uint64(v.I))
 		return b, nil
+	case "DECIMAL":
+		b := make([]byte, 8)
+		binary.BigEndian.PutUint64(b, uint64(v.I)^(1<<63))
+		return b, nil
+	case "BLOB":
+		return decodeHex(v.S)
+	default:
+		return []byte(v.S), nil
 	}
-	// TEXT
-	return []byte(v.S), nil
 }
 
 // encodeRow 行值 → JSON 字节（按列定义序）。
+// INT 存 number（兼容既有数据）；TEXT/DATE/DECIMAL/BLOB 存规范化字符串
+// （DECIMAL 存 scale=4 字符串，BLOB 存大写 hex）。
 func encodeRow(t *TableMeta, vals []Value) ([]byte, error) {
 	arr := make([]interface{}, len(vals))
 	for i, v := range vals {
 		if v.Kind == "INT" {
 			arr[i] = v.I
 		} else {
-			arr[i] = v.S
+			arr[i] = v.String()
 		}
 	}
 	return json.Marshal(arr)
 }
 
-// decodeRow JSON 字节 → 行值（按列定义序，类型强制）。
+// decodeRow JSON 字节 → 行值（按列定义序，类型强制还原）。
 func decodeRow(t *TableMeta, raw []byte) ([]Value, error) {
 	var arr []interface{}
 	if err := json.Unmarshal(raw, &arr); err != nil {
@@ -133,13 +161,36 @@ func decodeRow(t *TableMeta, raw []byte) ([]Value, error) {
 	}
 	vals := make([]Value, len(arr))
 	for i, a := range arr {
-		if t.Columns[i].Type == "INT" {
+		switch t.Columns[i].Type {
+		case "INT":
 			f, ok := a.(float64)
 			if !ok {
 				return nil, &SQLError{Msg: "corrupted row: int column"}
 			}
 			vals[i] = IntVal(int64(f))
-		} else {
+		case "DECIMAL":
+			s, ok := a.(string)
+			if !ok {
+				return nil, &SQLError{Msg: "corrupted row: decimal column"}
+			}
+			scaled, canon, err := parseDecimal(s)
+			if err != nil {
+				return nil, &SQLError{Msg: "corrupted row: decimal column"}
+			}
+			vals[i] = Value{Kind: "DECIMAL", I: scaled, S: canon}
+		case "DATE":
+			s, ok := a.(string)
+			if !ok {
+				return nil, &SQLError{Msg: "corrupted row: date column"}
+			}
+			vals[i] = Value{Kind: "DATE", S: s}
+		case "BLOB":
+			s, ok := a.(string)
+			if !ok {
+				return nil, &SQLError{Msg: "corrupted row: blob column"}
+			}
+			vals[i] = Value{Kind: "BLOB", S: s}
+		default: // TEXT
 			s, ok := a.(string)
 			if !ok {
 				return nil, &SQLError{Msg: "corrupted row: text column"}

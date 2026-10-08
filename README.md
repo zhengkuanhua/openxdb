@@ -2,12 +2,16 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_17a03bfcc22411f197eb525400393706
-    ReservedCode1: 818bBAZWeB4yMs8kJFTG4LCntQraeH2/Wv2DcRzvXhWG5gfNPTNIfL3mDqmOmzJM2huDpzJsrRet5mm0fHloXWPZZKaY4zjIRzTrGpvtfCn/DUDwdnvUmgB5ASmbIkQTnnKlrZpJUQPQPTkWDRo8NljJZfzo+lvI3lUvyJYcsQ6OvK/nQFtZW9Wb3jI=
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_1a6f9c20c31311f197eb525400393706
+    ReservedCode1: UMvmyo9vd97tPqgcL7KAc0nQ/6xchD4v7m4dVoS2Tn4JUb2vOzJnh39LkIJgS9ZVA55qrSsa/JxUvcZIk1wHBdYLJU3/QfBYzrYkfCv3XkOx3+1VXoXWJt/FSrh/VCe952atpnszTfKeRR82akERWOvxNFFC8eoKnrJbNWkxtXdzhvBMLsSOvSg1MdE=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_17a03bfcc22411f197eb525400393706
-    ReservedCode2: 818bBAZWeB4yMs8kJFTG4LCntQraeH2/Wv2DcRzvXhWG5gfNPTNIfL3mDqmOmzJM2huDpzJsrRet5mm0fHloXWPZZKaY4zjIRzTrGpvtfCn/DUDwdnvUmgB5ASmbIkQTnnKlrZpJUQPQPTkWDRo8NljJZfzo+lvI3lUvyJYcsQ6OvK/nQFtZW9Wb3jI=
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_1a6f9c20c31311f197eb525400393706
+    ReservedCode2: UMvmyo9vd97tPqgcL7KAc0nQ/6xchD4v7m4dVoS2Tn4JUb2vOzJnh39LkIJgS9ZVA55qrSsa/JxUvcZIk1wHBdYLJU3/QfBYzrYkfCv3XkOx3+1VXoXWJt/FSrh/VCe952atpnszTfKeRR82akERWOvxNFFC8eoKnrJbNWkxtXdzhvBMLsSOvSg1MdE=
 ---
+
+
+
+
 
 # OpenXDB
 
@@ -18,16 +22,18 @@ AIGC:
 
 OpenXDB is a from-scratch, single-node relational database kernel built for learning and experimentation. It implements a storage engine on top of RocksDB via cgo, a write-ahead log (WAL), transactional layer with snapshot isolation, a SQL subset with secondary indexes, and an in-memory B+Tree used as both an LSM comparator and a reference implementation.
 
-> **Status: M1 milestone (v2.0-FP), v0.1.0-alpha.** T1–T6 complete, all test suites green.
+> **Status: M3 分片落地 (v3.0-P3-M3), v0.3.0-alpha.** T1–T12 complete (P0/P1/P2 feature clusters + M2 replication + M3 sharding), all test suites green.
 
 ## Highlights
 
 - **Storage** — RocksDB-backed key-value storage via a thin C++ cgo bridge (`pkg/storage/rocksdb`), plus a pure-Go in-memory B+Tree (`pkg/storage/btree`) used as reference and comparator.
 - **WAL** — append-only write-ahead log with replay recovery (`pkg/wal`).
 - **Transactions** — local ACID transactions with snapshot isolation; read-your-writes merge, tombstones, and point/range scan (`pkg/txn`).
-- **SQL subset** — `CREATE/DROP TABLE`, `CREATE/DROP INDEX`, `INSERT`, `SELECT` (WHERE, ORDER BY, LIMIT, aggregates COUNT/SUM/AVG), `UPDATE`, `DELETE` (`pkg/sql`).
+- **SQL subset** — `CREATE/DROP TABLE` (types INT/TEXT/DATE/DECIMAL/BLOB), `CREATE/DROP INDEX`, `INSERT`, `SELECT` (WHERE, ORDER BY, LIMIT, aggregates COUNT/SUM/AVG, JOIN, GROUP BY, subqueries, BETWEEN, IN), `UPDATE`, `DELETE`, CSV `EXPORT`/`IMPORT`; expressions `LIKE` (`%` / `_`) and `CASE WHEN`; ops statements `SHOW TABLES`, `SHOW INDEX FROM t`, `EXPLAIN <SELECT>`, slow queries via `SET SLOW <ms>` and `SHOW SLOWQUERIES` (`pkg/sql`).
 - **Secondary indexes** — backfill on creation, automatic maintenance on DML, and query optimization for equality/range scans and ORDER BY (`T6`).
 - **Server & CLI** — REPL and TCP server (`cmd/openxdb`), binary protocol over TCP (`pkg/server`).
+- **Replication (M2)** — master-follower async replication: commit-hook binlog (independent append-only file, monotonically increasing LSN), replicator push with per-slot resume, follower idempotent apply, PING/PONG heartbeats with offline detection (`pkg/replication`, `pkg/txn`, `pkg/db`).
+- **Sharding (M3)** — logical sharding on the single-node kernel: RegionInfo metadata persisted as `m:regions`, Router with half-open `[StartKey, EndKey)` boundary semantics, region-prefixed physical keys (`r` + regionID:8B + inner key), cross-region point/range/full-table queries via range expansion + merge, and SPLIT / LIST REGIONS / LOCATE REGION management; default single-region shape keeps pre-sharding behavior unchanged (`pkg/sharding`, `pkg/sql`, `pkg/db`).
 
 ## Architecture
 
@@ -38,16 +44,19 @@ OpenXDB is a from-scratch, single-node relational database kernel built for lear
 | Transaction | `pkg/txn` | Begin/commit/rollback, snapshot isolation, read-your-writes |
 | Storage | `pkg/storage` | KV interface, key encoding; RocksDB engine and B+Tree engine |
 | WAL | `pkg/wal` | Append-only log, replay recovery |
+| Replication | `pkg/replication`, `pkg/txn`, `pkg/db` | Binlog store, master replicator (push + heartbeat), follower (idempotent apply), commit-hook wiring |
+| Sharding | `pkg/sharding`, `pkg/sql`, `pkg/db` | RegionInfo metadata, Router key→region mapping, region-prefixed physical keys, cross-region query merge, split management |
 | Data dir | `pkg/db` | Initialization, engine + WAL + txn manager wiring, crash recovery |
 
 ### Row / index key encoding
 
 ```
-row key:    s{tableID:8B}{pk}
-index key:  i{tableID:8B}{indexID:8B}{idxVal}p{pk}
+physical key: r{regionID:8B}{innerKey}
+row key:    s{tableID:8B}{pk}                         (inner, M1)
+index key:  i{tableID:8B}{indexID:8B}{idxVal}p{pk}   (inner, T6)
 ```
 
-Index values use sort-friendly encoding: INT flips the sign bit (`v ^ 0x8000000000000000`), TEXT stays raw bytes, so byte order equals value order.
+Every stored key carries a region prefix (`r` + 8-byte big-endian regionID); the inner key keeps the M1/T6 layout, so keys stay contiguous within a region and region boundaries are explicit. Index values use sort-friendly encoding: INT flips the sign bit (`v ^ 0x8000000000000000`), TEXT stays raw bytes, so byte order equals value order.
 
 ## Build
 
@@ -97,15 +106,15 @@ DELETE FROM users WHERE id = 3;
 go test ./...
 ```
 
-All packages pass: `db`, `server`, `sql` (incl. 9 secondary-index cases), `storage`, `storage/btree` (incl. randomized insert/delete invariant tests), `storage/rocksdb`, `txn`, `wal`.
+All packages pass: `db` (incl. replication integration: binlog on commit, master-follower consistency, idempotent apply), `replication` (binlog persistence/corruption, resume after reconnect, heartbeat timeouts), `server`, `sharding` (7 region-key/router/metadata cases), `sql` (incl. 9 secondary-index cases and 11 sharding integration cases), `storage`, `storage/btree` (incl. randomized insert/delete invariant tests), `storage/rocksdb`, `txn`, `wal`.
 
 ## Development log
 
 Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmarks):
 
-- `T1_rocksdb_storage_impl.md`, `T2_wal_impl.md`, `T3_sql_layer.md`, `T3_txn_impl.md`, `T5_cli_impl.md`, `T6_index_layer.md`
+- `T1_rocksdb_storage_impl.md`, `T2_wal_impl.md`, `T3_sql_layer.md`, `T3_txn_impl.md`, `T4_acid_notes.md`, `T5_cli_impl.md`, `T6_index_layer.md`, `T8_p0_sql_enhancements.md`, `T9_p1_csv_types.md`, `T10_p2_ops_expr.md`, `T11_m2_replication.md`, `T12_m3_sharding.md`
 - `B2_group_commit.md` — write-path group commit (batch fsync)
-- `E1_rocksdb_bench.md` — RocksDB write benchmark (E1a), B+Tree comparison (E1b) pending
+- `E1_rocksdb_bench.md` — RocksDB write benchmark (E1a) + in-memory B+Tree comparison (E1b)
 
 ## Roadmap
 
@@ -117,9 +126,16 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 - [x] E1 storage benchmark: RocksDB (E1a) vs in-memory B+Tree (E1b) — see [E1 experiment](docs/experiments/E1_rocksdb_bench.md)
 - [x] W4 ADR + storage engine selection write-up — see [ADR-004](docs/W4_adr_engine_selection.md) and [why RocksDB](docs/blog_why_openxdb_rocksdb.md)
 - [x] B2 batched commits on the write path (group commit / batch fsync) — see [B2 design](docs/B2_group_commit.md)
+- [x] P0 SQL enhancements: JOIN / GROUP BY / FROM+IN subqueries / BETWEEN / session transactions (BEGIN/COMMIT/ROLLBACK) — see [T8 design](docs/T8_p0_sql_enhancements.md)
+- [x] P1 CSV import/export + DATE/DECIMAL/BLOB types — see [T9 design](docs/T9_p1_csv_types.md)
+- [x] P2 ops statements (SHOW TABLES / SHOW INDEX / EXPLAIN / slow queries) + expressions (LIKE / CASE WHEN) — see [T10 design](docs/T10_p2_ops_expr.md)
+- [x] M2 replication: binlog + replicator + follower + heartbeat (async master-follower) — see [T11 design](docs/T11_m2_replication.md)
+- [x] M3 sharding: RegionInfo metadata + Router + region-prefixed keys + cross-region queries (SPLIT / LIST REGIONS / LOCATE REGION) — see [T12 design](docs/T12_m3_sharding.md)
 - [x] M2/M3 interface reservations (regions, versions, multi-node) — see [T7 design](docs/T7_m2m3_reservations.md)
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
+*（内容由AI生成，仅供参考）*
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

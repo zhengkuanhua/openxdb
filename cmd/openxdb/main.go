@@ -22,7 +22,7 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "version":
-		fmt.Printf("OpenXDB %s (M1 single-node)\n", version)
+		fmt.Printf("OpenXDB %s (M2 master-slave replication)\n", version)
 		return
 	case "init":
 		err = cmdInit(os.Args[2:])
@@ -107,11 +107,44 @@ func cmdStart(args []string) error {
 		return err
 	}
 	defer d.Close()
+	// M2：主节点复制（可选）。--replica-port 非 0 时监听复制端口并生成 binlog。
+	if rp, ok := flagValue(args, "--replica-port"); ok {
+		n, err := strconv.Atoi(rp)
+		if err != nil || n < 1 || n > 65535 {
+			return errors.New("invalid --replica-port value: " + rp)
+		}
+		if err := d.StartReplication(fmt.Sprintf(":%d", n)); err != nil {
+			return err
+		}
+		fmt.Printf("OpenXDB %s replication listening on :%d (binlog: %s)\n", version, n, db.BinlogFile)
+	}
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("OpenXDB %s serving on %s (data dir: %s)\n", version, addr, dir)
 	s := server.New(d.Txn)
 	s.SQL = d.SQL
 	return s.ServeTCP(addr)
+}
+
+// cmdReplica 以从节点身份启动：连接主节点复制端口并异步应用 binlog。
+func cmdReplica(args []string) error {
+	dir, err := needDataDir(args)
+	if err != nil {
+		return err
+	}
+	master, ok := flagValue(args, "--master")
+	if !ok || master == "" {
+		return errors.New("missing --master <host:port>")
+	}
+	d, err := db.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	if err := d.StartFollower(master); err != nil {
+		return err
+	}
+	fmt.Printf("OpenXDB %s replica of %s (data dir: %s), Ctrl-C to stop.\n", version, master, dir)
+	select {} // 阻塞等待；StartFollower 在后台 goroutine 持续复制
 }
 
 func usage() {
@@ -122,5 +155,8 @@ Commands:
   init    --data-dir <dir>    初始化数据目录
   repl    --data-dir <dir>    本地交互式命令行
   start   --data-dir <dir>    启动 TCP 服务
-          [--port <n>]        监听端口（默认 7788）`)
+          [--port <n>]        监听端口（默认 7788）
+          [--replica-port <n>] 主节点复制端口（启用 M2 复制并生成 binlog）
+  replica --data-dir <dir> --master <host:port>
+                             以从节点身份连接主节点并异步复制`)
 }

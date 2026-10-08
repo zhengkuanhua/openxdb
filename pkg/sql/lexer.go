@@ -23,6 +23,7 @@ const (
 	tokGt         // >
 	tokLe         // <=
 	tokGe         // >=
+	tokDot        // .
 	tokKeyword    // 关键字（大写原文）
 )
 
@@ -39,6 +40,13 @@ var keywords = map[string]bool{
 	"WHERE": true, "ORDER": true, "BY": true, "ASC": true, "DESC": true,
 	"LIMIT": true, "PRIMARY": true, "KEY": true, "UPDATE": true,
 	"SET": true, "DELETE": true, "AND": true, "INDEX": true, "ON": true,
+	"JOIN": true, "INNER": true, "LEFT": true, "OUTER": true,
+	"GROUP": true, "BETWEEN": true, "IN": true, "AS": true,
+	"BEGIN": true, "COMMIT": true, "ROLLBACK": true,
+	"EXPORT": true, "IMPORT": true, "TO": true,
+	// P2：运维语句 + 表达式增强
+	"SHOW": true, "EXPLAIN": true, "TABLES": true, "SLOWQUERIES": true,
+	"LIKE": true, "CASE": true, "WHEN": true, "THEN": true, "ELSE": true, "END": true,
 }
 
 type lexer struct {
@@ -60,6 +68,8 @@ func lex(sql string) ([]token, error) {
 			l.emit(tokRParen, ")", 1)
 		case c == ',':
 			l.emit(tokComma, ",", 1)
+		case c == '.':
+			l.emit(tokDot, ".", 1)
 		case c == ';':
 			l.emit(tokSemicolon, ";", 1)
 		case c == '*':
@@ -139,9 +149,21 @@ func (l *lexer) lexNumber() error {
 	for l.pos < len(l.src) && isDigit(l.src[l.pos]) {
 		l.pos++
 	}
+	// P1：支持小数（DECIMAL 字面量，如 123.45 / -0.5）
+	if l.pos < len(l.src) && l.src[l.pos] == '.' {
+		l.pos++
+		if l.pos >= len(l.src) || !isDigit(l.src[l.pos]) {
+			return errf("invalid number %q at %d", l.src[start:l.pos], start)
+		}
+		for l.pos < len(l.src) && isDigit(l.src[l.pos]) {
+			l.pos++
+		}
+	}
 	text := l.src[start:l.pos]
-	if _, err := strconv.ParseInt(text, 10, 64); err != nil {
-		return errf("invalid number %q at %d", text, start)
+	if !strings.Contains(text, ".") {
+		if _, err := strconv.ParseInt(text, 10, 64); err != nil {
+			return errf("invalid number %q at %d", text, start)
+		}
 	}
 	l.toks = append(l.toks, token{kind: tokNumber, text: text, pos: start})
 	return nil

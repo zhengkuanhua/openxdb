@@ -17,6 +17,9 @@ type txnManager struct {
 	seqNext   uint64     // 下一个待分配的提交序号（锁内分配；仅 Commit 事务占位）
 	applied   uint64     // 已成功应用到存储的最大提交序号
 	applyCond *sync.Cond // 关联 mu，等待轮到自己按序应用
+
+	commitHook func(lsn storage.LSN, seq uint64, batch *storage.WriteBatch) error // M2 复制挂接点
+	hookErr    error                                                              // 最近一次 hook 错误
 }
 
 // New 创建事务管理器并执行启动恢复（重放 WAL 已 Commit 记录）。
@@ -74,6 +77,21 @@ func (m *txnManager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.wal.Close()
+}
+
+// SetCommitHook 注册提交后回调（M2 复制挂接点；传 nil 清除）。
+func (m *txnManager) SetCommitHook(hook func(lsn storage.LSN, seq uint64, batch *storage.WriteBatch) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.commitHook = hook
+	m.hookErr = nil
+}
+
+// HookErr 返回最近一次提交后回调的错误（无错误返回 nil）。
+func (m *txnManager) HookErr() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.hookErr
 }
 
 type txnImpl struct {
@@ -258,6 +276,11 @@ func (t *txnImpl) Commit() error {
 	}
 	m.applied++
 	m.applyCond.Broadcast()
+	if m.commitHook != nil {
+		if herr := m.commitHook(lsn, seq, t.batch); herr != nil {
+			m.hookErr = herr
+		}
+	}
 	t.finish(TxnCommitted)
 	m.mu.Unlock()
 	return nil

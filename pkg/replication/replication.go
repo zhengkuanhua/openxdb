@@ -1,10 +1,10 @@
-// Package replication 提供 M2 复制闭环的接口预留（开发手册 §8，不在 M1 实现）。
+// Package replication 提供主从复制（M2，开发手册 §8）的完整实现：
+//   - Binlog：主节点独立复制日志（append-only 落盘），条目携带单调递增位点 LSN；
+//   - Master：监听复制端口，握手后按位点流式推送 binlog，心跳检测从节点存活；
+//   - Follower：连接主节点，幂等应用 binlog 到本地存储，位点可查询、断线可续传。
 //
-// M1 仅实现单机 WAL + 事务闭环；本包只做演进接口定义，不预支复杂度：
-//   - 复制日志从 WAL 演进：BinlogEntry 是 WalEntry 的复制视图（携带 SchemaVer）；
-//   - Replica 表示一个复制节点，Role 区分 Master / Slave；
-//   - M2 目标：Master 写 → 同步/半同步复制 → Slave 只读，半同步下至少 1 个
-//     Slave ack 后才返回提交成功（RPO≈0）。
+// 一致性模型（M2）：主节点本地事务提交时同步落 binlog（RPO=0），推送与从库应用
+// 为异步（无 ack 等待）；半同步/同步复制留待 M3。详见 docs/T11_m2_replication.md。
 package replication
 
 import (
@@ -19,20 +19,22 @@ type ReplicaRole uint8
 const (
 	// RoleMaster 主节点：接受写请求并生成复制日志。
 	RoleMaster ReplicaRole = 1
-	// RoleSlave 从节点：只读，按复制日志回放。
+	// RoleSlave 从节点：连接主节点并按复制日志回放。
 	RoleSlave ReplicaRole = 2
 )
 
-// BinlogEntry 一条复制日志条目（M2 启用，从 WAL 演进）。
-// 相比 WalEntry 增加 CommitLSN 与 SchemaVer：Slave 据此在一致点切换表结构。
+// BinlogEntry 一条复制日志条目（M2 实现）。
+// 相比 WalEntry 增加 CommitLSN 与 SchemaVer：SchemaVer 用于表结构演进（当前恒 0），
+// CommitLSN 记录源 WAL 提交点（审计/故障定位），复制位点以 LSN 为准。
 type BinlogEntry struct {
-	// LSN 本条复制日志的日志序号（与 WAL LSN 对齐）。
+	// LSN 本条复制日志位点：binlog 内部单调递增（从 1 开始），
+	// 同时作为幂等标识与断点续传基准（follower 相同位点不重复应用）。
 	LSN storage.LSN
-	// CommitLSN 该写事务的提交点 LSN（半同步 ack 判定基准）。
+	// CommitLSN 该写事务在源 WAL 中的提交点 LSN（M2 仅记录，不做同步判定基准）。
 	CommitLSN storage.LSN
 	// Batch 实际写入集合（Put/Delete）。
 	Batch *storage.WriteBatch
-	// SchemaVer 写入时表结构版本，Slave 回放前校验。
+	// SchemaVer 写入时表结构版本，Slave 回放前校验（M2 恒为 0）。
 	SchemaVer uint64
 }
 
@@ -44,20 +46,25 @@ type Replica struct {
 	BinlogFile string
 }
 
-// Replicator M2 复制器接口预留（M2 实现，不在 M1 实现）。
-// 语义：Master Append 后按策略（同步/半同步）等待 Slave ack；Slave 侧 Pull 回放。
+// Replicator 主端复制器（MasterReplicator 实现）。
+// 语义：Master 本地提交后 Append 落盘 binlog 并按位点推送；Slave 侧 Pull 用于
+// 程序化拉取；Ack 记录从节点已确认位点（断线续传基准）。
 type Replicator interface {
-	// Append 将一条复制日志写入 binlog 并按复制策略同步。
+	// Append 将一条复制日志写入 binlog 并广播唤醒推送（异步，不等待从节点确认）。
 	Append(entry *BinlogEntry) error
-	// Pull 从指定 LSN 起拉取复制日志（Slave 侧调用）。
+	// Pull 从指定 LSN 起拉取复制日志（顺序读取）。
 	Pull(from storage.LSN) ([]*BinlogEntry, error)
-	// Ack 标记某个 Slave 已回放到指定 LSN（半同步判定用）。
+	// Ack 标记某个从节点已回放到指定 LSN（断线续传用）。
 	Ack(node string, lsn storage.LSN) error
 	Close() error
 }
 
 // 标准错误。
 var (
-	// ErrNotImplemented 预留接口尚未实现：M1 不应实例化本包类型。
-	ErrNotImplemented = errors.New("replication: not implemented in M1")
+	// ErrGap 从节点收到不连续位点（跳号），数据流存在缺口时返回。
+	ErrGap = errors.New("replication: binlog lsn gap detected")
+	// ErrCorrupt binlog 或复制流损坏。
+	ErrCorrupt = errors.New("replication: corrupt binlog")
+	// ErrClosed 复制器/存储已关闭。
+	ErrClosed = errors.New("replication: closed")
 )
