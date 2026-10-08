@@ -47,7 +47,7 @@ jobs:
           $env:Path = "C:\msys64\ucrt64\bin;" + $env:Path
           $env:CGO_CFLAGS = "-IC:/rocksdb-src/include"
           $env:CGO_CXXFLAGS = "-IC:/rocksdb-src/include"
-          $env:CGO_LDFLAGS = "-LC:/rocksdb-build -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -lstdc++ -static"
+          $env:CGO_LDFLAGS = "-LC:/rocksdb-build -LC:/msys64/ucrt64/lib -Wl,--start-group -lrocksdb -lstdc++ -lwinpthread -Wl,--end-group -lshlwapi -lrpcrt4 -lws2_32 -static"
           go build ./...
 
       - name: Test
@@ -56,5 +56,5 @@ jobs:
           $env:Path = "C:\msys64\ucrt64\bin;" + $env:Path
           $env:CGO_CFLAGS = "-IC:/rocksdb-src/include"
           $env:CGO_CXXFLAGS = "-IC:/rocksdb-src/include"
-          $env:CGO_LDFLAGS = "-LC:/rocksdb-build -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -lstdc++ -static"
+          $env:CGO_LDFLAGS = "-LC:/rocksdb-build -LC:/msys64/ucrt64/lib -Wl,--start-group -lrocksdb -lstdc++ -lwinpthread -Wl,--end-group -lshlwapi -lrpcrt4 -lws2_32 -static"
           go test ./...
