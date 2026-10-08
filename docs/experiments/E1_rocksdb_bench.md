@@ -22,7 +22,7 @@ AIGC:
 | OS | Windows 11 (Build 22631) |
 | 编译器 | MinGW-w64 GCC 16.2.0（winlibs x86_64-posix-seh-ucrt，静态链接） |
 | RocksDB | v11.8.1 源码编译（Release / PORTABLE=1 / 无第三方压缩库） |
-| 基准程序 | `tests/bench/e1_bench.cpp`（C++20） |
+| 基准程序 | `tests/bench/rocksdb/e1_bench.cpp`（C++20） |
 
 ## 方法
 
