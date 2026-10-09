@@ -52,9 +52,13 @@ func TestAddNodeHandshake(t *testing.T) {
 	if !ok || nb.Addr == "" || nb.State != cluster.StateUp {
 		t.Fatalf("GetNode(node-b): %+v ok=%v", nb, ok)
 	}
-	// 重复注册报错
-	if _, err := mgrA.AddNode(srvB.SelfAddr); !errors.Is(err, cluster.ErrNodeExists) {
-		t.Fatalf("second AddNode: want ErrNodeExists, got %v", err)
+	// 重复注册幂等：节点重启（换地址）后重新 ADD NODE 更新地址，保持同一 NodeID
+	if _, err := mgrA.AddNode(srvB.SelfAddr); err != nil {
+		t.Fatalf("second AddNode (idempotent re-register): want nil, got %v", err)
+	}
+	nb2, ok := mgrA.GetNode("node-b")
+	if !ok || nb2.Addr != srvB.SelfAddr {
+		t.Fatalf("re-registered node-b: %+v ok=%v", nb2, ok)
 	}
 	// 未注册的地址握手失败
 	if _, err := mgrA.AddNode("127.0.0.1:1"); err == nil {

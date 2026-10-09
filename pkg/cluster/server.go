@@ -21,9 +21,9 @@ import (
 
 // Server 集群节点服务。
 type Server struct {
-	SelfID  string
+	SelfID   string
 	SelfAddr string
-	st      storage.Storage
+	st       storage.Storage
 	// router 分片路由（ASSIGN REGION 数据装载时学习 region 归属）。
 	// 由 db.StartCluster 注入，与 SQL 执行器共享同一指针。
 	router *sharding.Router
@@ -36,15 +36,30 @@ type Server struct {
 	idleTimeout time.Duration
 	closed      chan struct{}
 	once        sync.Once
+
+	// 2PC participant state (M5): pending2pc caches prepared ops;
+	// durable marker keys live under m:2pc:* (see txn2pc.go).
+	mu2pc      sync.Mutex
+	pending2pc map[string][]TxnOp
+	// prepareFail 参与者 prepare 阶段故障注入（测试专用；nil = 正常路径）。
+	prepareFail func(txID string) error
+}
+
+// SetPrepareFail 设置参与者 prepare 阶段故障钩子（仅测试使用；传 nil 恢复）。
+func (s *Server) SetPrepareFail(fn func(txID string) error) {
+	s.mu2pc.Lock()
+	defer s.mu2pc.Unlock()
+	s.prepareFail = fn
 }
 
 // NewServer 创建节点服务（selfID 为对端可见的节点身份）。
 func NewServer(st storage.Storage, selfID string) *Server {
 	return &Server{
-		SelfID:     selfID,
-		st:         st,
+		SelfID:      selfID,
+		st:          st,
 		idleTimeout: 30 * time.Second,
-		closed:     make(chan struct{}),
+		closed:      make(chan struct{}),
+		pending2pc:  map[string][]TxnOp{},
 	}
 }
 
@@ -131,6 +146,12 @@ func (s *Server) handleConn(conn net.Conn) {
 		case msgPing:
 			// 复用 M2 心跳：原样回 ts
 			writeFrame(conn, msgPong, payload)
+		case msg2pcPrepareReq:
+			s.handle2pcPrepare(conn, payload)
+		case msg2pcCommitReq:
+			s.handle2pcCommit(conn, payload)
+		case msg2pcAbortReq:
+			s.handle2pcAbort(conn, payload)
 		default:
 			return // 未知帧：断开
 		}

@@ -450,61 +450,86 @@ func (e *Executor) execInsert(s *InsertStmt) (*Result, error) {
 		return nil, &SQLError{Msg: "table not exists: " + s.Table}
 	}
 	affected := 0
+	var ops []kvOp
 	for _, row := range s.Rows {
-		ok, err := e.insertRow(tx, meta, s.Columns, row, false)
+		rops, ok, err := e.insertRowOps(tx, meta, s.Columns, row, false)
 		if err != nil {
 			return nil, err
 		}
 		if ok {
 			affected++
+			ops = append(ops, rops...)
 		}
 	}
 	if auto {
-		if err := tx.Commit(); err != nil {
+		// autocommit：本地 + 远端统一走 2PC 提交（单机零触发）
+		if err := e.exec2pcWrite(tx, ops); err != nil {
+			return nil, err
+		}
+	} else {
+		// 显式会话事务：仅支持本地 region 写（远端写 M5 返回明确错误）
+		if e.hasRemoteOps(ops) {
+			return nil, &SQLError{Msg: "distributed write inside explicit transaction not supported in M5 (autocommit 2PC only)"}
+		}
+		if err := applyOps(tx, ops); err != nil {
 			return nil, err
 		}
 	}
 	return &Result{AffectedRows: affected}, nil
 }
 
+// insertRowOps 单行插入的"物理操作列表"版本：不直接写事务，
+// 返回该行所需的全部键操作（行 Put + 索引键 Put），供调用方本地应用
+// 或 2PC 分组提交（M5）。dupSkip 语义同 insertRow。
+func (e *Executor) insertRowOps(tx txn.Txn, meta *TableMeta, cols []string, row []Value, dupSkip bool) ([]kvOp, bool, error) {
+	vals, err := e.buildRow(meta, cols, row)
+	if err != nil {
+		return nil, false, err
+	}
+	pk, err := e.pkOf(meta, vals)
+	if err != nil {
+		return nil, false, err
+	}
+	// 主键唯一性约束（ACID-C）：按 region 路由定位（远端 region 经
+	// getKVCluster 转发读唯一性，保证跨节点不重复）
+	rid, err := e.locateRow(meta, pk)
+	if err != nil {
+		return nil, false, err
+	}
+	key := e.rowKeyAt(meta, rid, pk)
+	if _, err := e.getKVCluster(tx, key); err == nil {
+		if dupSkip {
+			return nil, false, nil
+		}
+		return nil, false, &SQLError{Msg: "duplicate primary key: " + meta.Name}
+	} else if err != storage.ErrNotFound {
+		return nil, false, err
+	}
+	raw, err := encodeRow(meta, vals)
+	if err != nil {
+		return nil, false, err
+	}
+	ops := []kvOp{{Key: key, Value: raw}}
+	idxOps, err := e.putIndexKeyOps(meta, vals, pk, rid)
+	if err != nil {
+		return nil, false, err
+	}
+	ops = append(ops, idxOps...)
+	return ops, true, nil
+}
+
 // insertRow 单行插入（类型强制 + 主键唯一性 + 行写入 + 索引维护）。
 // dupSkip=true 时主键已存在返回 (false, nil)（导入语义跳过）；
 // dupSkip=false 时主键已存在返回错误（INSERT 唯一性约束）。
 func (e *Executor) insertRow(tx txn.Txn, meta *TableMeta, cols []string, row []Value, dupSkip bool) (bool, error) {
-	vals, err := e.buildRow(meta, cols, row)
+	ops, ok, err := e.insertRowOps(tx, meta, cols, row, dupSkip)
 	if err != nil {
 		return false, err
 	}
-	pk, err := e.pkOf(meta, vals)
-	if err != nil {
-		return false, err
+	if !ok {
+		return false, nil
 	}
-	// 主键唯一性约束（ACID-C）：已存在则冲突（按 region 路由定位）
-	rid, err := e.locateRow(meta, pk)
-	if err != nil {
-		return false, err
-	}
-	// M4 第一簇：禁止写远端 region（分布式写事务下簇统一）
-	if err := e.checkWritable(rid); err != nil {
-		return false, err
-	}
-	key := e.rowKeyAt(meta, rid, pk)
-	if _, err := tx.Get(key); err == nil {
-		if dupSkip {
-			return false, nil
-		}
-		return false, &SQLError{Msg: "duplicate primary key: " + meta.Name}
-	} else if err != storage.ErrNotFound {
-		return false, err
-	}
-	raw, err := encodeRow(meta, vals)
-	if err != nil {
-		return false, err
-	}
-	if err := tx.Put(key, raw); err != nil {
-		return false, err
-	}
-	if err := e.putIndexKeys(tx, meta, vals, pk, rid); err != nil {
+	if err := applyOps(tx, ops); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -1359,6 +1384,7 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 		return nil, err
 	}
 	affected := 0
+	var ops []kvOp
 	for _, kv := range pairs {
 		row, err := decodeRow(meta, kv.Value)
 		if err != nil {
@@ -1372,15 +1398,13 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 			continue
 		}
 		rid := ridOf(kv.Key)
-		// M4 第一簇：远端 region 的行不可本地修改
-		if err := e.checkWritable(rid); err != nil {
-			return nil, err
-		}
 		pk := pkSuffixOf(meta, innerOf(kv.Key))
-		// 维护索引：先删旧索引键
-		if err := e.delIndexKeys(tx, meta, row, pk, rid); err != nil {
+		// 维护索引：先删旧索引键（收集 ops，暂不落事务缓冲）
+		dops, err := e.delIndexKeyOps(meta, row, pk, rid)
+		if err != nil {
 			return nil, err
 		}
+		ops = append(ops, dops...)
 		for _, set := range s.Sets {
 			idx := colIndex(meta, set.Col)
 			if idx < 0 {
@@ -1396,17 +1420,24 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := tx.Put(kv.Key, raw); err != nil {
+		ops = append(ops, kvOp{Key: kv.Key, Value: raw})
+		// 写新索引键（收集 ops）
+		iops, err := e.putIndexKeyOps(meta, row, pk, rid)
+		if err != nil {
 			return nil, err
 		}
-		// 写新索引键
-		if err := e.putIndexKeys(tx, meta, row, pk, rid); err != nil {
-			return nil, err
-		}
+		ops = append(ops, iops...)
 		affected++
 	}
 	if auto {
-		if err := tx.Commit(); err != nil {
+		if err := e.exec2pcWrite(tx, ops); err != nil {
+			return nil, err
+		}
+	} else {
+		if e.hasRemoteOps(ops) {
+			return nil, &SQLError{Msg: "distributed write inside explicit transaction not supported in M5 (autocommit 2PC only)"}
+		}
+		if err := applyOps(tx, ops); err != nil {
 			return nil, err
 		}
 	}
@@ -1436,6 +1467,7 @@ func (e *Executor) execDelete(s *DeleteStmt) (*Result, error) {
 		return nil, err
 	}
 	affected := 0
+	var ops []kvOp
 	for _, kv := range pairs {
 		row, err := decodeRow(meta, kv.Value)
 		if err != nil {
@@ -1449,20 +1481,23 @@ func (e *Executor) execDelete(s *DeleteStmt) (*Result, error) {
 			continue
 		}
 		rid := ridOf(kv.Key)
-		// M4 第一簇：远端 region 的行不可本地删除
-		if err := e.checkWritable(rid); err != nil {
+		dops, err := e.delIndexKeyOps(meta, row, pkSuffixOf(meta, innerOf(kv.Key)), rid)
+		if err != nil {
 			return nil, err
 		}
-		if err := e.delIndexKeys(tx, meta, row, pkSuffixOf(meta, innerOf(kv.Key)), rid); err != nil {
-			return nil, err
-		}
-		if err := tx.Delete(kv.Key); err != nil {
-			return nil, err
-		}
+		ops = append(ops, dops...)
+		ops = append(ops, kvOp{Key: kv.Key, Delete: true})
 		affected++
 	}
 	if auto {
-		if err := tx.Commit(); err != nil {
+		if err := e.exec2pcWrite(tx, ops); err != nil {
+			return nil, err
+		}
+	} else {
+		if e.hasRemoteOps(ops) {
+			return nil, &SQLError{Msg: "distributed write inside explicit transaction not supported in M5 (autocommit 2PC only)"}
+		}
+		if err := applyOps(tx, ops); err != nil {
 			return nil, err
 		}
 	}
@@ -1528,39 +1563,58 @@ func pkSuffixOf(meta *TableMeta, rowKey []byte) []byte {
 	return rowKey[1+8:]
 }
 
-// putIndexKeys 为一行写入其所有索引键（值 = 存在标记）。
+// putIndexKeyOps 为一行产出其所有索引键 Put 操作（值 = 存在标记），
+// 不直接写事务；供本地 applyOps 或 2PC 分组提交（M5）使用。
 // rid 为行所在 region；索引键与行键同 region（保证回表同前缀）。
-func (e *Executor) putIndexKeys(tx txn.Txn, meta *TableMeta, row []Value, pk []byte, rid storage.ID) error {
+func (e *Executor) putIndexKeyOps(meta *TableMeta, row []Value, pk []byte, rid storage.ID) ([]kvOp, error) {
+	ops := make([]kvOp, 0, len(meta.Indexes))
 	for i := range meta.Indexes {
 		idx := &meta.Indexes[i]
 		ci := colIndex(meta, idx.Col)
 		val, err := idxBytes(row[ci])
 		if err != nil {
-			return err
+			return nil, err
 		}
 		key := EncodeIndexKey2(meta.ID, idx.ID, val, pk)
-		if err := tx.Put(sharding.EncodeRegionKey(rid, key), []byte{1}); err != nil {
-			return err
-		}
+		ops = append(ops, kvOp{Key: sharding.EncodeRegionKey(rid, key), Value: []byte{1}})
 	}
-	return nil
+	return ops, nil
+}
+
+// delIndexKeyOps 为一行产出其所有索引键 Delete 操作（rid 语义同
+// putIndexKeyOps）。
+func (e *Executor) delIndexKeyOps(meta *TableMeta, row []Value, pk []byte, rid storage.ID) ([]kvOp, error) {
+	ops := make([]kvOp, 0, len(meta.Indexes))
+	for i := range meta.Indexes {
+		idx := &meta.Indexes[i]
+		ci := colIndex(meta, idx.Col)
+		val, err := idxBytes(row[ci])
+		if err != nil {
+			return nil, err
+		}
+		key := EncodeIndexKey2(meta.ID, idx.ID, val, pk)
+		ops = append(ops, kvOp{Key: sharding.EncodeRegionKey(rid, key), Delete: true})
+	}
+	return ops, nil
+}
+
+// putIndexKeys 为一行写入其所有索引键（值 = 存在标记）。
+// rid 为行所在 region；索引键与行键同 region（保证回表同前缀）。
+func (e *Executor) putIndexKeys(tx txn.Txn, meta *TableMeta, row []Value, pk []byte, rid storage.ID) error {
+	ops, err := e.putIndexKeyOps(meta, row, pk, rid)
+	if err != nil {
+		return err
+	}
+	return applyOps(tx, ops)
 }
 
 // delIndexKeys 删除一行在所有索引上的键（rid 语义同 putIndexKeys）。
 func (e *Executor) delIndexKeys(tx txn.Txn, meta *TableMeta, row []Value, pk []byte, rid storage.ID) error {
-	for i := range meta.Indexes {
-		idx := &meta.Indexes[i]
-		ci := colIndex(meta, idx.Col)
-		val, err := idxBytes(row[ci])
-		if err != nil {
-			return err
-		}
-		key := EncodeIndexKey2(meta.ID, idx.ID, val, pk)
-		if err := tx.Delete(sharding.EncodeRegionKey(rid, key)); err != nil {
-			return err
-		}
+	ops, err := e.delIndexKeyOps(meta, row, pk, rid)
+	if err != nil {
+		return err
 	}
-	return nil
+	return applyOps(tx, ops)
 }
 
 // matchWhere 行级条件匹配（AND 组合；无 WHERE 恒真）。

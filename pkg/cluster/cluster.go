@@ -78,7 +78,7 @@ var (
 
 // Manager 集群管理器：节点注册表 + 心跳 + 查询转发客户端。
 type Manager struct {
-	SelfID  string
+	SelfID   string
 	SelfAddr string
 
 	mu    sync.RWMutex
@@ -137,9 +137,14 @@ func (m *Manager) AddNode(addr string) (string, error) {
 		return "", errors.New("cluster: cannot add self node")
 	}
 	m.mu.Lock()
-	if _, ok := m.nodes[hello.NodeID]; ok {
+	if n, ok := m.nodes[hello.NodeID]; ok {
+		// 幂等重注册：节点重启（换地址）后重新 ADD NODE 时更新地址与状态，
+		// 保持同一 NodeID，不重复报错。
+		n.Addr = addr
+		n.State = StateUp
+		n.LastSeen = time.Now().UnixMilli()
 		m.mu.Unlock()
-		return "", ErrNodeExists
+		return hello.NodeID, nil
 	}
 	m.nodes[hello.NodeID] = &NodeInfo{
 		ID: hello.NodeID, Addr: addr, Role: RoleData, State: StateUp,

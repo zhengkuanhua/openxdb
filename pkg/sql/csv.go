@@ -138,6 +138,7 @@ func (e *Executor) execImport(s *ImportStmt) (*Result, error) {
 		}
 	}
 	inserted, skipped := 0, 0
+	var ops []kvOp
 	for {
 		rec, err := r.Read()
 		if err != nil {
@@ -157,17 +158,19 @@ func (e *Executor) execImport(s *ImportStmt) (*Result, error) {
 			}
 			vals[i] = v
 		}
-		ok, err := e.insertRow(tx, meta, nil, vals, true)
+		rops, ok, err := e.insertRowOps(tx, meta, nil, vals, true)
 		if err != nil {
 			return nil, err
 		}
 		if ok {
 			inserted++
+			ops = append(ops, rops...)
 		} else {
 			skipped++
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	// M5：批量行统一提交（本地组 applyOps + 远端组 2PC；单机零触发）
+	if err := e.exec2pcWrite(tx, ops); err != nil {
 		return nil, err
 	}
 	return &Result{Columns: []string{"inserted", "skipped"}, AffectedRows: inserted, Rows: [][]Value{{IntVal(int64(inserted)), IntVal(int64(skipped))}}}, nil

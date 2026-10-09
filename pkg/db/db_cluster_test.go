@@ -166,15 +166,18 @@ func TestM4CrossNodeFullConsistency(t *testing.T) {
 	if len(res.Rows) != 1 || res.Rows[0][0].S != "u5" {
 		t.Fatalf("B point id=5 (local): %+v", res.Rows)
 	}
-	// 更新/删除等写路径第一簇仅本地：A 上写本地 region 正常，写远端 region 报错
+	// 写路径：本地 region 更新正常；M5 起跨 region 写走 2PC 提交成功（不再拦截报错）
 	mustSQL(t, dA, "UPDATE users SET age = 99 WHERE id = 1")
-	if _, err := dA.SQL.Execute("UPDATE users SET age = 99 WHERE id = 5"); err == nil {
-		t.Fatalf("A UPDATE remote region: want error, got nil")
-	}
+	mustSQL(t, dA, "UPDATE users SET age = 99 WHERE id = 5")
 	// 读侧验证本地更新可见（写路径未破坏 M2/M3 语义）
 	res = mustSQL(t, dA, "SELECT age FROM users WHERE id = 1")
 	if len(res.Rows) != 1 || res.Rows[0][0].I != 99 {
 		t.Fatalf("A read after local update: %+v", res.Rows)
+	}
+	// M5：跨 region 2PC 提交后两端一致（B 侧 id=5 归属本地 region）
+	res = mustSQL(t, dB, "SELECT age FROM users WHERE id = 5")
+	if len(res.Rows) != 1 || res.Rows[0][0].I != 99 {
+		t.Fatalf("B read after cross-node 2pc update: %+v", res.Rows)
 	}
 }
 

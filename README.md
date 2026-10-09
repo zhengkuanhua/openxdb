@@ -22,7 +22,7 @@ AIGC:
 
 OpenXDB is a from-scratch, single-node relational database kernel built for learning and experimentation. It implements a storage engine on top of RocksDB via cgo, a write-ahead log (WAL), transactional layer with snapshot isolation, a SQL subset with secondary indexes, and an in-memory B+Tree used as both an LSM comparator and a reference implementation.
 
-> **Status: M4 多节点落地 (v4.0-P3-M4), v0.4.0-alpha.** T1–T13 complete (P0/P1/P2 feature clusters + M2 replication + M3 sharding + M4 multi-node first cluster), all test suites green.
+> **Status: M5 分布式写路径落地 (v5.0-P3-M5), v0.5.0-alpha.** T1–T14 complete (P0/P1/P2 feature clusters + M2 replication + M3 sharding + M4 multi-node read + M5 distributed write/2PC), all test suites green.
 
 ## Highlights
 
@@ -35,6 +35,7 @@ OpenXDB is a from-scratch, single-node relational database kernel built for lear
 - **Replication (M2)** — master-follower async replication: commit-hook binlog (independent append-only file, monotonically increasing LSN), replicator push with per-slot resume, follower idempotent apply, PING/PONG heartbeats with offline detection (`pkg/replication`, `pkg/txn`, `pkg/db`).
 - **Sharding (M3)** — logical sharding on the single-node kernel: RegionInfo metadata persisted as `m:regions`, Router with half-open `[StartKey, EndKey)` boundary semantics, region-prefixed physical keys (`r` + regionID:8B + inner key), cross-region point/range/full-table queries via range expansion + merge, and SPLIT / LIST REGIONS / LOCATE REGION management; default single-region shape keeps pre-sharding behavior unchanged (`pkg/sharding`, `pkg/sql`, `pkg/db`).
 - **Multi-node cluster (M4)** — first distributed cluster: node topology with NodeInfo registry (`ADD NODE` / `SHOW NODES`), handshake and liveness via the reused M2 PING/PONG heartbeat protocol, cluster route table (region → node, `ASSIGN REGION ... TO NODE` / `SHOW REGION ROUTES`), and cross-node SELECT forwarding: non-local regions are executed via TCP on their owning node and merged back into the existing executor semantics (frames 16-21, byte-level physical-key scan to avoid package cycles); remote-region writes are rejected until the distributed write transaction cluster (2PC) lands (`pkg/cluster`, `pkg/sql`, `pkg/db`).
+- **Distributed write / 2PC (M5)** — cross-node write atomicity on the M4 cluster: autocommit INSERT/UPDATE/DELETE (incl. CSV IMPORT) that touch both local and remote regions are executed as a two-phase commit — the coordinator applies local ops, PREPAREs remote participants (ops persisted under `m:2pc:*` for crash recovery), commits locally, then idempotently COMMITs all participants; any PREPARE failure or local commit failure ABORTs the whole statement with understandable errors (`TXN_PREPARE_FAILED` / `TXN_COMMIT_ABORTED` / `TXN_COMMIT_UNCERTAIN`). Protocol frames 22-27 extend the M4 framing; single-node deployments never enter the 2PC path (zero regression) (`pkg/cluster`, `pkg/sql/2pc.go`, `pkg/db`).
 
 ## Architecture
 
@@ -48,6 +49,7 @@ OpenXDB is a from-scratch, single-node relational database kernel built for lear
 | Replication | `pkg/replication`, `pkg/txn`, `pkg/db` | Binlog store, master replicator (push + heartbeat), follower (idempotent apply), commit-hook wiring |
 | Sharding | `pkg/sharding`, `pkg/sql`, `pkg/db` | RegionInfo metadata, Router key→region mapping, region-prefixed physical keys, cross-region query merge, split management |
 | Cluster | `pkg/cluster`, `pkg/sql`, `pkg/db` | Node registry (m:nodes), handshake/liveness, cluster route table (region→node), cross-node SELECT forwarding + merge, region data load (REGION_PUSH) |
+| Distributed write / 2PC | `pkg/cluster`, `pkg/sql/2pc.go`, `pkg/db` | Two-phase commit coordinator (ops grouping by region, prepare→local commit→participant commit/abort), participant prepare persistence + idempotent commit/abort markers (m:2pc:*), crash recovery (Recover2PC) |
 | Data dir | `pkg/db` | Initialization, engine + WAL + txn manager wiring, crash recovery |
 
 ### Row / index key encoding
@@ -108,13 +110,13 @@ DELETE FROM users WHERE id = 3;
 go test ./...
 ```
 
-All packages pass: `cluster` (node handshake, query forwarding, heartbeat down, region push route learning), `db` (incl. replication integration: binlog on commit, master-follower consistency, idempotent apply; incl. M4 two-node integration: cross-node full consistency, single-region assign), `replication` (binlog persistence/corruption, resume after reconnect, heartbeat timeouts), `server`, `sharding` (7 region-key/router/metadata cases), `sql` (incl. 9 secondary-index cases and 11 sharding integration cases), `storage`, `storage/btree` (incl. randomized insert/delete invariant tests), `storage/rocksdb`, `txn`, `wal`.
+All packages pass: `cluster` (node handshake, query forwarding, heartbeat down, region push route learning, idempotent node re-register), `db` (incl. replication integration: binlog on commit, master-follower consistency, idempotent apply; incl. M4 two-node integration: cross-node full consistency, single-region assign; incl. M5 2PC integration: cross-node insert commit consistency, cross-node update/delete, prepare-failure abort rollback, single-node zero regression, crash recovery clears markers), `replication` (binlog persistence/corruption, resume after reconnect, heartbeat timeouts), `server`, `sharding` (7 region-key/router/metadata cases), `sql` (incl. 9 secondary-index cases and 11 sharding integration cases), `storage`, `storage/btree` (incl. randomized insert/delete invariant tests), `storage/rocksdb`, `txn`, `wal`.
 
 ## Development log
 
 Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmarks):
 
-- `T1_rocksdb_storage_impl.md`, `T2_wal_impl.md`, `T3_sql_layer.md`, `T3_txn_impl.md`, `T4_acid_notes.md`, `T5_cli_impl.md`, `T6_index_layer.md`, `T8_p0_sql_enhancements.md`, `T9_p1_csv_types.md`, `T10_p2_ops_expr.md`, `T11_m2_replication.md`, `T12_m3_sharding.md`, `T13_m4_multinode.md`
+- `T1_rocksdb_storage_impl.md`, `T2_wal_impl.md`, `T3_sql_layer.md`, `T3_txn_impl.md`, `T4_acid_notes.md`, `T5_cli_impl.md`, `T6_index_layer.md`, `T8_p0_sql_enhancements.md`, `T9_p1_csv_types.md`, `T10_p2_ops_expr.md`, `T11_m2_replication.md`, `T12_m3_sharding.md`, `T13_m4_multinode.md`, `T14_m5_2pc.md`
 - `B2_group_commit.md` — write-path group commit (batch fsync)
 - `E1_rocksdb_bench.md` — RocksDB write benchmark (E1a) + in-memory B+Tree comparison (E1b)
 
@@ -134,7 +136,7 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 - [x] M2 replication: binlog + replicator + follower + heartbeat (async master-follower) — see [T11 design](docs/T11_m2_replication.md)
 - [x] M3 sharding: RegionInfo metadata + Router + region-prefixed keys + cross-region queries (SPLIT / LIST REGIONS / LOCATE REGION) — see [T12 design](docs/T12_m3_sharding.md)
 - [x] M4 multi-node cluster: node topology + handshake/liveness + cluster route table (region→node) + cross-node SELECT forwarding/merge (ADD NODE / SHOW NODES / ASSIGN REGION / SHOW REGION ROUTES) — see [T13 design](docs/T13_m4_multinode.md)
-- [ ] M5 distributed write path: cross-node transactions / 2PC (planned next cluster)
+- [x] M5 distributed write path: cross-node transactions / 2PC (coordinator + participant, prepare persistence, idempotent commit/abort, crash recovery, single-node zero trigger) — see [T14 design](docs/T14_m5_2pc.md)
 - [x] M2/M3 interface reservations (regions, versions, multi-node) — see [T7 design](docs/T7_m2m3_reservations.md)
 
 ## License

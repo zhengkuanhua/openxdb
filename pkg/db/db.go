@@ -190,6 +190,11 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	srv := cluster.NewServer(d.Storage, d.Cluster.SelfID)
 	srv.SetRouter(d.SQL.ExecutorRouter())
 	srv.SetManager(d.Cluster)
+	// M5：2PC 崩溃恢复——清理未决 prepare（未决事务回滚，数据从未写入）
+	// 与历史幂等标记（仅运行期有效），保证重启后参与者状态干净可重入。
+	if err := srv.Recover2PC(); err != nil {
+		return "", fmt.Errorf("db: recover 2pc: %w", err)
+	}
 	realAddr, err := srv.ListenAndServe(addr)
 	if err != nil {
 		return "", fmt.Errorf("db: serve cluster: %w", err)
