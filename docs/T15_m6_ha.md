@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_86f4216cc39e11f18019525400248c00
+    ReservedCode1: r+9LNmtjgzsDdC0MWSNx5fYYc+8q1esCbMu6KFFwSrJf3v56Qo3P1HVmZ7d2du0yjFo5P0pamm7UW6SMURlmuTZXWVdD2MqxlBYq54FndZsf1kijYTtvlA/Y/uBzllfejQcCQ7IYQOF8g/bkaHvwd5UjrErv0bAukGxZ6eDS/cYBzHnrKDFe57uh1bY=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_86f4216cc39e11f18019525400248c00
+    ReservedCode2: r+9LNmtjgzsDdC0MWSNx5fYYc+8q1esCbMu6KFFwSrJf3v56Qo3P1HVmZ7d2du0yjFo5P0pamm7UW6SMURlmuTZXWVdD2MqxlBYq54FndZsf1kijYTtvlA/Y/uBzllfejQcCQ7IYQOF8g/bkaHvwd5UjrErv0bAukGxZ6eDS/cYBzHnrKDFe57uh1bY=
+---
+
 # T15 M6 高可用与故障转移（HA/Failover）
 
 - 状态：已落地（v5.0-P4-M6，v0.6.0-alpha）
@@ -170,3 +181,4 @@ go test ./... -count=1
 | `pkg/storage/rocksdb/rocksdb.go` | cgo LDFLAGS 修正（消除 libstdc++ 双重链接，补 shlwapi/rpcrt4/ws2_32） |
 | `docs/T15_m6_ha.md` | 本文档 |
 | `README.md` | Status v5.0-P4-M6、Highlights、Architecture、Tests、Roadmap 勾选 M6 |
+*（内容由AI生成，仅供参考）*

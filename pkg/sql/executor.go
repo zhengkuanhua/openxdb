@@ -32,13 +32,28 @@ type Executor struct {
 	// M6 故障转移状态：自动重指派互斥 + 已处理 down 节点去重。
 	failoverMu   sync.Mutex
 	failoverDone map[string]bool
+	// M7 自动分裂：配置（开启 + 行数阈值）+ 各表写计数水位。
+	splitMu        sync.Mutex
+	splitCfg       splitConfig
+	splitAcc       map[uint64]int64
+	// M7 自动均衡：周期循环控制（并发触发互斥见 balanceOnce）。
+	balanceMu    sync.Mutex
+	balanceStop  chan struct{}
+	balanceDone  chan struct{}
+	balanceOnceN int64 // 已执行均衡轮数（测试观测用）
 	// P2：慢查询配置与记录（内存）
 	slowThreshold int64 // 毫秒阈值；<=0 表示不记录（默认 1000ms）
 	slowQueries   []SlowQueryRecord
 }
 
+// splitConfig M7 自动分裂配置。
+type splitConfig struct {
+	enabled      bool
+	rowThreshold int64 // 行数阈值；<=0 视为未开启
+}
+
 func NewExecutor(tm txn.TxnManager) *Executor {
-	return &Executor{tm: tm, router: sharding.NewRouter(), failoverDone: map[string]bool{}}
+	return &Executor{tm: tm, router: sharding.NewRouter(), failoverDone: map[string]bool{}, splitAcc: map[uint64]int64{}}
 }
 
 // SetSlowThreshold 设置慢查询阈值（毫秒，<=0 关闭记录）。
@@ -143,6 +158,10 @@ func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
 		return e.execShowRegionRoutes()
 	case *AssignRegionStmt:
 		return e.execAssignRegion(s)
+	case *SplitRegionStmt:
+		return e.execSplitRegion(s)
+	case *BalanceStmt:
+		return e.execBalance(s)
 	}
 	return nil, ErrUnsupported
 }
@@ -477,6 +496,11 @@ func (e *Executor) execInsert(s *InsertStmt) (*Result, error) {
 		if err := applyOps(tx, ops); err != nil {
 			return nil, err
 		}
+	}
+	// M7 自动分裂：写提交后按配置检查本地 region 数据规模（显式事务内不触发，
+	// 分裂为独立事务，避免与用户事务交叠）。
+	if err := e.maybeAutoSplit(meta); err != nil {
+		return nil, err
 	}
 	return &Result{AffectedRows: affected}, nil
 }
@@ -1444,6 +1468,10 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 			return nil, err
 		}
 	}
+	// M7 自动分裂：写提交后检查本地 region 数据规模（同 execInsert）。
+	if err := e.maybeAutoSplit(meta); err != nil {
+		return nil, err
+	}
 	return &Result{AffectedRows: affected}, nil
 }
 
@@ -1503,6 +1531,10 @@ func (e *Executor) execDelete(s *DeleteStmt) (*Result, error) {
 		if err := applyOps(tx, ops); err != nil {
 			return nil, err
 		}
+	}
+	// M7 自动分裂：写提交后检查本地 region 数据规模（同 execInsert）。
+	if err := e.maybeAutoSplit(meta); err != nil {
+		return nil, err
 	}
 	return &Result{AffectedRows: affected}, nil
 }

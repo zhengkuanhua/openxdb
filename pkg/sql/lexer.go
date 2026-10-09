@@ -48,6 +48,8 @@ var keywords = map[string]bool{
 	"LIKE": true, "CASE": true, "WHEN": true, "THEN": true, "ELSE": true, "END": true,
 	// M4：多节点集群管理语句
 	"ADD": true, "NODE": true, "NODES": true, "REGION": true, "ROUTES": true, "ASSIGN": true,
+	// M7：分裂与负载均衡管理语句
+	"SPLIT": true, "BALANCE": true,
 }
 
 type lexer struct {

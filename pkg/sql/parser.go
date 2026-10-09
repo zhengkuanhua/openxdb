@@ -90,6 +90,11 @@ func (p *parser) parseStmt() (Stmt, error) {
 		return p.parseAddNode()
 	case "ASSIGN":
 		return p.parseAssignRegion()
+	case "SPLIT":
+		return p.parseSplitRegion()
+	case "BALANCE":
+		p.next()
+		return &BalanceStmt{}, nil
 	}
 	return nil, errf("unsupported statement %q at %d", p.cur().text, p.cur().pos)
 }
@@ -136,6 +141,25 @@ func (p *parser) parseAssignRegion() (Stmt, error) {
 		return nil, err
 	}
 	return &AssignRegionStmt{RegionID: uint64(rid), NodeID: nodeTok.text}, nil
+}
+
+// parseSplitRegion SPLIT REGION <regionID>：手动分裂 region（沿数据中点）。
+func (p *parser) parseSplitRegion() (Stmt, error) {
+	if err := p.expectKeyword("SPLIT"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("REGION"); err != nil {
+		return nil, err
+	}
+	ridTok, err := p.expect(tokNumber, "region id")
+	if err != nil {
+		return nil, err
+	}
+	rid, err := strconv.ParseUint(ridTok.text, 10, 64)
+	if err != nil {
+		return nil, errf("invalid region id %q", ridTok.text)
+	}
+	return &SplitRegionStmt{RegionID: rid}, nil
 }
 
 func (p *parser) parseCreate() (Stmt, error) {

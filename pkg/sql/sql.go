@@ -2,6 +2,7 @@ package sql
 
 import (
 	"strings"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
@@ -52,6 +53,27 @@ func (e *Engine) SetCluster(mgr *cluster.Manager, selfID string) { e.ex.SetClust
 // FailoverDownNode 触发节点离线后的 region 自动重指派（M6 心跳回调装配）。
 func (e *Engine) FailoverDownNode(downID string) (int, error) { return e.ex.FailoverDownNode(downID) }
 
+// SetAutoSplit 配置 M7 自动分裂：enabled 开启后，写路径累计水位并检查本地 region
+// 行数，超过 rowThreshold 自动沿数据中点一分为二（rowThreshold<=0 表示未开启）。
+func (e *Engine) SetAutoSplit(enabled bool, rowThreshold int64) {
+	e.ex.setAutoSplit(enabled, rowThreshold)
+}
+
+// SetAutoBalance 配置 M7 自动均衡：enabled 开启后按 interval 周期执行均衡调度
+// （interval<=0 使用默认 3s）；关闭时停止循环。
+func (e *Engine) SetAutoBalance(enabled bool, interval time.Duration) {
+	e.ex.setAutoBalance(enabled, interval)
+}
+
+// StopAutoBalance 停止自动均衡循环（db.Close 装配，避免 Close 竞态）。
+func (e *Engine) StopAutoBalance() { e.ex.stopAutoBalance() }
+
+// SplitRegionNow 手动触发 region 分裂（函数式入口，兼容旧手动 SPLIT）。
+func (e *Engine) SplitRegionNow(regionID uint64) error { return e.ex.splitRegionByID(regionID) }
+
+// BalanceNow 手动触发一次负载均衡（迁移过载本地 region 到最闲存活节点）。
+func (e *Engine) BalanceNow() (*Result, error) { return e.ex.execBalance(&BalanceStmt{}) }
+
 // Execute 解析并执行一条 SQL 语句。
 func (e *Engine) Execute(stmt string) (*Result, error) {
 	ast, err := Parse(stmt)
@@ -70,7 +92,7 @@ func (e *Engine) SlowQueries() []SlowQueryRecord { return e.ex.SlowQueries() }
 // IsSQL 判断一行命令是否以 SQL 关键字开头（供协议层路由）。
 func IsSQL(line string) bool {
 	trimmed := strings.TrimLeft(line, " \t\r\n")
-	for _, kw := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "BEGIN", "COMMIT", "ROLLBACK", "EXPORT", "IMPORT", "SHOW", "EXPLAIN"} {
+	for _, kw := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "BEGIN", "COMMIT", "ROLLBACK", "EXPORT", "IMPORT", "SHOW", "EXPLAIN", "SPLIT", "BALANCE"} {
 		if strings.HasPrefix(strings.ToUpper(trimmed), kw+" ") ||
 			strings.EqualFold(trimmed, kw) {
 			return true

@@ -261,6 +261,22 @@ type AssignRegionStmt struct {
 
 func (AssignRegionStmt) stmt() {}
 
+// ---- M7：region 分裂 / 负载均衡 ----
+
+// SplitRegionStmt SPLIT REGION <regionID>：手动将 region 沿数据中点一分为二。
+// 与 M3 手动 SplitTable（按指定边界）兼容：本语句按当前数据分布自动选边界，
+// 用于等量分裂；显式边界仍走 Engine.SplitTable。
+type SplitRegionStmt struct {
+	RegionID uint64 // 显式 region ID（隐式单 region 也可）
+}
+
+func (SplitRegionStmt) stmt() {}
+
+// BalanceStmt BALANCE：手动触发一次负载均衡（迁移过载本地 region 到最闲存活节点）。
+type BalanceStmt struct{}
+
+func (BalanceStmt) stmt() {}
+
 // Result 执行结果（面向协议层/CLI 输出）。
 type Result struct {
 	Columns      []string

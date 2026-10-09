@@ -292,6 +292,10 @@ func (d *DB) Close() error {
 	}
 	// M6：先停止自动故障转移监控，避免 Close 过程中误触发 promote。
 	d.StopAutoFailover()
+	// M7：停止自动均衡循环，避免 Close 过程中误触发 region 迁移。
+	if d.SQL != nil {
+		d.SQL.StopAutoBalance()
+	}
 	if d.Follower != nil {
 		if err := d.Follower.Stop(); err != nil {
 			errs = append(errs, fmt.Errorf("db: close follower: %w", err))
