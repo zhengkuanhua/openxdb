@@ -78,7 +78,13 @@ func (e *Executor) getKVCluster(tx txn.Txn, key []byte) ([]byte, error) {
 	if e.regionLocal(rid) {
 		return tx.Get(key)
 	}
-	return e.mgr.GetRemote(e.regionNode(rid), key)
+	// M6 读 failover：归属节点 down 时先自动重指派，再按新路由转发；
+	// 无存活目标时回退本节点本地副本，不向客户端报错。
+	node := e.resolveRegionOwner(rid)
+	if node == e.selfID {
+		return tx.Get(key)
+	}
+	return e.mgr.GetRemote(node, key)
 }
 
 // scanMergedCluster 集群感知范围扫描：按 ranges 逐 region 展开执行并合并。
@@ -97,18 +103,24 @@ func (e *Executor) scanMergedCluster(tx txn.Txn, ranges []storage.KeyRange) ([]s
 		if e.regionLocal(rid) {
 			pairs, err = e.scanMerged(tx, []storage.KeyRange{r})
 		} else {
-			rows, rerr := e.mgr.ScanRemote(e.regionNode(rid), r.Start, r.End, 0)
-			if rerr != nil {
-				return nil, rerr
+			// M6 读 failover：归属节点 down 时先自动重指派再转发；无存活目标回退本地
+			node := e.resolveRegionOwner(rid)
+			if node == e.selfID {
+				pairs, err = e.scanMerged(tx, []storage.KeyRange{r})
+			} else {
+				rows, rerr := e.mgr.ScanRemote(node, r.Start, r.End, 0)
+				if rerr != nil {
+					return nil, rerr
+				}
+				pairs = make([]storage.KVPair, 0, len(rows))
+				for _, row := range rows {
+					pairs = append(pairs, storage.KVPair{Key: row.Key, Value: row.Value})
+				}
+				// 单远端区间内按内层键序（与 scanMerged 一致）
+				sort.Slice(pairs, func(i, j int) bool {
+					return bytes.Compare(innerOf(pairs[i].Key), innerOf(pairs[j].Key)) < 0
+				})
 			}
-			pairs = make([]storage.KVPair, 0, len(rows))
-			for _, row := range rows {
-				pairs = append(pairs, storage.KVPair{Key: row.Key, Value: row.Value})
-			}
-			// 单远端区间内按内层键序（与 scanMerged 一致）
-			sort.Slice(pairs, func(i, j int) bool {
-				return bytes.Compare(innerOf(pairs[i].Key), innerOf(pairs[j].Key)) < 0
-			})
 		}
 		if err != nil {
 			return nil, err

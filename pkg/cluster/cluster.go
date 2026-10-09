@@ -88,6 +88,9 @@ type Manager struct {
 	heartbeats *heartbeatLoop
 	hbMu       sync.Mutex
 	stopped    bool
+
+	// M6 节点离线回调（心跳 UP->DOWN 首次转换时异步触发一次）。
+	onDown func(nodeID string)
 }
 
 // NewManager 创建集群管理器（selfID 必须非空）。
@@ -251,6 +254,35 @@ func (m *Manager) MarkDown(id string) {
 	defer m.mu.Unlock()
 	if n, ok := m.nodes[id]; ok {
 		n.State = StateDown
+	}
+}
+
+// IsDown 节点是否已离线（未注册视为在线，兼容"未注册即本地"的单机语义）。
+func (m *Manager) IsDown(id string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n, ok := m.nodes[id]
+	if !ok {
+		return false
+	}
+	return n.State == StateDown
+}
+
+// SetOnDown 注册节点离线回调：心跳检测到节点 UP->DOWN 时异步触发一次。
+// 回调在独立 goroutine 中执行（不阻塞心跳循环；调用方须自行处理并发与锁）。
+func (m *Manager) SetOnDown(fn func(nodeID string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onDown = fn
+}
+
+// notifyDown 异步触发离线回调（仅 UP->DOWN 首次转换，由心跳 tick 判定后调用）。
+func (m *Manager) notifyDown(id string) {
+	m.mu.RLock()
+	fn := m.onDown
+	m.mu.RUnlock()
+	if fn != nil {
+		go fn(id)
 	}
 }
 

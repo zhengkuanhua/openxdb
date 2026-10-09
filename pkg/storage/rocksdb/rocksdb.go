@@ -6,7 +6,7 @@ package rocksdb
 
 /*
 #cgo CXXFLAGS: -std=c++20
-#cgo LDFLAGS: -static-libstdc++ -static-libgcc -lstdc++ -lwinpthread
+#cgo LDFLAGS: -static-libstdc++ -static-libgcc -lwinpthread -lshlwapi -lrpcrt4 -lws2_32
 #include <stdlib.h>
 #include "bridge.h"
 */

@@ -29,13 +29,16 @@ type Executor struct {
 	// db.Open 装配后注入；selfID 供"本节点"归属判断。
 	mgr    *cluster.Manager
 	selfID string
+	// M6 故障转移状态：自动重指派互斥 + 已处理 down 节点去重。
+	failoverMu   sync.Mutex
+	failoverDone map[string]bool
 	// P2：慢查询配置与记录（内存）
 	slowThreshold int64 // 毫秒阈值；<=0 表示不记录（默认 1000ms）
 	slowQueries   []SlowQueryRecord
 }
 
 func NewExecutor(tm txn.TxnManager) *Executor {
-	return &Executor{tm: tm, router: sharding.NewRouter()}
+	return &Executor{tm: tm, router: sharding.NewRouter(), failoverDone: map[string]bool{}}
 }
 
 // SetSlowThreshold 设置慢查询阈值（毫秒，<=0 关闭记录）。

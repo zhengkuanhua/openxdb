@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
@@ -69,6 +70,10 @@ type DB struct {
 	// M4 集群组件（Open 即创建管理器；StartCluster 后服务端监听节点链路）。
 	Cluster    *cluster.Manager // 节点注册表 + 心跳 + 查询转发
 	ClusterSrv *cluster.Server  // 节点链路服务（StartCluster 后非 nil）
+
+	// M6 主从自动故障转移（EnableAutoFailover 后非零；StopAutoFailover 置零）。
+	failoverStop chan struct{}
+	failoverMu   sync.Mutex
 }
 
 // Init 初始化数据目录：创建 data/ 子目录与 openxdb.conf。
@@ -203,6 +208,8 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	d.Cluster.RegisterSelf(realAddr)
 	d.ClusterSrv = srv
 	// 心跳：周期 PING 远端节点，超时标记 DOWN（复用 M2 帧协议）。
+	// M6：节点离线后自动触发 region 重指派（SQL 层读 failover 依赖新路由）。
+	d.Cluster.SetOnDown(func(nodeID string) { _, _ = d.SQL.FailoverDownNode(nodeID) })
 	d.Cluster.StartHeartbeat(2*time.Second, 6*time.Second)
 	return realAddr, nil
 }
@@ -283,6 +290,8 @@ func (d *DB) Close() error {
 		}
 		d.ClusterSrv = nil
 	}
+	// M6：先停止自动故障转移监控，避免 Close 过程中误触发 promote。
+	d.StopAutoFailover()
 	if d.Follower != nil {
 		if err := d.Follower.Stop(); err != nil {
 			errs = append(errs, fmt.Errorf("db: close follower: %w", err))

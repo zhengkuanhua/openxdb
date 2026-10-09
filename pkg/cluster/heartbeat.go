@@ -57,6 +57,8 @@ func (h *heartbeatLoop) tick() {
 		}
 		if now-n.LastSeen > h.timeout.Milliseconds() {
 			h.mgr.MarkDown(n.ID)
+			// M6：UP->DOWN 首次转换时通知 SQL 层触发 region 自动重指派/读 failover
+			h.mgr.notifyDown(n.ID)
 		}
 	}
 }

@@ -49,6 +49,9 @@ func (e *Engine) ExecutorRouter() *sharding.Router { return e.ex.Router() }
 // SetCluster 注入 M4 集群管理器与本节点 ID（供 db.Open 装配，节点注册/转发/路由展开）。
 func (e *Engine) SetCluster(mgr *cluster.Manager, selfID string) { e.ex.SetCluster(mgr, selfID) }
 
+// FailoverDownNode 触发节点离线后的 region 自动重指派（M6 心跳回调装配）。
+func (e *Engine) FailoverDownNode(downID string) (int, error) { return e.ex.FailoverDownNode(downID) }
+
 // Execute 解析并执行一条 SQL 语句。
 func (e *Engine) Execute(stmt string) (*Result, error) {
 	ast, err := Parse(stmt)
