@@ -6,6 +6,7 @@ package rocksdb
 
 /*
 #cgo CXXFLAGS: -std=c++20
+#cgo LDFLAGS: -lstdc++ -lwinpthread
 #include <stdlib.h>
 #include "bridge.h"
 */

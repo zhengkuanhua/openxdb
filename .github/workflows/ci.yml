@@ -45,9 +45,13 @@ jobs:
         shell: pwsh
         run: |
           $env:Path = "C:\msys64\ucrt64\bin;" + $env:Path
+          gcc --version | Select-Object -First 1
+          go version
+          go env CC CXX CGO_LDFLAGS
+          Get-ChildItem C:/msys64/ucrt64/lib -Filter "libstdc++*" | Select-Object Name
           $env:CGO_CFLAGS = "-IC:/rocksdb-src/include"
           $env:CGO_CXXFLAGS = "-IC:/rocksdb-src/include"
-          $env:CGO_LDFLAGS = "-LC:/rocksdb-build -LC:/msys64/ucrt64/lib -Wl,--start-group -lrocksdb -lstdc++ -lwinpthread -Wl,--end-group -lshlwapi -lrpcrt4 -lws2_32 -static"
+          $env:CGO_LDFLAGS = "-LC:/rocksdb-build -LC:/msys64/ucrt64/lib -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -lstdc++ -lwinpthread -static"
           go build ./...
 
       - name: Test
@@ -56,5 +60,5 @@ jobs:
           $env:Path = "C:\msys64\ucrt64\bin;" + $env:Path
           $env:CGO_CFLAGS = "-IC:/rocksdb-src/include"
           $env:CGO_CXXFLAGS = "-IC:/rocksdb-src/include"
-          $env:CGO_LDFLAGS = "-LC:/rocksdb-build -LC:/msys64/ucrt64/lib -Wl,--start-group -lrocksdb -lstdc++ -lwinpthread -Wl,--end-group -lshlwapi -lrpcrt4 -lws2_32 -static"
+          $env:CGO_LDFLAGS = "-LC:/rocksdb-build -LC:/msys64/ucrt64/lib -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -lstdc++ -lwinpthread -static"
           go test ./...
