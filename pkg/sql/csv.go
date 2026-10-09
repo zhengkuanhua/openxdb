@@ -50,7 +50,7 @@ func (e *Executor) execExport(s *ExportStmt) (*Result, error) {
 			}
 		}
 	}
-	pairs, err := e.scanMerged(tx, e.rowRanges(meta))
+	pairs, err := e.scanMergedCluster(tx, e.rowRanges(meta))
 	if err != nil {
 		return nil, err
 	}

@@ -1,7 +1,6 @@
 package sql
 
 import (
-	"strconv"
 	"strings"
 )
 
@@ -47,6 +46,8 @@ var keywords = map[string]bool{
 	// P2：运维语句 + 表达式增强
 	"SHOW": true, "EXPLAIN": true, "TABLES": true, "SLOWQUERIES": true,
 	"LIKE": true, "CASE": true, "WHEN": true, "THEN": true, "ELSE": true, "END": true,
+	// M4：多节点集群管理语句
+	"ADD": true, "NODE": true, "NODES": true, "REGION": true, "ROUTES": true, "ASSIGN": true,
 }
 
 type lexer struct {
@@ -160,11 +161,8 @@ func (l *lexer) lexNumber() error {
 		}
 	}
 	text := l.src[start:l.pos]
-	if !strings.Contains(text, ".") {
-		if _, err := strconv.ParseInt(text, 10, 64); err != nil {
-			return errf("invalid number %q at %d", text, start)
-		}
-	}
+	// 数字 token 不在此处做 int64 范围校验：隐式 region ID（tableID|1<<63）等
+	// uint64 值也应可词法识别；有效性由下游解析（parseInt10 / ParseUint）按语义校验。
 	l.toks = append(l.toks, token{kind: tokNumber, text: text, pos: start})
 	return nil
 }

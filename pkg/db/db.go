@@ -13,11 +13,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/zhengkuanhua/openxdb/pkg/cluster"
 	"github.com/zhengkuanhua/openxdb/pkg/replication"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
 	"github.com/zhengkuanhua/openxdb/pkg/sql"
@@ -63,6 +65,10 @@ type DB struct {
 	// M2 复制组件（未启用时为 nil）。
 	Replicator *replication.MasterReplicator // 主节点复制器（StartReplication 后非 nil）
 	Follower   *replication.Follower         // 从节点复制器（StartFollower 后非 nil）
+
+	// M4 集群组件（Open 即创建管理器；StartCluster 后服务端监听节点链路）。
+	Cluster    *cluster.Manager // 节点注册表 + 心跳 + 查询转发
+	ClusterSrv *cluster.Server  // 节点链路服务（StartCluster 后非 nil）
 }
 
 // Init 初始化数据目录：创建 data/ 子目录与 openxdb.conf。
@@ -85,8 +91,9 @@ func Init(dir string) error {
 	}
 	conf := fmt.Sprintf(`# OpenXDB data directory config
 engine = %s
+node_id = %s
 created_at = %s
-`, DefaultEngine, time.Now().Format(time.RFC3339))
+`, DefaultEngine, clusterNodeID(dir), time.Now().Format(time.RFC3339))
 	if err := os.WriteFile(confPath, []byte(conf), 0o644); err != nil {
 		return fmt.Errorf("db: write config: %w", err)
 	}
@@ -152,7 +159,65 @@ func Open(dir string) (*DB, error) {
 	}
 	eng := sql.New(tm)
 	eng.LoadSharding(seq, regions)
-	return &DB{Dir: dir, Storage: st, WAL: w, Txn: tm, SQL: eng}, nil
+	// M4：恢复节点注册表（m:nodes）并创建集群管理器；selfAddr 由 StartCluster 填充。
+	mgr := cluster.NewManager(clusterNodeID(dir))
+	if raw, err := st.Get(cluster.MetaNodesKey()); err != nil {
+		if err != storage.ErrNotFound {
+			_ = tm.Close()
+			_ = st.Close()
+			return nil, fmt.Errorf("db: load node catalog: %w", err)
+		}
+	} else if len(raw) > 0 {
+		nodes, err := cluster.UnmarshalNodes(raw)
+		if err != nil {
+			_ = tm.Close()
+			_ = st.Close()
+			return nil, fmt.Errorf("db: corrupt node catalog: %w", err)
+		}
+		mgr.SetNodes(nodes)
+	}
+	mgr.RegisterSelf("")
+	eng.SetCluster(mgr, mgr.SelfID)
+	return &DB{Dir: dir, Storage: st, WAL: w, Txn: tm, SQL: eng, Cluster: mgr}, nil
+}
+
+// StartCluster 启动 M4 集群节点链路：监听 addr 提供节点握手/查询转发/数据装载，
+// 并启动心跳循环检测远端节点存活。addr 支持 ":0" 随机端口，返回实际监听地址。
+func (d *DB) StartCluster(addr string) (string, error) {
+	if d.ClusterSrv != nil {
+		return "", errors.New("db: cluster already started")
+	}
+	srv := cluster.NewServer(d.Storage, d.Cluster.SelfID)
+	srv.SetRouter(d.SQL.ExecutorRouter())
+	srv.SetManager(d.Cluster)
+	realAddr, err := srv.ListenAndServe(addr)
+	if err != nil {
+		return "", fmt.Errorf("db: serve cluster: %w", err)
+	}
+	srv.SetAddr(realAddr)
+	d.Cluster.RegisterSelf(realAddr)
+	d.ClusterSrv = srv
+	// 心跳：周期 PING 远端节点，超时标记 DOWN（复用 M2 帧协议）。
+	d.Cluster.StartHeartbeat(2*time.Second, 6*time.Second)
+	return realAddr, nil
+}
+
+// clusterNodeID 读取或生成节点 ID：优先 openxdb.conf 的 node_id，
+// 未初始化该字段的旧数据目录以数据目录短哈希兜底（保证多节点部署可区分）。
+func clusterNodeID(dir string) string {
+	confPath := filepath.Join(dir, ConfigFile)
+	if b, err := os.ReadFile(confPath); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "node_id = ") {
+				if id := strings.TrimPrefix(line, "node_id = "); id != "" {
+					return id
+				}
+			}
+		}
+	}
+	h := crc32.ChecksumIEEE([]byte(filepath.Clean(dir)))
+	return fmt.Sprintf("node-%08x", h)
 }
 
 // StartReplication 启动主节点复制（M2）：创建 binlog 并监听复制端口 addr，
@@ -204,6 +269,15 @@ func (d *DB) ReplicationStatus() (address string, slaves []replication.SlaveStat
 // Close 关闭事务管理器、存储与 WAL（顺序与 Open 相反）。
 func (d *DB) Close() error {
 	var errs []error
+	if d.Cluster != nil {
+		d.Cluster.Stop() // 停止心跳并关闭复用连接
+	}
+	if d.ClusterSrv != nil {
+		if err := d.ClusterSrv.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("db: close cluster: %w", err))
+		}
+		d.ClusterSrv = nil
+	}
 	if d.Follower != nil {
 		if err := d.Follower.Stop(); err != nil {
 			errs = append(errs, fmt.Errorf("db: close follower: %w", err))

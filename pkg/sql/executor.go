@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zhengkuanhua/openxdb/pkg/cluster"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 	"github.com/zhengkuanhua/openxdb/pkg/txn"
@@ -24,6 +25,10 @@ type Executor struct {
 	inTx  bool
 	// M3 分片路由（sql.New 注入默认 Router；db.Open 加载落盘元数据后覆盖）
 	router *sharding.Router
+	// M4 集群管理器（nil = 单机模式，转发路径零触发）。
+	// db.Open 装配后注入；selfID 供"本节点"归属判断。
+	mgr    *cluster.Manager
+	selfID string
 	// P2：慢查询配置与记录（内存）
 	slowThreshold int64 // 毫秒阈值；<=0 表示不记录（默认 1000ms）
 	slowQueries   []SlowQueryRecord
@@ -127,6 +132,14 @@ func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
 		return e.execShowSlowQueries()
 	case *ExplainStmt:
 		return e.execExplain(s)
+	case *AddNodeStmt:
+		return e.execAddNode(s)
+	case *ShowNodesStmt:
+		return e.execShowNodes()
+	case *ShowRegionRoutesStmt:
+		return e.execShowRegionRoutes()
+	case *AssignRegionStmt:
+		return e.execAssignRegion(s)
 	}
 	return nil, ErrUnsupported
 }
@@ -471,6 +484,10 @@ func (e *Executor) insertRow(tx txn.Txn, meta *TableMeta, cols []string, row []V
 	if err != nil {
 		return false, err
 	}
+	// M4 第一簇：禁止写远端 region（分布式写事务下簇统一）
+	if err := e.checkWritable(rid); err != nil {
+		return false, err
+	}
 	key := e.rowKeyAt(meta, rid, pk)
 	if _, err := tx.Get(key); err == nil {
 		if dupSkip {
@@ -528,7 +545,7 @@ func (e *Executor) execSelect(s *SelectStmt) (*Result, error) {
 			if err != nil {
 				return nil, err
 			}
-			raw, err := tx.Get(e.rowKeyAt(meta, rid, pk))
+			raw, err := e.getKVCluster(tx, e.rowKeyAt(meta, rid, pk))
 			if err == nil {
 				row, err := decodeRow(meta, raw)
 				if err != nil {
@@ -546,8 +563,8 @@ func (e *Executor) execSelect(s *SelectStmt) (*Result, error) {
 		return nil, err
 	}
 	if rows == nil {
-		// 全表扫描 + 过滤（跨 region 展开后按内层键序合并，等价单 region 全表序）
-		pairs, err := e.scanMerged(tx, e.rowRanges(meta))
+		// 全表扫描 + 过滤（跨 region/跨节点展开后按内层键序合并，等价单 region 全表序）
+		pairs, err := e.scanMergedCluster(tx, e.rowRanges(meta))
 		if err != nil {
 			return nil, err
 		}
@@ -632,7 +649,7 @@ func (e *Executor) indexLookup(tx txn.Txn, meta *TableMeta, s *SelectStmt) ([][]
 	default:
 		return nil, false, nil
 	}
-	pairs, err := e.scanMerged(tx, e.indexRanges(meta, idx.ID, start, end))
+	pairs, err := e.scanMergedCluster(tx, e.indexRanges(meta, idx.ID, start, end))
 	if err != nil {
 		return nil, false, err
 	}
@@ -640,8 +657,8 @@ func (e *Executor) indexLookup(tx txn.Txn, meta *TableMeta, s *SelectStmt) ([][]
 	for _, kv := range pairs {
 		inner := innerOf(kv.Key)
 		pk := indexPKSuffix(inner)
-		// 回表：索引键与行键同 region（写入时同路由），按 region 前缀读取
-		raw, err := tx.Get(e.rowKeyAt(meta, ridOf(kv.Key), pk))
+		// 回表：索引键与行键同 region（写入时同路由），按 region 前缀读取（跨节点经转发）
+		raw, err := e.getKVCluster(tx, e.rowKeyAt(meta, ridOf(kv.Key), pk))
 		if err != nil {
 			if err == storage.ErrNotFound {
 				continue // 索引脏键（理论上不出现）
@@ -868,9 +885,9 @@ func (e *Executor) relFromTable(tx txn.Txn, tabs []*TableMeta, table, alias stri
 	return e.relFromScan(tx, meta, alias)
 }
 
-// relFromScan 全表扫描生成 Rel（列名限定为 alias.col；跨 region 展开）。
+// relFromScan 全表扫描生成 Rel（列名限定为 alias.col；跨 region/跨节点展开）。
 func (e *Executor) relFromScan(tx txn.Txn, meta *TableMeta, alias string) (*Rel, error) {
-	pairs, err := e.scanMerged(tx, e.rowRanges(meta))
+	pairs, err := e.scanMergedCluster(tx, e.rowRanges(meta))
 	if err != nil {
 		return nil, err
 	}
@@ -1337,7 +1354,7 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 		return nil, &SQLError{Msg: "table not exists: " + s.Table}
 	}
 	// 全表扫描 + 过滤（跨 region 展开后按内层键序合并）
-	pairs, err := e.scanMerged(tx, e.rowRanges(meta))
+	pairs, err := e.scanMergedCluster(tx, e.rowRanges(meta))
 	if err != nil {
 		return nil, err
 	}
@@ -1355,6 +1372,10 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 			continue
 		}
 		rid := ridOf(kv.Key)
+		// M4 第一簇：远端 region 的行不可本地修改
+		if err := e.checkWritable(rid); err != nil {
+			return nil, err
+		}
 		pk := pkSuffixOf(meta, innerOf(kv.Key))
 		// 维护索引：先删旧索引键
 		if err := e.delIndexKeys(tx, meta, row, pk, rid); err != nil {
@@ -1410,7 +1431,7 @@ func (e *Executor) execDelete(s *DeleteStmt) (*Result, error) {
 		return nil, &SQLError{Msg: "table not exists: " + s.Table}
 	}
 	// 全表扫描 + 过滤（跨 region 展开后按内层键序合并）
-	pairs, err := e.scanMerged(tx, e.rowRanges(meta))
+	pairs, err := e.scanMergedCluster(tx, e.rowRanges(meta))
 	if err != nil {
 		return nil, err
 	}
@@ -1427,7 +1448,12 @@ func (e *Executor) execDelete(s *DeleteStmt) (*Result, error) {
 		if !ok {
 			continue
 		}
-		if err := e.delIndexKeys(tx, meta, row, pkSuffixOf(meta, innerOf(kv.Key)), ridOf(kv.Key)); err != nil {
+		rid := ridOf(kv.Key)
+		// M4 第一簇：远端 region 的行不可本地删除
+		if err := e.checkWritable(rid); err != nil {
+			return nil, err
+		}
+		if err := e.delIndexKeys(tx, meta, row, pkSuffixOf(meta, innerOf(kv.Key)), rid); err != nil {
 			return nil, err
 		}
 		if err := tx.Delete(kv.Key); err != nil {

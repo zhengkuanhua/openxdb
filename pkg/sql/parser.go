@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -85,8 +86,56 @@ func (p *parser) parseStmt() (Stmt, error) {
 		return p.parseShow()
 	case "EXPLAIN":
 		return p.parseExplain()
+	case "ADD":
+		return p.parseAddNode()
+	case "ASSIGN":
+		return p.parseAssignRegion()
 	}
 	return nil, errf("unsupported statement %q at %d", p.cur().text, p.cur().pos)
+}
+
+// parseAddNode ADD NODE '<addr>'：注册远端节点（地址字符串，如 '127.0.0.1:7791'）。
+func (p *parser) parseAddNode() (Stmt, error) {
+	if err := p.expectKeyword("ADD"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("NODE"); err != nil {
+		return nil, err
+	}
+	addrTok, err := p.expect(tokString, "node address string")
+	if err != nil {
+		return nil, err
+	}
+	return &AddNodeStmt{Addr: addrTok.text}, nil
+}
+
+// parseAssignRegion ASSIGN REGION <regionID> TO NODE '<nodeID>'：指派 region 归属节点。
+func (p *parser) parseAssignRegion() (Stmt, error) {
+	if err := p.expectKeyword("ASSIGN"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("REGION"); err != nil {
+		return nil, err
+	}
+	ridTok, err := p.expect(tokNumber, "region id")
+	if err != nil {
+		return nil, err
+	}
+	rid, err := strconv.ParseUint(ridTok.text, 10, 64)
+	if err != nil {
+		return nil, errf("invalid region id %q", ridTok.text)
+	}
+	if err := p.expectKeyword("TO"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("NODE"); err != nil {
+		return nil, err
+	}
+	nodeTok, err := p.expect(tokString, "node id string")
+	if err != nil {
+		return nil, err
+	}
+	return &AssignRegionStmt{RegionID: uint64(rid), NodeID: nodeTok.text}, nil
 }
 
 func (p *parser) parseCreate() (Stmt, error) {
@@ -962,7 +1011,7 @@ func (p *parser) peekKind() tokKind {
 	return tokEOF
 }
 
-// parseShow SHOW TABLES | SHOW INDEX FROM t | SHOW SLOWQUERIES
+// parseShow SHOW TABLES | SHOW INDEX FROM t | SHOW SLOWQUERIES | SHOW NODES | SHOW REGION ROUTES
 func (p *parser) parseShow() (Stmt, error) {
 	if err := p.expectKeyword("SHOW"); err != nil {
 		return nil, err
@@ -974,6 +1023,15 @@ func (p *parser) parseShow() (Stmt, error) {
 	case "SLOWQUERIES":
 		p.next()
 		return &ShowSlowQueriesStmt{}, nil
+	case "NODES":
+		p.next()
+		return &ShowNodesStmt{}, nil
+	case "REGION":
+		p.next()
+		if err := p.expectKeyword("ROUTES"); err != nil {
+			return nil, err
+		}
+		return &ShowRegionRoutesStmt{}, nil
 	case "INDEX":
 		p.next()
 		if err := p.expectKeyword("FROM"); err != nil {
@@ -985,7 +1043,7 @@ func (p *parser) parseShow() (Stmt, error) {
 		}
 		return &ShowIndexStmt{Table: nameTok.text}, nil
 	}
-	return nil, errf("expected TABLES, INDEX or SLOWQUERIES after SHOW at %d, got %q", p.cur().pos, p.cur().text)
+	return nil, errf("expected TABLES, INDEX, SLOWQUERIES, NODES or REGION ROUTES after SHOW at %d, got %q", p.cur().pos, p.cur().text)
 }
 
 // parseExplain EXPLAIN <SELECT>（不实际执行查询）。

@@ -39,8 +39,12 @@ type RegionInfo struct {
 	StartKey []byte       `json:"start_key,omitempty"`
 	EndKey   []byte       `json:"end_key,omitempty"`
 	State    RegionState  `json:"state,omitempty"`
-	Local    bool         `json:"local"`    // 归属本节点（单机恒 true）
+	Local    bool         `json:"local"` // 数据是否物理位于本节点（M3 单机恒 true）
 	Explicit bool         `json:"explicit"` // 显式分片标记（隐式单 region 为 false）
+	// Node region 归属节点 ID（M4 集群路由）：空字符串 = 本节点（未指派）。
+	// 该字段为 M4 新增，M3 既有落盘元数据不含此字段（JSON 反序列化后为空），
+	// 语义默认"本节点"，保证未多节点化部署时路由行为零回归。
+	Node string `json:"node,omitempty"`
 }
 
 // 标准错误。
@@ -72,6 +76,9 @@ func DecodeRegionKey(k []byte) (storage.ID, []byte) {
 
 // metaKey 全局分片元数据键（不带 region 前缀，与表目录同层）。
 var metaKey = []byte("m:regions")
+
+// MetaRegionsKey 返回分片元数据落盘键（供 cluster/db 等外部包读写同一份元数据）。
+func MetaRegionsKey() []byte { return metaKey }
 
 // regionsMeta 落盘格式：seq（显式 region ID 分配水位）+ regions 列表。
 type regionsMeta struct {
@@ -192,6 +199,76 @@ func (r *Router) ReplaceRegions(tableID storage.ID, regions []RegionInfo, seq ui
 	}
 	r.regions = kept
 	r.sortLocked()
+}
+
+// ---- M4 集群路由扩展 ----
+
+// RegionNode 返回 region 归属节点：空字符串 = 本节点（未指派）。
+// 隐式单 region（未显式分片）恒为本地。
+func (r *Router) RegionNode(regionID storage.ID) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for i := range r.regions {
+		if r.regions[i].RegionID == regionID {
+			return r.regions[i].Node
+		}
+	}
+	return ""
+}
+
+// SetRegionNode 指派 region 归属节点（ASSIGN REGION 管理入口）。
+// regionID 必须是已存在的显式 region；隐式单 region 不允许指派。
+func (r *Router) SetRegionNode(regionID storage.ID, node string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.regions {
+		if r.regions[i].RegionID == regionID {
+			r.regions[i].Node = node
+			return nil
+		}
+	}
+	return ErrRegionNotFound
+}
+
+// FindRegion 按 regionID 查找显式 region 元信息（找不到返回 false）。
+func (r *Router) FindRegion(regionID storage.ID) (RegionInfo, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for i := range r.regions {
+		if r.regions[i].RegionID == regionID {
+			return r.regions[i], true
+		}
+	}
+	return RegionInfo{}, false
+}
+
+// UpsertRegion 插入或更新一个显式 region（M4 ASSIGN REGION 时目标节点学习归属）。
+// 已存在则更新其 Node/State 等字段；不存在则追加（并按水位推进 ID）。
+// 隐式单 region 不作为显式条目插入，返回 ErrRegionNotFound 语义由调用方处理。
+func (r *Router) UpsertRegion(rg RegionInfo) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.regions {
+		if r.regions[i].RegionID == rg.RegionID {
+			r.regions[i] = rg
+			return nil
+		}
+	}
+	if uint64(rg.RegionID) > r.seq {
+		r.seq = uint64(rg.RegionID)
+	}
+	r.regions = append(r.regions, rg)
+	r.sortLocked()
+	return nil
+}
+
+// AllRegions 返回全部显式 region 元信息（按 TableID + StartKey 升序）。
+func (r *Router) AllRegions() []RegionInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]RegionInfo, len(r.regions))
+	copy(out, r.regions)
+	return out
 }
 
 // RemoveTable 删除某表全部 region 元数据（DROP TABLE 时调用）。

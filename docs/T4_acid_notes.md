@@ -2,12 +2,14 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_0c6e4dbbc1f611f18019525400248c00
-    ReservedCode1: jsTB9xKCWRny6qYMWHcQUKNZl6XrW6iPd6L3BmFDSuXpm2Vc47SApgoeXTEF3Fm8vszvE5w//S7hZHegRZxCKNjos4cItirDYr1JncZ3Va4T5elFCW2JboLBR3jtmirj8l4jt84SlRZkJ7SGxmkKSqMCzJUvoDlgKxV7m5hmPLPQG7KwvBrc7GKCu9Y=
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_51a3c7a1c36f11f18019525400248c00
+    ReservedCode1: c4mVST4FOh4oMIB7wEH5oYnag54B12e8pavTPh6QVY4Cg7GBiYR+J6Zr9P/T2gBoL56efcYbEw6X4y2QX5qpo+YX2cRC3+GF+OJldhYm6GNTwOABtr9MQ2zDP5Ql1W7FEFuRs+SbKO84UE2TcyNx3kXBrVmJlKtolmwV1v7SIK06GcwH0TMTuHwy/x8=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_0c6e4dbbc1f611f18019525400248c00
-    ReservedCode2: jsTB9xKCWRny6qYMWHcQUKNZl6XrW6iPd6L3BmFDSuXpm2Vc47SApgoeXTEF3Fm8vszvE5w//S7hZHegRZxCKNjos4cItirDYr1JncZ3Va4T5elFCW2JboLBR3jtmirj8l4jt84SlRZkJ7SGxmkKSqMCzJUvoDlgKxV7m5hmPLPQG7KwvBrc7GKCu9Y=
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_51a3c7a1c36f11f18019525400248c00
+    ReservedCode2: c4mVST4FOh4oMIB7wEH5oYnag54B12e8pavTPh6QVY4Cg7GBiYR+J6Zr9P/T2gBoL56efcYbEw6X4y2QX5qpo+YX2cRC3+GF+OJldhYm6GNTwOABtr9MQ2zDP5Ql1W7FEFuRs+SbKO84UE2TcyNx3kXBrVmJlKtolmwV1v7SIK06GcwH0TMTuHwy/x8=
 ---
+
+
 
 # T4 单机事务 ACID 收尾笔记
 
@@ -148,3 +150,4 @@ CSV 导入语义（`pkg/sql/csv.go`）：主键重复行跳过（不覆盖、不
 - `pkg/wal/wal_test.go`：追加、崩溃恢复、损坏检测、组提交。
 - `pkg/sql`：含会话事务（BEGIN/COMMIT/ROLLBACK）与主键唯一性约束集成用例；T8 记录了 9 例二级索引与事务透传覆盖。
 - 全仓 `go test ./... -count=1` 绿色（M3 落地后复核）。
+*（内容由AI生成，仅供参考）*

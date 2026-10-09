@@ -118,6 +118,15 @@ func cmdStart(args []string) error {
 		}
 		fmt.Printf("OpenXDB %s replication listening on :%d (binlog: %s)\n", version, n, db.BinlogFile)
 	}
+	// M4：集群节点链路（可选）。--cluster-addr 非空时监听节点握手/转发端口。
+	if ca, ok := flagValue(args, "--cluster-addr"); ok && ca != "" {
+		realAddr, err := d.StartCluster(ca)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("OpenXDB %s cluster node %s listening on %s (node id: %s)\n",
+			version, d.Cluster.SelfID, realAddr, d.Cluster.SelfID)
+	}
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("OpenXDB %s serving on %s (data dir: %s)\n", version, addr, dir)
 	s := server.New(d.Txn)
@@ -157,6 +166,7 @@ Commands:
   start   --data-dir <dir>    启动 TCP 服务
           [--port <n>]        监听端口（默认 7788）
           [--replica-port <n>] 主节点复制端口（启用 M2 复制并生成 binlog）
+          [--cluster-addr <addr>] 集群节点链路地址（启用 M4 节点握手/转发）
   replica --data-dir <dir> --master <host:port>
                              以从节点身份连接主节点并异步复制`)
 }

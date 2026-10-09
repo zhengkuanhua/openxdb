@@ -3,6 +3,7 @@ package sql
 import (
 	"strings"
 
+	"github.com/zhengkuanhua/openxdb/pkg/cluster"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 	"github.com/zhengkuanhua/openxdb/pkg/txn"
@@ -41,6 +42,12 @@ func (e *Engine) ListRegions(name string) ([]sharding.RegionInfo, error) {
 func (e *Engine) LocateRegion(name string, pk []byte) (storage.ID, error) {
 	return e.ex.LocateRegion(name, pk)
 }
+
+// ExecutorRouter 返回执行器共享的路由表指针（供 db.StartCluster 注入节点服务端）。
+func (e *Engine) ExecutorRouter() *sharding.Router { return e.ex.Router() }
+
+// SetCluster 注入 M4 集群管理器与本节点 ID（供 db.Open 装配，节点注册/转发/路由展开）。
+func (e *Engine) SetCluster(mgr *cluster.Manager, selfID string) { e.ex.SetCluster(mgr, selfID) }
 
 // Execute 解析并执行一条 SQL 语句。
 func (e *Engine) Execute(stmt string) (*Result, error) {

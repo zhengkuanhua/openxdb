@@ -234,6 +234,33 @@ type CaseWhenClause struct {
 	HasElse  bool
 }
 
+// ---- M4：多节点集群管理语句 ----
+
+// AddNodeStmt ADD NODE '<addr>'：与远端节点握手并注册到节点注册表。
+type AddNodeStmt struct {
+	Addr string // 节点链路地址 host:port
+}
+
+func (AddNodeStmt) stmt() {}
+
+// ShowNodesStmt SHOW NODES：列出节点注册表（ID/Addr/Role/State/LastSeen）。
+type ShowNodesStmt struct{}
+
+func (ShowNodesStmt) stmt() {}
+
+// ShowRegionRoutesStmt SHOW REGION ROUTES：列出集群 region 路由表（region → 归属节点）。
+type ShowRegionRoutesStmt struct{}
+
+func (ShowRegionRoutesStmt) stmt() {}
+
+// AssignRegionStmt ASSIGN REGION <regionID> TO NODE '<nodeID>'：指派 region 归属节点。
+type AssignRegionStmt struct {
+	RegionID uint64 // 显式 region ID
+	NodeID   string // 已注册节点 ID（本节点 ID 表示迁回本地）
+}
+
+func (AssignRegionStmt) stmt() {}
+
 // Result 执行结果（面向协议层/CLI 输出）。
 type Result struct {
 	Columns      []string
