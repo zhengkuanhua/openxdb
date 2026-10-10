@@ -1020,6 +1020,11 @@ func (e *Executor) execSelect(s *SelectStmt) (*Result, error) {
 	if auto {
 		defer tx.Rollback()
 	}
+	// M10 CTE：执行前展开语句级 WITH 子句（引用 CTE 名替换为定义子查询），
+	// 先于视图展开执行（语句内作用域优先）；循环引用在此阶段报错。
+	if err := e.expandCTEs(s); err != nil {
+		return nil, err
+	}
 	// M9 视图：执行前将 FROM/JOIN 中引用的视图展开为其定义（子查询），
 	// 展开过程带栈式循环引用防护。
 	if err := e.expandViews(tx, s); err != nil {
@@ -2445,6 +2450,93 @@ func (e *Executor) execShowViews() (*Result, error) {
 // expandViews 将 SELECT 中 FROM / JOIN 引用的视图展开为定义（子查询）。
 // 展开采用"定义副本"（JSON 深拷贝），避免共享 AST 污染；
 // stack 记录当前展开链上的视图名，遇到重复即判定循环引用。
+// ---- M10 CTE ----
+
+// expandCTEs 展开语句级 CTE（WITH 子句）：将 FROM/JOIN 中引用 CTE 名的
+// 表替换为 CTE 定义子查询（深拷贝副本）。支持单/多 CTE、CTE 引用 CTE
+// （兄弟互引）、与视图互引（视图展开先于本层执行时由 execSelect 递归处理）。
+// 循环引用（CTE 直接或间接引用自身）报 cyclic CTE reference。
+func (e *Executor) expandCTEs(s *SelectStmt) error {
+	return e.expandCTEsInner(make(map[string]*SelectStmt), s, nil)
+}
+
+// expandCTEsInner 递归展开：先注册本层 CTE（语句内作用域，同名覆盖），
+// 再替换 FROM/JOIN 引用并带栈递归展开 CTE 定义，检测循环引用。
+func (e *Executor) expandCTEsInner(ctes map[string]*SelectStmt, s *SelectStmt, stack []string) error {
+	if s == nil {
+		return nil
+	}
+	for _, c := range s.CTEs {
+		ctes[c.Name] = c.Select
+	}
+	if s.From != "" {
+		if def, ok := ctes[s.From]; ok {
+			if cyclicCTE(stack, s.From) {
+				return &SQLError{Msg: "cyclic CTE reference: " + s.From}
+			}
+			sub, err := cloneSelect(def)
+			if err != nil {
+				return err
+			}
+			tbl := s.From
+			s.Subquery = sub
+			s.SubAlias = orAlias(tbl, s.FromAlias)
+			s.From = ""
+			s.FromAlias = ""
+			if err := e.expandCTEsInner(ctes, sub, append(stack, tbl)); err != nil {
+				return err
+			}
+		}
+	}
+	if s.Subquery != nil {
+		if err := e.expandCTEsInner(ctes, s.Subquery, stack); err != nil {
+			return err
+		}
+	}
+	for i := range s.Joins {
+		jc := &s.Joins[i]
+		if jc.Subquery == nil && jc.Table != "" {
+			if def, ok := ctes[jc.Table]; ok {
+				if cyclicCTE(stack, jc.Table) {
+					return &SQLError{Msg: "cyclic CTE reference: " + jc.Table}
+				}
+				sub, err := cloneSelect(def)
+				if err != nil {
+					return err
+				}
+				tbl := jc.Table
+				jc.Subquery = sub
+				jc.Table = ""
+				if err := e.expandCTEsInner(ctes, sub, append(stack, tbl)); err != nil {
+					return err
+				}
+			}
+		} else if jc.Subquery != nil {
+			if err := e.expandCTEsInner(ctes, jc.Subquery, stack); err != nil {
+				return err
+			}
+		}
+	}
+	// 本层 CTE 定义展开（stack 推进以检测直接/间接循环引用）
+	for i := range s.CTEs {
+		c := &s.CTEs[i]
+		if err := e.expandCTEsInner(ctes, c.Select, append(stack, c.Name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// cyclicCTE 判断 CTE 名是否已在展开栈中（即形成循环）。
+func cyclicCTE(stack []string, name string) bool {
+	for _, n := range stack {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *Executor) expandViews(tx txn.Txn, s *SelectStmt) error {
 	if s == nil {
 		return nil

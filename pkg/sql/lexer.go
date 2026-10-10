@@ -58,6 +58,9 @@ var keywords = map[string]bool{
 	"FOREIGN": true, "REFERENCES": true, "CASCADE": true, "RESTRICT": true,
 	// M9：视图（CREATE VIEW / DROP VIEW / SHOW VIEWS）
 	"VIEW": true, "VIEWS": true,
+	// M10：SQL 兼容性增强簇（CTE / 窗口函数 / UPSERT）
+	"WITH": true, "OVER": true, "PARTITION": true,
+	"REPLACE": true, "DUPLICATE": true, "UNIQUE": true,
 }
 
 type lexer struct {

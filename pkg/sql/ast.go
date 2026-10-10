@@ -140,9 +140,23 @@ type JoinClause struct {
 	On       []Cond // ON 条件（AND 组合）
 }
 
+// CTE 公共表表达式（M10）：WITH name AS (SELECT ...)。
+type CTE struct {
+	Name   string
+	Select *SelectStmt
+}
+
+// WindowSpec 窗口函数规格（M10）：OVER(PARTITION BY ... ORDER BY ...)。
+// 无显式框架，默认为 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW。
+type WindowSpec struct {
+	PartitionBy []string // 分区列（t.col / col）
+	OrderBy     *OrderBy // 窗口内排序（可为 nil）
+}
+
 // SelectStmt SELECT。
 type SelectStmt struct {
 	Columns   []SelectColumn
+	CTEs      []CTE         // M10 WITH 子句（可为空）
 	From      string        // 表名（无 JOIN/子查询时）
 	FromAlias string        // FROM 表别名（空 = 表名）
 	Subquery  *SelectStmt   // FROM 子查询

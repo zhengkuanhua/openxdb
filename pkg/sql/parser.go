@@ -65,6 +65,8 @@ func (p *parser) parseStmt() (Stmt, error) {
 		return p.parseInsert()
 	case "SELECT":
 		return p.parseSelect()
+	case "WITH":
+		return p.parseSelect()
 	case "UPDATE":
 		return p.parseUpdate()
 	case "DELETE":
@@ -820,10 +822,43 @@ func (p *parser) parseInsert() (Stmt, error) {
 }
 
 func (p *parser) parseSelect() (Stmt, error) {
+	stmt := &SelectStmt{Limit: 0}
+	// M10 CTE：WITH name AS (SELECT ...) [, ...] 前缀（可嵌套，子查询 FROM 亦可带 WITH）
+	if p.cur().kind == tokKeyword && p.cur().text == "WITH" {
+		p.next()
+		for {
+			nameTok, err := p.expect(tokIdent, "CTE name")
+			if err != nil {
+				return nil, err
+			}
+			if err := p.expectKeyword("AS"); err != nil {
+				return nil, err
+			}
+			if _, err := p.expect(tokLParen, "("); err != nil {
+				return nil, err
+			}
+			sub, err := p.parseSelect()
+			if err != nil {
+				return nil, err
+			}
+			subSel, ok := sub.(*SelectStmt)
+			if !ok {
+				return nil, errf("invalid CTE definition")
+			}
+			if _, err := p.expect(tokRParen, ")"); err != nil {
+				return nil, err
+			}
+			stmt.CTEs = append(stmt.CTEs, CTE{Name: nameTok.text, Select: subSel})
+			if p.cur().kind == tokComma {
+				p.next()
+				continue
+			}
+			break
+		}
+	}
 	if err := p.expectKeyword("SELECT"); err != nil {
 		return nil, err
 	}
-	stmt := &SelectStmt{Limit: 0}
 	for {
 		sc, err := p.parseSelectColumn()
 		if err != nil {
