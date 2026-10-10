@@ -275,6 +275,36 @@ func (p *parser) parseCreate() (Stmt, error) {
 			}
 			return stmt, nil
 		default:
+			// 行内主键：id INT PRIMARY KEY（等价于将该列设为主键）
+			if p.cur().kind == tokKeyword && p.cur().text == "PRIMARY" {
+				if err := p.expectKeyword("PRIMARY"); err != nil {
+					return nil, err
+				}
+				if err := p.expectKeyword("KEY"); err != nil {
+					return nil, err
+				}
+				stmt.PK = col.text
+				switch p.cur().kind {
+				case tokComma:
+					p.next()
+					// 行内主键后仍可跟表级 PRIMARY KEY (col)
+					if p.cur().kind == tokKeyword && p.cur().text == "PRIMARY" {
+						if err := p.parsePrimaryKey(stmt); err != nil {
+							return nil, err
+						}
+						if _, err := p.expect(tokRParen, ")"); err != nil {
+							return nil, err
+						}
+						return stmt, nil
+					}
+					continue
+				case tokRParen:
+					p.next()
+					return stmt, nil
+				default:
+					return nil, errf("expected , or ) at %d, got %q", p.cur().pos, p.cur().text)
+				}
+			}
 			return nil, errf("expected , or ) at %d, got %q", p.cur().pos, p.cur().text)
 		}
 	}
@@ -326,11 +356,23 @@ func (p *parser) parseDrop() (Stmt, error) {
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
 	}
+	s := &DropTableStmt{}
+	// DROP TABLE [IF EXISTS] <name>
+	if p.cur().kind == tokKeyword && p.cur().text == "IF" {
+		if err := p.expectKeyword("IF"); err != nil {
+			return nil, err
+		}
+		if err := p.expectKeyword("EXISTS"); err != nil {
+			return nil, err
+		}
+		s.IfExists = true
+	}
 	nameTok, err := p.expect(tokIdent, "table name")
 	if err != nil {
 		return nil, err
 	}
-	return &DropTableStmt{Name: nameTok.text}, nil
+	s.Name = nameTok.text
+	return s, nil
 }
 
 // parseCreateIndex CREATE INDEX [idx] ON tbl (col)

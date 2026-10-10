@@ -57,7 +57,10 @@ type CreateTableStmt struct {
 func (CreateTableStmt) stmt() {}
 
 // DropTableStmt DROP TABLE。
-type DropTableStmt struct{ Name string }
+type DropTableStmt struct {
+	Name     string
+	IfExists bool // DROP TABLE IF EXISTS：表不存在时静默成功
+}
 
 func (DropTableStmt) stmt() {}
 

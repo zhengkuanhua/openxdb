@@ -401,6 +401,9 @@ func (e *Executor) execDropTable(s *DropTableStmt) (*Result, error) {
 	}
 	meta := findTable(tabs, s.Name)
 	if meta == nil {
+		if s.IfExists {
+			return &Result{}, nil
+		}
 		return nil, &SQLError{Msg: "table not exists: " + s.Name}
 	}
 	// 删除表内所有行与索引键（跨 region 展开）

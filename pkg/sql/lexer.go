@@ -34,7 +34,7 @@ type token struct {
 
 // keywords 关键字表（大小写不敏感）。
 var keywords = map[string]bool{
-	"CREATE": true, "TABLE": true, "DROP": true, "INSERT": true,
+	"CREATE": true, "TABLE": true, "DROP": true, "IF": true, "EXISTS": true, "INSERT": true,
 	"INTO": true, "VALUES": true, "SELECT": true, "FROM": true,
 	"WHERE": true, "ORDER": true, "BY": true, "ASC": true, "DESC": true,
 	"LIMIT": true, "PRIMARY": true, "KEY": true, "UPDATE": true,

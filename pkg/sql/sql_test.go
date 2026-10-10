@@ -191,6 +191,47 @@ func TestDropTable(t *testing.T) {
 	mustErr(t, e, "SELECT * FROM users", "table not exists")
 }
 
+func TestDropTableIfExists(t *testing.T) {
+	e := newEngine(t)
+	setupUsers(t, e)
+	// 表存在时 IF EXISTS 正常删除
+	res := mustExec(t, e, "DROP TABLE IF EXISTS users")
+	if res.AffectedRows != 3 {
+		t.Fatalf("DROP TABLE IF EXISTS (exists): want 3 rows dropped, got %d", res.AffectedRows)
+	}
+	mustErr(t, e, "SELECT * FROM users", "table not exists")
+	// 表不存在时 IF EXISTS 静默成功
+	res = mustExec(t, e, "DROP TABLE IF EXISTS nope")
+	if res.AffectedRows != 0 {
+		t.Fatalf("DROP TABLE IF EXISTS (missing): want 0 rows, got %d", res.AffectedRows)
+	}
+	// 不带 IF EXISTS 时表不存在仍报错
+	mustErr(t, e, "DROP TABLE nope", "table not exists")
+}
+
+func TestCreateInlinePrimaryKey(t *testing.T) {
+	e := newEngine(t)
+	// 行内主键 id INT PRIMARY KEY（首列）
+	mustExec(t, e, "CREATE TABLE t (id INT PRIMARY KEY, name TEXT)")
+	mustExec(t, e, "INSERT INTO t VALUES (1, 'a'), (2, 'b')")
+	rows := mustRows(t, e, "SELECT name FROM t WHERE id = 2")
+	if len(rows) != 1 || rows[0][0].S != "b" {
+		t.Fatalf("inline pk lookup: want [b], got %+v", rows)
+	}
+	// 主键唯一约束生效
+	mustErr(t, e, "INSERT INTO t VALUES (1, 'dup')", "duplicate primary key")
+	// 行内主键在末尾列
+	mustExec(t, e, "CREATE TABLE v (a INT, b TEXT, id INT PRIMARY KEY)")
+	mustExec(t, e, "INSERT INTO v VALUES (1, 'x', 10)")
+	rows = mustRows(t, e, "SELECT b FROM v WHERE id = 10")
+	if len(rows) != 1 || rows[0][0].S != "x" {
+		t.Fatalf("inline pk last col: want [x], got %+v", rows)
+	}
+	// 与表级 PRIMARY KEY 共存等价（行内优先，表级同列不冲突）
+	mustExec(t, e, "CREATE TABLE u (k INT PRIMARY KEY, v TEXT, PRIMARY KEY (k))")
+	mustExec(t, e, "INSERT INTO u VALUES (1, 'ok')")
+}
+
 func TestPersistenceAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 	if err := db.Init(dir); err != nil {
