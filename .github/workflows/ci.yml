@@ -44,21 +44,26 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          $env:Path = "C:\msys64\ucrt64\bin;" + $env:Path
-          gcc --version | Select-Object -First 1
+          # 统一使用 MSYS2 UCRT64 工具链（RocksDB 静态库由其编译，避免与 runner 自带 MinGW 混用导致 libstdc++ 符号缺失）
+          $env:CC = "C:/msys64/ucrt64/bin/gcc.exe"
+          $env:CXX = "C:/msys64/ucrt64/bin/g++.exe"
+          if (-not (Test-Path $env:CXX)) { Write-Error "MSYS2 UCRT64 g++ not found: $env:CXX"; exit 1 }
+          & $env:CC --version | Select-Object -First 1
           go version
           go env CC CXX CGO_LDFLAGS
           Get-ChildItem C:/msys64/ucrt64/lib -Filter "libstdc++*" | Select-Object Name
           $env:CGO_CFLAGS = "-IC:/rocksdb-src/include"
           $env:CGO_CXXFLAGS = "-IC:/rocksdb-src/include"
           $env:CGO_LDFLAGS = "-LC:/rocksdb-build -LC:/msys64/ucrt64/lib -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -lstdc++ -lwinpthread -static"
-          go build -x ./cmd/openxdb 2>&1 | Select-String -Pattern "g\+\+.*-o|libstdc|librocksdb|get_once" -Context 0,0
+          go build -x ./cmd/openxdb 2>&1 | Select-String -Pattern "g\+\+.*-o|libstdc|librocksdb|get_once|undefined" -Context 0,0
           if ($LASTEXITCODE -eq 0) { go build ./... } else { exit $LASTEXITCODE }
 
       - name: Test
         shell: pwsh
         run: |
-          $env:Path = "C:\msys64\ucrt64\bin;" + $env:Path
+          # 与 Build 步骤一致的 MSYS2 UCRT64 工具链
+          $env:CC = "C:/msys64/ucrt64/bin/gcc.exe"
+          $env:CXX = "C:/msys64/ucrt64/bin/g++.exe"
           $env:CGO_CFLAGS = "-IC:/rocksdb-src/include"
           $env:CGO_CXXFLAGS = "-IC:/rocksdb-src/include"
           $env:CGO_LDFLAGS = "-LC:/rocksdb-build -LC:/msys64/ucrt64/lib -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -lstdc++ -lwinpthread -static"
