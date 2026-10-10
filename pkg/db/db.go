@@ -26,6 +26,7 @@ import (
 	"github.com/zhengkuanhua/openxdb/pkg/sql"
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 	"github.com/zhengkuanhua/openxdb/pkg/storage/rocksdb"
+	"github.com/zhengkuanhua/openxdb/pkg/tso"
 	"github.com/zhengkuanhua/openxdb/pkg/txn"
 	"github.com/zhengkuanhua/openxdb/pkg/wal"
 )
@@ -70,6 +71,10 @@ type DB struct {
 	// M4 集群组件（Open 即创建管理器；StartCluster 后服务端监听节点链路）。
 	Cluster    *cluster.Manager // 节点注册表 + 心跳 + 查询转发
 	ClusterSrv *cluster.Server  // 节点链路服务（StartCluster 后非 nil）
+
+	// M8 全局时间戳源（Open 创建本地发号器并注入 SQL 引擎；StartCluster
+	// 注入节点服务，作为中心化发号权威服务 TSO_REQ）。
+	TSO tso.Source
 
 	// M6 主从自动故障转移（EnableAutoFailover 后非零；StopAutoFailover 置零）。
 	failoverStop chan struct{}
@@ -183,7 +188,23 @@ func Open(dir string) (*DB, error) {
 	}
 	mgr.RegisterSelf("")
 	eng.SetCluster(mgr, mgr.SelfID)
-	return &DB{Dir: dir, Storage: st, WAL: w, Txn: tm, SQL: eng, Cluster: mgr}, nil
+	// M8：本地时间戳源（中心化发号权威；单机模式退化为本地自增，零回归）。
+	ts := tso.New()
+	eng.SetTSO(ts)
+	return &DB{Dir: dir, Storage: st, WAL: w, Txn: tm, SQL: eng, Cluster: mgr, TSO: ts}, nil
+}
+
+// SetTSONode 将本节点时间戳源切换为指向 nodeID 节点的远程 TSO 客户端
+// （中心化部署：所有非中心节点调用本方法指向同一发号节点，保证全局单调
+// 可比；单机 / 未配置时保持本地发号，零回归）。batch<=0 时使用默认批次。
+func (d *DB) SetTSONode(nodeID string, batch uint64) error {
+	src := cluster.NewTSOClient(d.Cluster, nodeID, batch)
+	d.TSO = src
+	d.SQL.SetTSO(src)
+	if d.ClusterSrv != nil {
+		d.ClusterSrv.SetTSO(src)
+	}
+	return nil
 }
 
 // StartCluster 启动 M4 集群节点链路：监听 addr 提供节点握手/查询转发/数据装载，
@@ -195,10 +216,17 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	srv := cluster.NewServer(d.Storage, d.Cluster.SelfID)
 	srv.SetRouter(d.SQL.ExecutorRouter())
 	srv.SetManager(d.Cluster)
+	// M8：注入中心化时间戳源（TSO_REQ 由本节点批量发放）。
+	srv.SetTSO(d.TSO)
 	// M5：2PC 崩溃恢复——清理未决 prepare（未决事务回滚，数据从未写入）
 	// 与历史幂等标记（仅运行期有效），保证重启后参与者状态干净可重入。
 	if err := srv.Recover2PC(); err != nil {
 		return "", fmt.Errorf("db: recover 2pc: %w", err)
+	}
+	// M8：协调者崩溃恢复——依据持久化 CoordRecord 决策 commit/abort 并
+	// 驱动参与者幂等收尾（prepared/committing -> commit；preparing/aborted -> abort）。
+	if err := srv.RecoverCoordinated2PC(); err != nil {
+		return "", fmt.Errorf("db: recover coordinated 2pc: %w", err)
 	}
 	realAddr, err := srv.ListenAndServe(addr)
 	if err != nil {

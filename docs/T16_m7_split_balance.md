@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_ae9ef312c3bd11f197eb525400393706
+    ReservedCode1: u2+zcGlGHKj2aXDUl8A8YJlPEOut0pIrmAQg7ZlNfGqqnmKNW9yQSB6cE7ksngbjjDMGIzcjMJS2Z/5FClQ/6tS9ID/gwS5QJ/0OQ+MzU51Dfv6uUqA2Jjk/YXJr5tSh+V1QTtNYj+1Lct0vtwAQFForBjxheDNcSTfY/hiRhrQVJOttWGmxH/FW0bg=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_ae9ef312c3bd11f197eb525400393706
+    ReservedCode2: u2+zcGlGHKj2aXDUl8A8YJlPEOut0pIrmAQg7ZlNfGqqnmKNW9yQSB6cE7ksngbjjDMGIzcjMJS2Z/5FClQ/6tS9ID/gwS5QJ/0OQ+MzU51Dfv6uUqA2Jjk/YXJr5tSh+V1QTtNYj+1Lct0vtwAQFForBjxheDNcSTfY/hiRhrQVJOttWGmxH/FW0bg=
+---
+
 # T16 M7 Region 自动分裂与负载均衡（Split & Balance）
 - 状态：已落地（v5.0-P5-M7，v0.7.0-alpha）
 - 前置：M3 分片、M4 集群、M5 2PC 写路径、M6 高可用/故障转移
@@ -61,3 +72,4 @@ M7 全部落在 `pkg/sql/balance.go`（约 518 行，含 `pkg/sql/sql.go` 引擎
 
 ## 5. 验收
 - `go build ./...` 全绿；`go test ./... -count=1` 全包通过（本机 CGO 工具链：go1.27.1 + winlibs gcc16.2.0，CGO_CFLAGS/CGO_CXXFLAGS 指向 RocksDB include，CGO_LDFLAGS 指向 `rocksdb-build -lrocksdb`，仓库 #cgo 附加 `-static-libstdc++ -static-libgcc -lwinpthread -lshlwapi -lrpcrt4 -lws2_32`）。
+*（内容由AI生成，仅供参考）*

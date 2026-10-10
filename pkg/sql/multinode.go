@@ -70,30 +70,75 @@ func (e *Executor) checkWritable(rid storage.ID) error {
 
 // getKVCluster 集群感知点查：定位 region 后，本地直读、远端转发。
 // 与 tx.Get 相同的错误语义（未命中返回 storage.ErrNotFound）。
+// M8 快照隔离：读路径携带 begin_ts，本地/远端均按版本过滤。
 func (e *Executor) getKVCluster(tx txn.Txn, key []byte) ([]byte, error) {
+	bs := e.snapshotTS()
 	if e.mgr == nil {
-		return tx.Get(key)
+		return e.getKVVisible(tx, key, bs)
 	}
 	rid, _ := sharding.DecodeRegionKey(key)
 	if e.regionLocal(rid) {
-		return tx.Get(key)
+		return e.getKVVisible(tx, key, bs)
 	}
 	// M6 读 failover：归属节点 down 时先自动重指派，再按新路由转发；
 	// 无存活目标时回退本节点本地副本，不向客户端报错。
 	node := e.resolveRegionOwner(rid)
 	if node == e.selfID {
-		return tx.Get(key)
+		return e.getKVVisible(tx, key, bs)
 	}
-	return e.mgr.GetRemote(node, key)
+	return e.mgr.GetRemote(node, key, bs)
+}
+
+// getKVVisible 本地读取 + M8 快照版本过滤：begin_ts=0 时不过滤（旧路径零回归）。
+// 命中行若存在 commit_ts>begin_ts 的版本记录则视为不可见（未命中）。
+func (e *Executor) getKVVisible(tx txn.Txn, key []byte, beginTS uint64) ([]byte, error) {
+	v, err := tx.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	if beginTS == 0 {
+		return v, nil
+	}
+	visible, verr := cluster.VersionVisible(tx.Scan, key, beginTS)
+	if verr != nil {
+		return nil, verr
+	}
+	if !visible {
+		return nil, storage.ErrNotFound
+	}
+	return v, nil
+}
+
+// scanMergedVisible 本地合并扫描 + M8 快照版本过滤：begin_ts=0 时不过滤。
+func (e *Executor) scanMergedVisible(tx txn.Txn, ranges []storage.KeyRange, beginTS uint64) ([]storage.KVPair, error) {
+	pairs, err := e.scanMerged(tx, ranges)
+	if err != nil {
+		return nil, err
+	}
+	if beginTS == 0 {
+		return pairs, nil
+	}
+	out := make([]storage.KVPair, 0, len(pairs))
+	for _, kv := range pairs {
+		visible, verr := cluster.VersionVisible(tx.Scan, kv.Key, beginTS)
+		if verr != nil {
+			return nil, verr
+		}
+		if visible {
+			out = append(out, kv)
+		}
+	}
+	return out, nil
 }
 
 // scanMergedCluster 集群感知范围扫描：按 ranges 逐 region 展开执行并合并。
 // 与 scanMerged 相同的结果语义（按内层键序合并、等价单机全表序）：
-//   - 本地 region → 直接扫描本事务；
-//   - 远端 region → QUERY_REQ 转发区间扫描（归属节点直读其存储快照）。
+//   - 本地 region → 直接扫描本事务（M8 按 begin_ts 快照过滤）；
+//   - 远端 region → QUERY_REQ 转发区间扫描（携带 beginTS，归属节点按版本过滤）。
 func (e *Executor) scanMergedCluster(tx txn.Txn, ranges []storage.KeyRange) ([]storage.KVPair, error) {
+	bs := e.snapshotTS()
 	if e.mgr == nil {
-		return e.scanMerged(tx, ranges)
+		return e.scanMergedVisible(tx, ranges, bs)
 	}
 	var out []storage.KVPair
 	for _, r := range ranges {
@@ -101,14 +146,14 @@ func (e *Executor) scanMergedCluster(tx txn.Txn, ranges []storage.KeyRange) ([]s
 		var pairs []storage.KVPair
 		var err error
 		if e.regionLocal(rid) {
-			pairs, err = e.scanMerged(tx, []storage.KeyRange{r})
+			pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 		} else {
 			// M6 读 failover：归属节点 down 时先自动重指派再转发；无存活目标回退本地
 			node := e.resolveRegionOwner(rid)
 			if node == e.selfID {
-				pairs, err = e.scanMerged(tx, []storage.KeyRange{r})
+				pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 			} else {
-				rows, rerr := e.mgr.ScanRemote(node, r.Start, r.End, 0)
+				rows, rerr := e.mgr.ScanRemote(node, r.Start, r.End, 0, bs)
 				if rerr != nil {
 					return nil, rerr
 				}

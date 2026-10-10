@@ -23,12 +23,12 @@ import (
 // 帧类型：1-6 为 M2 复制协议占用（HELLO/HELLO_OK/BINLOG/ACK/PING/PONG）；
 // M4 节点链路从 16 开始，避免与 M2 语义冲突。
 const (
-	msgPing       byte = 5 // 复用 M2：PING（ts 8B UnixMilli）
-	msgPong       byte = 6 // 复用 M2：PONG（ts 8B UnixMilli）
-	msgNodeHello  byte = 16
+	msgPing        byte = 5 // 复用 M2：PING（ts 8B UnixMilli）
+	msgPong        byte = 6 // 复用 M2：PONG（ts 8B UnixMilli）
+	msgNodeHello   byte = 16
 	msgNodeHelloOK byte = 17
-	msgQueryReq   byte = 18
-	msgQueryResp  byte = 19
+	msgQueryReq    byte = 18
+	msgQueryResp   byte = 19
 )
 
 const (
@@ -59,11 +59,14 @@ const (
 
 // QueryReq QUERY_REQ 载荷。
 // Start/End 为带 region 前缀的物理键（JSON 序列化时自动 base64）。
+// BeginTS 为发起方快照版本（M8 分布式快照隔离）：远端按该版本做
+// MVCC 过滤，begin_ts=0 表示不过滤（旧路径/单机零回归）。
 type QueryReq struct {
-	Op    QueryOp `json:"op"`
-	Start []byte  `json:"start,omitempty"`
-	End   []byte  `json:"end,omitempty"`
-	Limit int     `json:"limit,omitempty"`
+	Op      QueryOp `json:"op"`
+	Start   []byte  `json:"start,omitempty"`
+	End     []byte  `json:"end,omitempty"`
+	Limit   int     `json:"limit,omitempty"`
+	BeginTS uint64  `json:"begin_ts,omitempty"`
 }
 
 // QueryRow 远端返回的一行：物理键 + 原始行值字节（不感知行结构）。

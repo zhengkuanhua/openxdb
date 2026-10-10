@@ -17,13 +17,15 @@ type Client struct {
 }
 
 // Scan 转发区间扫描 [start, end)，返回远端行（原样字节）。
-func (c *Client) Scan(start, end []byte, limit int) ([]QueryRow, error) {
-	return c.roundTrip(QueryReq{Op: OpScan, Start: start, End: end, Limit: limit})
+// beginTS>0 时远端按快照版本过滤（M8 分布式快照隔离）。
+func (c *Client) Scan(start, end []byte, limit int, beginTS uint64) ([]QueryRow, error) {
+	return c.roundTrip(QueryReq{Op: OpScan, Start: start, End: end, Limit: limit, BeginTS: beginTS})
 }
 
 // Get 转发点查；未命中返回 storage.ErrNotFound。
-func (c *Client) Get(key []byte) ([]byte, error) {
-	rows, err := c.roundTrip(QueryReq{Op: OpGet, Start: key})
+// beginTS>0 时远端按快照版本过滤（M8 分布式快照隔离）。
+func (c *Client) Get(key []byte, beginTS uint64) ([]byte, error) {
+	rows, err := c.roundTrip(QueryReq{Op: OpGet, Start: key, BeginTS: beginTS})
 	if err != nil {
 		return nil, err
 	}

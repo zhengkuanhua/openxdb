@@ -306,21 +306,23 @@ func (m *Manager) ensureRemote(id string) (*NodeInfo, error) {
 // ---- 查询转发（client.go 实现底层会话） ----
 
 // ScanRemote 将物理区间 [start, end) 转发到归属节点执行，返回远端行。
-func (m *Manager) ScanRemote(nodeID string, start, end []byte, limit int) ([]QueryRow, error) {
+// beginTS>0 时远端按快照版本过滤（M8 分布式快照隔离）。
+func (m *Manager) ScanRemote(nodeID string, start, end []byte, limit int, beginTS uint64) ([]QueryRow, error) {
 	n, err := m.ensureRemote(nodeID)
 	if err != nil {
 		return nil, err
 	}
-	return m.clientFor(n.ID).Scan(start, end, limit)
+	return m.clientFor(n.ID).Scan(start, end, limit, beginTS)
 }
 
 // GetRemote 将点查转发到归属节点执行；未命中返回 storage.ErrNotFound。
-func (m *Manager) GetRemote(nodeID string, key []byte) ([]byte, error) {
+// beginTS>0 时远端按快照版本过滤（M8 分布式快照隔离）。
+func (m *Manager) GetRemote(nodeID string, key []byte, beginTS uint64) ([]byte, error) {
 	n, err := m.ensureRemote(nodeID)
 	if err != nil {
 		return nil, err
 	}
-	return m.clientFor(n.ID).Get(key)
+	return m.clientFor(n.ID).Get(key, beginTS)
 }
 
 // helloRemote 与远端完成节点握手（连接 + NODE_HELLO -> NODE_HELLO_OK）。

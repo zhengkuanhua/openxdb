@@ -90,7 +90,7 @@ func TestQueryForwardScanAndGet(t *testing.T) {
 	}
 
 	// 转发区间扫描 [k1, k3)
-	rows, err := mgrA.ScanRemote("node-b", []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k1"), []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k3"), 0)
+	rows, err := mgrA.ScanRemote("node-b", []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k1"), []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k3"), 0, 0)
 	if err != nil {
 		t.Fatalf("ScanRemote: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestQueryForwardScanAndGet(t *testing.T) {
 		t.Fatalf("ScanRemote values: %q %q", rows[0].Value, rows[1].Value)
 	}
 	// 转发点查
-	v, err := mgrA.GetRemote("node-b", []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k2"))
+	v, err := mgrA.GetRemote("node-b", []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k2"), 0)
 	if err != nil {
 		t.Fatalf("GetRemote: %v", err)
 	}
@@ -109,11 +109,11 @@ func TestQueryForwardScanAndGet(t *testing.T) {
 		t.Fatalf("GetRemote: want v2, got %q", v)
 	}
 	// 未命中
-	if _, err := mgrA.GetRemote("node-b", []byte("r\x00\x00\x00\x00\x00\x00\x00\x01kx")); !errors.Is(err, storage.ErrNotFound) {
+	if _, err := mgrA.GetRemote("node-b", []byte("r\x00\x00\x00\x00\x00\x00\x00\x01kx"), 0); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("GetRemote(miss): want ErrNotFound, got %v", err)
 	}
 	// 未知节点
-	if _, err := mgrA.ScanRemote("ghost", nil, nil, 0); err == nil {
+	if _, err := mgrA.ScanRemote("ghost", nil, nil, 0, 0); err == nil {
 		t.Fatalf("ScanRemote(unknown node): want error, got nil")
 	}
 }

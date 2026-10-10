@@ -144,7 +144,7 @@ func (e *Executor) scanRegionRows(nodeID string, start, end []byte) ([]storage.K
 		defer tx.Rollback()
 		return e.scanMerged(tx, []storage.KeyRange{{Start: start, End: end}})
 	}
-	rows, err := e.mgr.ScanRemote(nodeID, start, end, 0)
+	rows, err := e.mgr.ScanRemote(nodeID, start, end, 0, 0)
 	if err != nil {
 		return nil, err
 	}

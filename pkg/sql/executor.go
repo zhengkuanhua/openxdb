@@ -12,6 +12,7 @@ import (
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
+	"github.com/zhengkuanhua/openxdb/pkg/tso"
 	"github.com/zhengkuanhua/openxdb/pkg/txn"
 )
 
@@ -29,13 +30,19 @@ type Executor struct {
 	// db.Open 装配后注入；selfID 供"本节点"归属判断。
 	mgr    *cluster.Manager
 	selfID string
+	// M8 分布式快照隔离：ts 为全局时间戳源（nil = 未装配，旧路径零回归）。
+	// curBeginTS 为显式事务 BEGIN 时获取的快照版本；stmtBeginTS 为
+	// autocommit 语句首次读时惰性获取的语句快照（每条语句独立）。
+	ts          tso.Source
+	curBeginTS  uint64
+	stmtBeginTS uint64
 	// M6 故障转移状态：自动重指派互斥 + 已处理 down 节点去重。
 	failoverMu   sync.Mutex
 	failoverDone map[string]bool
 	// M7 自动分裂：配置（开启 + 行数阈值）+ 各表写计数水位。
-	splitMu        sync.Mutex
-	splitCfg       splitConfig
-	splitAcc       map[uint64]int64
+	splitMu  sync.Mutex
+	splitCfg splitConfig
+	splitAcc map[uint64]int64
 	// M7 自动均衡：周期循环控制（并发触发互斥见 balanceOnce）。
 	balanceMu    sync.Mutex
 	balanceStop  chan struct{}
@@ -106,6 +113,8 @@ func (e *Executor) ExecuteText(stmt Stmt, sqlText string) (*Result, error) {
 
 // execStmt 语句分发（不计时/不记录慢查询，供 ExecuteText 包装）。
 func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
+	// M8：每条语句独立快照（显式事务内不重置，复用 BEGIN 快照）。
+	e.resetStmtSnapshot()
 	switch s := stmt.(type) {
 	case *CreateTableStmt:
 		return e.execCreateTable(s)
@@ -175,12 +184,27 @@ func (e *Executor) beginTx() error {
 	if e.inTx {
 		return &SQLError{Msg: "transaction already started"}
 	}
+	// M8 分布式快照隔离：BEGIN 时向 TSO 取全局 begin_ts 作为事务快照。
+	// 未装配 TSO（单机旧路径）时 begin_ts=0，行为与 M7 完全一致。
 	tx, err := e.tm.Begin()
 	if err != nil {
 		return err
 	}
 	e.curTx = tx
 	e.inTx = true
+	if e.ts != nil {
+		// 事务起点刷新 TSO 缓存：丢弃残余预取批次，取权威节点当前序列
+		// 的新鲜号作为快照，避免批量缓存让 begin_ts 滞后于已提交事务。
+		e.ts.Reset()
+		ts, terr := e.ts.Get()
+		if terr != nil {
+			tx.Rollback()
+			return &SQLError{Msg: fmt.Sprintf("BEGIN_FAILED: tso unavailable: %v", terr)}
+		}
+		e.curBeginTS = ts
+	} else {
+		e.curBeginTS = 0
+	}
 	return nil
 }
 
@@ -194,7 +218,13 @@ func (e *Executor) commitTx() error {
 	tx := e.curTx
 	e.inTx = false
 	e.curTx = nil
+	e.curBeginTS = 0
 	e.mu.Unlock()
+	if e.ts != nil {
+		// 事务结束后刷新 TSO 缓存：后续新事务/新语句取权威当前序列
+		// 的新鲜号，避免读到残余预取批次中的滞后时间戳。
+		e.ts.Reset()
+	}
 	return tx.Commit()
 }
 
@@ -208,8 +238,67 @@ func (e *Executor) rollbackTx() error {
 	tx := e.curTx
 	e.inTx = false
 	e.curTx = nil
+	e.curBeginTS = 0
 	e.mu.Unlock()
+	if e.ts != nil {
+		e.ts.Reset()
+	}
 	return tx.Rollback()
+}
+
+// SetTSO 注入全局时间戳源（M8：db.Open/StartCluster 装配）。
+// nil 表示不启用快照隔离（单机旧路径零回归）。
+func (e *Executor) SetTSO(src tso.Source) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ts = src
+	e.stmtBeginTS = 0
+}
+
+// tsoGet 从装配的时间戳源取号；未装配返回 0（旧路径）。
+func (e *Executor) tsoGet() (uint64, error) {
+	e.mu.Lock()
+	ts := e.ts
+	e.mu.Unlock()
+	if ts == nil {
+		return 0, nil
+	}
+	return ts.Get()
+}
+
+// snapshotTS 返回当前读快照版本：
+//   - 未装配 TSO：0（不过滤，旧路径零回归）；
+//   - 显式事务：BEGIN 时获取的 curBeginTS；
+//   - autocommit 语句：首次读时惰性获取并缓存 stmtBeginTS（每条语句独立）。
+//
+// 取号失败（如远程 TSO 不可达）退回 0：读不过滤、尽力而为，不阻塞语句。
+func (e *Executor) snapshotTS() uint64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.ts == nil {
+		return 0
+	}
+	if e.inTx {
+		return e.curBeginTS
+	}
+	if e.stmtBeginTS == 0 {
+		ts, err := e.ts.Get()
+		if err != nil {
+			return 0
+		}
+		e.stmtBeginTS = ts
+	}
+	return e.stmtBeginTS
+}
+
+// resetStmtSnapshot 在每条语句执行入口重置 autocommit 语句快照，
+// 保证每条语句拥有独立快照（显式事务内不重置）。
+func (e *Executor) resetStmtSnapshot() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.inTx {
+		e.stmtBeginTS = 0
+	}
 }
 
 // getTx 获取当前语句的事务：会话事务内复用 curTx；否则新建临时事务。

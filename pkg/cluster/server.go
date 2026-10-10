@@ -17,6 +17,7 @@ import (
 
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
+	"github.com/zhengkuanhua/openxdb/pkg/tso"
 )
 
 // Server 集群节点服务。
@@ -43,13 +44,29 @@ type Server struct {
 	pending2pc map[string][]TxnOp
 	// prepareFail 参与者 prepare 阶段故障注入（测试专用；nil = 正常路径）。
 	prepareFail func(txID string) error
+	// commitFail 参与者 commit 阶段故障注入（测试专用；nil = 正常路径）。
+	commitFail func(txID string) error
+	// tso 本地/全局时间戳源（M8）：nil = 未装配（旧路径，不做版本过滤）。
+	// 中心化部署下本节点即为发号权威，TSO_REQ 由其批量发放。
+	tso tso.Source
 }
+
+// SetTSO 注入时间戳源（M8：db.StartCluster 装配本地发号器）。
+// nil 表示不启用快照隔离（单机旧路径零回归）。
+func (s *Server) SetTSO(src tso.Source) { s.tso = src }
 
 // SetPrepareFail 设置参与者 prepare 阶段故障钩子（仅测试使用；传 nil 恢复）。
 func (s *Server) SetPrepareFail(fn func(txID string) error) {
 	s.mu2pc.Lock()
 	defer s.mu2pc.Unlock()
 	s.prepareFail = fn
+}
+
+// SetCommitFail 注入参与者 commit 阶段故障（测试专用；nil = 正常路径）。
+func (s *Server) SetCommitFail(fn func(txID string) error) {
+	s.mu2pc.Lock()
+	defer s.mu2pc.Unlock()
+	s.commitFail = fn
 }
 
 // NewServer 创建节点服务（selfID 为对端可见的节点身份）。
@@ -152,6 +169,8 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.handle2pcCommit(conn, payload)
 		case msg2pcAbortReq:
 			s.handle2pcAbort(conn, payload)
+		case msgTsoReq:
+			s.handleTso(conn, payload)
 		default:
 			return // 未知帧：断开
 		}
@@ -212,7 +231,7 @@ func (s *Server) handleQuery(conn net.Conn, payload []byte) {
 			resp = QueryResp{Row: &QueryRow{Key: req.Start, Value: v}}
 		}
 	case OpScan:
-		rows, err := s.scanRange(req.Start, req.End, req.Limit)
+		rows, err := s.scanRange(req.Start, req.End, req.Limit, req.BeginTS)
 		if err != nil {
 			resp = QueryResp{Err: err.Error()}
 		} else {
@@ -288,13 +307,23 @@ func (s *Server) applyPush(req *RegionPushReq) (RegionPushResp, error) {
 }
 
 // scanRange 区间扫描 [start, end)；end 为空表示无上界。
-func (s *Server) scanRange(start, end []byte, limit int) ([]QueryRow, error) {
+// beginTS>0 时逐行做快照版本过滤（M8 分布式快照隔离）。
+func (s *Server) scanRange(start, end []byte, limit int, beginTS uint64) ([]QueryRow, error) {
 	rows, err := s.st.Scan(storage.KeyRange{Start: start, End: end}, limit)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]QueryRow, 0, len(rows))
 	for _, kv := range rows {
+		if beginTS > 0 {
+			visible, verr := VersionVisible(s.st.Scan, kv.Key, beginTS)
+			if verr != nil {
+				return nil, verr
+			}
+			if !visible {
+				continue
+			}
+		}
 		out = append(out, QueryRow{Key: kv.Key, Value: kv.Value})
 	}
 	return out, nil
