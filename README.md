@@ -22,7 +22,7 @@ AIGC:
 
 OpenXDB is a from-scratch, single-node relational database kernel built for learning and experimentation. It implements a storage engine on top of RocksDB via cgo, a write-ahead log (WAL), transactional layer with snapshot isolation, a SQL subset with secondary indexes, and an in-memory B+Tree used as both an LSM comparator and a reference implementation.
 
-> **Status: BR 备份与恢复落地（BACKUP/RESTORE 逻辑备份 + 恢复 + 基于 binlog 的 LSN 时间点恢复基础）(v5.0-P7-BR), v0.9.0-alpha.** T1–T18 complete (P0/P1/P2 feature clusters + M2 replication + M3 sharding + M4 multi-node read + M5 distributed write/2PC + M6 HA/failover + M7 region auto-split & load balancing + M8 distributed transactions: TSO global timestamp + distributed snapshot isolation + 2PC recovery hardening + BR backup/restore: consistent-snapshot logical backup + idempotent restore + LSN-based PITR), all test suites green.
+> **Status: 客户端驱动（JDBC/Python）落地（驱动复用 pkg/server TCP 协议：JDBC OpenXDBDriver/Connection/Statement/ResultSet + Python connection/cursor/protocol）(v5.0-P8-CD), v0.10.0-alpha.** T1–T19 complete (P0/P1/P2 feature clusters + M2 replication + M3 sharding + M4 multi-node read + M5 distributed write/2PC + M6 HA/failover + M7 region auto-split & load balancing + M8 distributed transactions: TSO global timestamp + distributed snapshot isolation + 2PC recovery hardening + BR backup/restore: consistent-snapshot logical backup + idempotent restore + LSN-based PITR + T19 client drivers: JDBC & Python drivers wrapping the pkg/server protocol), all test suites green.
 
 ## Highlights
 
@@ -125,7 +125,7 @@ All packages pass: `cluster` (node handshake, query forwarding, heartbeat down, 
 
 Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmarks):
 
-- `T1_rocksdb_storage_impl.md`, `T2_wal_impl.md`, `T3_sql_layer.md`, `T3_txn_impl.md`, `T4_acid_notes.md`, `T5_cli_impl.md`, `T6_index_layer.md`, `T8_p0_sql_enhancements.md`, `T9_p1_csv_types.md`, `T10_p2_ops_expr.md`, `T11_m2_replication.md`, `T12_m3_sharding.md`, `T13_m4_multinode.md`, `T14_m5_2pc.md`, `T15_m6_ha.md`, `T16_m7_split_balance.md`, `T17_m8_dist_txn.md`, `T18_backup_restore.md`
+- `T1_rocksdb_storage_impl.md`, `T2_wal_impl.md`, `T3_sql_layer.md`, `T3_txn_impl.md`, `T4_acid_notes.md`, `T5_cli_impl.md`, `T6_index_layer.md`, `T8_p0_sql_enhancements.md`, `T9_p1_csv_types.md`, `T10_p2_ops_expr.md`, `T11_m2_replication.md`, `T12_m3_sharding.md`, `T13_m4_multinode.md`, `T14_m5_2pc.md`, `T15_m6_ha.md`, `T16_m7_split_balance.md`, `T17_m8_dist_txn.md`, `T18_backup_restore.md`, `T19_client_drivers.md`
 - `B2_group_commit.md` — write-path group commit (batch fsync)
 - `E1_rocksdb_bench.md` — RocksDB write benchmark (E1a) + in-memory B+Tree comparison (E1b)
 
@@ -150,6 +150,7 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 - [x] M7 region auto-split & load balancing: write-path auto-split (DML counter watermark → real row-count check → data-midpoint split in the same txn, boundary semantics reuse EncodeRegionKey), on-demand / periodic load balancing (BALANCE + auto-trigger, least-loaded live node target, largest region online migration via scan + REGION_PUSH with reads/writes uninterrupted, single-node reports cluster not enabled) — see [T16 design](docs/T16_m7_split_balance.md)
 - [x] M8 distributed transactions enhancement: global TSO timestamp (64-bit ms+logical layout, batch issuance, overflow protection, transaction-boundary Reset), distributed snapshot isolation (version records keyed by row-key first, begin_ts/commit_ts global filtering, cross-node passthrough), 2PC recovery hardening (coordinator CoordRecord persistence, commit/abort decision on restart, idempotent participant completion) — see [T17 design](docs/T17_m8_dist_txn.md)
 - [x] BR backup / restore: logical backup on a consistent snapshot (`BACKUP TO <path>`: full table catalog + data rows + index keys + region routing + backup-point LSN in a single transportable file with version & CRC32 checks, atomic write), idempotent restore (`RESTORE FROM <path>`: validate then drop-then-recreate same-named tables, rebuild data/indexes/routing in one transactional restore), LSN-based PITR foundation (`RESTORE FROM <path> TO LSN <n>`: binlog replay after the backup point up to the target LSN) — see [T18 design](docs/T18_backup_restore.md)
+- [x] T19 client drivers: JDBC driver (`OpenXDBDriver` / `OpenXDBConnection` / `OpenXDBStatement` / `OpenXDBResultSet`, `jdbc:openxdb://` URL, `META-INF/services` auto-registration, client-side `?` escaping) + Python driver (`openxdb` package: PEP 249 `connection` / `cursor` / `protocol`, module-level `connect`, qmark paramstyle, client-side escaping), both wrapping the pkg/server TCP protocol with no server-side auth handshake — see [T19 design](docs/T19_client_drivers.md)
 - [x] M2/M3 interface reservations (regions, versions, multi-node) — see [T7 design](docs/T7_m2m3_reservations.md)
 
 ## License

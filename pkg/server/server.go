@@ -83,6 +83,15 @@ func (s *Server) handleLocked(line string) (string, error) {
 		}
 		return s.doWrite(func(t txn.Txn) error { return t.Delete([]byte(toks[1])) })
 	case "BEGIN":
+		// SQL 引擎已挂载时，事务命令优先路由到 SQL 会话事务（executor 自维护
+		// curTx/curBeginTS）；否则走 KV 层显式事务（GET/SET/DEL 可见）。
+		// 事务命令成功统一回显 OK（SQL 引擎的 BEGIN 无列结果不直接透出）。
+		if s.SQL != nil && sql.IsSQL(line) {
+			if _, err := s.doSQL(line); err != nil {
+				return "", err
+			}
+			return "OK", nil
+		}
 		if s.cur != nil {
 			return "", errors.New("ERR transaction already active")
 		}
@@ -93,6 +102,12 @@ func (s *Server) handleLocked(line string) (string, error) {
 		s.cur = t
 		return "OK", nil
 	case "COMMIT":
+		if s.SQL != nil && sql.IsSQL(line) {
+			if _, err := s.doSQL(line); err != nil {
+				return "", err
+			}
+			return "OK", nil
+		}
 		if s.cur == nil {
 			return "", errors.New("ERR no active transaction")
 		}
@@ -103,6 +118,12 @@ func (s *Server) handleLocked(line string) (string, error) {
 		}
 		return "OK", nil
 	case "ROLLBACK":
+		if s.SQL != nil && sql.IsSQL(line) {
+			if _, err := s.doSQL(line); err != nil {
+				return "", err
+			}
+			return "OK", nil
+		}
 		if s.cur == nil {
 			return "", errors.New("ERR no active transaction")
 		}

@@ -136,6 +136,12 @@ func (l *lexer) lexString(q byte) error {
 	for l.pos < len(l.src) {
 		c := l.src[l.pos]
 		if c == q {
+			// SQL 标准转义：两个连续引号表示一个字面引号（如 'O''Brien'）。
+			if l.pos+1 < len(l.src) && l.src[l.pos+1] == q {
+				sb.WriteByte(q)
+				l.pos += 2
+				continue
+			}
 			l.pos++
 			l.toks = append(l.toks, token{kind: tokString, text: sb.String(), pos: start})
 			return nil
