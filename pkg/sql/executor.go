@@ -51,6 +51,11 @@ type Executor struct {
 	// P2：慢查询配置与记录（内存）
 	slowThreshold int64 // 毫秒阈值；<=0 表示不记录（默认 1000ms）
 	slowQueries   []SlowQueryRecord
+	// M8(BR)：备份/恢复环境（db.Open 装配注入）。
+	// st 为引擎级 Storage 引用：BACKUP 基于一致快照导出、RESTORE 物理写与 PITR 回放；
+	// binlogPath 为数据目录 binlog 文件路径（TO LSN 回放读取，M2 pkg/replication）。
+	st         storage.Storage
+	binlogPath string
 }
 
 // splitConfig M7 自动分裂配置。
@@ -171,8 +176,19 @@ func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
 		return e.execSplitRegion(s)
 	case *BalanceStmt:
 		return e.execBalance(s)
+	case *BackupStmt:
+		return e.execBackup(s)
+	case *RestoreStmt:
+		return e.execRestore(s)
 	}
 	return nil, ErrUnsupported
+}
+
+// SetBackupEnv 注入备份/恢复环境（db.Open 装配）。
+// st 为引擎级 Storage 引用；binlogPath 为数据目录 binlog 文件路径（可空字符串表示未启用）。
+func (e *Executor) SetBackupEnv(st storage.Storage, binlogPath string) {
+	e.st = st
+	e.binlogPath = binlogPath
 }
 
 // ---- 会话级显式事务 ----

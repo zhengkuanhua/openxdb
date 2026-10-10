@@ -95,8 +95,60 @@ func (p *parser) parseStmt() (Stmt, error) {
 	case "BALANCE":
 		p.next()
 		return &BalanceStmt{}, nil
+	case "BACKUP":
+		return p.parseBackup()
+	case "RESTORE":
+		return p.parseRestore()
 	}
 	return nil, errf("unsupported statement %q at %d", p.cur().text, p.cur().pos)
+}
+
+// parseBackup BACKUP TO '<path>'：生成完整逻辑备份快照文件。
+func (p *parser) parseBackup() (Stmt, error) {
+	if err := p.expectKeyword("BACKUP"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("TO"); err != nil {
+		return nil, err
+	}
+	pathTok, err := p.expect(tokString, "backup file path string")
+	if err != nil {
+		return nil, err
+	}
+	return &BackupStmt{Path: pathTok.text}, nil
+}
+
+// parseRestore RESTORE FROM '<path>' [TO LSN <n>]：
+// 恢复备份快照；可选 TO LSN 从备份点回放 binlog 到指定 LSN（PITR 基础）。
+func (p *parser) parseRestore() (Stmt, error) {
+	if err := p.expectKeyword("RESTORE"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("FROM"); err != nil {
+		return nil, err
+	}
+	pathTok, err := p.expect(tokString, "restore file path string")
+	if err != nil {
+		return nil, err
+	}
+	s := &RestoreStmt{Path: pathTok.text}
+	if p.cur().kind == tokKeyword && p.cur().text == "TO" {
+		p.next()
+		if err := p.expectKeyword("LSN"); err != nil {
+			return nil, err
+		}
+		lsnTok, err := p.expect(tokNumber, "lsn number")
+		if err != nil {
+			return nil, err
+		}
+		lsn, err := strconv.ParseUint(lsnTok.text, 10, 64)
+		if err != nil {
+			return nil, errf("invalid lsn %q", lsnTok.text)
+		}
+		s.ToLSN = lsn
+		s.HasToLSN = true
+	}
+	return s, nil
 }
 
 // parseAddNode ADD NODE '<addr>'：注册远端节点（地址字符串，如 '127.0.0.1:7791'）。

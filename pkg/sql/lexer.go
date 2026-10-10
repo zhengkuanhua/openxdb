@@ -50,6 +50,8 @@ var keywords = map[string]bool{
 	"ADD": true, "NODE": true, "NODES": true, "REGION": true, "ROUTES": true, "ASSIGN": true,
 	// M7：分裂与负载均衡管理语句
 	"SPLIT": true, "BALANCE": true,
+	// M8(BR)：备份/恢复语句（BACKUP/RESTORE+PITR）
+	"BACKUP": true, "RESTORE": true, "LSN": true,
 }
 
 type lexer struct {

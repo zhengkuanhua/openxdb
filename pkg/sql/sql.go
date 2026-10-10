@@ -73,6 +73,13 @@ func (e *Engine) SetAutoBalance(enabled bool, interval time.Duration) {
 // StopAutoBalance 停止自动均衡循环（db.Close 装配，避免 Close 竞态）。
 func (e *Engine) StopAutoBalance() { e.ex.stopAutoBalance() }
 
+// SetBackupEnv 注入备份/恢复环境（M8(BR)，db.Open 装配）。
+// st 为引擎级 Storage 引用（BACKUP 一致快照 / RESTORE 物理写 / PITR 回放）；
+// binlogPath 为数据目录 binlog 文件路径（可空字符串表示未启用）。
+func (e *Engine) SetBackupEnv(st storage.Storage, binlogPath string) {
+	e.ex.SetBackupEnv(st, binlogPath)
+}
+
 // SplitRegionNow 手动触发 region 分裂（函数式入口，兼容旧手动 SPLIT）。
 func (e *Engine) SplitRegionNow(regionID uint64) error { return e.ex.splitRegionByID(regionID) }
 
@@ -97,7 +104,7 @@ func (e *Engine) SlowQueries() []SlowQueryRecord { return e.ex.SlowQueries() }
 // IsSQL 判断一行命令是否以 SQL 关键字开头（供协议层路由）。
 func IsSQL(line string) bool {
 	trimmed := strings.TrimLeft(line, " \t\r\n")
-	for _, kw := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "BEGIN", "COMMIT", "ROLLBACK", "EXPORT", "IMPORT", "SHOW", "EXPLAIN", "SPLIT", "BALANCE"} {
+	for _, kw := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "BEGIN", "COMMIT", "ROLLBACK", "EXPORT", "IMPORT", "SHOW", "EXPLAIN", "SPLIT", "BALANCE", "BACKUP", "RESTORE"} {
 		if strings.HasPrefix(strings.ToUpper(trimmed), kw+" ") ||
 			strings.EqualFold(trimmed, kw) {
 			return true

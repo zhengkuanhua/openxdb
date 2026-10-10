@@ -275,6 +275,22 @@ func (SplitRegionStmt) stmt() {}
 // BalanceStmt BALANCE：手动触发一次负载均衡（迁移过载本地 region 到最闲存活节点）。
 type BalanceStmt struct{}
 
+// ---- M8(BR)：备份/恢复（BACKUP/RESTORE+PITR）----
+// BackupStmt BACKUP TO '<path>'：基于一致快照生成完整逻辑备份文件。
+type BackupStmt struct{ Path string }
+
+func (BackupStmt) stmt() {}
+
+// RestoreStmt RESTORE FROM '<path>' [TO LSN <n>]：
+// 校验并恢复备份快照；可选 TO LSN 通过 binlog 回放到指定 LSN（PITR 基础）。
+type RestoreStmt struct {
+	Path     string
+	ToLSN    uint64
+	HasToLSN bool
+}
+
+func (RestoreStmt) stmt() {}
+
 func (BalanceStmt) stmt() {}
 
 // Result 执行结果（面向协议层/CLI 输出）。

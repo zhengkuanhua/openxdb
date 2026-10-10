@@ -191,6 +191,8 @@ func Open(dir string) (*DB, error) {
 	// M8：本地时间戳源（中心化发号权威；单机模式退化为本地自增，零回归）。
 	ts := tso.New()
 	eng.SetTSO(ts)
+	// M8(BR)：注入备份/恢复环境（引擎级 Storage 引用 + 数据目录 binlog 路径）。
+	eng.SetBackupEnv(st, filepath.Join(dir, BinlogFile))
 	return &DB{Dir: dir, Storage: st, WAL: w, Txn: tm, SQL: eng, Cluster: mgr, TSO: ts}, nil
 }
 
