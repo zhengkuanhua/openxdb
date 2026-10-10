@@ -253,6 +253,12 @@ type ShowRegionRoutesStmt struct{}
 
 func (ShowRegionRoutesStmt) stmt() {}
 
+// ShowStatsStmt SHOW STATS：输出服务器运行指标（T20 运维监控，配合 openxdb stats）。
+type ShowStatsStmt struct{}
+
+func (ShowStatsStmt) stmt() {}
+
+
 // AssignRegionStmt ASSIGN REGION <regionID> TO NODE '<nodeID>'：指派 region 归属节点。
 type AssignRegionStmt struct {
 	RegionID uint64 // 显式 region ID

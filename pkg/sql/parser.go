@@ -1087,7 +1087,7 @@ func (p *parser) peekKind() tokKind {
 	return tokEOF
 }
 
-// parseShow SHOW TABLES | SHOW INDEX FROM t | SHOW SLOWQUERIES | SHOW NODES | SHOW REGION ROUTES
+// parseShow SHOW TABLES | SHOW INDEX FROM t | SHOW SLOWQUERIES | SHOW NODES | SHOW REGION ROUTES | SHOW STATS
 func (p *parser) parseShow() (Stmt, error) {
 	if err := p.expectKeyword("SHOW"); err != nil {
 		return nil, err
@@ -1096,6 +1096,9 @@ func (p *parser) parseShow() (Stmt, error) {
 	case "TABLES":
 		p.next()
 		return &ShowTablesStmt{}, nil
+	case "STATS":
+		p.next()
+		return &ShowStatsStmt{}, nil
 	case "SLOWQUERIES":
 		p.next()
 		return &ShowSlowQueriesStmt{}, nil

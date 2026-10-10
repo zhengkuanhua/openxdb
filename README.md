@@ -22,7 +22,7 @@ AIGC:
 
 OpenXDB is a from-scratch, single-node relational database kernel built for learning and experimentation. It implements a storage engine on top of RocksDB via cgo, a write-ahead log (WAL), transactional layer with snapshot isolation, a SQL subset with secondary indexes, and an in-memory B+Tree used as both an LSM comparator and a reference implementation.
 
-> **Status: 客户端驱动（JDBC/Python）落地（驱动复用 pkg/server TCP 协议：JDBC OpenXDBDriver/Connection/Statement/ResultSet + Python connection/cursor/protocol）(v5.0-P8-CD), v0.10.0-alpha.** T1–T19 complete (P0/P1/P2 feature clusters + M2 replication + M3 sharding + M4 multi-node read + M5 distributed write/2PC + M6 HA/failover + M7 region auto-split & load balancing + M8 distributed transactions: TSO global timestamp + distributed snapshot isolation + 2PC recovery hardening + BR backup/restore: consistent-snapshot logical backup + idempotent restore + LSN-based PITR + T19 client drivers: JDBC & Python drivers wrapping the pkg/server protocol), all test suites green.
+> **Status: 运维工具链落地（doctor 巡检 + stats 监控 + 一键部署：`openxdb doctor` 数据目录/RocksDB/元数据/binlog/端口巡检与 0/1/2 退出码，`openxdb stats` 连接数/表数/region/慢查询/binlog 位点指标，`scripts/deploy.ps1`/`deploy.sh` 参数化部署）(v5.0-P9-OT), v0.11.0-alpha.** T1–T20 complete (P0/P1/P2 feature clusters + M2 replication + M3 sharding + M4 multi-node read + M5 distributed write/2PC + M6 HA/failover + M7 region auto-split & load balancing + M8 distributed transactions: TSO global timestamp + distributed snapshot isolation + 2PC recovery hardening + BR backup/restore: consistent-snapshot logical backup + idempotent restore + LSN-based PITR + T19 client drivers: JDBC & Python drivers wrapping the pkg/server protocol + T20 ops toolchain: doctor health checks + stats monitoring + one-click deploy scripts), all test suites green.
 
 ## Highlights
 
@@ -32,6 +32,7 @@ OpenXDB is a from-scratch, single-node relational database kernel built for lear
 - **SQL subset** — `CREATE/DROP TABLE` (types INT/TEXT/DATE/DECIMAL/BLOB), `CREATE/DROP INDEX`, `INSERT`, `SELECT` (WHERE, ORDER BY, LIMIT, aggregates COUNT/SUM/AVG, JOIN, GROUP BY, subqueries, BETWEEN, IN), `UPDATE`, `DELETE`, CSV `EXPORT`/`IMPORT`; expressions `LIKE` (`%` / `_`) and `CASE WHEN`; ops statements `SHOW TABLES`, `SHOW INDEX FROM t`, `EXPLAIN <SELECT>`, slow queries via `SET SLOW <ms>` and `SHOW SLOWQUERIES` (`pkg/sql`).
 - **Secondary indexes** — backfill on creation, automatic maintenance on DML, and query optimization for equality/range scans and ORDER BY (`T6`).
 - **Server & CLI** — REPL and TCP server (`cmd/openxdb`), binary protocol over TCP (`pkg/server`).
+- **Ops toolchain (T20)** — `openxdb doctor` health checks: data dir & WAL integrity, RocksDB open, `m:tables`/`m:regions` metadata consistency & route self-consistency, binlog readability & LSN (read-only `PeekLastLSN`), optional online port/PING & slow-query checks, human-readable or `--json` report with exit codes 0=pass / 1=warn / 2=error; `openxdb stats` metrics: active connections (server session counter), table count, region count & route distribution, slow query count, binlog LSN (+ optional two-sample growth via `--interval`), table or `--json` output backed by the new `SHOW STATS` statement; one-click deploy scripts `scripts/deploy.ps1` / `scripts/deploy.sh` (parameterized `-DataDir`/`-Port`, init + start + health self-check + deployment summary) (`cmd/openxdb/doctor.go`, `cmd/openxdb/stats.go`, `pkg/server`, `pkg/sql`, `pkg/replication`, `pkg/db`, `scripts/`).
 - **Replication (M2)** — master-follower async replication: commit-hook binlog (independent append-only file, monotonically increasing LSN), replicator push with per-slot resume, follower idempotent apply, PING/PONG heartbeats with offline detection (`pkg/replication`, `pkg/txn`, `pkg/db`).
 - **Sharding (M3)** — logical sharding on the single-node kernel: RegionInfo metadata persisted as `m:regions`, Router with half-open `[StartKey, EndKey)` boundary semantics, region-prefixed physical keys (`r` + regionID:8B + inner key), cross-region point/range/full-table queries via range expansion + merge, and SPLIT / LIST REGIONS / LOCATE REGION management; default single-region shape keeps pre-sharding behavior unchanged (`pkg/sharding`, `pkg/sql`, `pkg/db`).
 - **Multi-node cluster (M4)** — first distributed cluster: node topology with NodeInfo registry (`ADD NODE` / `SHOW NODES`), handshake and liveness via the reused M2 PING/PONG heartbeat protocol, cluster route table (region → node, `ASSIGN REGION ... TO NODE` / `SHOW REGION ROUTES`), and cross-node SELECT forwarding: non-local regions are executed via TCP on their owning node and merged back into the existing executor semantics (frames 16-21, byte-level physical-key scan to avoid package cycles); remote-region writes are rejected until the distributed write transaction cluster (2PC) lands (`pkg/cluster`, `pkg/sql`, `pkg/db`).
@@ -46,6 +47,7 @@ OpenXDB is a from-scratch, single-node relational database kernel built for lear
 | Layer | Package | Responsibility |
 |-------|---------|----------------|
 | Protocol + CLI | `cmd/openxdb`, `pkg/server` | TCP server, REPL, binary protocol framing |
+| Ops toolchain (T20) | `cmd/openxdb`, `pkg/server`, `pkg/sql`, `pkg/replication`, `pkg/db`, `scripts/` | `openxdb doctor` health checks (data dir/WAL/RocksDB/metadata/binlog/port/slow queries, exit 0/1/2), `openxdb stats` metrics (connections/tables/regions/slow queries/binlog LSN), `SHOW STATS`, deploy scripts (`deploy.ps1` / `deploy.sh`) |
 | SQL | `pkg/sql` | Parser (recursive descent), executor (project/filter/sort/aggregate), metadata catalog, secondary index layer |
 | Transaction | `pkg/txn` | Begin/commit/rollback, snapshot isolation, read-your-writes |
 | Storage | `pkg/storage` | KV interface, key encoding; RocksDB engine and B+Tree engine |
@@ -100,6 +102,10 @@ openxdb repl --data-dir ./data
 
 # TCP server (default port 7788)
 openxdb start --data-dir ./data [--port 7788]
+
+# ops: health check + live metrics
+openxdb doctor --data-dir ./data [--addr 127.0.0.1:7788] [--json]
+openxdb stats [--addr 127.0.0.1:7788] [--interval 5] [--json]
 ```
 
 REPL session:
@@ -125,7 +131,7 @@ All packages pass: `cluster` (node handshake, query forwarding, heartbeat down, 
 
 Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmarks):
 
-- `T1_rocksdb_storage_impl.md`, `T2_wal_impl.md`, `T3_sql_layer.md`, `T3_txn_impl.md`, `T4_acid_notes.md`, `T5_cli_impl.md`, `T6_index_layer.md`, `T8_p0_sql_enhancements.md`, `T9_p1_csv_types.md`, `T10_p2_ops_expr.md`, `T11_m2_replication.md`, `T12_m3_sharding.md`, `T13_m4_multinode.md`, `T14_m5_2pc.md`, `T15_m6_ha.md`, `T16_m7_split_balance.md`, `T17_m8_dist_txn.md`, `T18_backup_restore.md`, `T19_client_drivers.md`
+- `T1_rocksdb_storage_impl.md`, `T2_wal_impl.md`, `T3_sql_layer.md`, `T3_txn_impl.md`, `T4_acid_notes.md`, `T5_cli_impl.md`, `T6_index_layer.md`, `T8_p0_sql_enhancements.md`, `T9_p1_csv_types.md`, `T10_p2_ops_expr.md`, `T11_m2_replication.md`, `T12_m3_sharding.md`, `T13_m4_multinode.md`, `T14_m5_2pc.md`, `T15_m6_ha.md`, `T16_m7_split_balance.md`, `T17_m8_dist_txn.md`, `T18_backup_restore.md`, `T19_client_drivers.md`, `T20_ops_toolchain.md`
 - `B2_group_commit.md` — write-path group commit (batch fsync)
 - `E1_rocksdb_bench.md` — RocksDB write benchmark (E1a) + in-memory B+Tree comparison (E1b)
 
@@ -151,6 +157,7 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 - [x] M8 distributed transactions enhancement: global TSO timestamp (64-bit ms+logical layout, batch issuance, overflow protection, transaction-boundary Reset), distributed snapshot isolation (version records keyed by row-key first, begin_ts/commit_ts global filtering, cross-node passthrough), 2PC recovery hardening (coordinator CoordRecord persistence, commit/abort decision on restart, idempotent participant completion) — see [T17 design](docs/T17_m8_dist_txn.md)
 - [x] BR backup / restore: logical backup on a consistent snapshot (`BACKUP TO <path>`: full table catalog + data rows + index keys + region routing + backup-point LSN in a single transportable file with version & CRC32 checks, atomic write), idempotent restore (`RESTORE FROM <path>`: validate then drop-then-recreate same-named tables, rebuild data/indexes/routing in one transactional restore), LSN-based PITR foundation (`RESTORE FROM <path> TO LSN <n>`: binlog replay after the backup point up to the target LSN) — see [T18 design](docs/T18_backup_restore.md)
 - [x] T19 client drivers: JDBC driver (`OpenXDBDriver` / `OpenXDBConnection` / `OpenXDBStatement` / `OpenXDBResultSet`, `jdbc:openxdb://` URL, `META-INF/services` auto-registration, client-side `?` escaping) + Python driver (`openxdb` package: PEP 249 `connection` / `cursor` / `protocol`, module-level `connect`, qmark paramstyle, client-side escaping), both wrapping the pkg/server TCP protocol with no server-side auth handshake — see [T19 design](docs/T19_client_drivers.md)
+- [x] T20 ops toolchain: `openxdb doctor` health checks (data dir/WAL integrity, RocksDB open health, `m:tables`/`m:regions` metadata consistency & route self-consistency, binlog readability & LSN, optional online port/PING & slow-query checks, human-readable or `--json` report, exit codes 0=pass / 1=warn / 2=error) + `openxdb stats` live metrics (active connections via server session counter, table count, region count & route distribution, slow query count, binlog LSN with optional two-sample growth, table or `--json` output, backed by new `SHOW STATS`) + one-click deploy scripts (`scripts/deploy.ps1` / `scripts/deploy.sh`: parameterized init/start/health self-check/deployment summary) — see [T20 design](docs/T20_ops_toolchain.md)
 - [x] M2/M3 interface reservations (regions, versions, multi-node) — see [T7 design](docs/T7_m2m3_reservations.md)
 
 ## License

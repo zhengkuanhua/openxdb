@@ -308,6 +308,20 @@ func (d *DB) ReplicationStatus() (address string, slaves []replication.SlaveStat
 	return d.Replicator.Addr(), d.Replicator.SlaveStatus()
 }
 
+// BinlogLSN 返回当前 binlog 最大位点（T20 运维监控，只读不创建）。
+// 未启用复制时读取数据目录 binlog 文件（存在即返回位点，不存在返回 0, nil）。
+func (d *DB) BinlogLSN() (uint64, error) {
+	path := filepath.Join(d.Dir, BinlogFile)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	lsn, err := replication.PeekLastLSN(path)
+	return uint64(lsn), err
+}
+
 // Close 关闭事务管理器、存储与 WAL（顺序与 Open 相反）。
 func (d *DB) Close() error {
 	var errs []error

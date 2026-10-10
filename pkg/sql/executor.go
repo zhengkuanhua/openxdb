@@ -56,6 +56,11 @@ type Executor struct {
 	// binlogPath 为数据目录 binlog 文件路径（TO LSN 回放读取，M2 pkg/replication）。
 	st         storage.Storage
 	binlogPath string
+	// T20：运维指标注入源（nil = 未装配，SHOW STATS 输出 0）。
+	// connSource 返回当前活跃 TCP 连接数（server 层会话计数）；
+	// binlogLSN 返回当前 binlog 最大位点（db 层注入，读取只读）。
+	connSource func() int64
+	binlogLSN  func() (uint64, error)
 }
 
 // splitConfig M7 自动分裂配置。
@@ -70,6 +75,13 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 
 // SetSlowThreshold 设置慢查询阈值（毫秒，<=0 关闭记录）。
 func (e *Executor) SetSlowThreshold(ms int64) { e.slowThreshold = ms }
+
+// SetStatsSources 装配 SHOW STATS 指标注入源（T20，cmd/openxdb start 时注入）：
+// conn 返回活跃连接数（server 层会话计数）；binlog 返回 binlog 最大位点（db 层）。
+func (e *Executor) SetStatsSources(conn func() int64, binlog func() (uint64, error)) {
+	e.connSource = conn
+	e.binlogLSN = binlog
+}
 
 // SlowQueries 返回当前慢查询记录副本（SHOW SLOWQUERIES 与协议层读取共用）。
 func (e *Executor) SlowQueries() []SlowQueryRecord {
@@ -170,6 +182,8 @@ func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
 		return e.execShowNodes()
 	case *ShowRegionRoutesStmt:
 		return e.execShowRegionRoutes()
+	case *ShowStatsStmt:
+		return e.execShowStats()
 	case *AssignRegionStmt:
 		return e.execAssignRegion(s)
 	case *SplitRegionStmt:
@@ -2018,6 +2032,43 @@ func (e *Executor) execShowSlowQueries() (*Result, error) {
 			StrVal(r.SQL),
 		})
 	}
+	return res, nil
+}
+
+// execShowStats SHOW STATS：输出服务器运行指标（T20 运维监控）。
+// 覆盖：活跃连接数（server 会话计数）、表数量、region 数量、
+// 慢查询数量、binlog 最大位点。注入源未装配时输出 0。
+func (e *Executor) execShowStats() (*Result, error) {
+	res := &Result{Columns: []string{"metric", "value"}}
+	appendKV := func(k string, v Value) {
+		res.Rows = append(res.Rows, []Value{StrVal(k), v})
+	}
+	if e.connSource != nil {
+		appendKV("connection_count", IntVal(e.connSource()))
+	} else {
+		appendKV("connection_count", IntVal(0))
+	}
+	tx, err := e.getTx()
+	if err != nil {
+		return nil, err
+	}
+	if e.autocommit() {
+		defer tx.Rollback()
+	}
+	tabs, err := loadTables(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	appendKV("table_count", IntVal(int64(len(tabs))))
+	appendKV("region_count", IntVal(int64(len(e.router.AllRegions()))))
+	appendKV("slow_query_count", IntVal(int64(len(e.SlowQueries()))))
+	lsn := uint64(0)
+	if e.binlogLSN != nil {
+		if n, err := e.binlogLSN(); err == nil {
+			lsn = n
+		}
+	}
+	appendKV("binlog_lsn", IntVal(int64(lsn)))
 	return res, nil
 }
 

@@ -44,7 +44,7 @@ var keywords = map[string]bool{
 	"BEGIN": true, "COMMIT": true, "ROLLBACK": true,
 	"EXPORT": true, "IMPORT": true, "TO": true,
 	// P2：运维语句 + 表达式增强
-	"SHOW": true, "EXPLAIN": true, "TABLES": true, "SLOWQUERIES": true,
+	"SHOW": true, "EXPLAIN": true, "TABLES": true, "SLOWQUERIES": true, "STATS": true,
 	"LIKE": true, "CASE": true, "WHEN": true, "THEN": true, "ELSE": true, "END": true,
 	// M4：多节点集群管理语句
 	"ADD": true, "NODE": true, "NODES": true, "REGION": true, "ROUTES": true, "ASSIGN": true,

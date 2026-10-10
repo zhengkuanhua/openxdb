@@ -25,6 +25,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/zhengkuanhua/openxdb/pkg/sql"
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
@@ -38,12 +39,19 @@ type Server struct {
 
 	mu  sync.Mutex
 	cur txn.Txn // 当前显式事务；nil 表示未开启
+
+	// T20：活跃 TCP 连接会话计数（ServeListener 每个连接进入 +1、退出 -1），
+	// 供 SHOW STATS / openxdb stats 拉取连接数指标。
+	conns int64
 }
 
 // New 创建协议执行器。
 func New(tm txn.TxnManager) *Server {
 	return &Server{Txn: tm}
 }
+
+// ActiveConns 返回当前活跃 TCP 连接数（T20 会话计数）。
+func (s *Server) ActiveConns() int64 { return atomic.LoadInt64(&s.conns) }
 
 // Handle 处理一行命令，返回响应文本（成功时不含 ERR 前缀）。
 func (s *Server) Handle(line string) (string, error) {
@@ -294,6 +302,8 @@ func (s *Server) ServeListener(ln net.Listener) error {
 		}
 		go func(c net.Conn) {
 			defer c.Close()
+			atomic.AddInt64(&s.conns, 1)
+			defer atomic.AddInt64(&s.conns, -1)
 			_ = s.REPL(c, c)
 		}(conn)
 	}

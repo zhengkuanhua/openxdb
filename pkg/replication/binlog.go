@@ -49,6 +49,32 @@ type binlogStore struct {
 	closed  bool
 }
 
+// PeekLastLSN 只读地读取 binlog 文件的最大位点（不创建、不写入）。
+// 用于运维巡检/监控读取位点；文件不存在时返回 os.ErrNotExist 原样错误。
+func PeekLastLSN(path string) (storage.LSN, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	if fi.Size() == 0 {
+		return 0, nil
+	}
+	b := &binlogStore{f: f, path: path}
+	if err := b.checkHeader(); err != nil {
+		return 0, err
+	}
+	var last storage.LSN
+	if err := b.replay(func(e *BinlogEntry) error { last = e.LSN; return nil }); err != nil {
+		return 0, err
+	}
+	return last, nil
+}
+
 // OpenBinlog 打开（或创建）binlog 文件，扫描末尾确定 nextLSN。
 func OpenBinlog(path string) (BinlogStore, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)

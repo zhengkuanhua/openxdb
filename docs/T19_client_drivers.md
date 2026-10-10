@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_0488f390c46c11f197b3525400248c00
+    ReservedCode1: h/G2iZjOiq3Hoa//j02XHk+3zeDYe/GEIYBeJEyTxB6/P2dOeMW2gCVgHkvTJOgjXU98dporM+RROajLI3w6VUBW87LNavzQOcanScHlAH0sd6pn+JxfVAdl+8j4qnsWhiiT8l7Zjb8R1CsQALiBvgOrRxW583iqVtbXLfqAezE6cVe0gCFHeGQuS+k=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_0488f390c46c11f197b3525400248c00
+    ReservedCode2: h/G2iZjOiq3Hoa//j02XHk+3zeDYe/GEIYBeJEyTxB6/P2dOeMW2gCVgHkvTJOgjXU98dporM+RROajLI3w6VUBW87LNavzQOcanScHlAH0sd6pn+JxfVAdl+8j4qnsWhiiT8l7Zjb8R1CsQALiBvgOrRxW583iqVtbXLfqAezE6cVe0gCFHeGQuS+k=
+---
+
 # T19 — 客户端驱动（JDBC / Python）
 
 实现记录：OpenXDB 客户端驱动功能簇闭环。本文档说明客户端驱动架构、线协议复用方式、JDBC / Python 驱动结构与错误码、事务语义与测试方式。
@@ -154,3 +165,4 @@ conn.close()
 - 驱动源码：`drivers/jdbc/`（`src/main/java/org/openxdb/jdbc/*`）、`drivers/python/openxdb/`
 - 驱动 README：`drivers/jdbc/README.md`、`drivers/python/README.md`
 - 服务端协议实现：`pkg/server`、`cmd/openxdb`
+*（内容由AI生成，仅供参考）*

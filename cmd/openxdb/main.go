@@ -30,6 +30,10 @@ func main() {
 		err = cmdREPL(os.Args[2:])
 	case "start":
 		err = cmdStart(os.Args[2:])
+	case "doctor":
+		err = cmdDoctor(os.Args[2:])
+	case "stats":
+		err = cmdStats(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -131,6 +135,8 @@ func cmdStart(args []string) error {
 	fmt.Printf("OpenXDB %s serving on %s (data dir: %s)\n", version, addr, dir)
 	s := server.New(d.Txn)
 	s.SQL = d.SQL
+	// T20：注入运维统计源（连接数 / binlog 位点），供 SHOW STATS 输出实时指标。
+	d.SQL.SetStatsSources(s.ActiveConns, d.BinlogLSN)
 	return s.ServeTCP(addr)
 }
 
@@ -168,5 +174,11 @@ Commands:
           [--replica-port <n>] 主节点复制端口（启用 M2 复制并生成 binlog）
           [--cluster-addr <addr>] 集群节点链路地址（启用 M4 节点握手/转发）
   replica --data-dir <dir> --master <host:port>
-                             以从节点身份连接主节点并异步复制`)
+                             以从节点身份连接主节点并异步复制
+  doctor  --data-dir <dir>   数据目录/本地服务健康巡检
+          [--addr <host:port>] 在线服务检查（端口连通、慢查询等）
+          [--json]            输出 JSON 报告（退出码：0=通过 1=警告 2=错误）
+  stats   [--addr <host:port>] 拉取服务运行指标（默认 127.0.0.1:7788）
+          [--interval <sec>]  二次采样计算 binlog 增长（默认单次）
+          [--json]            输出 JSON 指标`)
 }

@@ -98,6 +98,12 @@ func (e *Engine) Execute(stmt string) (*Result, error) {
 // SetSlowThreshold 设置慢查询阈值（毫秒，<=0 关闭记录），透传至执行器。
 func (e *Engine) SetSlowThreshold(ms int64) { e.ex.SetSlowThreshold(ms) }
 
+// SetStatsSources 注入运维统计源（T20）：连接数来源与 binlog 位点来源，
+// 供 SHOW STATS 输出实时指标；不注入时对应指标为 0。
+func (e *Engine) SetStatsSources(connSource func() int64, binlogLSN func() (uint64, error)) {
+	e.ex.SetStatsSources(connSource, binlogLSN)
+}
+
 // SlowQueries 返回慢查询记录副本（供协议层展示或测试断言）。
 func (e *Engine) SlowQueries() []SlowQueryRecord { return e.ex.SlowQueries() }
 
