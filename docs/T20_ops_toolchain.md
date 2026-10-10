@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_bae9a31dc48811f19063525400393706
+    ReservedCode1: /bCC+14QfcCwPZWtTvhJCuAwIX//7mcsAaVUYCt1ASgIMJCe3m+6OSRpEkmjC6cunKNHz+8u1OGZ2gP5u3htUHcGCGmzme6hDVcn0A3X0eWaJl33EBB2AWxvtyTQWx+brjgRxwWBariDuMQsEucKoalt46nyMARFCxcScP2g5v7yeb6xJiYplQylsYg=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_bae9a31dc48811f19063525400393706
+    ReservedCode2: /bCC+14QfcCwPZWtTvhJCuAwIX//7mcsAaVUYCt1ASgIMJCe3m+6OSRpEkmjC6cunKNHz+8u1OGZ2gP5u3htUHcGCGmzme6hDVcn0A3X0eWaJl33EBB2AWxvtyTQWx+brjgRxwWBariDuMQsEucKoalt46nyMARFCxcScP2g5v7yeb6xJiYplQylsYg=
+---
+
 # T20 运维工具链（doctor 巡检 + stats 监控 + 一键部署）
 
 > 功能簇 OT（Ops Toolchain），版本 v5.0-P9-OT / v0.11.0-alpha。
@@ -203,3 +214,4 @@ CGO_LDFLAGS:     -LC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-build -lroc
 - **空库正常**：`m:tables` / `m:regions` 的 `ErrNotFound`、空 WAL 均为警告而非错误；
 - **退出码是协议**：脚本（deploy）与 CI 均按 0/1/2 决策，`>=2` 视为失败；
 - **在线检查可选**：未传 `--addr` 时 doctor 不阻塞，以警告提示。
+*（内容由AI生成，仅供参考）*
