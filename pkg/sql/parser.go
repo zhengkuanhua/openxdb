@@ -1400,5 +1400,31 @@ func (p *parser) parseImport() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ImportStmt{Table: nameTok.text, Path: pathTok.text}, nil
+	stmt := &ImportStmt{Table: nameTok.text, Path: pathTok.text}
+	// 可选后缀：BATCH <n>（逐批提交行数）/ IGNORE ERRORS（坏行计数跳过）
+	for p.cur().kind == tokIdent {
+		switch strings.ToUpper(p.cur().text) {
+		case "BATCH":
+			p.next()
+			nTok, err := p.expect(tokNumber, "batch row count")
+			if err != nil {
+				return nil, err
+			}
+			n, err := strconv.ParseInt(nTok.text, 10, 64)
+			if err != nil || n <= 0 {
+				return nil, &SQLError{Msg: "invalid BATCH count: " + nTok.text}
+			}
+			stmt.Batch = int(n)
+		case "IGNORE":
+			p.next()
+			if p.cur().kind != tokIdent || !strings.EqualFold(p.cur().text, "ERRORS") {
+				return nil, &SQLError{Msg: "expected keyword ERRORS after IGNORE"}
+			}
+			p.next()
+			stmt.IgnoreErrors = true
+		default:
+			return nil, &SQLError{Msg: "unexpected token after IMPORT: " + p.cur().text}
+		}
+	}
+	return stmt, nil
 }
