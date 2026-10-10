@@ -61,6 +61,8 @@ type Executor struct {
 	// binlogLSN 返回当前 binlog 最大位点（db 层注入，读取只读）。
 	connSource func() int64
 	binlogLSN  func() (uint64, error)
+	// M9：查询结果缓存（SELECT 结果以规范化 SQL 为 key；写语句后全量失效）。
+	qc *QueryCache
 }
 
 // splitConfig M7 自动分裂配置。
@@ -70,7 +72,7 @@ type splitConfig struct {
 }
 
 func NewExecutor(tm txn.TxnManager) *Executor {
-	return &Executor{tm: tm, router: sharding.NewRouter(), failoverDone: map[string]bool{}, splitAcc: map[uint64]int64{}}
+	return &Executor{tm: tm, router: sharding.NewRouter(), failoverDone: map[string]bool{}, splitAcc: map[uint64]int64{}, qc: NewQueryCache()}
 }
 
 // SetSlowThreshold 设置慢查询阈值（毫秒，<=0 关闭记录）。
@@ -125,7 +127,38 @@ func (e *Executor) Execute(stmt Stmt) (*Result, error) {
 
 // ExecuteText 同 Execute，但慢查询记录使用原始 SQL 文本（Engine 层传入原文）。
 func (e *Executor) ExecuteText(stmt Stmt, sqlText string) (*Result, error) {
-	return e.execTimed(sqlText, func() (*Result, error) { return e.execStmt(stmt) })
+	return e.execTimed(sqlText, func() (*Result, error) {
+		// M9 查询缓存：仅 autocommit 下的 SELECT 参与缓存（显式事务内
+		// 依赖事务快照，结果不缓存也不查缓存，保持快照隔离语义）。
+		if ss, ok := stmt.(*SelectStmt); ok && e.qc.Enabled() && e.autocommit() {
+			key := NormalizeSQL(sqlText)
+			if res, hit := e.qc.Get(key); hit {
+				return res, nil
+			}
+			res, err := e.execStmt(ss)
+			if err == nil {
+				e.qc.Put(key, res)
+			}
+			return res, err
+		}
+		res, err := e.execStmt(stmt)
+		if err == nil && isWriteStmt(stmt) {
+			e.qc.Invalidate()
+		}
+		return res, err
+	})
+}
+
+// isWriteStmt 判断语句是否修改存储可见状态：DML 与 DDL（含备份恢复、
+// region 运维写操作）成功后需失效查询缓存；只读查询/事务控制语句不失效。
+func isWriteStmt(stmt Stmt) bool {
+	switch stmt.(type) {
+	case *CreateTableStmt, *DropTableStmt, *CreateIndexStmt, *DropIndexStmt,
+		*AlterTableStmt, *InsertStmt, *UpdateStmt, *DeleteStmt, *ImportStmt,
+		*AssignRegionStmt, *SplitRegionStmt, *BalanceStmt, *BackupStmt, *RestoreStmt:
+		return true
+	}
+	return false
 }
 
 // execStmt 语句分发（不计时/不记录慢查询，供 ExecuteText 包装）。
@@ -186,6 +219,8 @@ func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
 		return e.execShowRegionRoutes()
 	case *ShowStatsStmt:
 		return e.execShowStats()
+	case *SetStmt:
+		return e.execSet(s)
 	case *AssignRegionStmt:
 		return e.execAssignRegion(s)
 	case *SplitRegionStmt:
@@ -2300,6 +2335,34 @@ func (e *Executor) execShowSlowQueries() (*Result, error) {
 	return res, nil
 }
 
+// execSet SET <name> = <value>：会话变量设置（M9 查询缓存开关）。
+func (e *Executor) execSet(s *SetStmt) (*Result, error) {
+	switch s.Name {
+	case "query_cache":
+		on := false
+		switch s.Value {
+		case "on", "true", "1":
+			on = true
+		case "off", "false", "0":
+			on = false
+		default:
+			return nil, &SQLError{Msg: "invalid value for query_cache: " + s.Value + " (expected on/off/1/0)"}
+		}
+		e.qc.SetEnabled(on)
+		return &Result{Columns: []string{"variable", "value"}}, nil
+	default:
+		return nil, &SQLError{Msg: "unknown session variable: " + s.Name}
+	}
+}
+
+// boolVal 布尔值转 SQL 文本值（SHOW STATS 等输出用）。
+func boolVal(b bool) Value {
+	if b {
+		return StrVal("on")
+	}
+	return StrVal("off")
+}
+
 // execShowStats SHOW STATS：输出服务器运行指标（T20 运维监控）。
 // 覆盖：活跃连接数（server 会话计数）、表数量、region 数量、
 // 慢查询数量、binlog 最大位点。注入源未装配时输出 0。
@@ -2334,6 +2397,12 @@ func (e *Executor) execShowStats() (*Result, error) {
 		}
 	}
 	appendKV("binlog_lsn", IntVal(int64(lsn)))
+	// M9 查询缓存：开关 + 命中/未命中/失效次数。
+	qcOn, qcHits, qcMisses, qcInvals := e.qc.Stats()
+	appendKV("query_cache_enabled", boolVal(qcOn))
+	appendKV("query_cache_hits", IntVal(qcHits))
+	appendKV("query_cache_misses", IntVal(qcMisses))
+	appendKV("query_cache_invalidations", IntVal(qcInvals))
 	return res, nil
 }
 

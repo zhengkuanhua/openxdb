@@ -110,7 +110,7 @@ func (e *Engine) SlowQueries() []SlowQueryRecord { return e.ex.SlowQueries() }
 // IsSQL 判断一行命令是否以 SQL 关键字开头（供协议层路由）。
 func IsSQL(line string) bool {
 	trimmed := strings.TrimLeft(line, " \t\r\n")
-	for _, kw := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "BEGIN", "COMMIT", "ROLLBACK", "EXPORT", "IMPORT", "SHOW", "EXPLAIN", "SPLIT", "BALANCE", "BACKUP", "RESTORE"} {
+	for _, kw := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "BEGIN", "COMMIT", "ROLLBACK", "EXPORT", "IMPORT", "SHOW", "EXPLAIN", "SPLIT", "BALANCE", "BACKUP", "RESTORE", "ALTER", "SET"} {
 		if strings.HasPrefix(strings.ToUpper(trimmed), kw+" ") ||
 			strings.EqualFold(trimmed, kw) {
 			return true

@@ -97,12 +97,44 @@ func (p *parser) parseStmt() (Stmt, error) {
 		return &BalanceStmt{}, nil
 	case "ALTER":
 		return p.parseAlter()
+	case "SET":
+		return p.parseSet()
 	case "BACKUP":
 		return p.parseBackup()
 	case "RESTORE":
 		return p.parseRestore()
 	}
 	return nil, errf("unsupported statement %q at %d", p.cur().text, p.cur().pos)
+}
+
+// parseSet SET <name> = <value>：会话变量设置（M9 查询缓存开关等）。
+// 值支持标识符（on/off/true/false）、数字（1/0）与字符串字面量。
+func (p *parser) parseSet() (Stmt, error) {
+	if err := p.expectKeyword("SET"); err != nil {
+		return nil, err
+	}
+	if p.cur().kind != tokIdent {
+		return nil, errf("expected variable name at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	s := &SetStmt{Name: strings.ToLower(p.cur().text)}
+	p.next()
+	if _, err := p.expect(tokEq, "="); err != nil {
+		return nil, err
+	}
+	switch p.cur().kind {
+	case tokIdent, tokKeyword:
+		s.Value = strings.ToLower(p.cur().text)
+		p.next()
+	case tokNumber:
+		s.Value = p.cur().text
+		p.next()
+	case tokString:
+		s.Value = p.cur().text
+		p.next()
+	default:
+		return nil, errf("expected value at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	return s, nil
 }
 
 // parseAlter ALTER TABLE（M9 在线 DDL）：

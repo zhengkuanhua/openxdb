@@ -278,6 +278,14 @@ func (ShowRegionRoutesStmt) stmt() {}
 // ShowStatsStmt SHOW STATS：输出服务器运行指标（T20 运维监控，配合 openxdb stats）。
 type ShowStatsStmt struct{}
 
+// SetStmt 会话变量设置：SET <name> = <value>（M9 查询缓存开关等）。
+type SetStmt struct {
+	Name  string
+	Value string
+}
+
+func (SetStmt) stmt() {}
+
 func (ShowStatsStmt) stmt() {}
 
 
