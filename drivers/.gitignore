@@ -1,0 +1,11 @@
+# Maven 构建产物
+target/
+
+# Python 构建与缓存
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# 运行期二进制
+.bin/
