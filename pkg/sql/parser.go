@@ -411,15 +411,16 @@ func (p *parser) parseCreate() (Stmt, error) {
 		switch p.cur().kind {
 		case tokComma:
 			p.next()
-			// 可能是 PRIMARY KEY (col)
-			if p.cur().kind == tokKeyword && p.cur().text == "PRIMARY" {
-				if err := p.parsePrimaryKey(stmt); err != nil {
+			// 逗号后可以是表级 PRIMARY KEY (col) 或 FOREIGN KEY 约束
+			if p.cur().kind == tokKeyword && (p.cur().text == "PRIMARY" || p.cur().text == "FOREIGN") {
+				done, err := p.parseTableLevelTail(stmt)
+				if err != nil {
 					return nil, err
 				}
-				if _, err := p.expect(tokRParen, ")"); err != nil {
-					return nil, err
+				if done {
+					return stmt, nil
 				}
-				return stmt, nil
+				return nil, errf("expected ) at %d", p.cur().pos)
 			}
 		case tokRParen:
 			p.next()
@@ -440,19 +441,41 @@ func (p *parser) parseCreate() (Stmt, error) {
 				switch p.cur().kind {
 				case tokComma:
 					p.next()
-					// 行内主键后仍可跟表级 PRIMARY KEY (col)
-					if p.cur().kind == tokKeyword && p.cur().text == "PRIMARY" {
-						if err := p.parsePrimaryKey(stmt); err != nil {
+					// 行内主键后仍可跟表级 PRIMARY KEY (col) / FOREIGN KEY 约束
+					if p.cur().kind == tokKeyword && (p.cur().text == "PRIMARY" || p.cur().text == "FOREIGN") {
+						done, err := p.parseTableLevelTail(stmt)
+						if err != nil {
 							return nil, err
 						}
-						if _, err := p.expect(tokRParen, ")"); err != nil {
-							return nil, err
+						if done {
+							return stmt, nil
 						}
-						return stmt, nil
+						return nil, errf("expected ) at %d", p.cur().pos)
 					}
 					continue
 				case tokRParen:
 					p.next()
+					return stmt, nil
+				default:
+					return nil, errf("expected , or ) at %d, got %q", p.cur().pos, p.cur().text)
+				}
+			}
+			// 列级外键：col TYPE REFERENCES parent (col) [ON DELETE CASCADE|RESTRICT]
+			if p.cur().kind == tokKeyword && p.cur().text == "REFERENCES" {
+				fk, err := p.parseRefClause(ForeignKey{Columns: []string{col.text}})
+				if err != nil {
+					return nil, err
+				}
+				stmt.ForeignKeys = append(stmt.ForeignKeys, fk)
+				switch p.cur().kind {
+				case tokComma:
+					p.next()
+					continue
+				case tokRParen:
+					p.next()
+					if stmt.PK == "" && len(stmt.Columns) > 0 {
+						stmt.PK = stmt.Columns[0].Name
+					}
 					return stmt, nil
 				default:
 					return nil, errf("expected , or ) at %d, got %q", p.cur().pos, p.cur().text)
@@ -493,6 +516,111 @@ func (p *parser) parsePrimaryKey(stmt *CreateTableStmt) error {
 	}
 	stmt.PK = pkTok.text
 	return nil
+}
+
+// parseTableLevelTail 解析表级约束尾部（逗号分隔的 PRIMARY KEY / FOREIGN KEY）。
+// 调用时 cur 位于表级约束首关键字；循环直到消费右括号并返回 done=true。
+func (p *parser) parseTableLevelTail(stmt *CreateTableStmt) (bool, error) {
+	for {
+		if p.cur().kind == tokKeyword && p.cur().text == "PRIMARY" {
+			if err := p.parsePrimaryKey(stmt); err != nil {
+				return false, err
+			}
+		} else if p.cur().kind == tokKeyword && p.cur().text == "FOREIGN" {
+			fk, err := p.parseForeignKey()
+			if err != nil {
+				return false, err
+			}
+			stmt.ForeignKeys = append(stmt.ForeignKeys, fk)
+		} else {
+			return false, errf("expected PRIMARY KEY or FOREIGN KEY at %d, got %q", p.cur().pos, p.cur().text)
+		}
+		if p.cur().kind == tokComma {
+			p.next()
+			continue
+		}
+		if p.cur().kind == tokRParen {
+			p.next()
+			return true, nil
+		}
+		return false, errf("expected , or ) at %d, got %q", p.cur().pos, p.cur().text)
+	}
+}
+
+// parseForeignKey FOREIGN KEY (col,...) REFERENCES tbl (col,...) [ON DELETE ...]
+func (p *parser) parseForeignKey() (ForeignKey, error) {
+	var fk ForeignKey
+	if err := p.expectKeyword("FOREIGN"); err != nil {
+		return fk, err
+	}
+	if err := p.expectKeyword("KEY"); err != nil {
+		return fk, err
+	}
+	if _, err := p.expect(tokLParen, "("); err != nil {
+		return fk, err
+	}
+	for {
+		ct, err := p.expect(tokIdent, "column name")
+		if err != nil {
+			return fk, err
+		}
+		fk.Columns = append(fk.Columns, ct.text)
+		if p.cur().kind == tokComma {
+			p.next()
+			continue
+		}
+		break
+	}
+	if _, err := p.expect(tokRParen, ")"); err != nil {
+		return fk, err
+	}
+	return p.parseRefClause(fk)
+}
+
+// parseRefClause REFERENCES tbl (col,...) [ON DELETE CASCADE|RESTRICT] 公共子句
+// （表级 FOREIGN KEY 与列级 REFERENCES 复用）。
+func (p *parser) parseRefClause(fk ForeignKey) (ForeignKey, error) {
+	if err := p.expectKeyword("REFERENCES"); err != nil {
+		return fk, err
+	}
+	rt, err := p.expect(tokIdent, "referenced table")
+	if err != nil {
+		return fk, err
+	}
+	fk.RefTable = rt.text
+	if _, err := p.expect(tokLParen, "("); err != nil {
+		return fk, err
+	}
+	for {
+		ct, err := p.expect(tokIdent, "referenced column")
+		if err != nil {
+			return fk, err
+		}
+		fk.RefColumns = append(fk.RefColumns, ct.text)
+		if p.cur().kind == tokComma {
+			p.next()
+			continue
+		}
+		break
+	}
+	if _, err := p.expect(tokRParen, ")"); err != nil {
+		return fk, err
+	}
+	fk.OnDelete = "RESTRICT"
+	if p.cur().kind == tokKeyword && p.cur().text == "ON" {
+		if err := p.expectKeyword("ON"); err != nil {
+			return fk, err
+		}
+		if err := p.expectKeyword("DELETE"); err != nil {
+			return fk, err
+		}
+		if p.cur().kind != tokKeyword || (p.cur().text != "CASCADE" && p.cur().text != "RESTRICT") {
+			return fk, errf("expected CASCADE or RESTRICT at %d, got %q", p.cur().pos, p.cur().text)
+		}
+		fk.OnDelete = p.cur().text
+		p.next()
+	}
+	return fk, nil
 }
 
 func (p *parser) parseDrop() (Stmt, error) {

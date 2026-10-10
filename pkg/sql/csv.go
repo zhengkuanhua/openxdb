@@ -178,6 +178,7 @@ func (e *Executor) execImport(s *ImportStmt) (*Result, error) {
 			return &SQLError{Msg: "table not exists: " + s.Table}
 		}
 		tx, meta = nt, nmeta
+		tabs = ntabs
 		seen = make(map[string]bool)
 		return nil
 	}
@@ -236,7 +237,7 @@ func (e *Executor) execImport(s *ImportStmt) (*Result, error) {
 			continue
 		}
 		seen[string(pk)] = true
-		rops, ok, err := e.insertRowOps(tx, meta, nil, vals, true)
+		rops, ok, err := e.insertRowOps(tx, tabs, meta, nil, vals, true)
 		if err != nil {
 			if s.IgnoreErrors {
 				bad++

@@ -406,7 +406,11 @@ func (e *Executor) execCreateTable(s *CreateTableStmt) (*Result, error) {
 	if s.PK == "" && len(s.Columns) > 0 {
 		s.PK = s.Columns[0].Name
 	}
-	meta := &TableMeta{ID: nextTableID(tabs), Name: s.Name, Columns: s.Columns, PK: s.PK}
+	meta := &TableMeta{ID: nextTableID(tabs), Name: s.Name, Columns: s.Columns, PK: s.PK, ForeignKeys: s.ForeignKeys}
+	// M9 外键：建表时校验引用关系（父表存在/列存在/引用主键/类型兼容）
+	if err := validateForeignKeys(tabs, meta); err != nil {
+		return nil, err
+	}
 	tabs = append(tabs, meta)
 	raw, err := saveTables(tabs)
 	if err != nil {
@@ -442,6 +446,22 @@ func (e *Executor) execDropTable(s *DropTableStmt) (*Result, error) {
 			return &Result{}, nil
 		}
 		return nil, &SQLError{Msg: "table not exists: " + s.Name}
+	}
+	// M9 外键：DROP 表时外键联动清理——被删表自身的外键定义随目录移除自然消失；
+	// 若被删表作为父表被其它表引用，则联动移除这些子表上指向它的外键定义，
+	// 避免元数据悬空引用（子表数据保留，仅解除约束关系）。
+	for _, t := range tabs {
+		if t.Name == s.Name {
+			continue
+		}
+		var kept []ForeignKey
+		for _, fk := range t.ForeignKeys {
+			if fk.RefTable == s.Name {
+				continue
+			}
+			kept = append(kept, fk)
+		}
+		t.ForeignKeys = kept
 	}
 	// 删除表内所有行与索引键（跨 region 展开）
 	pairs, err := e.scanMerged(tx, e.rowRanges(meta))
@@ -893,7 +913,7 @@ func (e *Executor) execInsert(s *InsertStmt) (*Result, error) {
 	affected := 0
 	var ops []kvOp
 	for _, row := range s.Rows {
-		rops, ok, err := e.insertRowOps(tx, meta, s.Columns, row, false)
+		rops, ok, err := e.insertRowOps(tx, tabs, meta, s.Columns, row, false)
 		if err != nil {
 			return nil, err
 		}
@@ -927,9 +947,13 @@ func (e *Executor) execInsert(s *InsertStmt) (*Result, error) {
 // insertRowOps 单行插入的"物理操作列表"版本：不直接写事务，
 // 返回该行所需的全部键操作（行 Put + 索引键 Put），供调用方本地应用
 // 或 2PC 分组提交（M5）。dupSkip 语义同 insertRow。
-func (e *Executor) insertRowOps(tx txn.Txn, meta *TableMeta, cols []string, row []Value, dupSkip bool) ([]kvOp, bool, error) {
+// M9 外键：插入前校验引用完整性（父表行存在且类型匹配）。
+func (e *Executor) insertRowOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, dupSkip bool) ([]kvOp, bool, error) {
 	vals, err := e.buildRow(meta, cols, row)
 	if err != nil {
+		return nil, false, err
+	}
+	if err := e.checkFKOnRow(tx, tabs, meta, vals); err != nil {
 		return nil, false, err
 	}
 	pk, err := e.pkOf(meta, vals)
@@ -967,8 +991,8 @@ func (e *Executor) insertRowOps(tx txn.Txn, meta *TableMeta, cols []string, row 
 // insertRow 单行插入（类型强制 + 主键唯一性 + 行写入 + 索引维护）。
 // dupSkip=true 时主键已存在返回 (false, nil)（导入语义跳过）；
 // dupSkip=false 时主键已存在返回错误（INSERT 唯一性约束）。
-func (e *Executor) insertRow(tx txn.Txn, meta *TableMeta, cols []string, row []Value, dupSkip bool) (bool, error) {
-	ops, ok, err := e.insertRowOps(tx, meta, cols, row, dupSkip)
+func (e *Executor) insertRow(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, dupSkip bool) (bool, error) {
+	ops, ok, err := e.insertRowOps(tx, tabs, meta, cols, row, dupSkip)
 	if err != nil {
 		return false, err
 	}
@@ -1851,6 +1875,15 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 			return nil, err
 		}
 		ops = append(ops, dops...)
+		// M9 外键：父表被引用行禁止更新（ON UPDATE 动作未支持，RESTRICT 语义）。
+		// 基于旧行判断（SET 修改前），防止把被引用的主键改走。
+		referenced, err := e.fkParentReferenced(tx, tabs, meta, row)
+		if err != nil {
+			return nil, err
+		}
+		if referenced {
+			return nil, &SQLError{Msg: "foreign key constraint violated: " + meta.Name + " is referenced by child table (ON UPDATE not supported)"}
+		}
 		for _, set := range s.Sets {
 			idx := colIndex(meta, set.Col)
 			if idx < 0 {
@@ -1861,6 +1894,10 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 				return nil, err
 			}
 			row[idx] = v
+		}
+		// 更新后行须满足自身引用完整性。
+		if err := e.checkFKOnRow(tx, tabs, meta, row); err != nil {
+			return nil, err
 		}
 		raw, err := encodeRow(meta, row)
 		if err != nil {
@@ -1936,6 +1973,13 @@ func (e *Executor) execDelete(s *DeleteStmt) (*Result, error) {
 			return nil, err
 		}
 		ops = append(ops, dops...)
+		// M9 外键：删除父表行时检查子表引用——RESTRICT 阻止删除，
+		// CASCADE 级联收集子行删除操作（含其索引清理）。
+		fkops, err := e.collectFKDeleteOps(tx, tabs, meta, row)
+		if err != nil {
+			return nil, err
+		}
+		ops = append(ops, fkops...)
 		ops = append(ops, kvOp{Key: kv.Key, Delete: true})
 		affected++
 	}

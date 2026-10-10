@@ -49,12 +49,23 @@ func (Where) stmt() {}
 
 // CreateTableStmt CREATE TABLE。
 type CreateTableStmt struct {
-	Name    string
-	Columns []ColumnDef
-	PK      string // 主键列名；未声明 PRIMARY KEY 时默认第一列
+	Name        string
+	Columns     []ColumnDef
+	PK          string       // 主键列名；未声明 PRIMARY KEY 时默认第一列
+	ForeignKeys []ForeignKey // M9 外键约束（列级/表级，解析时收集）
 }
 
 func (CreateTableStmt) stmt() {}
+
+// ForeignKey 外键约束定义（M9）。
+// Columns 为子表（本表）外键列，RefTable/RefColumns 为引用父表与父列；
+// OnDelete 取值 "CASCADE" / "RESTRICT"（默认 RESTRICT，即 NO ACTION 语义）。
+type ForeignKey struct {
+	Columns    []string `json:"columns"`
+	RefTable   string   `json:"ref_table"`
+	RefColumns []string `json:"ref_columns"`
+	OnDelete   string   `json:"on_delete,omitempty"`
+}
 
 // DropTableStmt DROP TABLE。
 type DropTableStmt struct {

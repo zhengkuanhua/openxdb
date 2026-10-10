@@ -15,11 +15,12 @@ import (
 
 // TableMeta 表结构元数据。
 type TableMeta struct {
-	ID      uint64      `json:"id"`
-	Name    string      `json:"name"`
-	Columns []ColumnDef `json:"columns"`
-	PK      string      `json:"pk"`
-	Indexes []IndexMeta `json:"indexes,omitempty"`
+	ID          uint64       `json:"id"`
+	Name        string       `json:"name"`
+	Columns     []ColumnDef  `json:"columns"`
+	PK          string       `json:"pk"`
+	Indexes     []IndexMeta  `json:"indexes,omitempty"`
+	ForeignKeys []ForeignKey `json:"foreign_keys,omitempty"` // M9 外键约束（持久化）
 }
 
 // IndexMeta 二级索引元数据（T6）。
