@@ -95,12 +95,133 @@ func (p *parser) parseStmt() (Stmt, error) {
 	case "BALANCE":
 		p.next()
 		return &BalanceStmt{}, nil
+	case "ALTER":
+		return p.parseAlter()
 	case "BACKUP":
 		return p.parseBackup()
 	case "RESTORE":
 		return p.parseRestore()
 	}
 	return nil, errf("unsupported statement %q at %d", p.cur().text, p.cur().pos)
+}
+
+// parseAlter ALTER TABLE（M9 在线 DDL）：
+//
+//	ALTER TABLE t ADD COLUMN c TYPE
+//	ALTER TABLE t DROP COLUMN c
+//	ALTER TABLE t RENAME COLUMN c TO c2
+//	ALTER TABLE t RENAME TO t2
+//	ALTER TABLE t ADD INDEX i (c)
+//	ALTER TABLE t DROP INDEX i
+func (p *parser) parseAlter() (Stmt, error) {
+	if err := p.expectKeyword("ALTER"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("TABLE"); err != nil {
+		return nil, err
+	}
+	tbl, err := p.expect(tokIdent, "table name")
+	if err != nil {
+		return nil, err
+	}
+	if p.cur().kind != tokKeyword {
+		return nil, errf("expected ALTER action at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	s := &AlterTableStmt{Table: tbl.text}
+	switch p.cur().text {
+	case "ADD":
+		p.next()
+		if p.cur().kind == tokKeyword && p.cur().text == "COLUMN" {
+			p.next()
+			col, err := p.expect(tokIdent, "column name")
+			if err != nil {
+				return nil, err
+			}
+			typ, err := p.expect(tokIdent, "column type")
+			if err != nil {
+				return nil, err
+			}
+			s.Action = "ADD_COLUMN"
+			s.Column = ColumnDef{Name: col.text, Type: strings.ToUpper(typ.text)}
+			return s, nil
+		}
+		if p.cur().kind == tokKeyword && p.cur().text == "INDEX" {
+			p.next()
+			idx, err := p.expect(tokIdent, "index name")
+			if err != nil {
+				return nil, err
+			}
+			if _, err := p.expect(tokLParen, "("); err != nil {
+				return nil, err
+			}
+			col, err := p.expect(tokIdent, "index column")
+			if err != nil {
+				return nil, err
+			}
+			if _, err := p.expect(tokRParen, ")"); err != nil {
+				return nil, err
+			}
+			s.Action = "ADD_INDEX"
+			s.Name = idx.text
+			s.Col = col.text
+			return s, nil
+		}
+		return nil, errf("expected COLUMN or INDEX after ADD at %d, got %q", p.cur().pos, p.cur().text)
+	case "DROP":
+		p.next()
+		if p.cur().kind == tokKeyword && p.cur().text == "INDEX" {
+			p.next()
+			idx, err := p.expect(tokIdent, "index name")
+			if err != nil {
+				return nil, err
+			}
+			s.Action = "DROP_INDEX"
+			s.Name = idx.text
+			return s, nil
+		}
+		if err := p.expectKeyword("COLUMN"); err != nil {
+			return nil, err
+		}
+		col, err := p.expect(tokIdent, "column name")
+		if err != nil {
+			return nil, err
+		}
+		s.Action = "DROP_COLUMN"
+		s.Col = col.text
+		return s, nil
+	case "RENAME":
+		p.next()
+		if p.cur().kind == tokKeyword && p.cur().text == "COLUMN" {
+			p.next()
+			old, err := p.expect(tokIdent, "column name")
+			if err != nil {
+				return nil, err
+			}
+			if err := p.expectKeyword("TO"); err != nil {
+				return nil, err
+			}
+			nw, err := p.expect(tokIdent, "new column name")
+			if err != nil {
+				return nil, err
+			}
+			s.Action = "RENAME_COLUMN"
+			s.Col = old.text
+			s.NewName = nw.text
+			return s, nil
+		}
+		if p.cur().kind == tokKeyword && p.cur().text == "TO" {
+			p.next()
+			nw, err := p.expect(tokIdent, "new table name")
+			if err != nil {
+				return nil, err
+			}
+			s.Action = "RENAME_TABLE"
+			s.NewName = nw.text
+			return s, nil
+		}
+		return nil, errf("expected COLUMN or TO after RENAME at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	return nil, errf("unsupported ALTER action %q at %d", p.cur().text, p.cur().pos)
 }
 
 // parseBackup BACKUP TO '<path>'：生成完整逻辑备份快照文件。

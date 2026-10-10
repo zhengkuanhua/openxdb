@@ -249,6 +249,22 @@ func coerceValue(typ, name string, v Value) (Value, error) {
 	return Value{}, &SQLError{Msg: "unsupported column type: " + typ}
 }
 
+// zeroValue 返回列类型的默认值（M9 在线 DDL：新增列回填已有行）。
+func zeroValue(typ string) Value {
+	switch typ {
+	case "INT":
+		return IntVal(0)
+	case "DATE":
+		return Value{Kind: "DATE", S: "1970-01-01"}
+	case "DECIMAL":
+		return decVal(0)
+	case "BLOB":
+		return Value{Kind: "BLOB", S: ""}
+	default:
+		return StrVal("")
+	}
+}
+
 // String 规范化：BLOB 以大写 hex 输出。
 func (v Value) String() string {
 	if v.Kind == "INT" {

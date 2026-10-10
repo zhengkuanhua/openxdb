@@ -81,6 +81,25 @@ type DropIndexStmt struct {
 
 func (DropIndexStmt) stmt() {}
 
+// AlterTableStmt ALTER TABLE（M9 在线 DDL）。
+// Action 取值：
+//   "ADD_COLUMN"    新增列，列定义在 Column（已有行回填默认值）
+//   "DROP_COLUMN"   删除列（连同引用该列的索引），列名在 Col
+//   "RENAME_COLUMN" 重命名列，旧列在 Col、新列在 NewName
+//   "RENAME_TABLE"  重命名表，新表名在 NewName
+//   "ADD_INDEX"     新增索引，索引名在 Name、索引列在 Col
+//   "DROP_INDEX"    删除索引，索引名在 Name
+type AlterTableStmt struct {
+	Table   string
+	Action  string
+	Col     string
+	NewName string
+	Name    string
+	Column  ColumnDef
+}
+
+func (AlterTableStmt) stmt() {}
+
 // InsertStmt INSERT。
 type InsertStmt struct {
 	Table   string

@@ -141,6 +141,8 @@ func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
 		return e.execCreateIndex(s)
 	case *DropIndexStmt:
 		return e.execDropIndex(s)
+	case *AlterTableStmt:
+		return e.execAlterTable(s)
 	case *InsertStmt:
 		return e.execInsert(s)
 	case *SelectStmt:
@@ -572,6 +574,266 @@ func (e *Executor) execDropIndex(s *DropIndexStmt) (*Result, error) {
 		}
 	}
 	return &Result{AffectedRows: len(pairs)}, nil
+}
+
+// ---- M9 在线 DDL ----
+
+// ddlCommit 保存表目录元数据并把在线 DDL 的数据重写键操作统一提交：
+// metaKey 为全局元数据键（不含 region 前缀），直接写入事务缓冲；
+// 数据行 ops 在 autocommit 下走 2PC（单机零触发）+ tx.Commit() 落 WAL，
+// 显式事务内本地应用由用户 COMMIT 统一落盘。任一环节失败整体回滚，
+// 保证崩溃安全。
+func (e *Executor) ddlCommit(tx txn.Txn, tabs []*TableMeta, ops []kvOp, auto bool) error {
+	raw, err := saveTables(tabs)
+	if err != nil {
+		return err
+	}
+	if err := tx.Put(metaKey, raw); err != nil {
+		return err
+	}
+	if auto {
+		if len(ops) == 0 {
+			return tx.Commit()
+		}
+		if err := e.exec2pcWrite(tx, ops); err != nil {
+			return err
+		}
+	} else {
+		if e.hasRemoteOps(ops) {
+			return &SQLError{Msg: "distributed write inside explicit transaction not supported in M5 (autocommit 2PC only)"}
+		}
+		if err := applyOps(tx, ops); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// execAlterTable 在线 DDL：ALTER TABLE 六种动作（ADD/DROP/RENAME COLUMN、
+// RENAME TABLE、ADD/DROP INDEX）。整个操作在单个事务内完成：
+// 元数据变更 + 数据重写要么全部生效要么全部回滚；Commit 时经 WAL 落盘，
+// 崩溃后 WAL 重放保持目录与数据一致（SHOW TABLES / SHOW INDEX 同步可见）。
+func (e *Executor) execAlterTable(s *AlterTableStmt) (*Result, error) {
+	tx, err := e.getTx()
+	if err != nil {
+		return nil, err
+	}
+	auto := e.autocommit()
+	if auto {
+		defer tx.Rollback()
+	}
+	tabs, err := loadTables(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	meta := findTable(tabs, s.Table)
+	if meta == nil {
+		return nil, &SQLError{Msg: "table not exists: " + s.Table}
+	}
+	affected := 0
+	switch s.Action {
+	case "ADD_COLUMN":
+		if colIndex(meta, s.Column.Name) >= 0 {
+			return nil, &SQLError{Msg: "column already exists: " + s.Column.Name}
+		}
+		// 旧列清单（decodeRow 依赖列数，新增列前先固化旧列布局）
+		old := *meta
+		old.Columns = append([]ColumnDef(nil), meta.Columns...)
+		meta.Columns = append(meta.Columns, s.Column)
+		pairs, err := e.scanMerged(tx, e.rowRanges(meta))
+		if err != nil {
+			return nil, err
+		}
+		var ops []kvOp
+		for _, kv := range pairs {
+			row, err := decodeRow(&old, kv.Value)
+			if err != nil {
+				return nil, err
+			}
+			// 已有行回填默认值（INT=0 / TEXT='' / DATE=1970-01-01 / DECIMAL=0.0000 / BLOB=''）
+			row = append(row, zeroValue(s.Column.Type))
+			raw, err := encodeRow(meta, row)
+			if err != nil {
+				return nil, err
+			}
+			ops = append(ops, kvOp{Key: kv.Key, Value: raw})
+		}
+		affected = len(pairs)
+		if err := e.ddlCommit(tx, tabs, ops, auto); err != nil {
+			return nil, err
+		}
+		return &Result{AffectedRows: affected}, nil
+	case "DROP_COLUMN":
+		if colIndex(meta, s.Col) < 0 {
+			return nil, &SQLError{Msg: "unknown column: " + s.Col}
+		}
+		if meta.PK == s.Col {
+			return nil, &SQLError{Msg: "cannot drop primary key column: " + s.Col}
+		}
+		old := *meta
+		old.Columns = append([]ColumnDef(nil), meta.Columns...)
+		old.Indexes = append([]IndexMeta(nil), meta.Indexes...)
+		// 从新列布局中移除被删列（行重写后 encodeRow 按新布局编码）
+		cols := make([]ColumnDef, 0, len(meta.Columns)-1)
+		for _, c := range meta.Columns {
+			if c.Name != s.Col {
+				cols = append(cols, c)
+			}
+		}
+		meta.Columns = cols
+		// 删除列需同步移除引用该列的相关索引（索引键 + 元数据）
+		var kept []IndexMeta
+		for _, in := range meta.Indexes {
+			if in.Col == s.Col {
+				pairs, err := e.scanMerged(tx, e.indexRanges(meta, in.ID,
+					EncodeIndexKey2(meta.ID, in.ID, nil, nil),
+					EncodeIndexKey2(meta.ID, in.ID+1, nil, nil)))
+				if err != nil {
+					return nil, err
+				}
+				for _, kv := range pairs {
+					if err := tx.Delete(kv.Key); err != nil {
+						return nil, err
+					}
+				}
+				affected += len(pairs)
+				continue
+			}
+			kept = append(kept, in)
+		}
+		meta.Indexes = kept
+		idx := colIndex(&old, s.Col)
+		pairs, err := e.scanMerged(tx, e.rowRanges(meta))
+		if err != nil {
+			return nil, err
+		}
+		var ops []kvOp
+		for _, kv := range pairs {
+			row, err := decodeRow(&old, kv.Value)
+			if err != nil {
+				return nil, err
+			}
+			row = append(row[:idx], row[idx+1:]...)
+			raw, err := encodeRow(meta, row)
+			if err != nil {
+				return nil, err
+			}
+			ops = append(ops, kvOp{Key: kv.Key, Value: raw})
+		}
+		affected += len(pairs)
+		if err := e.ddlCommit(tx, tabs, ops, auto); err != nil {
+			return nil, err
+		}
+		return &Result{AffectedRows: affected}, nil
+	case "RENAME_COLUMN":
+		if colIndex(meta, s.Col) < 0 {
+			return nil, &SQLError{Msg: "unknown column: " + s.Col}
+		}
+		if colIndex(meta, s.NewName) >= 0 {
+			return nil, &SQLError{Msg: "column already exists: " + s.NewName}
+		}
+		for i := range meta.Columns {
+			if meta.Columns[i].Name == s.Col {
+				meta.Columns[i].Name = s.NewName
+				break
+			}
+		}
+		if meta.PK == s.Col {
+			meta.PK = s.NewName
+		}
+		for i := range meta.Indexes {
+			if meta.Indexes[i].Col == s.Col {
+				meta.Indexes[i].Col = s.NewName
+			}
+		}
+		if err := e.ddlCommit(tx, tabs, nil, auto); err != nil {
+			return nil, err
+		}
+		return &Result{AffectedRows: 0}, nil
+	case "RENAME_TABLE":
+		if findTable(tabs, s.NewName) != nil {
+			return nil, &SQLError{Msg: "table already exists: " + s.NewName}
+		}
+		meta.Name = s.NewName
+		if err := e.ddlCommit(tx, tabs, nil, auto); err != nil {
+			return nil, err
+		}
+		return &Result{AffectedRows: 0}, nil
+	case "ADD_INDEX":
+		if findIndex(meta, s.Name) != nil {
+			return nil, &SQLError{Msg: "index already exists: " + s.Name}
+		}
+		if colIndex(meta, s.Col) < 0 {
+			return nil, &SQLError{Msg: "unknown column: " + s.Col}
+		}
+		idx := IndexMeta{ID: nextIndexID(meta), Name: s.Name, Col: s.Col}
+		meta.Indexes = append(meta.Indexes, idx)
+		// 回填：全表扫描逐行写索引键（跨 region 展开）
+		pairs, err := e.scanMerged(tx, e.rowRanges(meta))
+		if err != nil {
+			return nil, err
+		}
+		for _, kv := range pairs {
+			row, err := decodeRow(meta, kv.Value)
+			if err != nil {
+				return nil, err
+			}
+			pk := pkSuffixOf(meta, innerOf(kv.Key))
+			if err := e.putIndexKeys(tx, meta, row, pk, ridOf(kv.Key)); err != nil {
+				return nil, err
+			}
+		}
+		raw, err := saveTables(tabs)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Put(metaKey, raw); err != nil {
+			return nil, err
+		}
+		if auto {
+			if err := tx.Commit(); err != nil {
+				return nil, err
+			}
+		}
+		return &Result{AffectedRows: len(pairs)}, nil
+	case "DROP_INDEX":
+		idx := findIndex(meta, s.Name)
+		if idx == nil {
+			return nil, &SQLError{Msg: "index not exists: " + s.Name}
+		}
+		pairs, err := e.scanMerged(tx, e.indexRanges(meta, idx.ID,
+			EncodeIndexKey2(meta.ID, idx.ID, nil, nil),
+			EncodeIndexKey2(meta.ID, idx.ID+1, nil, nil)))
+		if err != nil {
+			return nil, err
+		}
+		for _, kv := range pairs {
+			if err := tx.Delete(kv.Key); err != nil {
+				return nil, err
+			}
+		}
+		var kept []IndexMeta
+		for _, i := range meta.Indexes {
+			if i.ID != idx.ID {
+				kept = append(kept, i)
+			}
+		}
+		meta.Indexes = kept
+		raw, err := saveTables(tabs)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Put(metaKey, raw); err != nil {
+			return nil, err
+		}
+		if auto {
+			if err := tx.Commit(); err != nil {
+				return nil, err
+			}
+		}
+		return &Result{AffectedRows: len(pairs)}, nil
+	}
+	return nil, errf("unsupported ALTER action %q", s.Action)
 }
 
 // ---- DML ----

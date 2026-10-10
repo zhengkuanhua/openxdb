@@ -52,6 +52,8 @@ var keywords = map[string]bool{
 	"SPLIT": true, "BALANCE": true,
 	// M8(BR)：备份/恢复语句（BACKUP/RESTORE+PITR）
 	"BACKUP": true, "RESTORE": true, "LSN": true,
+	// M9：在线 DDL（ALTER TABLE）
+	"ALTER": true, "COLUMN": true, "RENAME": true,
 }
 
 type lexer struct {
