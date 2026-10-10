@@ -203,6 +203,12 @@ func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
 		return e.execExport(s)
 	case *ImportStmt:
 		return e.execImport(s)
+	case *CreateViewStmt:
+		return e.execCreateView(s)
+	case *DropViewStmt:
+		return e.execDropView(s)
+	case *ShowViewsStmt:
+		return e.execShowViews()
 	case *ShowTablesStmt:
 		return e.execShowTables()
 	case *ShowIndexStmt:
@@ -1013,6 +1019,11 @@ func (e *Executor) execSelect(s *SelectStmt) (*Result, error) {
 	auto := e.autocommit()
 	if auto {
 		defer tx.Rollback()
+	}
+	// M9 视图：执行前将 FROM/JOIN 中引用的视图展开为其定义（子查询），
+	// 展开过程带栈式循环引用防护。
+	if err := e.expandViews(tx, s); err != nil {
+		return nil, err
 	}
 	// P0 增强路径：JOIN / GROUP BY / FROM 子查询 / BETWEEN / IN / 限定列引用
 	if hasAdvancedSelect(s) {
@@ -2298,6 +2309,213 @@ func timeNow() string {
 	now := time.Now()
 	return fmt.Sprintf("%d-%02d-%02d %02d:%02d:%02d",
 		now.Year(), int(now.Month()), now.Day(), now.Hour(), now.Minute(), now.Second())
+}
+
+// execCreateView CREATE VIEW：校验重名（表/视图）、定义引用的表/视图存在、
+// 循环引用防护（含间接环），随后持久化视图目录。
+func (e *Executor) execCreateView(s *CreateViewStmt) (*Result, error) {
+	tx, err := e.getTx()
+	if err != nil {
+		return nil, err
+	}
+	auto := e.autocommit()
+	if auto {
+		defer tx.Rollback()
+	}
+	tabs, err := loadTables(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	views, err := loadViews(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	if findTable(tabs, s.Name) != nil {
+		return nil, &SQLError{Msg: "view name conflicts with table: " + s.Name}
+	}
+	if findView(views, s.Name) != nil {
+		return nil, &SQLError{Msg: "view already exists: " + s.Name}
+	}
+	if s.Select == nil {
+		return nil, &SQLError{Msg: "view definition missing"}
+	}
+	// 循环引用静态防护：直接引用自身或经已有视图链间接引用自身均拒绝
+	// （先于存在性检查，保证自引用报循环错误而非 table not exists）
+	if err := checkViewCycle(views, s.Name, s.Select); err != nil {
+		return nil, err
+	}
+	// 定义引用的每个名字必须是真实表或已存在视图
+	for _, n := range viewRefNames(s.Select) {
+		if findTable(tabs, n) == nil && findView(views, n) == nil {
+			return nil, &SQLError{Msg: "table not exists: " + n}
+		}
+	}
+	views = append(views, &ViewMeta{Name: s.Name, Select: s.Select})
+	raw, err := saveViews(views)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(viewsKey, raw); err != nil {
+		return nil, err
+	}
+	if auto {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	return &Result{}, nil
+}
+
+// execDropView DROP VIEW [IF EXISTS]：被其它视图引用的视图禁止删除（RESTRICT）。
+func (e *Executor) execDropView(s *DropViewStmt) (*Result, error) {
+	tx, err := e.getTx()
+	if err != nil {
+		return nil, err
+	}
+	auto := e.autocommit()
+	if auto {
+		defer tx.Rollback()
+	}
+	views, err := loadViews(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	if findView(views, s.Name) == nil {
+		if s.IfExists {
+			return &Result{}, nil
+		}
+		return nil, &SQLError{Msg: "view not exists: " + s.Name}
+	}
+	// 被其它视图引用时禁止删除，避免悬空引用
+	for _, v := range views {
+		if v.Name == s.Name {
+			continue
+		}
+		for _, n := range viewRefNames(v.Select) {
+			if n == s.Name {
+				return nil, &SQLError{Msg: "cannot drop view " + s.Name + ": referenced by view " + v.Name}
+			}
+		}
+	}
+	var kept []*ViewMeta
+	for _, v := range views {
+		if v.Name != s.Name {
+			kept = append(kept, v)
+		}
+	}
+	raw, err := saveViews(kept)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(viewsKey, raw); err != nil {
+		return nil, err
+	}
+	if auto {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	return &Result{}, nil
+}
+
+// execShowViews SHOW VIEWS：列出全部视图名与定义摘要。
+func (e *Executor) execShowViews() (*Result, error) {
+	tx, err := e.getTx()
+	if err != nil {
+		return nil, err
+	}
+	if e.autocommit() {
+		defer tx.Rollback()
+	}
+	views, err := loadViews(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	res := &Result{Columns: []string{"view", "definition"}}
+	sort.Slice(views, func(i, j int) bool { return views[i].Name < views[j].Name })
+	for _, v := range views {
+		res.Rows = append(res.Rows, []Value{
+			StrVal(v.Name),
+			StrVal(viewSummary(v.Select)),
+		})
+	}
+	return res, nil
+}
+
+// expandViews 将 SELECT 中 FROM / JOIN 引用的视图展开为定义（子查询）。
+// 展开采用"定义副本"（JSON 深拷贝），避免共享 AST 污染；
+// stack 记录当前展开链上的视图名，遇到重复即判定循环引用。
+func (e *Executor) expandViews(tx txn.Txn, s *SelectStmt) error {
+	if s == nil {
+		return nil
+	}
+	views, err := loadViews(tx.Get)
+	if err != nil {
+		return err
+	}
+	return e.expandViewsInner(views, s, nil)
+}
+
+func (e *Executor) expandViewsInner(views []*ViewMeta, s *SelectStmt, stack []string) error {
+	if s == nil {
+		return nil
+	}
+	if s.From != "" {
+		if v := findView(views, s.From); v != nil {
+			if cyclicView(stack, v.Name) {
+				return &SQLError{Msg: "cyclic view reference: " + v.Name}
+			}
+			sub, err := cloneSelect(v.Select)
+			if err != nil {
+				return err
+			}
+			s.Subquery = sub
+			s.SubAlias = s.From
+			s.From = ""
+			if err := e.expandViewsInner(views, sub, append(stack, v.Name)); err != nil {
+				return err
+			}
+		}
+	}
+	if s.Subquery != nil {
+		if err := e.expandViewsInner(views, s.Subquery, stack); err != nil {
+			return err
+		}
+	}
+	for i := range s.Joins {
+		jc := &s.Joins[i]
+		if jc.Subquery == nil && jc.Table != "" {
+			if v := findView(views, jc.Table); v != nil {
+				if cyclicView(stack, v.Name) {
+					return &SQLError{Msg: "cyclic view reference: " + v.Name}
+				}
+				sub, err := cloneSelect(v.Select)
+				if err != nil {
+					return err
+				}
+				jc.Subquery = sub
+				jc.Table = ""
+				if err := e.expandViewsInner(views, sub, append(stack, v.Name)); err != nil {
+					return err
+				}
+			}
+		} else if jc.Subquery != nil {
+			if err := e.expandViewsInner(views, jc.Subquery, stack); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// cyclicView 判断 view 名是否已在展开栈中（即形成循环）。
+func cyclicView(stack []string, name string) bool {
+	for _, n := range stack {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // execShowTables SHOW TABLES：列出全部表（表名 / 列定义 / 主键 / 索引概要）。

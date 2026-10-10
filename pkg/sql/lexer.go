@@ -56,6 +56,8 @@ var keywords = map[string]bool{
 	"ALTER": true, "COLUMN": true, "RENAME": true,
 	// M9：外键约束（FOREIGN KEY / REFERENCES / ON DELETE CASCADE|RESTRICT）
 	"FOREIGN": true, "REFERENCES": true, "CASCADE": true, "RESTRICT": true,
+	// M9：视图（CREATE VIEW / DROP VIEW / SHOW VIEWS）
+	"VIEW": true, "VIEWS": true,
 }
 
 type lexer struct {

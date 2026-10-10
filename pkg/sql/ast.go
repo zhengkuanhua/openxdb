@@ -186,6 +186,27 @@ type DeleteStmt struct {
 
 func (DeleteStmt) stmt() {}
 
+// CreateViewStmt CREATE VIEW <name> AS <SELECT>（M9 视图）。
+type CreateViewStmt struct {
+	Name   string
+	Select *SelectStmt
+}
+
+func (CreateViewStmt) stmt() {}
+
+// DropViewStmt DROP VIEW [IF EXISTS] <name>。
+type DropViewStmt struct {
+	Name     string
+	IfExists bool
+}
+
+func (DropViewStmt) stmt() {}
+
+// ShowViewsStmt SHOW VIEWS。
+type ShowViewsStmt struct{}
+
+func (ShowViewsStmt) stmt() {}
+
 // BeginStmt 开启会话级显式事务（BEGIN）。
 type BeginStmt struct{}
 

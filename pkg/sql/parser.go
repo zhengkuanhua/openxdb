@@ -374,10 +374,12 @@ func (p *parser) parseCreate() (Stmt, error) {
 	switch p.cur().text {
 	case "INDEX":
 		return p.parseCreateIndex()
+	case "VIEW":
+		return p.parseCreateView()
 	case "TABLE":
 		// 已有 TABLE 分支
 	default:
-		return nil, errf("expected TABLE or INDEX at %d, got %q", p.cur().pos, p.cur().text)
+		return nil, errf("expected TABLE, INDEX or VIEW at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
@@ -630,9 +632,11 @@ func (p *parser) parseDrop() (Stmt, error) {
 	switch p.cur().text {
 	case "INDEX":
 		return p.parseDropIndex()
+	case "VIEW":
+		return p.parseDropView()
 	case "TABLE":
 	default:
-		return nil, errf("expected TABLE or INDEX at %d, got %q", p.cur().pos, p.cur().text)
+		return nil, errf("expected TABLE, INDEX or VIEW at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
@@ -649,6 +653,53 @@ func (p *parser) parseDrop() (Stmt, error) {
 		s.IfExists = true
 	}
 	nameTok, err := p.expect(tokIdent, "table name")
+	if err != nil {
+		return nil, err
+	}
+	s.Name = nameTok.text
+	return s, nil
+}
+
+// parseCreateView CREATE VIEW <name> AS <SELECT>：收集视图名并解析定义。
+func (p *parser) parseCreateView() (Stmt, error) {
+	if err := p.expectKeyword("VIEW"); err != nil {
+		return nil, err
+	}
+	nameTok, err := p.expect(tokIdent, "view name")
+	if err != nil {
+		return nil, err
+	}
+	if p.cur().kind != tokKeyword || p.cur().text != "AS" {
+		return nil, errf("expected AS at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	p.next()
+	selStmt, err := p.parseSelect()
+	if err != nil {
+		return nil, err
+	}
+	sel, ok := selStmt.(*SelectStmt)
+	if !ok {
+		return nil, errf("expected SELECT after AS at %d", p.cur().pos)
+	}
+	return &CreateViewStmt{Name: nameTok.text, Select: sel}, nil
+}
+
+// parseDropView DROP VIEW [IF EXISTS] <name>。
+func (p *parser) parseDropView() (Stmt, error) {
+	if err := p.expectKeyword("VIEW"); err != nil {
+		return nil, err
+	}
+	s := &DropViewStmt{}
+	if p.cur().kind == tokKeyword && p.cur().text == "IF" {
+		if err := p.expectKeyword("IF"); err != nil {
+			return nil, err
+		}
+		if err := p.expectKeyword("EXISTS"); err != nil {
+			return nil, err
+		}
+		s.IfExists = true
+	}
+	nameTok, err := p.expect(tokIdent, "view name")
 	if err != nil {
 		return nil, err
 	}
@@ -1444,6 +1495,9 @@ func (p *parser) parseShow() (Stmt, error) {
 			return nil, err
 		}
 		return &ShowIndexStmt{Table: nameTok.text}, nil
+	case "VIEWS":
+		p.next()
+		return &ShowViewsStmt{}, nil
 	}
 	return nil, errf("expected TABLES, INDEX, SLOWQUERIES, NODES or REGION ROUTES after SHOW at %d, got %q", p.cur().pos, p.cur().text)
 }
