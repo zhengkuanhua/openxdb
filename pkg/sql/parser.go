@@ -1969,26 +1969,43 @@ func (p *parser) parseExport() (Stmt, error) {
 	return stmt, nil
 }
 
-// parseImport IMPORT INTO t FROM 'path'
+// parseImport IMPORT MYSQLDUMP FROM 'path' [BATCH n] [IGNORE ERRORS] 或 IMPORT INTO t FROM 'path' [BATCH n] [IGNORE ERRORS]
 func (p *parser) parseImport() (Stmt, error) {
 	if err := p.expectKeyword("IMPORT"); err != nil {
 		return nil, err
 	}
-	if err := p.expectKeyword("INTO"); err != nil {
-		return nil, err
+	stmt := &ImportStmt{}
+	// M14：IMPORT MYSQLDUMP FROM 'path' —— mysqldump 兼容导入（解析 CREATE TABLE/INSERT 灌入）
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "MYSQLDUMP") {
+		p.next()
+		stmt.Format = "MYSQLDUMP"
+		if err := p.expectKeyword("FROM"); err != nil {
+			return nil, err
+		}
+		pathTok, err := p.expect(tokString, "file path string")
+		if err != nil {
+			return nil, err
+		}
+		stmt.Path = pathTok.text
+	} else {
+		// 旧语法：IMPORT INTO t FROM 'path'
+		if err := p.expectKeyword("INTO"); err != nil {
+			return nil, err
+		}
+		nameTok, err := p.expect(tokIdent, "table name")
+		if err != nil {
+			return nil, err
+		}
+		if err := p.expectKeyword("FROM"); err != nil {
+			return nil, err
+		}
+		pathTok, err := p.expect(tokString, "file path string")
+		if err != nil {
+			return nil, err
+		}
+		stmt.Table = nameTok.text
+		stmt.Path = pathTok.text
 	}
-	nameTok, err := p.expect(tokIdent, "table name")
-	if err != nil {
-		return nil, err
-	}
-	if err := p.expectKeyword("FROM"); err != nil {
-		return nil, err
-	}
-	pathTok, err := p.expect(tokString, "file path string")
-	if err != nil {
-		return nil, err
-	}
-	stmt := &ImportStmt{Table: nameTok.text, Path: pathTok.text}
 	// 可选后缀：BATCH <n>（逐批提交行数）/ IGNORE ERRORS（坏行计数跳过）
 	for p.cur().kind == tokIdent {
 		switch strings.ToUpper(p.cur().text) {

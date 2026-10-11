@@ -112,6 +112,10 @@ func csvValue(v Value) string {
 // `IGNORE ERRORS`：宽松模式——坏行（列数/类型非法）计数跳过并继续，
 // 不再整体回滚（主键重复始终只跳过计数）。
 func (e *Executor) execImport(s *ImportStmt) (*Result, error) {
+	// M14：mysqldump 兼容导入走独立实现（解析 CREATE TABLE/INSERT 灌入）
+	if s.Format == "MYSQLDUMP" {
+		return e.execImportDump(s)
+	}
 	tx, err := e.tm.Begin()
 	if err != nil {
 		return nil, err

@@ -315,6 +315,7 @@ func (ExportStmt) stmt() {}
 // ImportStmt 从 CSV 导入建行（IMPORT INTO t FROM 'path' [BATCH n] [IGNORE ERRORS]）。
 // Batch>0 时逐批提交（每 n 行一批）；IgnoreErrors 时坏行计数跳过不整体回滚。
 type ImportStmt struct {
+	Format       string // ""=CSV（IMPORT INTO t FROM 'path'）；"MYSQLDUMP"=mysqldump 兼容导入
 	Table        string
 	Path         string
 	Batch        int
