@@ -120,15 +120,18 @@ type InsertStmt struct {
 
 func (InsertStmt) stmt() {}
 
-// SelectColumn SELECT 目标列：普通列 / 聚合函数 / CASE 表达式（P2）。
+// SelectColumn SELECT 目标列：普通列 / 聚合函数 / 窗口函数 / CASE 表达式（P2 / M10）。
+// Window 非空表示窗口函数列：Agg 为函数名（"ROW_NUMBER"|"RANK"|"DENSE_RANK"|"COUNT"|"SUM"|"AVG"），
+// Window 描述 PARTITION BY / ORDER BY；仅允许出现在 SELECT 列表，其它位置解析报错。
 type SelectColumn struct {
-	Raw   string // 原始文本（列名、*、COUNT(*)、SUM(x)、AVG(x)、CASE 表达式）
-	Agg   string // "" | "COUNT" | "SUM" | "AVG"
-	Ref   string // 限定表名/别名（t.col 时非空；聚合参数亦可限定）
-	Col   string // 聚合目标列 / 裸列名（COUNT 可为空）
-	Name  string // 输出列名
-	Alias string // AS 别名（空 = 默认输出名）
-	Case  *CaseWhenClause // 非空 = 输出 CASE 表达式求值结果（忽略 Col）
+	Raw    string // 原始文本（列名、*、COUNT(*)、SUM(x)、AVG(x)、CASE 表达式）
+	Agg    string // "" | "COUNT" | "SUM" | "AVG" | "ROW_NUMBER" | "RANK" | "DENSE_RANK"
+	Ref    string // 限定表名/别名（t.col 时非空；聚合参数亦可限定）
+	Col    string // 聚合目标列 / 裸列名（COUNT 可为空）
+	Name   string // 输出列名
+	Alias  string // AS 别名（空 = 默认输出名）
+	Case   *CaseWhenClause // 非空 = 输出 CASE 表达式求值结果（忽略 Col）
+	Window *WindowSpec // 非空 = 窗口函数列（OVER 子句）
 }
 
 // JoinClause JOIN 子句（INNER / LEFT，支持子查询右表）。

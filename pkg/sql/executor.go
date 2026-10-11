@@ -1215,11 +1215,22 @@ func (e *Executor) finishSelect(meta *TableMeta, s *SelectStmt, rows [][]Value, 
 	}
 	// 聚合
 	hasAgg := false
+	hasWindow := false
 	for _, c := range s.Columns {
+		if c.Window != nil {
+			hasWindow = true
+			continue
+		}
 		if c.Agg != "" {
 			hasAgg = true
-			break
 		}
+	}
+	if hasWindow {
+		// 窗口函数与全局聚合混用不支持
+		if hasAgg {
+			return nil, &SQLError{Msg: "window function cannot be mixed with aggregate without GROUP BY"}
+		}
+		return e.finishSelectWindow(meta, s, rows)
 	}
 	if hasAgg {
 		return e.doAgg(meta, s, rows)
@@ -1240,6 +1251,58 @@ func (e *Executor) finishSelect(meta *TableMeta, s *SelectStmt, rows [][]Value, 
 		for _, c := range s.Columns {
 			if c.Name == "*" {
 				out = append(out, row...)
+			} else if c.Case != nil {
+				v, err := evalCaseM1(meta, row, c.Case)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, v)
+			} else {
+				v, err := rowValue(meta, row, c.Name)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, v)
+			}
+		}
+		res.Rows = append(res.Rows, out)
+	}
+	return res, nil
+}
+
+// finishSelectWindow 窗口函数投影（单表/meta 路径）：普通列逐行取值，窗口列由 computeWindows 计算。
+func (e *Executor) finishSelectWindow(meta *TableMeta, s *SelectStmt, rows [][]Value) (*Result, error) {
+	res := &Result{}
+	for _, c := range s.Columns {
+		if c.Name == "*" {
+			for _, col := range meta.Columns {
+				res.Columns = append(res.Columns, col.Name)
+			}
+		} else {
+			res.Columns = append(res.Columns, c.Name)
+		}
+	}
+	var winCols []*SelectColumn
+	for i := range s.Columns {
+		if s.Columns[i].Window != nil {
+			winCols = append(winCols, &s.Columns[i])
+		}
+	}
+	winVals, err := computeWindows(rows, func(row []Value, col string) (Value, error) {
+		return rowValue(meta, row, col)
+	}, winCols)
+	if err != nil {
+		return nil, err
+	}
+	for ri, row := range rows {
+		var out []Value
+		wi := 0
+		for _, c := range s.Columns {
+			if c.Name == "*" {
+				out = append(out, row...)
+			} else if c.Window != nil {
+				out = append(out, winVals[ri][wi])
+				wi++
 			} else if c.Case != nil {
 				v, err := evalCaseM1(meta, row, c.Case)
 				if err != nil {
@@ -1546,14 +1609,24 @@ func (e *Executor) execSelectRel(tx txn.Txn, s *SelectStmt) (*Result, error) {
 		rel.Rows = filtered
 	}
 	hasAgg := false
+	hasWindow := false
 	for _, c := range s.Columns {
+		if c.Window != nil {
+			hasWindow = true
+			continue
+		}
 		if c.Agg != "" {
 			hasAgg = true
-			break
 		}
 	}
 	if len(s.GroupBy) > 0 {
+		if hasWindow {
+			return nil, &SQLError{Msg: "window function not supported with GROUP BY"}
+		}
 		return e.groupRel(tx, s, rel)
+	}
+	if hasAgg && hasWindow {
+		return nil, &SQLError{Msg: "window function cannot be mixed with aggregate without GROUP BY"}
 	}
 	if hasAgg {
 		return e.aggRel(s, rel)
@@ -1699,6 +1772,134 @@ func aggValues(rel *Rel, rows [][]Value, c *SelectColumn) (Value, error) {
 	return Value{}, errf("unsupported aggregate %q", c.Agg)
 }
 
+// computeWindows 计算所有窗口列在 rows 上的逐行值（M10 窗口函数）。
+// 返回 winVals[i][j] = 第 i 行、第 j 个窗口列的值；winCols 须按 SELECT 列表顺序传入。
+func computeWindows(rows [][]Value, getter func(row []Value, col string) (Value, error), winCols []*SelectColumn) ([][]Value, error) {
+	n := len(rows)
+	out := make([][]Value, n)
+	for i := range out {
+		out[i] = make([]Value, len(winCols))
+	}
+	for j, c := range winCols {
+		vals, err := computeWindowCol(rows, getter, c)
+		if err != nil {
+			return nil, err
+		}
+		for i := range vals {
+			out[i][j] = vals[i]
+		}
+	}
+	return out, nil
+}
+
+// computeWindowCol 计算单个窗口列在 rows 上的逐行值。
+// 默认框架 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW（逐行累计）；
+// ROW_NUMBER/RANK/DENSE_RANK 按窗口 ORDER BY 键分配，无 ORDER BY 时保持行序。
+func computeWindowCol(rows [][]Value, getter func(row []Value, col string) (Value, error), c *SelectColumn) ([]Value, error) {
+	ws := c.Window
+	vals := make([]Value, len(rows))
+	// 分区：按 PARTITION BY 列取值拼键分组；无分区时整个结果集为一组
+	parts := make(map[string][]int)
+	var order []string
+	for i, r := range rows {
+		var kb strings.Builder
+		for _, p := range ws.PartitionBy {
+			v, err := getter(r, p)
+			if err != nil {
+				return nil, err
+			}
+			kb.WriteString(v.String())
+			kb.WriteByte(0xff)
+		}
+		k := kb.String()
+		if _, ok := parts[k]; !ok {
+			parts[k] = []int{}
+			order = append(order, k)
+		}
+		parts[k] = append(parts[k], i)
+	}
+	for _, k := range order {
+		idxs := parts[k]
+		// 组内稳定排序：按窗口 ORDER BY 键；无 ORDER BY 保持原行序
+		sorted := make([]int, len(idxs))
+		copy(sorted, idxs)
+		keyMap := make(map[int]Value, len(idxs))
+		if ws.OrderBy != nil {
+			qname := qualifiedName(ws.OrderBy.Ref, ws.OrderBy.Col)
+			for _, oi := range idxs {
+				v, err := getter(rows[oi], qname)
+				if err != nil {
+					return nil, err
+				}
+				keyMap[oi] = v
+			}
+			sort.SliceStable(sorted, func(a, b int) bool {
+				cmp := compareVal(keyMap[sorted[a]], keyMap[sorted[b]])
+				if ws.OrderBy.Desc {
+					return cmp > 0
+				}
+				return cmp < 0
+			})
+		}
+		// 组内逐行窗口值：rank 为 RANK（带 gap），dense 为 DENSE_RANK（连续编号）
+		rank := 1
+		dense := 1
+		var isum, dsum int64
+		dec := false
+		cnt := 0
+		for t, oi := range sorted {
+			if t > 0 && ws.OrderBy != nil {
+				if compareVal(keyMap[sorted[t]], keyMap[sorted[t-1]]) != 0 {
+					rank = t + 1
+					dense++
+				}
+			}
+			var v Value
+			switch c.Agg {
+			case "ROW_NUMBER":
+				v = IntVal(int64(t + 1))
+			case "RANK":
+				v = IntVal(int64(rank))
+			case "DENSE_RANK":
+				v = IntVal(int64(dense))
+			case "COUNT":
+				cnt++
+				v = IntVal(int64(cnt))
+			case "SUM", "AVG":
+				av, err := getter(rows[oi], c.Col)
+				if err != nil {
+					return nil, err
+				}
+				switch av.Kind {
+				case "INT":
+					isum += av.I
+				case "DECIMAL":
+					dec = true
+					dsum += av.I
+				default:
+					return nil, &SQLError{Msg: "window aggregate on non-numeric column: " + c.Name}
+				}
+				cnt++
+				if c.Agg == "SUM" {
+					if dec {
+						v = decVal(dsum)
+					} else {
+						v = IntVal(isum)
+					}
+				} else if dec {
+					v = decVal(dsum / int64(cnt))
+				} else {
+					v = IntVal(isum / int64(cnt))
+				}
+			default:
+				return nil, errf("unsupported window function %q", c.Agg)
+			}
+			vals[oi] = v
+		}
+	}
+	return vals, nil
+}
+
 // aggRel 全局聚合（无 GROUP BY）。
 func (e *Executor) aggRel(s *SelectStmt, rel *Rel) (*Result, error) {
 	res := &Result{}
@@ -1823,11 +2024,33 @@ func (e *Executor) finishRel(tx txn.Txn, s *SelectStmt, rel *Rel, rows [][]Value
 			res.Columns = append(res.Columns, c.Name)
 		}
 	}
-	for _, row := range rows {
+	var winCols []*SelectColumn
+	hasWindow := false
+	for i := range s.Columns {
+		if s.Columns[i].Window != nil {
+			winCols = append(winCols, &s.Columns[i])
+			hasWindow = true
+		}
+	}
+	var winVals [][]Value
+	if hasWindow {
+		var err error
+		winVals, err = computeWindows(rows, func(row []Value, col string) (Value, error) {
+			return relValue(rel, row, col)
+		}, winCols)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for ri, row := range rows {
 		var out []Value
+		wi := 0
 		for _, c := range s.Columns {
 			if c.Name == "*" {
 				out = append(out, row...)
+			} else if c.Window != nil {
+				out = append(out, winVals[ri][wi])
+				wi++
 			} else if c.Case != nil {
 				v, err := e.evalCaseRel(tx, rel, row, c.Case)
 				if err != nil {

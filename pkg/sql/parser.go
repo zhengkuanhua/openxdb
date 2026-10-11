@@ -1092,6 +1092,13 @@ func (p *parser) parseColumnRef() (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
+	// 聚合/窗口函数只允许出现在 SELECT 列表；WHERE/GROUP BY/ORDER BY 等位置显式报错
+	if p.cur().kind == tokLParen {
+		switch strings.ToUpper(tok.text) {
+		case "COUNT", "SUM", "AVG", "ROW_NUMBER", "RANK", "DENSE_RANK":
+			return "", "", errf("function %s() only allowed in SELECT list", tok.text)
+		}
+	}
 	if p.cur().kind == tokDot {
 		p.next()
 		col, err := p.expect(tokIdent, "column name after dot")
@@ -1143,11 +1150,30 @@ func (p *parser) parseSelectColumn() (SelectColumn, error) {
 			}
 			return sc, nil
 		}
-		// 聚合函数：COUNT/SUM/AVG(...)
+		// 聚合/窗口函数：COUNT/SUM/AVG/ROW_NUMBER/RANK/DENSE_RANK(...)
 		if p.cur().kind == tokLParen {
 			upper := strings.ToUpper(first)
-			if upper != "COUNT" && upper != "SUM" && upper != "AVG" {
+			if upper != "COUNT" && upper != "SUM" && upper != "AVG" && upper != "ROW_NUMBER" && upper != "RANK" && upper != "DENSE_RANK" {
 				return SelectColumn{}, errf("function %q not supported", first)
+			}
+			// 无参排名窗口函数：ROW_NUMBER() / RANK() / DENSE_RANK()，必须带 OVER
+			if upper == "ROW_NUMBER" || upper == "RANK" || upper == "DENSE_RANK" {
+				p.next() // (
+				if _, err := p.expect(tokRParen, ")"); err != nil {
+					return SelectColumn{}, err
+				}
+				sc := SelectColumn{Raw: upper + "()", Agg: upper, Name: upper + "()"}
+				if p.cur().kind == tokKeyword && p.cur().text == "OVER" {
+					if err := p.parseWindowSpec(&sc); err != nil {
+						return SelectColumn{}, err
+					}
+				} else {
+					return SelectColumn{}, errf("window function %s() requires OVER clause", upper)
+				}
+				if err := p.parseSelectAlias(&sc); err != nil {
+					return SelectColumn{}, err
+				}
+				return sc, nil
 			}
 			p.next() // (
 			if upper == "COUNT" && p.cur().kind == tokStar {
@@ -1156,6 +1182,11 @@ func (p *parser) parseSelectColumn() (SelectColumn, error) {
 					return SelectColumn{}, err
 				}
 				sc := SelectColumn{Raw: "COUNT(*)", Agg: "COUNT", Name: "COUNT(*)"}
+				if p.cur().kind == tokKeyword && p.cur().text == "OVER" {
+					if err := p.parseWindowSpec(&sc); err != nil {
+						return SelectColumn{}, err
+					}
+				}
 				if err := p.parseSelectAlias(&sc); err != nil {
 					return SelectColumn{}, err
 				}
@@ -1169,6 +1200,11 @@ func (p *parser) parseSelectColumn() (SelectColumn, error) {
 				return SelectColumn{}, err
 			}
 			sc := SelectColumn{Raw: upper + "(" + qualifiedName(argRef, argCol) + ")", Agg: upper, Ref: argRef, Col: argCol, Name: upper + "(" + qualifiedName(argRef, argCol) + ")"}
+			if p.cur().kind == tokKeyword && p.cur().text == "OVER" {
+				if err := p.parseWindowSpec(&sc); err != nil {
+					return SelectColumn{}, err
+				}
+			}
 			if err := p.parseSelectAlias(&sc); err != nil {
 				return SelectColumn{}, err
 			}
@@ -1194,6 +1230,68 @@ func (p *parser) parseSelectAlias(sc *SelectColumn) error {
 		sc.Alias = tok.text
 		sc.Name = tok.text
 	}
+	return nil
+}
+
+// parseWindowSpec 解析 OVER 子句（M10 窗口函数）：
+// OVER ( [PARTITION BY col [, col ...]] [ORDER BY col [ASC|DESC]] )
+// 无显式框架，默认为 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW。
+func (p *parser) parseWindowSpec(sc *SelectColumn) error {
+	if err := p.expectKeyword("OVER"); err != nil {
+		return err
+	}
+	if p.cur().kind != tokLParen {
+		return errf("expected ( after OVER at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	p.next()
+	ws := &WindowSpec{}
+	if p.cur().kind == tokKeyword && p.cur().text == "PARTITION" {
+		if err := p.expectKeyword("PARTITION"); err != nil {
+			return err
+		}
+		if err := p.expectKeyword("BY"); err != nil {
+			return err
+		}
+		for {
+			ref, col, err := p.parseColumnRef()
+			if err != nil {
+				return err
+			}
+			ws.PartitionBy = append(ws.PartitionBy, qualifiedName(ref, col))
+			if p.cur().kind == tokComma {
+				p.next()
+				continue
+			}
+			break
+		}
+	}
+	if p.cur().kind == tokKeyword && p.cur().text == "ORDER" {
+		if err := p.expectKeyword("ORDER"); err != nil {
+			return err
+		}
+		if err := p.expectKeyword("BY"); err != nil {
+			return err
+		}
+		ref, col, err := p.parseColumnRef()
+		if err != nil {
+			return err
+		}
+		ob := &OrderBy{Ref: ref, Col: col}
+		if p.cur().kind == tokKeyword {
+			switch p.cur().text {
+			case "ASC":
+				p.next()
+			case "DESC":
+				ob.Desc = true
+				p.next()
+			}
+		}
+		ws.OrderBy = ob
+	}
+	if _, err := p.expect(tokRParen, ")"); err != nil {
+		return err
+	}
+	sc.Window = ws
 	return nil
 }
 
