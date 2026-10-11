@@ -399,6 +399,17 @@ func (ShowRegionRoutesStmt) stmt() {}
 // ShowStatsStmt SHOW STATS：输出服务器运行指标（T20 运维监控，配合 openxdb stats）。
 type ShowStatsStmt struct{}
 
+func (ShowStatsStmt) stmt() {}
+
+// ShowBinlogEventsStmt SHOW BINLOG EVENTS [FROM <lsn>] [LIMIT <n>]（M14 CDC）：
+// 只读展示 binlog 增量变更流；From 为起始位点（nil=从头），Limit<=0=不限。
+type ShowBinlogEventsStmt struct {
+	From  *uint64
+	Limit int
+}
+
+func (ShowBinlogEventsStmt) stmt() {}
+
 // SetStmt 会话变量设置：SET <name> = <value>（M9 查询缓存开关等）。
 type SetStmt struct {
 	Name  string
@@ -406,8 +417,6 @@ type SetStmt struct {
 }
 
 func (SetStmt) stmt() {}
-
-func (ShowStatsStmt) stmt() {}
 
 // AssignRegionStmt ASSIGN REGION <regionID> TO NODE '<nodeID>'：指派 region 归属节点。
 type AssignRegionStmt struct {

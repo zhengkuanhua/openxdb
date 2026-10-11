@@ -368,6 +368,8 @@ func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
 		return e.execShowRegionRoutes()
 	case *ShowStatsStmt:
 		return e.execShowStats()
+	case *ShowBinlogEventsStmt:
+		return e.execShowBinlogEvents(s)
 	case *SetStmt:
 		return e.execSet(s)
 	case *AssignRegionStmt:

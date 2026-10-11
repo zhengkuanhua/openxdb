@@ -270,10 +270,20 @@ func encodeBinRecord(e *BinlogEntry) ([]byte, error) {
 	return append(head, body.Bytes()...), nil
 }
 
+// decodeBinRecord 解码一条完整记录（严格模式：半条视为损坏）。
 func decodeBinRecord(r io.Reader) (*BinlogEntry, error) {
+	return decodeBinRecordOpt(r, false)
+}
+
+// decodeBinRecordOpt 解码一条记录；tolerateTail=true 时把尾部不完整记录
+// （io.ErrUnexpectedEOF，正在追加的半条）视为正常 EOF，供只读拉取器使用。
+func decodeBinRecordOpt(r io.Reader, tolerateTail bool) (*BinlogEntry, error) {
 	head := make([]byte, binRecHead)
 	if _, err := io.ReadFull(r, head); err != nil {
 		if err == io.EOF {
+			return nil, io.EOF
+		}
+		if tolerateTail && err == io.ErrUnexpectedEOF {
 			return nil, io.EOF
 		}
 		return nil, ErrCorrupt
@@ -285,6 +295,9 @@ func decodeBinRecord(r io.Reader) (*BinlogEntry, error) {
 	}
 	body := make([]byte, bodyLen)
 	if _, err := io.ReadFull(r, body); err != nil {
+		if tolerateTail && err == io.ErrUnexpectedEOF {
+			return nil, io.EOF
+		}
 		return nil, ErrCorrupt
 	}
 	if crc32.ChecksumIEEE(append(head[4:], body...)) != crcWant {

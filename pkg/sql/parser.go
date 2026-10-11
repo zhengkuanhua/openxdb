@@ -1905,6 +1905,40 @@ func (p *parser) parseShow() (Stmt, error) {
 		p.next()
 		return &ShowUsersStmt{}, nil
 	}
+	// SHOW BINLOG EVENTS [FROM <lsn>] [LIMIT <n>]：BINLOG/EVENTS 不在关键字表。
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "BINLOG") {
+		p.next()
+		if !(p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "EVENTS")) {
+			return nil, errf("expected keyword EVENTS at %d, got %q", p.pos, p.cur().text)
+		}
+		p.next()
+		stmt := &ShowBinlogEventsStmt{}
+		if p.cur().kind == tokKeyword && p.cur().text == "FROM" {
+			p.next()
+			lsnTok, err := p.expect(tokNumber, "lsn number")
+			if err != nil {
+				return nil, err
+			}
+			lsn, err := strconv.ParseUint(lsnTok.text, 10, 64)
+			if err != nil {
+				return nil, errf("invalid lsn %q", lsnTok.text)
+			}
+			stmt.From = &lsn
+		}
+		if p.cur().kind == tokKeyword && p.cur().text == "LIMIT" {
+			p.next()
+			nTok, err := p.expect(tokNumber, "limit number")
+			if err != nil {
+				return nil, err
+			}
+			n, err := strconv.Atoi(nTok.text)
+			if err != nil {
+				return nil, errf("invalid limit %q", nTok.text)
+			}
+			stmt.Limit = n
+		}
+		return stmt, nil
+	}
 	return nil, errf("expected TABLES, INDEX, SLOWQUERIES, NODES, REGION ROUTES, VIEWS or USERS after SHOW at %d, got %q", p.cur().pos, p.cur().text)
 }
 
