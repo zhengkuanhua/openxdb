@@ -63,6 +63,9 @@ func (p *parser) parseStmt() (Stmt, error) {
 		return p.parseDrop()
 	case "INSERT":
 		return p.parseInsert()
+	case "REPLACE":
+		// M10 UPSERT：REPLACE INTO 语义与 INSERT 同构（冲突时删旧插新）
+		return p.parseInsertInto(true)
 	case "SELECT":
 		return p.parseSelect()
 	case "WITH":
@@ -375,6 +378,9 @@ func (p *parser) parseCreate() (Stmt, error) {
 	}
 	switch p.cur().text {
 	case "INDEX":
+		return p.parseCreateIndex()
+	case "UNIQUE":
+		// M10 UPSERT：CREATE UNIQUE INDEX（唯一索引，UPSERT 冲突键来源之一）
 		return p.parseCreateIndex()
 	case "VIEW":
 		return p.parseCreateView()
@@ -709,8 +715,13 @@ func (p *parser) parseDropView() (Stmt, error) {
 	return s, nil
 }
 
-// parseCreateIndex CREATE INDEX [idx] ON tbl (col)
+// parseCreateIndex CREATE [UNIQUE] INDEX [idx] ON tbl (col)
 func (p *parser) parseCreateIndex() (Stmt, error) {
+	unique := false
+	if p.cur().kind == tokKeyword && p.cur().text == "UNIQUE" {
+		p.next()
+		unique = true
+	}
 	if err := p.expectKeyword("INDEX"); err != nil {
 		return nil, err
 	}
@@ -735,7 +746,7 @@ func (p *parser) parseCreateIndex() (Stmt, error) {
 	if _, err := p.expect(tokRParen, ")"); err != nil {
 		return nil, err
 	}
-	return &CreateIndexStmt{Name: nameTok.text, Table: tableTok.text, Col: colTok.text}, nil
+	return &CreateIndexStmt{Name: nameTok.text, Table: tableTok.text, Col: colTok.text, Unique: unique}, nil
 }
 
 // parseDropIndex DROP INDEX [idx] ON tbl
@@ -758,8 +769,20 @@ func (p *parser) parseDropIndex() (Stmt, error) {
 }
 
 func (p *parser) parseInsert() (Stmt, error) {
-	if err := p.expectKeyword("INSERT"); err != nil {
-		return nil, err
+	return p.parseInsertInto(false)
+}
+
+// parseInsertInto 解析 INSERT [INTO] / REPLACE [INTO] 的公共部分；
+// replace=true 时按 REPLACE INTO 语义（冲突删旧插新，不支持 ON DUPLICATE 子句）。
+func (p *parser) parseInsertInto(replace bool) (Stmt, error) {
+	if replace {
+		if err := p.expectKeyword("REPLACE"); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := p.expectKeyword("INSERT"); err != nil {
+			return nil, err
+		}
 	}
 	if err := p.expectKeyword("INTO"); err != nil {
 		return nil, err
@@ -768,7 +791,7 @@ func (p *parser) parseInsert() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	stmt := &InsertStmt{Table: nameTok.text}
+	stmt := &InsertStmt{Table: nameTok.text, Replace: replace}
 	// 可选 (col, ...)
 	if p.cur().kind == tokLParen {
 		p.next()
@@ -818,7 +841,51 @@ func (p *parser) parseInsert() (Stmt, error) {
 		}
 		break
 	}
+	// M10 UPSERT：INSERT ... ON DUPLICATE KEY UPDATE col=val[, ...]
+	// （REPLACE 无此子句；无唯一/主键冲突时等价普通 INSERT）
+	if !replace && p.cur().kind == tokKeyword && p.cur().text == "ON" {
+		p.next()
+		if err := p.expectKeyword("DUPLICATE"); err != nil {
+			return nil, err
+		}
+		if err := p.expectKeyword("KEY"); err != nil {
+			return nil, err
+		}
+		if err := p.expectKeyword("UPDATE"); err != nil {
+			return nil, err
+		}
+		sets, err := p.parseSetItems()
+		if err != nil {
+			return nil, err
+		}
+		stmt.OnDup = &OnDuplicateUpdate{Sets: sets}
+	}
 	return stmt, nil
+}
+
+// parseSetItems 解析逗号分隔的 SET 赋值项列表（col=value）。
+func (p *parser) parseSetItems() ([]SetItem, error) {
+	var sets []SetItem
+	for {
+		colTok, err := p.expect(tokIdent, "column name")
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(tokEq, "="); err != nil {
+			return nil, err
+		}
+		v, err := p.parseValue()
+		if err != nil {
+			return nil, err
+		}
+		sets = append(sets, SetItem{Col: colTok.text, Val: v})
+		if p.cur().kind == tokComma {
+			p.next()
+			continue
+		}
+		break
+	}
+	return sets, nil
 }
 
 func (p *parser) parseSelect() (Stmt, error) {
@@ -1533,25 +1600,11 @@ func (p *parser) parseUpdate() (Stmt, error) {
 		return nil, err
 	}
 	stmt := &UpdateStmt{Table: nameTok.text}
-	for {
-		colTok, err := p.expect(tokIdent, "column name")
-		if err != nil {
-			return nil, err
-		}
-		if _, err := p.expect(tokEq, "="); err != nil {
-			return nil, err
-		}
-		v, err := p.parseValue()
-		if err != nil {
-			return nil, err
-		}
-		stmt.Sets = append(stmt.Sets, SetItem{Col: colTok.text, Val: v})
-		if p.cur().kind == tokComma {
-			p.next()
-			continue
-		}
-		break
+	sets, err := p.parseSetItems()
+	if err != nil {
+		return nil, err
 	}
+	stmt.Sets = sets
 	if p.cur().kind == tokKeyword && p.cur().text == "WHERE" {
 		p.next()
 		w, err := p.parseWhere()

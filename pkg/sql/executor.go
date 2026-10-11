@@ -549,22 +549,25 @@ func (e *Executor) execCreateIndex(s *CreateIndexStmt) (*Result, error) {
 	if colIndex(meta, s.Col) < 0 {
 		return nil, &SQLError{Msg: "unknown column: " + s.Col}
 	}
-	idx := IndexMeta{ID: nextIndexID(meta), Name: s.Name, Col: s.Col}
+	idx := IndexMeta{ID: nextIndexID(meta), Name: s.Name, Col: s.Col, Unique: s.Unique}
 	meta.Indexes = append(meta.Indexes, idx)
-	// 回填：全表扫描逐行写索引键（meta.Indexes 已含新索引；跨 region 展开）
+	// 回填：全表扫描逐行写索引键（meta.Indexes 已含新索引；跨 region 展开）；
+	// M10 UPSERT：UNIQUE 索引回填时做磁盘 + 语句内 pending 双重唯一性检查（重复数据建索引报错）
 	pairs, err := e.scanMerged(tx, e.rowRanges(meta))
 	if err != nil {
 		return nil, err
 	}
+	var pending [][]Value
 	for _, kv := range pairs {
 		row, err := decodeRow(meta, kv.Value)
 		if err != nil {
 			return nil, err
 		}
 		pk := pkSuffixOf(meta, innerOf(kv.Key))
-		if err := e.putIndexKeys(tx, meta, row, pk, ridOf(kv.Key)); err != nil {
+		if err := e.putIndexKeys(tx, meta, row, pk, ridOf(kv.Key), &pending); err != nil {
 			return nil, err
 		}
+		pending = append(pending, row)
 	}
 	raw, err := saveTables(tabs)
 	if err != nil {
@@ -829,20 +832,23 @@ func (e *Executor) execAlterTable(s *AlterTableStmt) (*Result, error) {
 		}
 		idx := IndexMeta{ID: nextIndexID(meta), Name: s.Name, Col: s.Col}
 		meta.Indexes = append(meta.Indexes, idx)
-		// 回填：全表扫描逐行写索引键（跨 region 展开）
+		// 回填：全表扫描逐行写索引键（跨 region 展开）；
+		// M10 UPSERT：UNIQUE 索引回填时做磁盘 + 语句内 pending 双重唯一性检查（重复数据建索引报错）
 		pairs, err := e.scanMerged(tx, e.rowRanges(meta))
 		if err != nil {
 			return nil, err
 		}
+		var pending [][]Value
 		for _, kv := range pairs {
 			row, err := decodeRow(meta, kv.Value)
 			if err != nil {
 				return nil, err
 			}
 			pk := pkSuffixOf(meta, innerOf(kv.Key))
-			if err := e.putIndexKeys(tx, meta, row, pk, ridOf(kv.Key)); err != nil {
+			if err := e.putIndexKeys(tx, meta, row, pk, ridOf(kv.Key), &pending); err != nil {
 				return nil, err
 			}
+			pending = append(pending, row)
 		}
 		raw, err := saveTables(tabs)
 		if err != nil {
@@ -918,13 +924,16 @@ func (e *Executor) execInsert(s *InsertStmt) (*Result, error) {
 	}
 	affected := 0
 	var ops []kvOp
+	// M10 UPSERT：语句内已计划写入的最终行（含 REPLACE 删旧插新后的新行、
+	// ON DUPLICATE 更新后的目标行），用于语句内主键/唯一键冲突判定。
+	var pending [][]Value
 	for _, row := range s.Rows {
-		rops, ok, err := e.insertRowOps(tx, tabs, meta, s.Columns, row, false)
+		rops, aff, err := e.insertRowUpsertOps(tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &pending)
 		if err != nil {
 			return nil, err
 		}
-		if ok {
-			affected++
+		if aff > 0 {
+			affected += aff
 			ops = append(ops, rops...)
 		}
 	}
@@ -986,12 +995,358 @@ func (e *Executor) insertRowOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, 
 		return nil, false, err
 	}
 	ops := []kvOp{{Key: key, Value: raw}}
-	idxOps, err := e.putIndexKeyOps(meta, vals, pk, rid)
+	idxOps, err := e.putIndexKeyOps(tx, meta, vals, pk, rid, nil, nil)
 	if err != nil {
 		return nil, false, err
 	}
 	ops = append(ops, idxOps...)
 	return ops, true, nil
+}
+
+// insertRowUpsertOps M10 UPSERT 单行处理：
+//   - 普通 INSERT：主键/唯一索引冲突报错；
+//   - INSERT ... ON DUPLICATE KEY UPDATE：冲突时更新冲突行（affected=2），无冲突插入（affected=1）；
+//   - REPLACE INTO：冲突时删除所有冲突行后插入新行（affected=删除数+1），无冲突插入（affected=1）。
+// pending 记录本语句已计划的最终行（用于语句内主键/唯一键重复判定）。
+func (e *Executor) insertRowUpsertOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, onDup *OnDuplicateUpdate, replace bool, pending *[][]Value) ([]kvOp, int, error) {
+	vals, err := e.buildRow(meta, cols, row)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := e.checkFKOnRow(tx, tabs, meta, vals); err != nil {
+		return nil, 0, err
+	}
+	pk, err := e.pkOf(meta, vals)
+	if err != nil {
+		return nil, 0, err
+	}
+	rid, err := e.locateRow(meta, pk)
+	if err != nil {
+		return nil, 0, err
+	}
+	key := e.rowKeyAt(meta, rid, pk)
+	diskExists := false
+	if _, err := e.getKVCluster(tx, key); err == nil {
+		diskExists = true
+	} else if err != storage.ErrNotFound {
+		return nil, 0, err
+	}
+	// 收集全部冲突行（主键 + 唯一索引，磁盘 + pending，去重）
+	conflicts, err := e.upsertConflicts(tx, meta, vals, pk, diskExists, *pending)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(conflicts) == 0 {
+		// 无冲突：普通插入
+		raw, err := encodeRow(meta, vals)
+		if err != nil {
+			return nil, 0, err
+		}
+		ops := []kvOp{{Key: key, Value: raw}}
+		idxOps, err := e.putIndexKeyOps(tx, meta, vals, pk, rid, pending, nil)
+		if err != nil {
+			return nil, 0, err
+		}
+		ops = append(ops, idxOps...)
+		*pending = append(*pending, vals)
+		return ops, 1, nil
+	}
+	if onDup != nil {
+		// 更新冲突行（主键冲突优先于唯一索引冲突）
+		target := conflicts[0]
+		for _, cp := range conflicts {
+			if bytes.Equal(cp, pk) {
+				target = cp
+				break
+			}
+		}
+		return e.onDupUpdateOps(tx, tabs, meta, vals, pk, rid, target, diskExists, onDup, pending)
+	}
+	if replace {
+		return e.replaceRowOps(tx, tabs, meta, vals, pk, rid, conflicts, diskExists, pending)
+	}
+	// 普通 INSERT：报冲突错误
+	if diskExists || bytes.Equal(conflicts[0], pk) {
+		return nil, 0, &SQLError{Msg: "duplicate primary key: " + meta.Name}
+	}
+	return nil, 0, &SQLError{Msg: "duplicate unique key on " + meta.Name}
+}
+
+// upsertConflicts 收集与待插入行冲突的所有既有行 pk（去重）：
+// 磁盘主键冲突、磁盘各唯一索引冲突、pending 主键/唯一冲突。
+// 返回按发现顺序；普通 INSERT 报错时主键冲突优先。
+func (e *Executor) upsertConflicts(tx txn.Txn, meta *TableMeta, vals []Value, pk []byte, diskExists bool, pending [][]Value) ([][]byte, error) {
+	seen := map[string]bool{}
+	var out [][]byte
+	add := func(cpk []byte) {
+		if cpk == nil {
+			return
+		}
+		k := string(cpk)
+		if seen[k] {
+			return
+		}
+		seen[k] = true
+		out = append(out, cpk)
+	}
+	if diskExists {
+		add(pk)
+	}
+	// 磁盘唯一索引冲突
+	for i := range meta.Indexes {
+		idx := &meta.Indexes[i]
+		if !idx.Unique {
+			continue
+		}
+		ci := colIndex(meta, idx.Col)
+		val, err := idxBytes(vals[ci])
+		if err != nil {
+			return nil, err
+		}
+		start := EncodeIndexKey2(meta.ID, idx.ID, val, nil)
+		end := EncodeIndexKey2(meta.ID, idx.ID, append(append([]byte{}, val...), 0xff), nil)
+		pairs, err := e.scanMergedCluster(tx, e.indexRanges(meta, idx.ID, start, end))
+		if err != nil {
+			return nil, err
+		}
+		for _, kv := range pairs {
+			epk := indexPKSuffix(innerOf(kv.Key))
+			if !bytes.Equal(epk, pk) {
+				add(epk)
+			}
+		}
+	}
+	// pending 主键冲突
+	for _, prow := range pending {
+		ppk, err := e.pkOf(meta, prow)
+		if err != nil {
+			return nil, err
+		}
+		if bytes.Equal(ppk, pk) {
+			add(ppk)
+			break
+		}
+	}
+	// pending 唯一索引冲突
+	for i := range meta.Indexes {
+		idx := &meta.Indexes[i]
+		if !idx.Unique {
+			continue
+		}
+		ci := colIndex(meta, idx.Col)
+		val, err := idxBytes(vals[ci])
+		if err != nil {
+			return nil, err
+		}
+		for _, prow := range pending {
+			ppk, err := e.pkOf(meta, prow)
+			if err != nil {
+				return nil, err
+			}
+			if bytes.Equal(ppk, pk) {
+				continue
+			}
+			pv, err := idxBytes(prow[ci])
+			if err != nil {
+				return nil, err
+			}
+			if bytes.Equal(val, pv) {
+				add(ppk)
+			}
+		}
+	}
+	return out, nil
+}
+
+// onDupUpdateOps ON DUPLICATE KEY UPDATE：更新冲突行（不改变其主键身份）。
+// SET 应用在冲突行上（MySQL 语义：待插入值被丢弃，仅更新既有行）；主键列禁止修改。
+func (e *Executor) onDupUpdateOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, newVals []Value, newPK []byte, newRid storage.ID, targetPK []byte, diskExists bool, onDup *OnDuplicateUpdate, pending *[][]Value) ([]kvOp, int, error) {
+	for _, set := range onDup.Sets {
+		if set.Col == meta.PK {
+			return nil, 0, &SQLError{Msg: "cannot update primary key column in ON DUPLICATE KEY UPDATE: " + set.Col}
+		}
+	}
+	// 定位冲突行（磁盘或 pending）
+	target, rid, key, onDisk, err := e.upsertTargetRow(tx, meta, newPK, newRid, targetPK, diskExists, *pending)
+	if err != nil {
+		return nil, 0, err
+	}
+	// 应用 SET 到冲突行
+	updated := append([]Value{}, target...)
+	for _, set := range onDup.Sets {
+		idx := colIndex(meta, set.Col)
+		if idx < 0 {
+			return nil, 0, &SQLError{Msg: "unknown column: " + set.Col}
+		}
+		v, err := coerceValue(meta.Columns[idx].Type, set.Col, set.Val)
+		if err != nil {
+			return nil, 0, err
+		}
+		updated[idx] = v
+	}
+	if err := e.checkFKOnRow(tx, tabs, meta, updated); err != nil {
+		return nil, 0, err
+	}
+	// 被更新行若被外键引用（作为父表）则禁止（ON UPDATE RESTRICT 语义）
+	referenced, err := e.fkParentReferenced(tx, tabs, meta, target)
+	if err != nil {
+		return nil, 0, err
+	}
+	if referenced {
+		return nil, 0, &SQLError{Msg: "foreign key constraint violated: " + meta.Name + " is referenced by child table (ON UPDATE not supported)"}
+	}
+	var ops []kvOp
+	if onDisk {
+		dops, err := e.delIndexKeyOps(meta, target, targetPK, rid)
+		if err != nil {
+			return nil, 0, err
+		}
+		ops = append(ops, dops...)
+	}
+	raw, err := encodeRow(meta, updated)
+	if err != nil {
+		return nil, 0, err
+	}
+	ops = append(ops, kvOp{Key: key, Value: raw})
+	iops, err := e.putIndexKeyOps(tx, meta, updated, targetPK, rid, pending, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	ops = append(ops, iops...)
+	e.replacePending(pending, meta, targetPK, updated)
+	return ops, 2, nil
+}
+
+// replaceRowOps REPLACE INTO：删除全部冲突行（含外键 CASCADE 联动）后插入新行，
+// 删除与插入在同一个提交内原子完成。
+func (e *Executor) replaceRowOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, newVals []Value, newPK []byte, newRid storage.ID, conflicts [][]byte, diskExists bool, pending *[][]Value) ([]kvOp, int, error) {
+	var ops []kvOp
+	deleted := 0
+	// 待删除 pk 集合：REPLACE 插入时唯一性检查跳过这些行
+	ignore := make(map[string]bool, len(conflicts))
+	for _, cp := range conflicts {
+		ignore[string(cp)] = true
+	}
+	for _, cp := range conflicts {
+		target, rid, key, onDisk, err := e.upsertTargetRow(tx, meta, newPK, newRid, cp, diskExists && bytes.Equal(cp, newPK), *pending)
+		if err != nil {
+			return nil, 0, err
+		}
+		if onDisk {
+			// 外键联动删除（CASCADE 子行等）
+			fops, err := e.collectFKDeleteOps(tx, tabs, meta, target)
+			if err != nil {
+				return nil, 0, err
+			}
+			ops = append(ops, fops...)
+			dops, err := e.delIndexKeyOps(meta, target, cp, rid)
+			if err != nil {
+				return nil, 0, err
+			}
+			ops = append(ops, dops...)
+			// 主键冲突时跳过行键 Delete：后续 Put 覆盖同一行键，
+			// 而存储层 WriteBatch 先 Put 后 Delete，同 key Delete 会覆盖 Put 导致行丢失。
+			if !bytes.Equal(cp, newPK) {
+				ops = append(ops, kvOp{Key: key, Delete: true})
+			}
+		}
+		deleted++
+		e.dropPending(pending, meta, cp)
+	}
+	// 插入新行
+	raw, err := encodeRow(meta, newVals)
+	if err != nil {
+		return nil, 0, err
+	}
+	ops = append(ops, kvOp{Key: e.rowKeyAt(meta, newRid, newPK), Value: raw})
+	iops, err := e.putIndexKeyOps(tx, meta, newVals, newPK, newRid, pending, ignore)
+	if err != nil {
+		return nil, 0, err
+	}
+	ops = append(ops, iops...)
+	e.replacePending(pending, meta, newPK, newVals)
+	return ops, deleted + 1, nil
+}
+
+// upsertTargetRow 定位冲突行：优先 pending（语句内最终状态），否则磁盘行。
+func (e *Executor) upsertTargetRow(tx txn.Txn, meta *TableMeta, newPK []byte, newRid storage.ID, targetPK []byte, diskExists bool, pending [][]Value) ([]Value, storage.ID, []byte, bool, error) {
+	if bytes.Equal(targetPK, newPK) {
+		if diskExists {
+			raw, err := e.getKVCluster(tx, e.rowKeyAt(meta, newRid, newPK))
+			if err != nil {
+				return nil, 0, nil, false, err
+			}
+			row, err := decodeRow(meta, raw)
+			if err != nil {
+				return nil, 0, nil, false, err
+			}
+			return row, newRid, e.rowKeyAt(meta, newRid, newPK), true, nil
+		}
+		// pending 主键冲突：取 pending 行（磁盘无此行，本语句将写入）
+		row := e.pendingRowByPK(meta, pending, newPK)
+		if row == nil {
+			return nil, 0, nil, false, &SQLError{Msg: "internal: pending row not found for upsert"}
+		}
+		return row, newRid, e.rowKeyAt(meta, newRid, newPK), false, nil
+	}
+	// 唯一索引冲突：目标行为冲突行（pk=targetPK）
+	row := e.pendingRowByPK(meta, pending, targetPK)
+	if row != nil {
+		tr, err := e.locateRow(meta, targetPK)
+		if err != nil {
+			return nil, 0, nil, false, err
+		}
+		return row, tr, e.rowKeyAt(meta, tr, targetPK), false, nil
+	}
+	tr, err := e.locateRow(meta, targetPK)
+	if err != nil {
+		return nil, 0, nil, false, err
+	}
+	raw, err := e.getKVCluster(tx, e.rowKeyAt(meta, tr, targetPK))
+	if err != nil {
+		return nil, 0, nil, false, err
+	}
+	row, err = decodeRow(meta, raw)
+	if err != nil {
+		return nil, 0, nil, false, err
+	}
+	return row, tr, e.rowKeyAt(meta, tr, targetPK), true, nil
+}
+
+// pendingRowByPK 在语句内 pending 行中按主键查找。
+func (e *Executor) pendingRowByPK(meta *TableMeta, pending [][]Value, pk []byte) []Value {
+	for _, row := range pending {
+		ppk, err := e.pkOf(meta, row)
+		if err == nil && bytes.Equal(ppk, pk) {
+			return row
+		}
+	}
+	return nil
+}
+
+// replacePending 用 newRow 替换 pending 中同主键行；不存在则追加。
+func (e *Executor) replacePending(pending *[][]Value, meta *TableMeta, pk []byte, newRow []Value) {
+	for i, row := range *pending {
+		ppk, err := e.pkOf(meta, row)
+		if err == nil && bytes.Equal(ppk, pk) {
+			(*pending)[i] = newRow
+			return
+		}
+	}
+	*pending = append(*pending, newRow)
+}
+
+// dropPending 从 pending 中移除指定主键的行（该行最终状态不存在）。
+func (e *Executor) dropPending(pending *[][]Value, meta *TableMeta, pk []byte) {
+	out := (*pending)[:0]
+	for _, row := range *pending {
+		ppk, err := e.pkOf(meta, row)
+		if err == nil && bytes.Equal(ppk, pk) {
+			continue
+		}
+		out = append(out, row)
+	}
+	*pending = out
 }
 
 // insertRow 单行插入（类型强制 + 主键唯一性 + 行写入 + 索引维护）。
@@ -2094,6 +2449,8 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 	}
 	affected := 0
 	var ops []kvOp
+	// M10 UPSERT：语句内已计划更新的最终行（唯一索引语句内冲突判定）
+	var pending [][]Value
 	for _, kv := range pairs {
 		row, err := decodeRow(meta, kv.Value)
 		if err != nil {
@@ -2143,8 +2500,11 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 			return nil, err
 		}
 		ops = append(ops, kvOp{Key: kv.Key, Value: raw})
-		// 写新索引键（收集 ops）
-		iops, err := e.putIndexKeyOps(meta, row, pk, rid)
+		// 记录语句内最终行（用于唯一索引语句内冲突判定）
+		e.dropPending(&pending, meta, pk)
+		e.replacePending(&pending, meta, pk, row)
+		// 写新索引键（收集 ops；唯一索引做磁盘 + pending 双重冲突检查）
+		iops, err := e.putIndexKeyOps(tx, meta, row, pk, rid, &pending, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -2303,7 +2663,10 @@ func pkSuffixOf(meta *TableMeta, rowKey []byte) []byte {
 // putIndexKeyOps 为一行产出其所有索引键 Put 操作（值 = 存在标记），
 // 不直接写事务；供本地 applyOps 或 2PC 分组提交（M5）使用。
 // rid 为行所在 region；索引键与行键同 region（保证回表同前缀）。
-func (e *Executor) putIndexKeyOps(meta *TableMeta, row []Value, pk []byte, rid storage.ID) ([]kvOp, error) {
+// M10 UPSERT：UNIQUE 索引写入前做唯一性检查（磁盘 + 语句内 pending 双通道）；
+// ignore 为本次语句将删除的行 pk 集合（REPLACE 删旧插新时跳过被删行的旧键），
+// 可为 nil。
+func (e *Executor) putIndexKeyOps(tx txn.Txn, meta *TableMeta, row []Value, pk []byte, rid storage.ID, pending *[][]Value, ignore map[string]bool) ([]kvOp, error) {
 	ops := make([]kvOp, 0, len(meta.Indexes))
 	for i := range meta.Indexes {
 		idx := &meta.Indexes[i]
@@ -2311,6 +2674,47 @@ func (e *Executor) putIndexKeyOps(meta *TableMeta, row []Value, pk []byte, rid s
 		val, err := idxBytes(row[ci])
 		if err != nil {
 			return nil, err
+		}
+		if idx.Unique {
+			// 磁盘唯一性：扫描同值索引键区间，键归属行必须与当前行相同
+			start := EncodeIndexKey2(meta.ID, idx.ID, val, nil)
+			end := EncodeIndexKey2(meta.ID, idx.ID, append(append([]byte{}, val...), 0xff), nil)
+			pairs, err := e.scanMergedCluster(tx, e.indexRanges(meta, idx.ID, start, end))
+			if err != nil {
+				return nil, err
+			}
+			for _, kv := range pairs {
+				epk := indexPKSuffix(innerOf(kv.Key))
+				if bytes.Equal(epk, pk) {
+					continue
+				}
+				if ignore != nil && ignore[string(epk)] {
+					continue
+				}
+				return nil, &SQLError{Msg: "duplicate unique key: " + idx.Name + " on " + meta.Name + "." + idx.Col}
+			}
+			// 语句内 pending 唯一性：本语句前序已计划写入的最终行
+			if pending != nil {
+				for _, prow := range *pending {
+					ppk, err := e.pkOf(meta, prow)
+					if err != nil {
+						return nil, err
+					}
+					if bytes.Equal(ppk, pk) {
+						continue
+					}
+					if ignore != nil && ignore[string(ppk)] {
+						continue
+					}
+					pv, err := idxBytes(prow[ci])
+					if err != nil {
+						return nil, err
+					}
+					if bytes.Equal(val, pv) {
+						return nil, &SQLError{Msg: "duplicate unique key: " + idx.Name + " on " + meta.Name + "." + idx.Col}
+					}
+				}
+			}
 		}
 		key := EncodeIndexKey2(meta.ID, idx.ID, val, pk)
 		ops = append(ops, kvOp{Key: sharding.EncodeRegionKey(rid, key), Value: []byte{1}})
@@ -2337,8 +2741,9 @@ func (e *Executor) delIndexKeyOps(meta *TableMeta, row []Value, pk []byte, rid s
 
 // putIndexKeys 为一行写入其所有索引键（值 = 存在标记）。
 // rid 为行所在 region；索引键与行键同 region（保证回表同前缀）。
-func (e *Executor) putIndexKeys(tx txn.Txn, meta *TableMeta, row []Value, pk []byte, rid storage.ID) error {
-	ops, err := e.putIndexKeyOps(meta, row, pk, rid)
+// pending 为语句内已计划写入的最终行（唯一索引回填/更新时做语句内唯一性检查），可为 nil。
+func (e *Executor) putIndexKeys(tx txn.Txn, meta *TableMeta, row []Value, pk []byte, rid storage.ID, pending *[][]Value) error {
+	ops, err := e.putIndexKeyOps(tx, meta, row, pk, rid, pending, nil)
 	if err != nil {
 		return err
 	}

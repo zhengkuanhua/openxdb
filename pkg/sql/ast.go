@@ -75,11 +75,12 @@ type DropTableStmt struct {
 
 func (DropTableStmt) stmt() {}
 
-// CreateIndexStmt CREATE INDEX（T6 二级索引）。
+// CreateIndexStmt CREATE INDEX（T6 二级索引；M10 支持 UNIQUE）。
 type CreateIndexStmt struct {
 	Name  string // 索引名（表内唯一）
 	Table string
 	Col   string // 单列索引
+	Unique bool  // M10：UNIQUE 索引（唯一约束）
 }
 
 func (CreateIndexStmt) stmt() {}
@@ -111,14 +112,23 @@ type AlterTableStmt struct {
 
 func (AlterTableStmt) stmt() {}
 
-// InsertStmt INSERT。
+// InsertStmt INSERT / REPLACE（M10 UPSERT）。
+// OnDup 非空表示 INSERT ... ON DUPLICATE KEY UPDATE（冲突时更新）；
+// Replace=true 表示 REPLACE INTO（冲突时删除旧行再插入，事务内原子）。
 type InsertStmt struct {
 	Table   string
 	Columns []string // 空 = 全部列按定义序
 	Rows    [][]Value
+	OnDup   *OnDuplicateUpdate // M10：ON DUPLICATE KEY UPDATE 赋值项
+	Replace bool               // M10：REPLACE INTO 语义
 }
 
 func (InsertStmt) stmt() {}
+
+// OnDuplicateUpdate INSERT ... ON DUPLICATE KEY UPDATE 更新项（M10）。
+type OnDuplicateUpdate struct {
+	Sets []SetItem
+}
 
 // SelectColumn SELECT 目标列：普通列 / 聚合函数 / 窗口函数 / CASE 表达式（P2 / M10）。
 // Window 非空表示窗口函数列：Agg 为函数名（"ROW_NUMBER"|"RANK"|"DENSE_RANK"|"COUNT"|"SUM"|"AVG"），

@@ -23,11 +23,12 @@ type TableMeta struct {
 	ForeignKeys []ForeignKey `json:"foreign_keys,omitempty"` // M9 外键约束（持久化）
 }
 
-// IndexMeta 二级索引元数据（T6）。
+// IndexMeta 二级索引元数据（T6；M10 支持 UNIQUE 唯一索引）。
 type IndexMeta struct {
-	ID   uint64 `json:"id"`
-	Name string `json:"name"`
-	Col  string `json:"col"`
+	ID     uint64 `json:"id"`
+	Name   string `json:"name"`
+	Col    string `json:"col"`
+	Unique bool   `json:"unique,omitempty"` // M10：唯一索引（键值全表唯一）
 }
 
 // metaKey 表目录键。
