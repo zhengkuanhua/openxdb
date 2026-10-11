@@ -39,6 +39,8 @@ func main() {
 		err = cmdStats(os.Args[2:])
 	case "status":
 		err = cmdStatus(os.Args[2:])
+	case "import":
+		err = cmdImport(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -214,5 +216,9 @@ Commands:
           [--json]            输出 JSON 指标
   metrics [--addr <host:port>] 拉取 Prometheus 文本指标（默认 127.0.0.1:7788）
   status  [--addr <host:port>] 拉取聚合状态快照（默认 127.0.0.1:7788）
-          [--json]            输出 JSON 状态快照`)
+          [--json]            输出 JSON 状态快照
+  import  --data-dir <dir> --dump <file>
+                              M14 生态接入：mysqldump 兼容导入
+          [--batch <n>]       每批行数提交一次事务（默认单原子事务）
+          [--ignore-errors]   坏行/建表/执行错误跳过继续`)
 }
