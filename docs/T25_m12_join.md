@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_875935c4c53a11f197b3525400248c00
+    ReservedCode1: KPc+Z77cHY8Dn7Bals1Rw2E3wLXaUiH6cFznxbVvkiVQCFtENkY323H01qWjTn0Tu96xx9u3ngkjhBW4ekJ4kndDtUUBn7/SskFGgOHC757FCT7CBWxySG0hta1/W3hQSImFTEVBV8Hh3Zu7mh020ZJT2m5MB3YJTpbdSX7fX8yrvMSXfwVWqN95EYo=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_875935c4c53a11f197b3525400248c00
+    ReservedCode2: KPc+Z77cHY8Dn7Bals1Rw2E3wLXaUiH6cFznxbVvkiVQCFtENkY323H01qWjTn0Tu96xx9u3ngkjhBW4ekJ4kndDtUUBn7/SskFGgOHC757FCT7CBWxySG0hta1/W3hQSImFTEVBV8Hh3Zu7mh020ZJT2m5MB3YJTpbdSX7fX8yrvMSXfwVWqN95EYo=
+---
+
 # T25 M12 功能簇（1/3）：分布式 JOIN（跨分片路由 + 合并）
 
 > 版本：v5.0-P13-M12, v0.14.0-alpha
@@ -79,4 +90,5 @@ OpenXDB 在 M1-M8 已具备单机 SQL（含普通 JOIN：`joinRels` 全量内存
 - T 表格追加 `T25 M12 distributed SQL cluster: distributed join + cross-node ORDER BY/paging + distributed subquery`；
 - 文档列表追加 `T25_m12_join.md`（随本提交加入）。
 
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

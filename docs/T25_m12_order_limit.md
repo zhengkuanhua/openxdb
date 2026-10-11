@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_885ee792c53a11f197b3525400248c00
+    ReservedCode1: G8z+dwssFSvgCuERNBt7VgirAU8l9fpekDqTKy9v33h0oDV6reQEBtH0my6g+SRyVALVS34iMrtkUHiYJSHXp/ZfFqoP4PY4KCz4gsdLZAnUoq7bzTg9LLZvmxtmfVsC3Mst0RhaIQKapC97E/Bht/u44xt/8dy4YzIJxe83oV9Fhkx8P60AWquoH2A=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_885ee792c53a11f197b3525400248c00
+    ReservedCode2: G8z+dwssFSvgCuERNBt7VgirAU8l9fpekDqTKy9v33h0oDV6reQEBtH0my6g+SRyVALVS34iMrtkUHiYJSHXp/ZfFqoP4PY4KCz4gsdLZAnUoq7bzTg9LLZvmxtmfVsC3Mst0RhaIQKapC97E/Bht/u44xt/8dy4YzIJxe83oV9Fhkx8P60AWquoH2A=
+---
+
 # T25 M12 功能簇（2/3）：跨节点 ORDER BY / LIMIT 分页
 
 > 版本：v5.0-P13-M12, v0.14.0-alpha
@@ -82,4 +93,5 @@ OpenXDB 已具备单机 SQL 排序分页（`finishSelect`/`finishRel` 对单 reg
 - T 表格追加 `T25 M12 distributed SQL cluster: distributed join + cross-node ORDER BY/paging + distributed subquery`；
 - 文档列表追加 `T25_m12_order_limit.md`（随本提交加入）。
 
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

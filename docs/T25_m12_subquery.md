@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_893216e5c53a11f19063525400393706
+    ReservedCode1: 2uERJVNzRBdB8GJJfM+Nn2tEvNEDqEeq+QKupKzVkhYcet9g46pAJfsSvTIB0L3i83AKsvfNC+U1ER491lYbrYZPS39dsWy2sqlLnX3iIu7/epaN+Nni7vEqxlu/sbNlic++OQ5shIqG3hBE53GBuBjbh6i65KfbeAPuj0XdGxXrCgkWTVT7VsnZ9uk=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_893216e5c53a11f19063525400393706
+    ReservedCode2: 2uERJVNzRBdB8GJJfM+Nn2tEvNEDqEeq+QKupKzVkhYcet9g46pAJfsSvTIB0L3i83AKsvfNC+U1ER491lYbrYZPS39dsWy2sqlLnX3iIu7/epaN+Nni7vEqxlu/sbNlic++OQ5shIqG3hBE53GBuBjbh6i65KfbeAPuj0XdGxXrCgkWTVT7VsnZ9uk=
+---
+
 # T25 M12 功能簇（3/3）：分布式子查询（IN / EXISTS / 标量）
 
 > 版本：v5.0-P13-M12, v0.14.0-alpha
@@ -85,4 +96,5 @@ IN 子查询可路由需同时满足：
 - T 表格追加 `T25 M12 distributed SQL cluster: distributed JOIN + cross-node ORDER BY/limit + distributed subquery`；
 - 文档列表追加 `T25_m12_subquery.md`（随本提交加入）。
 
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
