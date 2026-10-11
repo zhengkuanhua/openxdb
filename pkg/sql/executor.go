@@ -2137,7 +2137,9 @@ func (e *Executor) execSelectRel(tx txn.Txn, s *SelectStmt) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		rel, err = joinRels(rel, right, jc)
+		// M12：右表物理表且 ON 含右主键等值条件时走分布式路由 JOIN（跨 region/节点
+		// 路由点查 + 合并）；否则回退 joinRels 全量拼接，行为与单机一致。
+		rel, err = e.joinRel(tx, tabs, rel, right, jc)
 		if err != nil {
 			return nil, err
 		}
