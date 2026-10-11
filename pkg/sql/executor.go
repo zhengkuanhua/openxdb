@@ -121,12 +121,24 @@ func (e *Executor) execTimed(sql string, fn func() (*Result, error)) (*Result, e
 }
 
 // Execute 执行一条解析后的语句；SELECT 等语句统计耗时并按阈值记录慢查询。
+// 以超级用户（root）身份执行，向后兼容未接入鉴权的调用方。
 func (e *Executor) Execute(stmt Stmt) (*Result, error) {
-	return e.ExecuteText(stmt, fmt.Sprintf("%T", stmt))
+	return e.ExecuteTextAs(stmt, fmt.Sprintf("%T", stmt), SuperUser)
 }
 
 // ExecuteText 同 Execute，但慢查询记录使用原始 SQL 文本（Engine 层传入原文）。
+// 以超级用户（root）身份执行，向后兼容未接入鉴权的调用方。
 func (e *Executor) ExecuteText(stmt Stmt, sqlText string) (*Result, error) {
+	return e.ExecuteTextAs(stmt, sqlText, SuperUser)
+}
+
+// ExecuteTextAs 同 ExecuteText，但以指定用户身份执行：执行前经权限校验。
+// 非 root 用户执行管理语句或无表级权限的 DML 时返回权限拒绝错误；
+// 降级 guest（user 为空串）同样受控（见 authz.go）。
+func (e *Executor) ExecuteTextAs(stmt Stmt, sqlText, user string) (*Result, error) {
+	if err := e.checkPrivilege(stmt, user); err != nil {
+		return nil, err
+	}
 	return e.execTimed(sqlText, func() (*Result, error) {
 		// M9 查询缓存：仅 autocommit 下的 SELECT 参与缓存（显式事务内
 		// 依赖事务快照，结果不缓存也不查缓存，保持快照隔离语义）。

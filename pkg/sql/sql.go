@@ -100,12 +100,21 @@ func (e *Engine) SplitRegionNow(regionID uint64) error { return e.ex.splitRegion
 func (e *Engine) BalanceNow() (*Result, error) { return e.ex.execBalance(&BalanceStmt{}) }
 
 // Execute 解析并执行一条 SQL 语句。
+// 以超级用户（root）身份执行，向后兼容未接入鉴权的调用方（CLI/旧驱动）。
 func (e *Engine) Execute(stmt string) (*Result, error) {
+	return e.ExecuteAs(stmt, SuperUser)
+}
+
+// ExecuteAs 解析并以指定用户身份执行一条 SQL 语句：执行前经权限校验
+// （管理语句仅 root；DML 需对应表级授权；SHOW/EXPLAIN/SET/事务控制放行）。
+// 空用户（降级 guest）视为无任何授权。校验规则详见 authz.go 与
+// docs/T24_m11_auth.md。
+func (e *Engine) ExecuteAs(stmt, user string) (*Result, error) {
 	ast, err := Parse(stmt)
 	if err != nil {
 		return nil, err
 	}
-	return e.ex.ExecuteText(ast, stmt)
+	return e.ex.ExecuteTextAs(ast, stmt, user)
 }
 
 // SetSlowThreshold 设置慢查询阈值（毫秒，<=0 关闭记录），透传至执行器。
@@ -123,7 +132,7 @@ func (e *Engine) SlowQueries() []SlowQueryRecord { return e.ex.SlowQueries() }
 // IsSQL 判断一行命令是否以 SQL 关键字开头（供协议层路由）。
 func IsSQL(line string) bool {
 	trimmed := strings.TrimLeft(line, " \t\r\n")
-	for _, kw := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "BEGIN", "COMMIT", "ROLLBACK", "EXPORT", "IMPORT", "SHOW", "EXPLAIN", "SPLIT", "BALANCE", "BACKUP", "RESTORE", "ALTER", "SET"} {
+	for _, kw := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "GRANT", "REVOKE", "BEGIN", "COMMIT", "ROLLBACK", "EXPORT", "IMPORT", "SHOW", "EXPLAIN", "SPLIT", "BALANCE", "BACKUP", "RESTORE", "ALTER", "SET"} {
 		if strings.HasPrefix(strings.ToUpper(trimmed), kw+" ") ||
 			strings.EqualFold(trimmed, kw) {
 			return true
