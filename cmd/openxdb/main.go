@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/zhengkuanhua/openxdb/pkg/db"
@@ -137,6 +138,10 @@ func cmdStart(args []string) error {
 	s.SQL = d.SQL
 	// T20：注入运维统计源（连接数 / binlog 位点），供 SHOW STATS 输出实时指标。
 	d.SQL.SetStatsSources(s.ActiveConns, d.BinlogLSN)
+	// M13：慢查询落盘装配（默认 data/slow.log，阈值 100ms 可由 SET 运行时调）。
+	slowLogPath := filepath.Join(dir, "slow.log")
+	d.SQL.SetSlowLog(slowLogPath, true)
+	fmt.Printf("slow query log: %s (threshold %dms, use SHOW SLOWQUERIES)\n", slowLogPath, d.SQL.SlowQueryThreshold())
 	return s.ServeTCP(addr)
 }
 

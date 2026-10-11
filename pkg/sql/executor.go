@@ -48,9 +48,14 @@ type Executor struct {
 	balanceStop  chan struct{}
 	balanceDone  chan struct{}
 	balanceOnceN int64 // 已执行均衡轮数（测试观测用）
-	// P2：慢查询配置与记录（内存）
-	slowThreshold int64 // 毫秒阈值；<=0 表示不记录（默认 1000ms）
+	// P2/M13：慢查询配置与记录（内存 + 落盘）。
+	// slowThreshold 毫秒阈值；<=0 表示不记录（默认 100ms）。
+	// slowQueries 内存环形记录（保留最近 slowQueryMax 条，可 SHOW 查询）；
+	// slowLog 落盘器（db/cmd 装配路径与开关后写入 data/slow.log）。
+	slowThreshold int64
 	slowQueries   []SlowQueryRecord
+	slowQueryMax  int   // 内存保留条数（默认 slowQueryMaxDefault，可 SetSlowQueryMax 调整）
+	slowLog       *SlowLog
 	// M8(BR)：备份/恢复环境（db.Open 装配注入）。
 	// st 为引擎级 Storage 引用：BACKUP 基于一致快照导出、RESTORE 物理写与 PITR 回放；
 	// binlogPath 为数据目录 binlog 文件路径（TO LSN 回放读取，M2 pkg/replication）。
@@ -72,11 +77,59 @@ type splitConfig struct {
 }
 
 func NewExecutor(tm txn.TxnManager) *Executor {
-	return &Executor{tm: tm, router: sharding.NewRouter(), failoverDone: map[string]bool{}, splitAcc: map[uint64]int64{}, qc: NewQueryCache()}
+	return &Executor{
+		tm:            tm,
+		router:        sharding.NewRouter(),
+		failoverDone:  map[string]bool{},
+		splitAcc:      map[uint64]int64{},
+		qc:            NewQueryCache(),
+		slowThreshold: slowThresholdDefault, // M13：默认 100ms
+		slowQueryMax:  slowQueryMaxDefault,
+		slowLog:       NewSlowLog(),
+	}
 }
 
-// SetSlowThreshold 设置慢查询阈值（毫秒，<=0 关闭记录）。
+// SetSlowThreshold 设置慢查询阈值（毫秒，<=0 关闭记录）。运行时调用即时生效。
 func (e *Executor) SetSlowThreshold(ms int64) { e.slowThreshold = ms }
+
+// SlowQueryThreshold 返回当前慢查询阈值（毫秒），0 表示已禁用记录。
+func (e *Executor) SlowQueryThreshold() int64 { return e.slowThreshold }
+
+// SetSlowLog 配置慢查询落盘（M13）：path 为日志文件路径，enabled=false 或
+// path 空串关闭落盘。配置变更对后续记录即时生效，无需重启。
+func (e *Executor) SetSlowLog(path string, enabled bool) {
+	if e.slowLog == nil {
+		e.slowLog = NewSlowLog()
+	}
+	e.slowLog.Configure(path, enabled)
+}
+
+// SlowLogEnabled 返回当前慢查询落盘开关状态（SHOW STATS 等展示用）。
+func (e *Executor) SlowLogEnabled() bool {
+	return e.slowLog != nil && e.slowLog.Enabled()
+}
+
+// SlowLogPath 返回当前慢查询落盘路径（关闭时为空串）。
+func (e *Executor) SlowLogPath() string {
+	if e.slowLog == nil {
+		return ""
+	}
+	return e.slowLog.Path()
+}
+
+// SetSlowQueryMax 设置内存慢查询记录保留条数（>=1 生效；默认 slowQueryMaxDefault）。
+// 调整即时生效，不影响已保留记录。
+func (e *Executor) SetSlowQueryMax(n int) {
+	if n < 1 {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.slowQueryMax = n
+	if len(e.slowQueries) > n {
+		e.slowQueries = e.slowQueries[len(e.slowQueries)-n:]
+	}
+}
 
 // SetStatsSources 装配 SHOW STATS 指标注入源（T20，cmd/openxdb start 时注入）：
 // conn 返回活跃连接数（server 层会话计数）；binlog 返回 binlog 最大位点（db 层）。
@@ -94,30 +147,58 @@ func (e *Executor) SlowQueries() []SlowQueryRecord {
 	return out
 }
 
-// recordSlow 记录一条慢查询（保留最近 slowQueryMax 条）。
-func (e *Executor) recordSlow(sql string, ms int64) {
+// recordSlow 记录一条慢查询（内存保留最近 slowQueryMax 条 + 落盘）。
+// 调用方已通过阈值判定（低开销：此路径之外不做任何格式化）。
+func (e *Executor) recordSlow(r SlowQueryRecord) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if len(e.slowQueries) >= slowQueryMax {
+	if len(e.slowQueries) >= e.slowQueryMax {
 		e.slowQueries = e.slowQueries[1:]
 	}
-	e.slowQueries = append(e.slowQueries, SlowQueryRecord{
-		SQL:      sql,
-		Duration: ms,
-		At:       timeNow(),
-	})
+	e.slowQueries = append(e.slowQueries, r)
+	e.mu.Unlock()
+	// 落盘在内存锁外执行，慢查询低频 + 落盘器独立互斥，互不阻塞热路径。
+	if e.slowLog != nil {
+		e.slowLog.Write(r)
+	}
 }
 
-// execTimed 执行一条语句并统计耗时（毫秒），超阈值记录慢查询。
-// 若记录慢查询自身失败则原样返回执行错误。
-func (e *Executor) execTimed(sql string, fn func() (*Result, error)) (*Result, error) {
-	start := timeNowMs()
+// execTimed 执行一条语句并统计耗时（毫秒）：先取开始时间，执行结束后
+// 若超过阈值（含执行失败，Err 记录错误信息）才构造记录与格式化，正常语句零开销。
+func (e *Executor) execTimed(user, sql string, fn func() (*Result, error)) (*Result, error) {
+	startMs := timeNowMs()
+	startAt := timeNow()
 	res, err := fn()
-	ms := timeNowMs() - start
-	if err == nil && e.slowThreshold > 0 && ms >= e.slowThreshold {
-		e.recordSlow(sql, ms)
+	ms := timeNowMs() - startMs
+	if e.slowThreshold > 0 && ms >= e.slowThreshold {
+		e.recordSlow(SlowQueryRecord{
+			SQL:      sql,
+			User:     user,
+			StartAt:  startAt,
+			Duration: ms,
+			Rows:     rowsOf(res),
+			Err:      errString(err),
+		})
 	}
 	return res, err
+}
+
+// rowsOf 提取结果行数：SELECT 返回行数；DML 影响行数；无结果返回 0。
+func rowsOf(res *Result) int64 {
+	if res == nil {
+		return 0
+	}
+	if res.AffectedRows > 0 {
+		return int64(res.AffectedRows)
+	}
+	return int64(len(res.Rows))
+}
+
+// errString 错误信息文本（nil 为空串）。
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // Execute 执行一条解析后的语句；SELECT 等语句统计耗时并按阈值记录慢查询。
@@ -139,7 +220,7 @@ func (e *Executor) ExecuteTextAs(stmt Stmt, sqlText, user string) (*Result, erro
 	if err := e.checkPrivilege(stmt, user); err != nil {
 		return nil, err
 	}
-	return e.execTimed(sqlText, func() (*Result, error) {
+	return e.execTimed(user, sqlText, func() (*Result, error) {
 		// M9 查询缓存：仅 autocommit 下的 SELECT 参与缓存（显式事务内
 		// 依赖事务快照，结果不缓存也不查缓存，保持快照隔离语义）。
 		if ss, ok := stmt.(*SelectStmt); ok && e.qc.Enabled() && e.autocommit() {
@@ -3110,10 +3191,13 @@ func itoa(n int64) string {
 	return string(b[i:])
 }
 
-// ---- P2：运维语句执行 ----
+// ---- P2/M13：慢查询与运维语句执行 ----
 
-// slowQueryMax 内存慢查询记录上限。
-const slowQueryMax = 64
+// slowThresholdDefault 默认慢查询阈值（毫秒，M13 默认 100ms）。
+const slowThresholdDefault int64 = 100
+
+// slowQueryMaxDefault 内存慢查询记录默认上限（可 SetSlowQueryMax 调整）。
+const slowQueryMaxDefault = 64
 
 // timeNowMs 当前 Unix 毫秒。
 func timeNowMs() int64 {
@@ -3486,21 +3570,26 @@ func (e *Executor) execShowIndex(s *ShowIndexStmt) (*Result, error) {
 }
 
 // execShowSlowQueries SHOW SLOWQUERIES：查看内存慢查询记录（新->旧）。
+// M13 列：time | user | duration_ms | rows | error | sql。
 func (e *Executor) execShowSlowQueries() (*Result, error) {
 	recs := e.SlowQueries()
-	res := &Result{Columns: []string{"time", "duration_ms", "sql"}}
+	res := &Result{Columns: []string{"time", "user", "duration_ms", "rows", "error", "sql"}}
 	for i := len(recs) - 1; i >= 0; i-- {
 		r := recs[i]
 		res.Rows = append(res.Rows, []Value{
-			StrVal(r.At),
+			StrVal(r.StartAt),
+			StrVal(r.User),
 			IntVal(r.Duration),
+			IntVal(r.Rows),
+			StrVal(r.Err),
 			StrVal(r.SQL),
 		})
 	}
 	return res, nil
 }
 
-// execSet SET <name> = <value>：会话变量设置（M9 查询缓存开关）。
+// execSet SET <name> = <value>：会话/服务变量设置（M9 查询缓存开关；
+// M13 慢查询阈值与落盘开关，运行时变更即时生效）。
 func (e *Executor) execSet(s *SetStmt) (*Result, error) {
 	switch s.Name {
 	case "query_cache":
@@ -3514,6 +3603,29 @@ func (e *Executor) execSet(s *SetStmt) (*Result, error) {
 			return nil, &SQLError{Msg: "invalid value for query_cache: " + s.Value + " (expected on/off/1/0)"}
 		}
 		e.qc.SetEnabled(on)
+		return &Result{Columns: []string{"variable", "value"}}, nil
+	case "slow_query_threshold":
+		// M13：毫秒阈值，<=0 关闭记录。即时生效。
+		ms, err := strconv.ParseInt(s.Value, 10, 64)
+		if err != nil {
+			return nil, &SQLError{Msg: "invalid value for slow_query_threshold: " + s.Value + " (expected integer ms)"}
+		}
+		e.SetSlowThreshold(ms)
+		return &Result{Columns: []string{"variable", "value"}}, nil
+	case "slow_query_log":
+		// M13：慢查询落盘开关 on/off（路径由服务启动配置，见 SetSlowLog）。即时生效。
+		on := false
+		switch s.Value {
+		case "on", "true", "1":
+			on = true
+		case "off", "false", "0":
+			on = false
+		default:
+			return nil, &SQLError{Msg: "invalid value for slow_query_log: " + s.Value + " (expected on/off/1/0)"}
+		}
+		if e.slowLog != nil {
+			e.slowLog.Configure(e.slowLog.Path(), on)
+		}
 		return &Result{Columns: []string{"variable", "value"}}, nil
 	default:
 		return nil, &SQLError{Msg: "unknown session variable: " + s.Name}

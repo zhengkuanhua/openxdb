@@ -2,6 +2,7 @@ package sql_test
 
 import (
 	"encoding/csv"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1151,7 +1152,9 @@ func TestP2SlowQueries(t *testing.T) {
 		t.Fatalf("SHOW SLOWQUERIES: want rows, got 0")
 	}
 	row := res.Rows[0]
-	if len(row) != 3 || row[0].S == "" || row[1].I <= 0 || !strings.Contains(row[2].S, "SELECT") {
+	// M13 列：time | user | duration_ms | rows | error | sql
+	if len(row) != 6 || row[0].S == "" || row[1].S == "" || row[2].I <= 0 ||
+		row[3].I < 0 || row[4].S != "" || !strings.Contains(row[5].S, "SELECT") {
 		t.Fatalf("SHOW SLOWQUERIES row: got %+v", row)
 	}
 	// 关闭后新查询不再追加
@@ -1282,5 +1285,71 @@ func TestP2CaseJoinGroup(t *testing.T) {
 	}
 	if got[25] != "young" || got[30] != "old" || got[35] != "old" {
 		t.Fatalf("case group values: got %+v", got)
+	}
+}
+
+// TestM13SlowQueryPublic M13 慢查询对外能力：
+// SET slow_query_threshold 即时生效、按用户执行记录用户/行数、落盘文件内容、关闭后停止。
+func TestM13SlowQueryPublic(t *testing.T) {
+	e := newEngine(t)
+	mustExec(t, e, "CREATE TABLE big (id INT, v TEXT, PRIMARY KEY (id))")
+	vals := make([]string, 300)
+	for i := range vals {
+		vals[i] = fmt.Sprintf("(%d, 'x')", i)
+	}
+	mustExec(t, e, "INSERT INTO big VALUES "+strings.Join(vals, ", "))
+	mustExec(t, e, "CREATE USER 'alice' IDENTIFIED BY 'secret1'")
+	mustExec(t, e, "GRANT SELECT ON big TO 'alice'")
+
+	// 阈值调低即时生效；落盘路径由服务装配（模拟 cmd start 的 SetSlowLog）。
+	logPath := filepath.Join(t.TempDir(), "slow.log")
+	e.SetSlowLog(logPath, true)
+	mustExec(t, e, "SET slow_query_log = on")
+	mustExec(t, e, "SET slow_query_threshold = 1")
+
+	if _, err := e.ExecuteAs("SELECT * FROM big", "alice"); err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	res := mustExec(t, e, "SHOW SLOWQUERIES")
+	if len(res.Rows) == 0 {
+		t.Fatal("want slow rows")
+	}
+	row := res.Rows[0]
+	if len(row) != 6 || row[1].S != "alice" || row[3].I != 300 || row[4].S != "" {
+		t.Fatalf("slow row: %+v", row)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read slow.log: %v", err)
+	}
+	if !strings.Contains(string(data), "SELECT * FROM big") ||
+		!strings.Contains(string(data), "| alice |") ||
+		!strings.Contains(string(data), "rows=300") {
+		t.Fatalf("slow.log content: %q", string(data))
+	}
+
+	// 关闭阈值后新慢查询不再记录（既有记录仍在内存中）。
+	before := len(mustExec(t, e, "SHOW SLOWQUERIES").Rows)
+	mustExec(t, e, "SET slow_query_threshold = 0")
+	if _, err := e.ExecuteAs("SELECT * FROM big", "alice"); err != nil {
+		t.Fatalf("select2: %v", err)
+	}
+	after := len(mustExec(t, e, "SHOW SLOWQUERIES").Rows)
+	if after != before {
+		t.Fatalf("threshold=0 should stop recording: before=%d after=%d", before, after)
+	}
+}
+
+// TestM13SlowQuerySetError SET 非法阈值报错且不改配置。
+func TestM13SlowQuerySetError(t *testing.T) {
+	e := newEngine(t)
+	if _, err := e.Execute("SET slow_query_threshold = abc"); err == nil {
+		t.Fatal("want error for invalid threshold")
+	}
+	if _, err := e.Execute("SET slow_query_log = maybe"); err == nil {
+		t.Fatal("want error for invalid log value")
+	}
+	if e.SlowLogEnabled() {
+		t.Fatal("slow log should remain off after failed SET")
 	}
 }

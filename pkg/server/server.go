@@ -151,6 +151,12 @@ func (s *Server) handleLocked(line string, sess *session) (string, error) {
 		}
 		return s.doGet([]byte(toks[1]))
 	case "SET":
+		// SQL SET 变量赋值（M13：slow_query_threshold / slow_query_log 等）优先
+		// 路由到 SQL 引擎：形式为 SET <name> = <value> 或 SET <name>=<value>。
+		// 其余 SET <key> <value...> 保持 KV 语义（向后兼容）。
+		if s.SQL != nil && len(toks) >= 2 && isSQLSetAssign(toks[1:]) {
+			return s.doSQL(line, sess)
+		}
 		if len(toks) < 3 {
 			return "", errors.New("ERR syntax: SET <key> <value>")
 		}
@@ -243,6 +249,18 @@ func (s *Server) doAuth(toks []string, sess *session) (string, error) {
 	sess.user = user
 	sess.authed = true
 	return "AUTH OK", nil
+}
+
+// isSQLSetAssign 判断 SET 行是否为 SQL 变量赋值形式：
+// "SET <name> = <value>"（toks 从 name 开始）或 "SET <name>=<value>"。
+func isSQLSetAssign(toks []string) bool {
+	if len(toks) == 0 {
+		return false
+	}
+	if strings.Contains(toks[0], "=") {
+		return true
+	}
+	return len(toks) >= 2 && toks[1] == "="
 }
 
 // doSQL 执行一条 SQL 语句并格式化输出（以会话用户身份执行，触发执行期

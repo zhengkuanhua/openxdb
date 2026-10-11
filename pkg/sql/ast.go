@@ -349,11 +349,15 @@ type ExplainStmt struct {
 
 func (ExplainStmt) stmt() {}
 
-// SlowQueryRecord 慢查询记录（内存保留最近 slowQueryMax 条）。
+// SlowQueryRecord 慢查询记录（内存保留最近 slowQueryMax 条，可落盘 data/slow.log）。
+// M13：记录执行耗时超过阈值的 SQL，含用户、开始时间、耗时、SQL 文本、结果行数/错误。
 type SlowQueryRecord struct {
 	SQL      string // SQL 原文
+	User     string // 执行用户（root / AUTH 会话用户；guest 为空串）
+	StartAt  string // 开始时间 YYYY-MM-DD HH:MM:SS
 	Duration int64  // 耗时（毫秒）
-	At       string // 触发时间 YYYY-MM-DD HH:MM:SS
+	Rows     int64  // 结果行数（SELECT 返回行数 / DML 影响行数；执行失败为 0）
+	Err      string // 错误信息（执行成功为空串；慢且失败同样记录）
 }
 
 // ---- P2：CASE WHEN 表达式 ----

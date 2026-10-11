@@ -118,7 +118,24 @@ func (e *Engine) ExecuteAs(stmt, user string) (*Result, error) {
 }
 
 // SetSlowThreshold 设置慢查询阈值（毫秒，<=0 关闭记录），透传至执行器。
+// 运行时调用即时生效；也可经 SET slow_query_threshold = <ms> 配置。
 func (e *Engine) SetSlowThreshold(ms int64) { e.ex.SetSlowThreshold(ms) }
+
+// SlowQueryThreshold 返回当前慢查询阈值（毫秒），0 表示已禁用记录。
+func (e *Engine) SlowQueryThreshold() int64 { return e.ex.SlowQueryThreshold() }
+
+// SetSlowLog 配置慢查询落盘（M13）：path 为日志文件路径（如 data/slow.log），
+// enabled=false 或 path 空串关闭落盘。变更即时生效，无需重启。
+func (e *Engine) SetSlowLog(path string, enabled bool) { e.ex.SetSlowLog(path, enabled) }
+
+// SlowLogEnabled 返回当前慢查询落盘开关状态。
+func (e *Engine) SlowLogEnabled() bool { return e.ex.SlowLogEnabled() }
+
+// SlowLogPath 返回当前慢查询落盘路径（关闭时为空串）。
+func (e *Engine) SlowLogPath() string { return e.ex.SlowLogPath() }
+
+// SetSlowQueryMax 设置内存慢查询记录保留条数（>=1 生效；默认 64）。
+func (e *Engine) SetSlowQueryMax(n int) { e.ex.SetSlowQueryMax(n) }
 
 // SetStatsSources 注入运维统计源（T20）：连接数来源与 binlog 位点来源，
 // 供 SHOW STATS 输出实时指标；不注入时对应指标为 0。
