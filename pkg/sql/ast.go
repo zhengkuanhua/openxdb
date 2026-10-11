@@ -29,14 +29,14 @@ type ColumnDef struct {
 // Op 支持 = != < > <= >= BETWEEN IN LIKE；Col 可为裸列名或 t.col 限定名（Ref 拆分存放）。
 // LeftCase 非空时表示左操作数为 CASE 表达式（忽略 Col），仍按 Op 与右值比较。
 type Cond struct {
-	Ref      string // 限定表名/别名（空 = 未限定）
-	Col      string // 裸列名
-	Op       string // = != < > <= >= BETWEEN IN LIKE
-	Val      Value  // 右值（BETWEEN 下界）
-	Val2     Value  // BETWEEN 上界
-	RightRef string // 右值为列引用（t.col，JOIN ON 场景；空 = 字面量 Val）
-	InList   []Value // IN 列表
-	Sub      *SelectStmt // IN 子查询（右值）
+	Ref      string          // 限定表名/别名（空 = 未限定）
+	Col      string          // 裸列名
+	Op       string          // = != < > <= >= BETWEEN IN LIKE
+	Val      Value           // 右值（BETWEEN 下界）
+	Val2     Value           // BETWEEN 上界
+	RightRef string          // 右值为列引用（t.col，JOIN ON 场景；空 = 字面量 Val）
+	InList   []Value         // IN 列表
+	Sub      *SelectStmt     // IN 子查询（右值）
 	LeftCase *CaseWhenClause // 左操作数为 CASE 表达式（P2）
 }
 
@@ -75,12 +75,44 @@ type DropTableStmt struct {
 
 func (DropTableStmt) stmt() {}
 
+// ---- M11：用户管理 ----
+
+// CreateUserStmt CREATE USER '<name>' IDENTIFIED BY '<pwd>'。
+// 密码仅以哈希形式持久化（SHA-256+salt，见 user.go）。
+type CreateUserStmt struct {
+	Name     string
+	Password string
+}
+
+func (CreateUserStmt) stmt() {}
+
+// DropUserStmt DROP USER [IF EXISTS] '<name>'。
+type DropUserStmt struct {
+	Name     string
+	IfExists bool // DROP USER IF EXISTS：用户不存在时静默成功
+}
+
+func (DropUserStmt) stmt() {}
+
+// AlterUserStmt ALTER USER '<name>' IDENTIFIED BY '<pwd>'（重置密码）。
+type AlterUserStmt struct {
+	Name     string
+	Password string
+}
+
+func (AlterUserStmt) stmt() {}
+
+// ShowUsersStmt SHOW USERS：列出全部用户。
+type ShowUsersStmt struct{}
+
+func (ShowUsersStmt) stmt() {}
+
 // CreateIndexStmt CREATE INDEX（T6 二级索引；M10 支持 UNIQUE）。
 type CreateIndexStmt struct {
-	Name  string // 索引名（表内唯一）
-	Table string
-	Col   string // 单列索引
-	Unique bool  // M10：UNIQUE 索引（唯一约束）
+	Name   string // 索引名（表内唯一）
+	Table  string
+	Col    string // 单列索引
+	Unique bool   // M10：UNIQUE 索引（唯一约束）
 }
 
 func (CreateIndexStmt) stmt() {}
@@ -95,12 +127,13 @@ func (DropIndexStmt) stmt() {}
 
 // AlterTableStmt ALTER TABLE（M9 在线 DDL）。
 // Action 取值：
-//   "ADD_COLUMN"    新增列，列定义在 Column（已有行回填默认值）
-//   "DROP_COLUMN"   删除列（连同引用该列的索引），列名在 Col
-//   "RENAME_COLUMN" 重命名列，旧列在 Col、新列在 NewName
-//   "RENAME_TABLE"  重命名表，新表名在 NewName
-//   "ADD_INDEX"     新增索引，索引名在 Name、索引列在 Col
-//   "DROP_INDEX"    删除索引，索引名在 Name
+//
+//	"ADD_COLUMN"    新增列，列定义在 Column（已有行回填默认值）
+//	"DROP_COLUMN"   删除列（连同引用该列的索引），列名在 Col
+//	"RENAME_COLUMN" 重命名列，旧列在 Col、新列在 NewName
+//	"RENAME_TABLE"  重命名表，新表名在 NewName
+//	"ADD_INDEX"     新增索引，索引名在 Name、索引列在 Col
+//	"DROP_INDEX"    删除索引，索引名在 Name
 type AlterTableStmt struct {
 	Table   string
 	Action  string
@@ -134,14 +167,14 @@ type OnDuplicateUpdate struct {
 // Window 非空表示窗口函数列：Agg 为函数名（"ROW_NUMBER"|"RANK"|"DENSE_RANK"|"COUNT"|"SUM"|"AVG"），
 // Window 描述 PARTITION BY / ORDER BY；仅允许出现在 SELECT 列表，其它位置解析报错。
 type SelectColumn struct {
-	Raw    string // 原始文本（列名、*、COUNT(*)、SUM(x)、AVG(x)、CASE 表达式）
-	Agg    string // "" | "COUNT" | "SUM" | "AVG" | "ROW_NUMBER" | "RANK" | "DENSE_RANK"
-	Ref    string // 限定表名/别名（t.col 时非空；聚合参数亦可限定）
-	Col    string // 聚合目标列 / 裸列名（COUNT 可为空）
-	Name   string // 输出列名
-	Alias  string // AS 别名（空 = 默认输出名）
+	Raw    string          // 原始文本（列名、*、COUNT(*)、SUM(x)、AVG(x)、CASE 表达式）
+	Agg    string          // "" | "COUNT" | "SUM" | "AVG" | "ROW_NUMBER" | "RANK" | "DENSE_RANK"
+	Ref    string          // 限定表名/别名（t.col 时非空；聚合参数亦可限定）
+	Col    string          // 聚合目标列 / 裸列名（COUNT 可为空）
+	Name   string          // 输出列名
+	Alias  string          // AS 别名（空 = 默认输出名）
 	Case   *CaseWhenClause // 非空 = 输出 CASE 表达式求值结果（忽略 Col）
-	Window *WindowSpec // 非空 = 窗口函数列（OVER 子句）
+	Window *WindowSpec     // 非空 = 窗口函数列（OVER 子句）
 }
 
 // JoinClause JOIN 子句（INNER / LEFT，支持子查询右表）。
@@ -169,11 +202,11 @@ type WindowSpec struct {
 // SelectStmt SELECT。
 type SelectStmt struct {
 	Columns   []SelectColumn
-	CTEs      []CTE         // M10 WITH 子句（可为空）
-	From      string        // 表名（无 JOIN/子查询时）
-	FromAlias string        // FROM 表别名（空 = 表名）
-	Subquery  *SelectStmt   // FROM 子查询
-	SubAlias  string        // FROM 子查询别名（必填）
+	CTEs      []CTE       // M10 WITH 子句（可为空）
+	From      string      // 表名（无 JOIN/子查询时）
+	FromAlias string      // FROM 表别名（空 = 表名）
+	Subquery  *SelectStmt // FROM 子查询
+	SubAlias  string      // FROM 子查询别名（必填）
 	Joins     []JoinClause
 	Where     *Where
 	GroupBy   []string // GROUP BY 列（t.col / col）
@@ -349,7 +382,6 @@ type SetStmt struct {
 func (SetStmt) stmt() {}
 
 func (ShowStatsStmt) stmt() {}
-
 
 // AssignRegionStmt ASSIGN REGION <regionID> TO NODE '<nodeID>'：指派 region 归属节点。
 type AssignRegionStmt struct {

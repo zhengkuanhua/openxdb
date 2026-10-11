@@ -33,7 +33,11 @@ func Parse(sql string) (Stmt, error) {
 }
 
 func (p *parser) cur() token { return p.toks[p.pos] }
-func (p *parser) next()      { if p.pos < len(p.toks)-1 { p.pos++ } }
+func (p *parser) next() {
+	if p.pos < len(p.toks)-1 {
+		p.pos++
+	}
+}
 
 func (p *parser) expect(k tokKind, what string) (token, error) {
 	if p.cur().kind != k {
@@ -154,6 +158,10 @@ func (p *parser) parseAlter() (Stmt, error) {
 	if err := p.expectKeyword("ALTER"); err != nil {
 		return nil, err
 	}
+	// M11：ALTER USER '<name>' IDENTIFIED BY '<pwd>'
+	if p.cur().kind == tokKeyword && p.cur().text == "USER" {
+		return p.parseAlterUser()
+	}
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
 	}
@@ -259,6 +267,28 @@ func (p *parser) parseAlter() (Stmt, error) {
 		return nil, errf("expected COLUMN or TO after RENAME at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	return nil, errf("unsupported ALTER action %q at %d", p.cur().text, p.cur().pos)
+}
+
+// parseAlterUser ALTER USER '<name>' IDENTIFIED BY '<pwd>'（重置密码）。
+func (p *parser) parseAlterUser() (Stmt, error) {
+	if err := p.expectKeyword("USER"); err != nil {
+		return nil, err
+	}
+	nameTok, err := p.expect(tokString, "user name")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("IDENTIFIED"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("BY"); err != nil {
+		return nil, err
+	}
+	pwdTok, err := p.expect(tokString, "password")
+	if err != nil {
+		return nil, err
+	}
+	return &AlterUserStmt{Name: nameTok.text, Password: pwdTok.text}, nil
 }
 
 // parseBackup BACKUP TO '<path>'：生成完整逻辑备份快照文件。
@@ -384,6 +414,9 @@ func (p *parser) parseCreate() (Stmt, error) {
 		return p.parseCreateIndex()
 	case "VIEW":
 		return p.parseCreateView()
+	case "USER":
+		// M11：CREATE USER '<name>' IDENTIFIED BY '<pwd>'
+		return p.parseCreateUser()
 	case "TABLE":
 		// 已有 TABLE 分支
 	default:
@@ -494,6 +527,28 @@ func (p *parser) parseCreate() (Stmt, error) {
 			return nil, errf("expected , or ) at %d, got %q", p.cur().pos, p.cur().text)
 		}
 	}
+}
+
+// parseCreateUser CREATE USER '<name>' IDENTIFIED BY '<pwd>'。
+func (p *parser) parseCreateUser() (Stmt, error) {
+	if err := p.expectKeyword("USER"); err != nil {
+		return nil, err
+	}
+	nameTok, err := p.expect(tokString, "user name")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("IDENTIFIED"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("BY"); err != nil {
+		return nil, err
+	}
+	pwdTok, err := p.expect(tokString, "password")
+	if err != nil {
+		return nil, err
+	}
+	return &CreateUserStmt{Name: nameTok.text, Password: pwdTok.text}, nil
 }
 
 func (p *parser) parsePrimaryKey(stmt *CreateTableStmt) error {
@@ -642,9 +697,12 @@ func (p *parser) parseDrop() (Stmt, error) {
 		return p.parseDropIndex()
 	case "VIEW":
 		return p.parseDropView()
+	case "USER":
+		// M11 用户管理：DROP USER [IF EXISTS] '<name>'
+		return p.parseDropUser()
 	case "TABLE":
 	default:
-		return nil, errf("expected TABLE, INDEX or VIEW at %d, got %q", p.cur().pos, p.cur().text)
+		return nil, errf("expected TABLE, INDEX, VIEW or USER at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
@@ -661,6 +719,30 @@ func (p *parser) parseDrop() (Stmt, error) {
 		s.IfExists = true
 	}
 	nameTok, err := p.expect(tokIdent, "table name")
+	if err != nil {
+		return nil, err
+	}
+	s.Name = nameTok.text
+	return s, nil
+}
+
+// parseDropUser DROP USER [IF EXISTS] '<name>'。
+func (p *parser) parseDropUser() (Stmt, error) {
+	if err := p.expectKeyword("USER"); err != nil {
+		return nil, err
+	}
+	s := &DropUserStmt{}
+	// DROP USER [IF EXISTS] <name>
+	if p.cur().kind == tokKeyword && p.cur().text == "IF" {
+		if err := p.expectKeyword("IF"); err != nil {
+			return nil, err
+		}
+		if err := p.expectKeyword("EXISTS"); err != nil {
+			return nil, err
+		}
+		s.IfExists = true
+	}
+	nameTok, err := p.expect(tokString, "user name")
 	if err != nil {
 		return nil, err
 	}
@@ -1685,7 +1767,12 @@ func (p *parser) parseShow() (Stmt, error) {
 		p.next()
 		return &ShowViewsStmt{}, nil
 	}
-	return nil, errf("expected TABLES, INDEX, SLOWQUERIES, NODES or REGION ROUTES after SHOW at %d, got %q", p.cur().pos, p.cur().text)
+	// SHOW USERS：USERS 不在关键字表（避免与表名 users 冲突），按标识符文本匹配。
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "USERS") {
+		p.next()
+		return &ShowUsersStmt{}, nil
+	}
+	return nil, errf("expected TABLES, INDEX, SLOWQUERIES, NODES, REGION ROUTES, VIEWS or USERS after SHOW at %d, got %q", p.cur().pos, p.cur().text)
 }
 
 // parseExplain EXPLAIN <SELECT>（不实际执行查询）。

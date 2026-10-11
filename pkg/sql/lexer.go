@@ -11,19 +11,19 @@ const (
 	tokIdent
 	tokNumber
 	tokString
-	tokStar       // *
-	tokLParen     // (
-	tokRParen     // )
-	tokComma      // ,
-	tokSemicolon  // ;
-	tokEq         // =
-	tokNe         // !=
-	tokLt         // <
-	tokGt         // >
-	tokLe         // <=
-	tokGe         // >=
-	tokDot        // .
-	tokKeyword    // 关键字（大写原文）
+	tokStar      // *
+	tokLParen    // (
+	tokRParen    // )
+	tokComma     // ,
+	tokSemicolon // ;
+	tokEq        // =
+	tokNe        // !=
+	tokLt        // <
+	tokGt        // >
+	tokLe        // <=
+	tokGe        // >=
+	tokDot       // .
+	tokKeyword   // 关键字（大写原文）
 )
 
 type token struct {
@@ -61,6 +61,8 @@ var keywords = map[string]bool{
 	// M10：SQL 兼容性增强簇（CTE / 窗口函数 / UPSERT）
 	"WITH": true, "OVER": true, "PARTITION": true,
 	"REPLACE": true, "DUPLICATE": true, "UNIQUE": true,
+	// M11：用户管理（CREATE/DROP/ALTER USER ... IDENTIFIED BY ...）
+	"USER": true, "IDENTIFIED": true,
 }
 
 type lexer struct {
@@ -199,7 +201,7 @@ func (l *lexer) lexIdent() {
 	l.toks = append(l.toks, token{kind: tokIdent, text: text, pos: start})
 }
 
-func isDigit(c byte) bool     { return c >= '0' && c <= '9' }
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 func isIdentStart(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }

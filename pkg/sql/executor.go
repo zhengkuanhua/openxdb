@@ -209,6 +209,14 @@ func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
 		return e.execDropView(s)
 	case *ShowViewsStmt:
 		return e.execShowViews()
+	case *CreateUserStmt:
+		return e.execCreateUser(s)
+	case *DropUserStmt:
+		return e.execDropUser(s)
+	case *AlterUserStmt:
+		return e.execAlterUser(s)
+	case *ShowUsersStmt:
+		return e.execShowUsers()
 	case *ShowTablesStmt:
 		return e.execShowTables()
 	case *ShowIndexStmt:
@@ -523,6 +531,147 @@ func (e *Executor) execDropTable(s *DropTableStmt) (*Result, error) {
 		}
 	}
 	return &Result{AffectedRows: len(pairs)}, nil
+}
+
+// ---- M11：用户管理 ----
+
+// execCreateUser CREATE USER '<name>' IDENTIFIED BY '<pwd>'。
+// 密码以 SHA-256+salt 哈希落库（user.go），绝不保存明文；重复用户报错。
+func (e *Executor) execCreateUser(s *CreateUserStmt) (*Result, error) {
+	tx, err := e.getTx()
+	if err != nil {
+		return nil, err
+	}
+	auto := e.autocommit()
+	if auto {
+		defer tx.Rollback()
+	}
+	users, err := loadUsers(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	if findUser(users, s.Name) != nil {
+		return nil, &SQLError{Msg: "user already exists: " + s.Name}
+	}
+	saltHash, err := hashPassword(s.Password)
+	if err != nil {
+		return nil, err
+	}
+	users = append(users, &UserMeta{Name: s.Name, SaltHash: saltHash})
+	raw, err := saveUsers(users)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(usersMetaKey, raw); err != nil {
+		return nil, err
+	}
+	if auto {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	return &Result{AffectedRows: 0}, nil
+}
+
+// execDropUser DROP USER [IF EXISTS] '<name>'。
+// 用户不存在时：IF EXISTS 静默成功，否则报错。
+func (e *Executor) execDropUser(s *DropUserStmt) (*Result, error) {
+	tx, err := e.getTx()
+	if err != nil {
+		return nil, err
+	}
+	auto := e.autocommit()
+	if auto {
+		defer tx.Rollback()
+	}
+	users, err := loadUsers(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	if findUser(users, s.Name) == nil {
+		if s.IfExists {
+			return &Result{}, nil
+		}
+		return nil, &SQLError{Msg: "user not exists: " + s.Name}
+	}
+	var kept []*UserMeta
+	for _, u := range users {
+		if u.Name != s.Name {
+			kept = append(kept, u)
+		}
+	}
+	raw, err := saveUsers(kept)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(usersMetaKey, raw); err != nil {
+		return nil, err
+	}
+	if auto {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	return &Result{AffectedRows: 0}, nil
+}
+
+// execAlterUser ALTER USER '<name>' IDENTIFIED BY '<pwd>'（重置密码）。
+func (e *Executor) execAlterUser(s *AlterUserStmt) (*Result, error) {
+	tx, err := e.getTx()
+	if err != nil {
+		return nil, err
+	}
+	auto := e.autocommit()
+	if auto {
+		defer tx.Rollback()
+	}
+	users, err := loadUsers(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	u := findUser(users, s.Name)
+	if u == nil {
+		return nil, &SQLError{Msg: "user not exists: " + s.Name}
+	}
+	saltHash, err := hashPassword(s.Password)
+	if err != nil {
+		return nil, err
+	}
+	u.SaltHash = saltHash
+	raw, err := saveUsers(users)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(usersMetaKey, raw); err != nil {
+		return nil, err
+	}
+	if auto {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	return &Result{AffectedRows: 0}, nil
+}
+
+// execShowUsers SHOW USERS：列出全部用户（按名称排序）。
+func (e *Executor) execShowUsers() (*Result, error) {
+	tx, err := e.getTx()
+	if err != nil {
+		return nil, err
+	}
+	if e.autocommit() {
+		defer tx.Rollback()
+	}
+	users, err := loadUsers(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].Name < users[j].Name })
+	res := &Result{Columns: []string{"user"}}
+	for _, u := range users {
+		res.Rows = append(res.Rows, []Value{StrVal(u.Name)})
+	}
+	return res, nil
 }
 
 // execCreateIndex 建二级索引：元数据登记 + 对现有数据回填索引键。
@@ -1007,6 +1156,7 @@ func (e *Executor) insertRowOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, 
 //   - 普通 INSERT：主键/唯一索引冲突报错；
 //   - INSERT ... ON DUPLICATE KEY UPDATE：冲突时更新冲突行（affected=2），无冲突插入（affected=1）；
 //   - REPLACE INTO：冲突时删除所有冲突行后插入新行（affected=删除数+1），无冲突插入（affected=1）。
+//
 // pending 记录本语句已计划的最终行（用于语句内主键/唯一键重复判定）。
 func (e *Executor) insertRowUpsertOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, onDup *OnDuplicateUpdate, replace bool, pending *[][]Value) ([]kvOp, int, error) {
 	vals, err := e.buildRow(meta, cols, row)

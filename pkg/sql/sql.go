@@ -51,6 +51,12 @@ func (e *Engine) ExecutorRouter() *sharding.Router { return e.ex.Router() }
 // SetCluster 注入 M4 集群管理器与本节点 ID（供 db.Open 装配，节点注册/转发/路由展开）。
 func (e *Engine) SetCluster(mgr *cluster.Manager, selfID string) { e.ex.SetCluster(mgr, selfID) }
 
+// AuthenticateUser 校验用户名与密码（M11 预留：server 层连接鉴权握手与执行期权限校验用）。
+// 用户不存在或密码不匹配返回 (false, nil)；存储层错误原样返回。密码只做哈希比对，不落明文。
+func (e *Engine) AuthenticateUser(name, password string) (bool, error) {
+	return e.ex.authenticateUser(name, password)
+}
+
 // SetTSO 注入 M8 全局时间戳源（供 db.Open 装配；nil = 未启用快照隔离，
 // 单机旧路径零回归）。
 func (e *Engine) SetTSO(src tso.Source) { e.ex.SetTSO(src) }
