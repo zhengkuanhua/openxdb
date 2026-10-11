@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_f8c27df6c4b211f19063525400393706
+    ReservedCode1: LIvUvcdg7awnhvzp7hCzdMRvbXdJso2rMbvcwISxbwtG0xMrHuLQNZn48PhfjzPFssZ0L8grIc0mOGWXN478XNLAweby9GeIQ8ieNidALC6RGUCmPu4zmtSrwUZTG6/YSd0zJdSFb50/iukUfCe8Jy73KUX/G94BneG6jqUEh3rOTjz57u67OAL4Jc0=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_f8c27df6c4b211f19063525400393706
+    ReservedCode2: LIvUvcdg7awnhvzp7hCzdMRvbXdJso2rMbvcwISxbwtG0xMrHuLQNZn48PhfjzPFssZ0L8grIc0mOGWXN478XNLAweby9GeIQ8ieNidALC6RGUCmPu4zmtSrwUZTG6/YSd0zJdSFb50/iukUfCe8Jy73KUX/G94BneG6jqUEh3rOTjz57u67OAL4Jc0=
+---
+
 # T22 M9 功能簇（4/5）：外键约束
 
 > 版本：v5.0-P11-M9FK, v0.13.0-alpha
@@ -90,3 +101,4 @@ CREATE TABLE child (
 
 - Status 行更新为 `M9 foreign key: REFERENCES / FOREIGN KEY + ON DELETE CASCADE|RESTRICT, meta persistence, DROP TABLE cleanup (v5.0-P11-M9FK), v0.13.0-alpha.`
 - T 列表追加 `+ T22 M9: foreign key (REFERENCES / ON DELETE CASCADE, meta persistence, DROP TABLE cleanup)`
+*（内容由AI生成，仅供参考）*

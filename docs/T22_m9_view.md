@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_fa0e3e54c4b211f19063525400393706
+    ReservedCode1: EeVBOs4FI3T3UtgATGNbdfpg717mBFPA/HFccpMNw11kZEBdKwLbxFPE3UHF8V5oyQZ/PrgcP4EfpbFR2HKSbR4uZ/7WyKd9qUEOm66bat1ZRTF/wcDYeGMbLxFGwKBondkCJE2s9YaQdHquMcNW8mHTwvfQWlmxrl0xRaDu5bp4yhx0o5jWbegwJyE=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_fa0e3e54c4b211f19063525400393706
+    ReservedCode2: EeVBOs4FI3T3UtgATGNbdfpg717mBFPA/HFccpMNw11kZEBdKwLbxFPE3UHF8V5oyQZ/PrgcP4EfpbFR2HKSbR4uZ/7WyKd9qUEOm66bat1ZRTF/wcDYeGMbLxFGwKBondkCJE2s9YaQdHquMcNW8mHTwvfQWlmxrl0xRaDu5bp4yhx0o5jWbegwJyE=
+---
+
 # T22 M9 功能簇（5/5）：视图
 
 > 版本：v5.0-P11-M9VIEW, v0.13.0-alpha
@@ -93,3 +104,4 @@ SHOW VIEWS;                       -- 列出视图名 + 定义摘要
 
 - Status 行更新为 `M9 view: CREATE/DROP VIEW + SHOW VIEWS, definition expansion, cycle guard (v5.0-P11-M9VIEW), v0.13.0-alpha.`
 - T 列表追加 `+ T22 M9: view (CREATE/DROP VIEW + SHOW VIEWS, definition expansion, cycle guard)`
+*（内容由AI生成，仅供参考）*
