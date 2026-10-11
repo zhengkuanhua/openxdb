@@ -161,7 +161,7 @@ func (s *Server) handleLocked(line string, sess *session) (string, error) {
 	case "PING":
 		return "PONG", nil
 	case "HELP":
-		return "PING GET SET DEL BEGIN COMMIT ROLLBACK METRICS QUIT", nil
+		return "PING GET SET DEL BEGIN COMMIT ROLLBACK METRICS STATUS QUIT", nil
 	case "QUIT":
 		return "BYE", nil
 	case "AUTH":
@@ -200,6 +200,9 @@ func (s *Server) handleLocked(line string, sess *session) (string, error) {
 			return "", errors.New("ERR metrics not enabled")
 		}
 		return s.m.Render(), nil
+	case "STATUS":
+		// M13 子功能三：聚合状态快照（STATUS / STATUS JSON），只读不阻塞。
+		return s.doStatus(toks)
 	case "BEGIN":
 		// SQL 引擎已挂载时，事务命令优先路由到 SQL 会话事务（executor 自维护
 		// curTx/curBeginTS）；否则走 KV 层显式事务（GET/SET/DEL 可见）。

@@ -5,11 +5,13 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 
 	"github.com/zhengkuanhua/openxdb/pkg/db"
+	"github.com/zhengkuanhua/openxdb/pkg/metrics"
 	"github.com/zhengkuanhua/openxdb/pkg/server"
 )
 
@@ -35,6 +37,8 @@ func main() {
 		err = cmdDoctor(os.Args[2:])
 	case "stats":
 		err = cmdStats(os.Args[2:])
+	case "status":
+		err = cmdStatus(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -142,6 +146,27 @@ func cmdStart(args []string) error {
 	slowLogPath := filepath.Join(dir, "slow.log")
 	d.SQL.SetSlowLog(slowLogPath, true)
 	fmt.Printf("slow query log: %s (threshold %dms, use SHOW SLOWQUERIES)\n", slowLogPath, d.SQL.SlowQueryThreshold())
+	// M13：metrics 导出装配（METRICS/STATUS/HTTP /metrics 共享注册表；
+	// 注入连接数/慢查询阈值/存储大小/region 分布实时采集源）。
+	m := metrics.New()
+	m.SetConnSource(s.ActiveConns)
+	m.SetSlowThresholdSource(d.SQL.SlowQueryThreshold)
+	m.SetStorageBytesSource(func() int64 { return dirSize(dir) })
+	m.SetRegionStatsSource(d.SQL.MetricsRegionStats)
+	s.SetMetrics(m)
+	d.SQL.SetMetrics(m)
+	if mp, ok := flagValue(args, "--metrics-port"); ok {
+		n, err := strconv.Atoi(mp)
+		if err != nil || n < 1 || n > 65535 {
+			return errors.New("invalid --metrics-port value: " + mp)
+		}
+		if n > 0 {
+			go func() {
+				_ = http.ListenAndServe(fmt.Sprintf(":%d", n), m.Handler())
+			}()
+			fmt.Printf("metrics endpoint: http://127.0.0.1:%d/metrics\n", n)
+		}
+	}
 	return s.ServeTCP(addr)
 }
 
@@ -187,5 +212,7 @@ Commands:
   stats   [--addr <host:port>] 拉取服务运行指标（默认 127.0.0.1:7788）
           [--interval <sec>]  二次采样计算 binlog 增长（默认单次）
           [--json]            输出 JSON 指标
-  metrics [--addr <host:port>] 拉取 Prometheus 文本指标（默认 127.0.0.1:7788）`)
+  metrics [--addr <host:port>] 拉取 Prometheus 文本指标（默认 127.0.0.1:7788）
+  status  [--addr <host:port>] 拉取聚合状态快照（默认 127.0.0.1:7788）
+          [--json]            输出 JSON 状态快照`)
 }

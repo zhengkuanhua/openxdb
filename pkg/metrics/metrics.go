@@ -134,6 +134,56 @@ func (m *Registry) SetStorageBytesSource(f func() int64) { m.storageBytes = f }
 // SetRegionStatsSource 注入 region 分片状态采集源（sql.Engine.MetricsRegionStats）。
 func (m *Registry) SetRegionStatsSource(f func() RegionStats) { m.regionStats = f }
 
+// ---- 状态快照 ----
+
+// Snapshot 结构化状态快照（M13 子功能三 STATUS 聚合的数据源）。
+// 与 Render 同源：计数器直读原子值，注入采集源未装配时输出 0（单项降级，
+// 不影响整体状态查询）。
+type Snapshot struct {
+	SQLTotal        int64       // SQL 查询累计数
+	KVTotal         int64       // KV 命令累计数
+	SQLQPS          int64       // SQL QPS（当前秒窗）
+	KVQPS           int64       // KV QPS（当前秒窗）
+	ActiveConns     int64       // 活跃 TCP 连接数（注入源，0 = 未装配）
+	SlowQueryTotal  int64       // 慢查询累计数
+	SlowThresholdMs int64       // 慢查询阈值毫秒（注入源，0 = 未装配）
+	StorageBytes    int64       // 存储总数据量字节（注入源，0 = 未装配）
+	Regions         RegionStats // region 分片状态（注入源，空 = 未装配）
+	TxnCommit       int64       // 事务提交累计数
+	TxnRollback     int64       // 事务回滚累计数
+	LocalTotal      int64       // 本节点数据访问累计数
+	RemoteTotal     int64       // 远端转发数据访问累计数
+}
+
+// Snapshot 返回注册表当前状态快照（线程安全：全部为原子读/注入源调用）。
+func (m *Registry) Snapshot() Snapshot {
+	nowSec := m.now().Unix()
+	snap := Snapshot{
+		SQLTotal:       m.sqlTotal.Load(),
+		KVTotal:        m.kvTotal.Load(),
+		SQLQPS:         m.sqlQPS.value(nowSec),
+		KVQPS:          m.kvQPS.value(nowSec),
+		SlowQueryTotal: m.slowTotal.Load(),
+		TxnCommit:      m.txnCommit.Load(),
+		TxnRollback:    m.txnRollback.Load(),
+		LocalTotal:     m.localTotal.Load(),
+		RemoteTotal:    m.remoteTotal.Load(),
+	}
+	if m.conns != nil {
+		snap.ActiveConns = m.conns()
+	}
+	if m.slowThreshold != nil {
+		snap.SlowThresholdMs = m.slowThreshold()
+	}
+	if m.storageBytes != nil {
+		snap.StorageBytes = m.storageBytes()
+	}
+	if m.regionStats != nil {
+		snap.Regions = m.regionStats()
+	}
+	return snap
+}
+
 // ---- 渲染 ----
 
 // writeMetric 写一组 Prometheus 文本（HELP/TYPE + 指标行）。

@@ -187,3 +187,63 @@ func TestM13MetricsHandler(t *testing.T) {
 		t.Fatalf("handler body missing metrics:\n%s", rec.Body.String())
 	}
 }
+
+// TestM13MetricsSnapshot 结构化快照：计数器直读值 + 注入源实时值，
+// 未注入源输出 0（单项降级），与 Render 口径一致。
+func TestM13MetricsSnapshot(t *testing.T) {
+	m := New()
+	m.now = fixedNow(1700000000)
+	m.IncSQL()
+	m.IncSQL()
+	m.IncSQL()
+	m.IncKV()
+	m.IncSlow()
+	m.IncCommit()
+	m.IncRollback()
+	m.IncLocal()
+	m.IncRemote()
+	m.SetConnSource(func() int64 { return 7 })
+	m.SetSlowThresholdSource(func() int64 { return 250 })
+	m.SetStorageBytesSource(func() int64 { return 1048576 })
+	m.SetRegionStatsSource(func() RegionStats{
+		return RegionStats{Total: 5, ByState: map[string]int64{"RUNNING": 3, "SPLITTING": 2}, Local: 4, Remote: 1}
+	})
+
+	snap := m.Snapshot()
+	if snap.SQLTotal != 3 || snap.KVTotal != 1 {
+		t.Fatalf("totals: sql=%d kv=%d, want 3/1", snap.SQLTotal, snap.KVTotal)
+	}
+	if snap.SQLQPS != 3 || snap.KVQPS != 1 {
+		t.Fatalf("qps: sql=%d kv=%d, want 3/1", snap.SQLQPS, snap.KVQPS)
+	}
+	if snap.ActiveConns != 7 || snap.SlowThresholdMs != 250 || snap.StorageBytes != 1048576 {
+		t.Fatalf("injected sources: conns=%d threshold=%d storage=%d", snap.ActiveConns, snap.SlowThresholdMs, snap.StorageBytes)
+	}
+	if snap.SlowQueryTotal != 1 || snap.TxnCommit != 1 || snap.TxnRollback != 1 {
+		t.Fatalf("slow/txn counters: slow=%d commit=%d rollback=%d", snap.SlowQueryTotal, snap.TxnCommit, snap.TxnRollback)
+	}
+	if snap.LocalTotal != 1 || snap.RemoteTotal != 1 {
+		t.Fatalf("local/remote: %d/%d, want 1/1", snap.LocalTotal, snap.RemoteTotal)
+	}
+	if snap.Regions.Total != 5 || snap.Regions.Local != 4 || snap.Regions.Remote != 1 ||
+		snap.Regions.ByState["RUNNING"] != 3 || snap.Regions.ByState["SPLITTING"] != 2 {
+		t.Fatalf("region snapshot: %+v", snap.Regions)
+	}
+}
+
+// TestM13MetricsSnapshotNilSources 未装配注入源时快照输出 0（STATUS 降级路径）。
+func TestM13MetricsSnapshotNilSources(t *testing.T) {
+	m := New()
+	m.now = fixedNow(1700000000)
+	m.IncSQL()
+	snap := m.Snapshot()
+	if snap.SQLTotal != 1 {
+		t.Fatalf("counter should still read: %d", snap.SQLTotal)
+	}
+	if snap.ActiveConns != 0 || snap.SlowThresholdMs != 0 || snap.StorageBytes != 0 {
+		t.Fatalf("nil sources should be 0: %+v", snap)
+	}
+	if snap.Regions.Total != 0 || len(snap.Regions.ByState) != 0 {
+		t.Fatalf("nil region source should be empty: %+v", snap.Regions)
+	}
+}

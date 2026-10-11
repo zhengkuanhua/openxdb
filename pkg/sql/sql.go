@@ -153,6 +153,22 @@ func (e *Engine) MetricsRegionStats() metrics.RegionStats { return e.ex.MetricsR
 // SlowQueries 返回慢查询记录副本（供协议层展示或测试断言）。
 func (e *Engine) SlowQueries() []SlowQueryRecord { return e.ex.SlowQueries() }
 
+// ClusterNodes 返回节点注册表快照（存活/角色，按 ID 排序；未装配集群返回空）。
+func (e *Engine) ClusterNodes() []cluster.NodeInfo {
+	if e.ex.mgr == nil {
+		return nil
+	}
+	return e.ex.mgr.ListNodes()
+}
+
+// ClusterSelfNode 返回本节点信息（未装配集群返回 false；STATUS 单机兜底用）。
+func (e *Engine) ClusterSelfNode() (cluster.NodeInfo, bool) {
+	if e.ex.mgr == nil {
+		return cluster.NodeInfo{}, false
+	}
+	return e.ex.mgr.SelfNode(), true
+}
+
 // IsSQL 判断一行命令是否以 SQL 关键字开头（供协议层路由）。
 func IsSQL(line string) bool {
 	trimmed := strings.TrimLeft(line, " \t\r\n")
