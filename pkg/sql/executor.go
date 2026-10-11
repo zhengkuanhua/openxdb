@@ -155,7 +155,8 @@ func isWriteStmt(stmt Stmt) bool {
 	switch stmt.(type) {
 	case *CreateTableStmt, *DropTableStmt, *CreateIndexStmt, *DropIndexStmt,
 		*AlterTableStmt, *InsertStmt, *UpdateStmt, *DeleteStmt, *ImportStmt,
-		*AssignRegionStmt, *SplitRegionStmt, *BalanceStmt, *BackupStmt, *RestoreStmt:
+		*AssignRegionStmt, *SplitRegionStmt, *BalanceStmt, *BackupStmt, *RestoreStmt,
+		*GrantStmt, *RevokeStmt:
 		return true
 	}
 	return false
@@ -245,6 +246,10 @@ func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
 		return e.execBackup(s)
 	case *RestoreStmt:
 		return e.execRestore(s)
+	case *GrantStmt:
+		return e.execGrant(s)
+	case *RevokeStmt:
+		return e.execRevoke(s)
 	}
 	return nil, ErrUnsupported
 }
@@ -525,6 +530,19 @@ func (e *Executor) execDropTable(s *DropTableStmt) (*Result, error) {
 	if err := tx.Put(metaRegionsKey, rraw); err != nil {
 		return nil, err
 	}
+	// M11 联动：DROP TABLE 一并清理所有用户对该表的权限记录（m:grants）。
+	grants, err := loadGrants(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	removeTableGrants(grants, s.Name)
+	graw, err := saveGrants(grants)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(grantsMetaKey, graw); err != nil {
+		return nil, err
+	}
 	if auto {
 		if err := tx.Commit(); err != nil {
 			return nil, err
@@ -605,6 +623,19 @@ func (e *Executor) execDropUser(s *DropUserStmt) (*Result, error) {
 		return nil, err
 	}
 	if err := tx.Put(usersMetaKey, raw); err != nil {
+		return nil, err
+	}
+	// M11 联动：DROP USER 一并清理该用户的全部权限记录（m:grants）。
+	grants, err := loadGrants(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	removeUserGrants(grants, s.Name)
+	graw, err := saveGrants(grants)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(grantsMetaKey, graw); err != nil {
 		return nil, err
 	}
 	if auto {

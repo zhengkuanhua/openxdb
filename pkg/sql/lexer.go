@@ -63,6 +63,8 @@ var keywords = map[string]bool{
 	"REPLACE": true, "DUPLICATE": true, "UNIQUE": true,
 	// M11：用户管理（CREATE/DROP/ALTER USER ... IDENTIFIED BY ...）
 	"USER": true, "IDENTIFIED": true,
+	// M11：权限模型（GRANT/REVOKE ... ON ... TO/FROM ...）
+	"GRANT": true, "REVOKE": true, "ALL": true,
 }
 
 type lexer struct {

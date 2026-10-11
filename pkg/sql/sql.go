@@ -57,6 +57,13 @@ func (e *Engine) AuthenticateUser(name, password string) (bool, error) {
 	return e.ex.authenticateUser(name, password)
 }
 
+// HasPrivilege 查询用户对某表是否拥有指定权限（M11 预留：执行期权限校验用）。
+// op 为 "SELECT"/"INSERT"/"UPDATE"/"DELETE"；用户或表无授权记录返回 false。
+// 存储层错误原样返回；未知 op 返回错误。
+func (e *Engine) HasPrivilege(user, table, op string) (bool, error) {
+	return e.ex.hasPrivilege(user, table, op)
+}
+
 // SetTSO 注入 M8 全局时间戳源（供 db.Open 装配；nil = 未启用快照隔离，
 // 单机旧路径零回归）。
 func (e *Engine) SetTSO(src tso.Source) { e.ex.SetTSO(src) }

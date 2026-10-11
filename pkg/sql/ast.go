@@ -107,6 +107,26 @@ type ShowUsersStmt struct{}
 
 func (ShowUsersStmt) stmt() {}
 
+// GrantStmt GRANT <priv[,priv...]> ON <table> TO '<user>'。
+// Privileges 为大写权限名：SELECT / INSERT / UPDATE / DELETE / ALL。
+type GrantStmt struct {
+	Privileges []string
+	Table      string
+	User       string
+}
+
+func (GrantStmt) stmt() {}
+
+// RevokeStmt REVOKE <priv[,priv...]> ON <table> FROM '<user>'。
+// Privileges 为大写权限名：SELECT / INSERT / UPDATE / DELETE / ALL。
+type RevokeStmt struct {
+	Privileges []string
+	Table      string
+	User       string
+}
+
+func (RevokeStmt) stmt() {}
+
 // CreateIndexStmt CREATE INDEX（T6 二级索引；M10 支持 UNIQUE）。
 type CreateIndexStmt struct {
 	Name   string // 索引名（表内唯一）

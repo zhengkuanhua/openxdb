@@ -112,6 +112,10 @@ func (p *parser) parseStmt() (Stmt, error) {
 		return p.parseBackup()
 	case "RESTORE":
 		return p.parseRestore()
+	case "GRANT":
+		return p.parseGrant()
+	case "REVOKE":
+		return p.parseRevoke()
 	}
 	return nil, errf("unsupported statement %q at %d", p.cur().text, p.cur().pos)
 }
@@ -337,6 +341,81 @@ func (p *parser) parseRestore() (Stmt, error) {
 		s.HasToLSN = true
 	}
 	return s, nil
+}
+
+// parsePrivList 解析逗号分隔的权限名列表（SELECT/INSERT/UPDATE/DELETE/ALL）。
+// 权限 token 为关键字（大写），返回大写权限名切片。
+func (p *parser) parsePrivList() ([]string, error) {
+	var privs []string
+	for {
+		if p.cur().kind != tokKeyword {
+			return nil, errf("expected privilege at %d, got %q", p.cur().pos, p.cur().text)
+		}
+		priv := p.cur().text
+		switch priv {
+		case "SELECT", "INSERT", "UPDATE", "DELETE", "ALL":
+			privs = append(privs, priv)
+		default:
+			return nil, errf("unsupported privilege %q at %d", priv, p.cur().pos)
+		}
+		p.next()
+		if p.cur().kind != tokComma {
+			return privs, nil
+		}
+		p.next()
+	}
+}
+
+// parseGrant GRANT <priv[,priv...]> ON <table> TO '<user>'。
+func (p *parser) parseGrant() (Stmt, error) {
+	if err := p.expectKeyword("GRANT"); err != nil {
+		return nil, err
+	}
+	privs, err := p.parsePrivList()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("ON"); err != nil {
+		return nil, err
+	}
+	tableTok, err := p.expect(tokIdent, "table name")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("TO"); err != nil {
+		return nil, err
+	}
+	userTok, err := p.expect(tokString, "user name")
+	if err != nil {
+		return nil, err
+	}
+	return &GrantStmt{Privileges: privs, Table: tableTok.text, User: userTok.text}, nil
+}
+
+// parseRevoke REVOKE <priv[,priv...]> ON <table> FROM '<user>'。
+func (p *parser) parseRevoke() (Stmt, error) {
+	if err := p.expectKeyword("REVOKE"); err != nil {
+		return nil, err
+	}
+	privs, err := p.parsePrivList()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("ON"); err != nil {
+		return nil, err
+	}
+	tableTok, err := p.expect(tokIdent, "table name")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("FROM"); err != nil {
+		return nil, err
+	}
+	userTok, err := p.expect(tokString, "user name")
+	if err != nil {
+		return nil, err
+	}
+	return &RevokeStmt{Privileges: privs, Table: tableTok.text, User: userTok.text}, nil
 }
 
 // parseAddNode ADD NODE '<addr>'：注册远端节点（地址字符串，如 '127.0.0.1:7791'）。
