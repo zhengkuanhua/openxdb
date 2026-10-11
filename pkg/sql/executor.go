@@ -2169,11 +2169,15 @@ func (e *Executor) execSelectRel(tx txn.Txn, s *SelectStmt) (*Result, error) {
 			return nil, err
 		}
 	}
-	// WHERE 过滤
+	// WHERE 过滤（M12-3：子查询条件预计算一次，行级过滤复用缓存）
 	if s.Where != nil && len(s.Where.Conds) > 0 {
+		cache, err := e.precomputeSubqueries(tx, tabs, rel, s.Where)
+		if err != nil {
+			return nil, err
+		}
 		filtered := make([][]Value, 0, len(rel.Rows))
 		for _, r := range rel.Rows {
-			ok, err := e.matchWhereRel(tx, rel, r, s.Where)
+			ok, err := e.matchWhereRelCached(tx, rel, r, s.Where, cache)
 			if err != nil {
 				return nil, err
 			}
@@ -2210,62 +2214,13 @@ func (e *Executor) execSelectRel(tx txn.Txn, s *SelectStmt) (*Result, error) {
 }
 
 // matchWhereRel 对 Rel 行执行 WHERE（支持限定列/右列引用/BETWEEN/IN/IN 子查询）。
+// 子查询条件走 matchCondRel 动态执行（CASE 分支等无缓存场景兜底）。
 func (e *Executor) matchWhereRel(tx txn.Txn, rel *Rel, row []Value, w *Where) (bool, error) {
-	if w == nil || len(w.Conds) == 0 {
-		return true, nil
-	}
-	for _, c := range w.Conds {
-		ok, err := e.matchCondRel(tx, rel, row, &c)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			return false, nil
-		}
-	}
-	return true, nil
+	return e.matchWhereRelCached(tx, rel, row, w, nil)
 }
 
 func (e *Executor) matchCondRel(tx txn.Txn, rel *Rel, row []Value, c *Cond) (bool, error) {
-	var a Value
-	var err error
-	if c.LeftCase != nil {
-		a, err = e.evalCaseRel(tx, rel, row, c.LeftCase)
-		if err != nil {
-			return false, err
-		}
-	} else {
-		a, err = relValue(rel, row, qualifiedName(c.Ref, c.Col))
-		if err != nil {
-			return false, err
-		}
-	}
-	switch c.Op {
-	case "=", "!=", "<", ">", "<=", ">=":
-		if c.RightRef != "" {
-			b, err := relValue(rel, row, c.RightRef)
-			if err != nil {
-				return false, err
-			}
-			return matchCond(a, c.Op, b), nil
-		}
-		return matchCond(a, c.Op, c.Val), nil
-	case "BETWEEN":
-		return compareVal(a, c.Val) >= 0 && compareVal(a, c.Val2) <= 0, nil
-	case "LIKE":
-		return likeMatch(a.String(), c.Val.String()), nil
-	case "IN":
-		if c.Sub != nil {
-			return e.inSubquery(tx, a, c.Sub)
-		}
-		for _, v := range c.InList {
-			if compareVal(a, v) == 0 {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
-	return false, errf("unsupported op %q", c.Op)
+	return e.matchCondRelCached(tx, rel, row, c, nil)
 }
 
 // evalCaseRel Rel 行级 CASE 求值（分支条件走 matchWhereRel，支持嵌套/限定列）。

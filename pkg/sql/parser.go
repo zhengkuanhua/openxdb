@@ -1555,6 +1555,30 @@ func (p *parser) parseWhere() (Where, error) {
 // parseCond 解析单个条件：左列（或 CASE 表达式）op 右值（支持 BETWEEN/IN/LIKE 与列引用右值）。
 func (p *parser) parseCond() (Cond, error) {
 	var c Cond
+	// M12-3 分布式子查询：EXISTS (SELECT ...) 独立条件（无左操作数）。
+	if p.cur().kind == tokKeyword && p.cur().text == "EXISTS" {
+		p.next()
+		if _, err := p.expect(tokLParen, "("); err != nil {
+			return c, err
+		}
+		if p.cur().kind != tokKeyword || p.cur().text != "SELECT" {
+			return c, errf("expected SELECT in EXISTS at %d, got %q", p.cur().pos, p.cur().text)
+		}
+		sub, err := p.parseSelect()
+		if err != nil {
+			return c, err
+		}
+		subSel, ok := sub.(*SelectStmt)
+		if !ok {
+			return c, errf("invalid subquery in EXISTS")
+		}
+		if _, err := p.expect(tokRParen, ")"); err != nil {
+			return c, err
+		}
+		c.Op = "EXISTS"
+		c.Sub = subSel
+		return c, nil
+	}
 	if p.cur().kind == tokKeyword && p.cur().text == "CASE" {
 		cc, err := p.parseCaseWhen()
 		if err != nil {
@@ -1655,7 +1679,25 @@ func (p *parser) parseCond() (Cond, error) {
 	default:
 		return c, errf("expected comparison operator at %d, got %q", p.cur().pos, p.cur().text)
 	}
-	// 右值：列引用（JOIN ON 场景）或字面量
+	// 右值：标量子查询 (SELECT ...) / 列引用（JOIN ON 场景）/ 字面量
+	// M12-3 标量子查询：比较运算符右侧出现 "(" 且后随 SELECT 时解析为子查询。
+	if p.cur().kind == tokLParen && p.pos+1 < len(p.toks) &&
+		p.toks[p.pos+1].kind == tokKeyword && p.toks[p.pos+1].text == "SELECT" {
+		p.next() // 吃掉 (
+		sub, err := p.parseSelect()
+		if err != nil {
+			return c, err
+		}
+		subSel, ok := sub.(*SelectStmt)
+		if !ok {
+			return c, errf("invalid subquery in scalar comparison")
+		}
+		if _, err := p.expect(tokRParen, ")"); err != nil {
+			return c, err
+		}
+		c.Sub = subSel
+		return c, nil
+	}
 	if p.cur().kind == tokIdent {
 		rref, rcol, err := p.parseColumnRef()
 		if err != nil {
