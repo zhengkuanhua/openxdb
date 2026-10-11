@@ -37,7 +37,7 @@ var keywords = map[string]bool{
 	"CREATE": true, "TABLE": true, "DROP": true, "IF": true, "EXISTS": true, "INSERT": true,
 	"INTO": true, "VALUES": true, "SELECT": true, "FROM": true,
 	"WHERE": true, "ORDER": true, "BY": true, "ASC": true, "DESC": true,
-	"LIMIT": true, "PRIMARY": true, "KEY": true, "UPDATE": true,
+	"LIMIT": true, "OFFSET": true, "PRIMARY": true, "KEY": true, "UPDATE": true,
 	"SET": true, "DELETE": true, "AND": true, "INDEX": true, "ON": true,
 	"JOIN": true, "INNER": true, "LEFT": true, "OUTER": true,
 	"GROUP": true, "BETWEEN": true, "IN": true, "AS": true,

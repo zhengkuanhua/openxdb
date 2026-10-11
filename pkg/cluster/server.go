@@ -12,6 +12,8 @@ package cluster
 import (
 	"errors"
 	"net"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -231,7 +233,7 @@ func (s *Server) handleQuery(conn net.Conn, payload []byte) {
 			resp = QueryResp{Row: &QueryRow{Key: req.Start, Value: v}}
 		}
 	case OpScan:
-		rows, err := s.scanRange(req.Start, req.End, req.Limit, req.BeginTS)
+		rows, err := s.scanRange(req.Start, req.End, req.Limit, req.BeginTS, req.Sort)
 		if err != nil {
 			resp = QueryResp{Err: err.Error()}
 		} else {
@@ -308,7 +310,9 @@ func (s *Server) applyPush(req *RegionPushReq) (RegionPushResp, error) {
 
 // scanRange 区间扫描 [start, end)；end 为空表示无上界。
 // beginTS>0 时逐行做快照版本过滤（M8 分布式快照隔离）。
-func (s *Server) scanRange(start, end []byte, limit int, beginTS uint64) ([]QueryRow, error) {
+// spec 非空时（M12-2）：过滤后按 spec 提取排序键本地排序，再截取
+// [Offset, Offset+Limit) 窗口返回；Limit<=0 表示窗口无上界。
+func (s *Server) scanRange(start, end []byte, limit int, beginTS uint64, spec *SortSpec) ([]QueryRow, error) {
 	rows, err := s.st.Scan(storage.KeyRange{Start: start, End: end}, limit)
 	if err != nil {
 		return nil, err
@@ -326,7 +330,141 @@ func (s *Server) scanRange(start, end []byte, limit int, beginTS uint64) ([]Quer
 		}
 		out = append(out, QueryRow{Key: kv.Key, Value: kv.Value})
 	}
+	if spec == nil {
+		return out, nil
+	}
+	// M12-2 本地排序 + 窗口截取：coordinator 只需归并已有序的窗口行。
+	sort.SliceStable(out, func(i, j int) bool {
+		return sortRowLess(out[i], out[j], spec)
+	})
+	if spec.Offset > 0 {
+		if spec.Offset >= len(out) {
+			out = out[:0]
+		} else {
+			out = out[spec.Offset:]
+		}
+	}
+	if spec.Limit > 0 && len(out) > spec.Limit {
+		out = out[:spec.Limit]
+	}
 	return out, nil
+}
+
+// sortRowLess 按 SortSpec 比较两行：提取第 ColIndex 列排序键后按类型比较。
+// INT/DECIMAL 按数值（DECIMAL 按 Scale 位定点整数）；TEXT/DATE/BLOB 按字符串。
+func sortRowLess(a, b QueryRow, spec *SortSpec) bool {
+	ka, ea := sortRowKey(a, spec)
+	kb, eb := sortRowKey(b, spec)
+	if ea != nil {
+		return false
+	}
+	if eb != nil {
+		return true
+	}
+	var cmp int
+	if spec.Kind == "INT" || spec.Kind == "DECIMAL" {
+		if ka.i < kb.i {
+			cmp = -1
+		} else if ka.i > kb.i {
+			cmp = 1
+		}
+	} else {
+		cmp = strings.Compare(ka.s, kb.s)
+	}
+	if spec.Desc {
+		return cmp > 0
+	}
+	return cmp < 0
+}
+
+// sortKeyVal 排序键（数值或字符串二选一）。
+type sortKeyVal struct {
+	i int64
+	s string
+}
+
+// sortRowKey 从行 JSON 数组提取排序键。
+// INT：JSON number → int64；DECIMAL：规范化定点串 → scaled int64；
+// 其它（TEXT/DATE/BLOB）：字符串原样。
+func sortRowKey(row QueryRow, spec *SortSpec) (sortKeyVal, error) {
+	var arr []interface{}
+	if err := unmarshalJSON(row.Value, &arr); err != nil {
+		return sortKeyVal{}, err
+	}
+	if spec.ColIndex < 0 || spec.ColIndex >= len(arr) {
+		return sortKeyVal{}, errors.New("cluster: sort col index out of range")
+	}
+	switch spec.Kind {
+	case "INT":
+		f, ok := arr[spec.ColIndex].(float64)
+		if !ok {
+			return sortKeyVal{}, errors.New("cluster: INT sort key not numeric")
+		}
+		return sortKeyVal{i: int64(f)}, nil
+	case "DECIMAL":
+		s, ok := arr[spec.ColIndex].(string)
+		if !ok {
+			return sortKeyVal{}, errors.New("cluster: DECIMAL sort key not string")
+		}
+		scaled, err := decSortScaled(s, spec.Scale)
+		if err != nil {
+			return sortKeyVal{}, err
+		}
+		return sortKeyVal{i: scaled}, nil
+	default:
+		s, _ := arr[spec.ColIndex].(string)
+		return sortKeyVal{s: s}, nil
+	}
+}
+
+// decSortScaled 解析定点十进制串为缩放整数（scale 位小数，如 4 位 "12.3400" → 123400）。
+// 与 sql 包 decCanonical/parseDecimal 的定点语义保持一致，供远端排序精确比较。
+func decSortScaled(s string, scale int) (int64, error) {
+	neg := false
+	i := 0
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		neg = s[i] == '-'
+		i++
+	}
+	intPart := int64(0)
+	intDigits := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		intPart = intPart*10 + int64(s[i]-'0')
+		intDigits++
+		i++
+	}
+	if intDigits == 0 {
+		return 0, errors.New("cluster: invalid DECIMAL: " + s)
+	}
+	frac := int64(0)
+	fracDigits := 0
+	if i < len(s) && s[i] == '.' {
+		i++
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			frac = frac*10 + int64(s[i]-'0')
+			fracDigits++
+			i++
+		}
+	}
+	if i != len(s) {
+		return 0, errors.New("cluster: invalid DECIMAL: " + s)
+	}
+	for fracDigits < scale {
+		frac *= 10
+		fracDigits++
+	}
+	if fracDigits > scale {
+		return 0, errors.New("cluster: DECIMAL too many fractional digits: " + s)
+	}
+	unit := int64(1)
+	for j := 0; j < scale; j++ {
+		unit *= 10
+	}
+	scaled := intPart*unit + frac
+	if neg {
+		scaled = -scaled
+	}
+	return scaled, nil
 }
 
 // mustJSON 序列化响应（handleQuery 内错误已由上层处理，此处不返回错误）。

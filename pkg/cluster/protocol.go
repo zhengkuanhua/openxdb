@@ -67,6 +67,22 @@ type QueryReq struct {
 	End     []byte  `json:"end,omitempty"`
 	Limit   int     `json:"limit,omitempty"`
 	BeginTS uint64  `json:"begin_ts,omitempty"`
+	// Sort 非空时（M12-2 跨节点 ORDER BY/LIMIT 分页）：远端扫描完成后
+	// 按 Sort 提取第 ColIndex 列排序，再截取 [Offset, Offset+Limit) 窗口返回。
+	// 仅影响 OpScan，OpGet 忽略。
+	Sort *SortSpec `json:"sort,omitempty"`
+}
+
+// SortSpec 远端排序窗口下推描述。
+// Kind 与 sql 包列类型一致（INT/DECIMAL/TEXT/DATE/BLOB）；远端不感知表结构，
+// 仅需按行 JSON 数组的第 ColIndex 列提取排序键；DECIMAL 按 Scale 位定点整数比较。
+type SortSpec struct {
+	ColIndex int    `json:"col_index"`
+	Kind     string `json:"kind"`
+	Desc     bool   `json:"desc,omitempty"`
+	Scale    int    `json:"scale,omitempty"`
+	Offset   int    `json:"offset,omitempty"` // 排序后窗口起点（0 = 从头）
+	Limit    int    `json:"limit,omitempty"`  // 窗口行数（<=0 = 全量）
 }
 
 // QueryRow 远端返回的一行：物理键 + 原始行值字节（不感知行结构）。

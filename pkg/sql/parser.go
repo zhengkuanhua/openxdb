@@ -1199,7 +1199,7 @@ func (p *parser) parseSelect() (Stmt, error) {
 		}
 		stmt.OrderBy = ob
 	}
-	// LIMIT
+	// LIMIT [OFFSET n]（M12-2 支持 OFFSET 分页：LIMIT n OFFSET m）
 	if p.cur().kind == tokKeyword && p.cur().text == "LIMIT" {
 		p.next()
 		nTok, err := p.expect(tokNumber, "limit number")
@@ -1211,6 +1211,18 @@ func (p *parser) parseSelect() (Stmt, error) {
 			return nil, err
 		}
 		stmt.Limit = int(n)
+		if p.cur().kind == tokKeyword && p.cur().text == "OFFSET" {
+			p.next()
+			mTok, err := p.expect(tokNumber, "offset number")
+			if err != nil {
+				return nil, err
+			}
+			m, err := parseInt10(mTok.text)
+			if err != nil {
+				return nil, err
+			}
+			stmt.Offset = int(m)
+		}
 	}
 	return stmt, nil
 }

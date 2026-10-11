@@ -315,6 +315,17 @@ func (m *Manager) ScanRemote(nodeID string, start, end []byte, limit int, beginT
 	return m.clientFor(n.ID).Scan(start, end, limit, beginTS)
 }
 
+// ScanSortedRemote 转发带排序窗口的区间扫描（M12-2）：
+// 远端本地排序后截取 [spec.Offset, spec.Offset+spec.Limit) 返回，
+// 支持 LIMIT 下推 top-N / OFFSET 下推窗口行。
+func (m *Manager) ScanSortedRemote(nodeID string, start, end []byte, beginTS uint64, spec *SortSpec) ([]QueryRow, error) {
+	n, err := m.ensureRemote(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	return m.clientFor(n.ID).ScanSorted(start, end, beginTS, spec)
+}
+
 // GetRemote 将点查转发到归属节点执行；未命中返回 storage.ErrNotFound。
 // beginTS>0 时远端按快照版本过滤（M8 分布式快照隔离）。
 func (m *Manager) GetRemote(nodeID string, key []byte, beginTS uint64) ([]byte, error) {

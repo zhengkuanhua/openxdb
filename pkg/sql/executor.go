@@ -1622,8 +1622,19 @@ func (e *Executor) execSelect(s *SelectStmt) (*Result, error) {
 		return nil, err
 	}
 	if rows == nil {
+		// M12-2 分布式排序分页捷径（无 WHERE：窗口截断正确性前提）
+		if e.canDistributedOrder(meta, s) {
+			return e.execDistributedOrder(tx, meta, s)
+		}
 		// 全表扫描 + 过滤（跨 region/跨节点展开后按内层键序合并，等价单 region 全表序）
-		pairs, err := e.scanMergedCluster(tx, e.rowRanges(meta))
+		var pairs []storage.KVPair
+		var err error
+		if e.canDistributedTop(meta, s) {
+			// M12-2 无 ORDER BY 仅 LIMIT/OFFSET：各分片取足量再截断
+			pairs, err = e.scanMergedClusterTop(tx, e.rowRanges(meta), s.Offset+s.Limit)
+		} else {
+			pairs, err = e.scanMergedCluster(tx, e.rowRanges(meta))
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1757,7 +1768,14 @@ func (e *Executor) finishSelect(meta *TableMeta, s *SelectStmt, rows [][]Value, 
 			return cmp < 0
 		})
 	}
-	// LIMIT
+	// LIMIT / OFFSET（M12-2：OFFSET 在排序后截断，与 LIMIT 同一语义位置）
+	if s.Offset > 0 {
+		if s.Offset >= len(rows) {
+			rows = rows[:0]
+		} else {
+			rows = rows[s.Offset:]
+		}
+	}
 	if s.Limit > 0 && len(rows) > s.Limit {
 		rows = rows[:s.Limit]
 	}
@@ -2126,6 +2144,13 @@ func (e *Executor) execSelectRel(tx txn.Txn, s *SelectStmt) (*Result, error) {
 	tabs, err := loadTables(tx.Get)
 	if err != nil {
 		return nil, err
+	}
+	// M12-2：单物理表（无子查询/JOIN/GROUP BY）+ 裸列 ORDER BY 分页时，
+	// 走分布式排序捷径（各分片排序窗口 + coordinator 归并）；否则全量 Rel 路径。
+	if s.Subquery == nil && len(s.Joins) == 0 && len(s.GroupBy) == 0 {
+		if meta := findTable(tabs, s.From); meta != nil && e.canDistributedOrder(meta, s) {
+			return e.execDistributedOrder(tx, meta, s)
+		}
 	}
 	rel, err := e.relFromTable(tx, tabs, s.From, orAlias(s.From, s.FromAlias), s.Subquery, s.SubAlias)
 	if err != nil {
@@ -2560,6 +2585,14 @@ func (e *Executor) finishRel(tx txn.Txn, s *SelectStmt, rel *Rel, rows [][]Value
 			}
 			return cmp < 0
 		})
+	}
+	// LIMIT / OFFSET（M12-2）
+	if s.Offset > 0 {
+		if s.Offset >= len(rows) {
+			rows = rows[:0]
+		} else {
+			rows = rows[s.Offset:]
+		}
 	}
 	if s.Limit > 0 && len(rows) > s.Limit {
 		rows = rows[:s.Limit]
@@ -3646,6 +3679,9 @@ func (e *Executor) planOf(s *SelectStmt, meta *TableMeta) []string {
 	}
 	if s.Limit > 0 {
 		lines = append(lines, "limit: "+strconv.Itoa(s.Limit))
+	}
+	if s.Offset > 0 {
+		lines = append(lines, "offset: "+strconv.Itoa(s.Offset))
 	}
 	lines = append(lines, "projection: "+e.projSummary(s))
 	return lines

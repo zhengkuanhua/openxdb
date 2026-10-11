@@ -232,6 +232,7 @@ type SelectStmt struct {
 	GroupBy   []string // GROUP BY 列（t.col / col）
 	OrderBy   *OrderBy
 	Limit     int // <=0 不限
+	Offset    int // <=0 不偏移（M12-2 分页）
 }
 
 func (SelectStmt) stmt() {}
