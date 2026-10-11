@@ -74,18 +74,22 @@ func (e *Executor) checkWritable(rid storage.ID) error {
 func (e *Executor) getKVCluster(tx txn.Txn, key []byte) ([]byte, error) {
 	bs := e.snapshotTS()
 	if e.mgr == nil {
+		e.incLocal()
 		return e.getKVVisible(tx, key, bs)
 	}
 	rid, _ := sharding.DecodeRegionKey(key)
 	if e.regionLocal(rid) {
+		e.incLocal()
 		return e.getKVVisible(tx, key, bs)
 	}
 	// M6 读 failover：归属节点 down 时先自动重指派，再按新路由转发；
 	// 无存活目标时回退本节点本地副本，不向客户端报错。
 	node := e.resolveRegionOwner(rid)
 	if node == e.selfID {
+		e.incLocal()
 		return e.getKVVisible(tx, key, bs)
 	}
+	e.incRemote()
 	return e.mgr.GetRemote(node, key, bs)
 }
 
@@ -138,6 +142,7 @@ func (e *Executor) scanMergedVisible(tx txn.Txn, ranges []storage.KeyRange, begi
 func (e *Executor) scanMergedCluster(tx txn.Txn, ranges []storage.KeyRange) ([]storage.KVPair, error) {
 	bs := e.snapshotTS()
 	if e.mgr == nil {
+		e.incLocal()
 		return e.scanMergedVisible(tx, ranges, bs)
 	}
 	var out []storage.KVPair
@@ -146,13 +151,16 @@ func (e *Executor) scanMergedCluster(tx txn.Txn, ranges []storage.KeyRange) ([]s
 		var pairs []storage.KVPair
 		var err error
 		if e.regionLocal(rid) {
+			e.incLocal()
 			pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 		} else {
 			// M6 读 failover：归属节点 down 时先自动重指派再转发；无存活目标回退本地
 			node := e.resolveRegionOwner(rid)
 			if node == e.selfID {
+				e.incLocal()
 				pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 			} else {
+				e.incRemote()
 				rows, rerr := e.mgr.ScanRemote(node, r.Start, r.End, 0, bs)
 				if rerr != nil {
 					return nil, rerr

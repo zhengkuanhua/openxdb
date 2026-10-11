@@ -137,6 +137,7 @@ func (e *Executor) failoverRegion(rg sharding.RegionInfo, downID string) error {
 // nodeID == 本节点时走本地事务扫描；否则 QUERY_REQ 转发。
 func (e *Executor) scanRegionRows(nodeID string, start, end []byte) ([]storage.KVPair, error) {
 	if nodeID == e.selfID {
+		e.incLocal()
 		tx, err := e.tm.Begin()
 		if err != nil {
 			return nil, err
@@ -144,6 +145,7 @@ func (e *Executor) scanRegionRows(nodeID string, start, end []byte) ([]storage.K
 		defer tx.Rollback()
 		return e.scanMerged(tx, []storage.KeyRange{{Start: start, End: end}})
 	}
+	e.incRemote()
 	rows, err := e.mgr.ScanRemote(nodeID, start, end, 0, 0)
 	if err != nil {
 		return nil, err

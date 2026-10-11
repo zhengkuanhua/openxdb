@@ -178,6 +178,7 @@ Commands:
           [--port <n>]        监听端口（默认 7788）
           [--replica-port <n>] 主节点复制端口（启用 M2 复制并生成 binlog）
           [--cluster-addr <addr>] 集群节点链路地址（启用 M4 节点握手/转发）
+          [--metrics-port <n>] Prometheus /metrics 端口（默认 7789，0 禁用）
   replica --data-dir <dir> --master <host:port>
                              以从节点身份连接主节点并异步复制
   doctor  --data-dir <dir>   数据目录/本地服务健康巡检
@@ -185,5 +186,6 @@ Commands:
           [--json]            输出 JSON 报告（退出码：0=通过 1=警告 2=错误）
   stats   [--addr <host:port>] 拉取服务运行指标（默认 127.0.0.1:7788）
           [--interval <sec>]  二次采样计算 binlog 增长（默认单次）
-          [--json]            输出 JSON 指标`)
+          [--json]            输出 JSON 指标
+  metrics [--addr <host:port>] 拉取 Prometheus 文本指标（默认 127.0.0.1:7788）`)
 }

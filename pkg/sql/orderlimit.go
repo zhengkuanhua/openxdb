@@ -100,12 +100,15 @@ func (e *Executor) execDistributedOrder(tx txn.Txn, meta *TableMeta, s *SelectSt
 		var pairs []storage.KVPair
 		var err error
 		if e.regionLocal(rid) {
+			e.incLocal()
 			pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 		} else {
 			node := e.resolveRegionOwner(rid)
 			if node == e.selfID {
+				e.incLocal()
 				pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 			} else {
+				e.incRemote()
 				rows, rerr := e.mgr.ScanSortedRemote(node, r.Start, r.End, bs, spec)
 				if rerr != nil {
 					return nil, rerr
@@ -162,12 +165,15 @@ func (e *Executor) scanMergedClusterTop(tx txn.Txn, ranges []storage.KeyRange, n
 		var pairs []storage.KVPair
 		var err error
 		if e.regionLocal(rid) {
+			e.incLocal()
 			pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 		} else {
 			node := e.resolveRegionOwner(rid)
 			if node == e.selfID {
+				e.incLocal()
 				pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 			} else {
+				e.incRemote()
 				rows, rerr := e.mgr.ScanRemote(node, r.Start, r.End, n, bs)
 				if rerr != nil {
 					return nil, rerr

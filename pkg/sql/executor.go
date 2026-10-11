@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
+	"github.com/zhengkuanhua/openxdb/pkg/metrics"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 	"github.com/zhengkuanhua/openxdb/pkg/tso"
@@ -54,7 +55,7 @@ type Executor struct {
 	// slowLog 落盘器（db/cmd 装配路径与开关后写入 data/slow.log）。
 	slowThreshold int64
 	slowQueries   []SlowQueryRecord
-	slowQueryMax  int   // 内存保留条数（默认 slowQueryMaxDefault，可 SetSlowQueryMax 调整）
+	slowQueryMax  int // 内存保留条数（默认 slowQueryMaxDefault，可 SetSlowQueryMax 调整）
 	slowLog       *SlowLog
 	// M8(BR)：备份/恢复环境（db.Open 装配注入）。
 	// st 为引擎级 Storage 引用：BACKUP 基于一致快照导出、RESTORE 物理写与 PITR 回放；
@@ -68,6 +69,8 @@ type Executor struct {
 	binlogLSN  func() (uint64, error)
 	// M9：查询结果缓存（SELECT 结果以规范化 SQL 为 key；写语句后全量失效）。
 	qc *QueryCache
+	// M13：metrics 导出注册表（nil = 未装配，计数零触发）。
+	m *metrics.Registry
 }
 
 // splitConfig M7 自动分裂配置。
@@ -138,6 +141,38 @@ func (e *Executor) SetStatsSources(conn func() int64, binlog func() (uint64, err
 	e.binlogLSN = binlog
 }
 
+// SetMetrics 注入指标注册表（M13 metrics 导出；nil 关闭计数）。
+func (e *Executor) SetMetrics(m *metrics.Registry) { e.m = m }
+
+// incLocal / incRemote 数据访问本地/远端转发计数（M13 metrics）。
+func (e *Executor) incLocal() {
+	if e.m != nil {
+		e.m.IncLocal()
+	}
+}
+func (e *Executor) incRemote() {
+	if e.m != nil {
+		e.m.IncRemote()
+	}
+}
+
+// MetricsRegionStats 聚合当前路由表的 region 分片状态指标（M13 metrics 采集源）。
+// 口径与 T20 SHOW STATS 一致：仅统计显式路由表（隐式单 region 不落盘）。
+func (e *Executor) MetricsRegionStats() metrics.RegionStats {
+	regions := e.router.AllRegions()
+	st := metrics.RegionStats{ByState: map[string]int64{}}
+	for _, rg := range regions {
+		st.Total++
+		st.ByState[string(rg.State)]++
+		if rg.Node == "" || rg.Node == e.selfID {
+			st.Local++
+		} else {
+			st.Remote++
+		}
+	}
+	return st
+}
+
 // SlowQueries 返回当前慢查询记录副本（SHOW SLOWQUERIES 与协议层读取共用）。
 func (e *Executor) SlowQueries() []SlowQueryRecord {
 	e.mu.Lock()
@@ -156,6 +191,9 @@ func (e *Executor) recordSlow(r SlowQueryRecord) {
 	}
 	e.slowQueries = append(e.slowQueries, r)
 	e.mu.Unlock()
+	if e.m != nil {
+		e.m.IncSlow()
+	}
 	// 落盘在内存锁外执行，慢查询低频 + 落盘器独立互斥，互不阻塞热路径。
 	if e.slowLog != nil {
 		e.slowLog.Write(r)
@@ -169,6 +207,9 @@ func (e *Executor) execTimed(user, sql string, fn func() (*Result, error)) (*Res
 	startAt := timeNow()
 	res, err := fn()
 	ms := timeNowMs() - startMs
+	if e.m != nil {
+		e.m.IncSQL()
+	}
 	if e.slowThreshold > 0 && ms >= e.slowThreshold {
 		e.recordSlow(SlowQueryRecord{
 			SQL:      sql,
@@ -404,7 +445,13 @@ func (e *Executor) commitTx() error {
 		// 的新鲜号，避免读到残余预取批次中的滞后时间戳。
 		e.ts.Reset()
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if e.m != nil {
+		e.m.IncCommit()
+	}
+	return nil
 }
 
 // rollbackTx 回滚会话事务（未开启时报错）。
@@ -422,7 +469,13 @@ func (e *Executor) rollbackTx() error {
 	if e.ts != nil {
 		e.ts.Reset()
 	}
-	return tx.Rollback()
+	if err := tx.Rollback(); err != nil {
+		return err
+	}
+	if e.m != nil {
+		e.m.IncRollback()
+	}
+	return nil
 }
 
 // SetTSO 注入全局时间戳源（M8：db.Open/StartCluster 装配）。

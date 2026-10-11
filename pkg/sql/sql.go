@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
+	"github.com/zhengkuanhua/openxdb/pkg/metrics"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 	"github.com/zhengkuanhua/openxdb/pkg/tso"
@@ -142,6 +143,12 @@ func (e *Engine) SetSlowQueryMax(n int) { e.ex.SetSlowQueryMax(n) }
 func (e *Engine) SetStatsSources(connSource func() int64, binlogLSN func() (uint64, error)) {
 	e.ex.SetStatsSources(connSource, binlogLSN)
 }
+
+// SetMetrics 注入指标注册表（M13 metrics 导出；nil 关闭 SQL/事务/节点计数）。
+func (e *Engine) SetMetrics(m *metrics.Registry) { e.ex.SetMetrics(m) }
+
+// MetricsRegionStats 聚合当前路由表 region 分片状态（M13 metrics 采集源）。
+func (e *Engine) MetricsRegionStats() metrics.RegionStats { return e.ex.MetricsRegionStats() }
 
 // SlowQueries 返回慢查询记录副本（供协议层展示或测试断言）。
 func (e *Engine) SlowQueries() []SlowQueryRecord { return e.ex.SlowQueries() }

@@ -27,6 +27,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/zhengkuanhua/openxdb/pkg/metrics"
 	"github.com/zhengkuanhua/openxdb/pkg/sql"
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 	"github.com/zhengkuanhua/openxdb/pkg/txn"
@@ -48,6 +49,9 @@ type Server struct {
 	// T20：活跃 TCP 连接会话计数（ServeListener 每个连接进入 +1、退出 -1），
 	// 供 SHOW STATS / openxdb stats 拉取连接数指标。
 	conns int64
+
+	// M13：metrics 导出注册表（nil = 未装配，METRICS 返回 ERR not enabled）。
+	m *metrics.Registry
 }
 
 // AuthConfig 连接鉴权配置：经 SetAuth 装配到 Server。
@@ -79,6 +83,26 @@ func (s *Server) ActiveConns() int64 { return atomic.LoadInt64(&s.conns) }
 
 // SetAuth 启用连接鉴权配置（M11 子功能 3）。传入 nil 可恢复无鉴权旧行为。
 func (s *Server) SetAuth(cfg *AuthConfig) { s.Auth = cfg }
+
+// SetMetrics 注入指标注册表（M13 metrics 导出；nil 关闭计数与 METRICS 命令）。
+func (s *Server) SetMetrics(m *metrics.Registry) { s.m = m }
+
+// incKV / incCommit / incRollback M13 metrics：KV 命令与 KV 事务计数。
+func (s *Server) incKV() {
+	if s.m != nil {
+		s.m.IncKV()
+	}
+}
+func (s *Server) incCommit() {
+	if s.m != nil {
+		s.m.IncCommit()
+	}
+}
+func (s *Server) incRollback() {
+	if s.m != nil {
+		s.m.IncRollback()
+	}
+}
 
 // defaultSession 返回当前模式的默认会话：无鉴权（Auth==nil）时会话为超级
 // 用户 root（旧行为）；启用鉴权时为未鉴权 guest（user 为空串，等待 AUTH）。
@@ -137,7 +161,7 @@ func (s *Server) handleLocked(line string, sess *session) (string, error) {
 	case "PING":
 		return "PONG", nil
 	case "HELP":
-		return "PING GET SET DEL BEGIN COMMIT ROLLBACK QUIT", nil
+		return "PING GET SET DEL BEGIN COMMIT ROLLBACK METRICS QUIT", nil
 	case "QUIT":
 		return "BYE", nil
 	case "AUTH":
@@ -149,6 +173,7 @@ func (s *Server) handleLocked(line string, sess *session) (string, error) {
 		if len(toks) < 2 {
 			return "", errors.New("ERR syntax: GET <key>")
 		}
+		s.incKV()
 		return s.doGet([]byte(toks[1]))
 	case "SET":
 		// SQL SET 变量赋值（M13：slow_query_threshold / slow_query_log 等）优先
@@ -160,13 +185,21 @@ func (s *Server) handleLocked(line string, sess *session) (string, error) {
 		if len(toks) < 3 {
 			return "", errors.New("ERR syntax: SET <key> <value>")
 		}
+		s.incKV()
 		val := strings.Join(toks[2:], " ")
 		return s.doWrite(func(t txn.Txn) error { return t.Put([]byte(toks[1]), []byte(val)) })
 	case "DEL":
 		if len(toks) < 2 {
 			return "", errors.New("ERR syntax: DEL <key>")
 		}
+		s.incKV()
 		return s.doWrite(func(t txn.Txn) error { return t.Delete([]byte(toks[1])) })
+	case "METRICS":
+		// M13 metrics 导出：返回 Prometheus 文本格式指标（服务装配后可用）。
+		if s.m == nil {
+			return "", errors.New("ERR metrics not enabled")
+		}
+		return s.m.Render(), nil
 	case "BEGIN":
 		// SQL 引擎已挂载时，事务命令优先路由到 SQL 会话事务（executor 自维护
 		// curTx/curBeginTS）；否则走 KV 层显式事务（GET/SET/DEL 可见）。
@@ -201,6 +234,7 @@ func (s *Server) handleLocked(line string, sess *session) (string, error) {
 		if err := t.Commit(); err != nil {
 			return "", fmt.Errorf("ERR commit: %v", err)
 		}
+		s.incCommit()
 		return "OK", nil
 	case "ROLLBACK":
 		if s.SQL != nil && sql.IsSQL(line) {
@@ -217,6 +251,7 @@ func (s *Server) handleLocked(line string, sess *session) (string, error) {
 		if err := t.Rollback(); err != nil {
 			return "", fmt.Errorf("ERR rollback: %v", err)
 		}
+		s.incRollback()
 		return "OK", nil
 	default:
 		// SQL 语句路由（T3）：SQL 引擎已挂载且行首为 SQL 关键字
