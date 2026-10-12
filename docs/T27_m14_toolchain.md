@@ -1,4 +1,15 @@
 ---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_15c52666c57711f19063525400393706
+    ReservedCode1: jgZEH9JNVXNTUwsgxsVY9hFvVNeBKy+nEyqJFGFDzcdbJcsC78SJkgzGW0pNvQRaW66nFW9HILRMAmAHoExTYNzV1xl7+wUn5evtiGh9NtVFWr+KnDH039sul74VtYecPRC0XlFz5o84EkX3OjqLuu1Rf+oB6MUEqnDQJ9DmwzECB2yC7OlmS1NEkVY=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_15c52666c57711f19063525400393706
+    ReservedCode2: jgZEH9JNVXNTUwsgxsVY9hFvVNeBKy+nEyqJFGFDzcdbJcsC78SJkgzGW0pNvQRaW66nFW9HILRMAmAHoExTYNzV1xl7+wUn5evtiGh9NtVFWr+KnDH039sul74VtYecPRC0XlFz5o84EkX3OjqLuu1Rf+oB6MUEqnDQJ9DmwzECB2yC7OlmS1NEkVY=
+---
+
+---
 # T27 M14 功能簇（3/3）：工具链收尾与 README 勾选
 
 > 版本：v5.0-P16-M14, v0.18.0-alpha
@@ -72,3 +83,4 @@ go run ./examples/binlog_subscriber.go --binlog <binlog.log> --offset <offset-fi
 - 代码：`cmd/openxdb/import.go`、`cmd/openxdb/main.go`（分发 + usage）、`examples/binlog_subscriber.go`；
 - 测试：`cmd/openxdb/m14_toolchain_test.go`；
 - 文档：本文档；README Status / Roadmap 已同步 M14 并勾选 T27（两份 T27 文档链接已就位）。
+*（内容由AI生成，仅供参考）*

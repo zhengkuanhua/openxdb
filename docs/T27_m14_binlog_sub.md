@@ -1,4 +1,15 @@
 ---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_15003266c57711f19063525400393706
+    ReservedCode1: Kb+HbeFxovG4QHef3mpMepV9YhHQPafWj0MC0/VjWGUccszBFKNxPvJ7iDHcsX1F6olTwkSBc1A3HHvsfKgjc34f4f8JCg66VV5TzM01+enev3H8f4llKNLp6TXmsjQsAleavAKRIWU7o5GNhTaL8zKfsfcurOUnS7IExv3t2/w+fcXwUdkvHqXSZlU=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_15003266c57711f19063525400393706
+    ReservedCode2: Kb+HbeFxovG4QHef3mpMepV9YhHQPafWj0MC0/VjWGUccszBFKNxPvJ7iDHcsX1F6olTwkSBc1A3HHvsfKgjc34f4f8JCg66VV5TzM01+enev3H8f4llKNLp6TXmsjQsAleavAKRIWU7o5GNhTaL8zKfsfcurOUnS7IExv3t2/w+fcXwUdkvHqXSZlU=
+---
+
+---
 # T27 M14 生态接入簇（2/3）：binlog 对外订阅（CDC）
 
 > 版本：v5.0-P13-M14, v0.14.0-alpha
@@ -62,3 +73,4 @@ SHOW BINLOG EVENTS [FROM <lsn>] [LIMIT <n>]
 - binlog 为单文件 append-only，未做日志轮转；超大 binlog 下 `Fetch` 为顺序扫描（LSN 定位 + 逐条解码），后续可按需增加索引位点或分片。
 - 订阅为拉取模式 + 客户端持久化位点；未提供推送 / 断线重连自动恢复（由客户端按 nextLSN 重试）。
 - 二级索引键事件（`IsIndex`）默认跟随行变更输出，消费方按需忽略。
+*（内容由AI生成，仅供参考）*

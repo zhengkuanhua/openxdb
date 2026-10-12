@@ -1,4 +1,15 @@
 ---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_13da6eafc57711f197b3525400248c00
+    ReservedCode1: s9AjnO1nZtHdNAfExQip6bmNNdMPsv5+oj7mR3BXoGvExOzHrMKaKDwdIMnaOL+wMOnKNLZ+72ZhEJypdKnnTRqAZuNGDcuIPM528/O/Bd0lvXTKuk7mpRvq0gxs5pS4Px2X4QIvD8HvmaJfR4C9cQjzPD/myzz5jKPfV9fX+OxYALRYCmnxjsIBt6M=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_13da6eafc57711f197b3525400248c00
+    ReservedCode2: s9AjnO1nZtHdNAfExQip6bmNNdMPsv5+oj7mR3BXoGvExOzHrMKaKDwdIMnaOL+wMOnKNLZ+72ZhEJypdKnnTRqAZuNGDcuIPM528/O/Bd0lvXTKuk7mpRvq0gxs5pS4Px2X4QIvD8HvmaJfR4C9cQjzPD/myzz5jKPfV9fX+OxYALRYCmnxjsIBt6M=
+---
+
+---
 # T27 M14 功能簇（1/3）：mysqldump 兼容导入
 
 > 版本：v5.0-P16-M14, v0.18.0-alpha
@@ -80,3 +91,4 @@ go test ./pkg/sql/ ./pkg/import/ -count=1   # 全绿（sql 15.6s / import 0.4s�
 
 - 当前兼容子集：单表 dump 常规输出（含 `SET NAMES`、`LOCK TABLES`、`/*!...*/` 等辅助语句跳过）；不支持存储过程/触发器/视图定义（解析器跳过非 CREATE TABLE/INSERT/DROP 语句）。
 - CLI `openxdb import` 命令与 binlog 对外订阅 CDC（子功能二）、工具链收尾与 README 勾选（子功能三）在 M14 后续子功能推进。
+*（内容由AI生成，仅供参考）*
