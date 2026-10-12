@@ -29,8 +29,9 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "version":
-		fmt.Printf("OpenXDB %s (M2 master-slave replication)\n", version)
-		return
+		err = cmdVersion(os.Args[2:])
+	case "preflight":
+		err = cmdPreflight(os.Args[2:])
 	case "init":
 		err = cmdInit(os.Args[2:])
 	case "repl":
@@ -269,7 +270,10 @@ func usage() {
 	fmt.Println(`Usage: openxdb <command> [options]
 
 Commands:
-  version                   打印版本
+  version                   打印版本（发行/构建/commit/数据格式版本）
+  preflight --data-dir <dir> 升级前健康检查（PREFLIGHT CHECK，M16-3）
+          [--target-version <ver>] 目标版本提示（升级兼容判断参考）
+          [--json]            输出 JSON 报告（退出码：0=PASS 2=FAIL）
   init    --data-dir <dir>    初始化数据目录
   repl    --data-dir <dir>    本地交互式命令行
   start   --data-dir <dir>    启动 TCP 服务
