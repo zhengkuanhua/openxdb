@@ -71,6 +71,8 @@ type Executor struct {
 	qc *QueryCache
 	// M13：metrics 导出注册表（nil = 未装配，计数零触发）。
 	m *metrics.Registry
+	// M15-2：触发器递归防护深度（触发器体再次写同一表时不再触发）。
+	triggerDepth int
 }
 
 // splitConfig M7 自动分裂配置。
@@ -350,6 +352,12 @@ func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
 		return e.execRefreshMatView(s)
 	case *DropMatViewStmt:
 		return e.execDropMatView(s)
+	case *CreateTriggerStmt:
+		return e.execCreateTrigger(s)
+	case *DropTriggerStmt:
+		return e.execDropTrigger(s)
+	case *ShowTriggersStmt:
+		return e.execShowTriggers(s)
 	case *CreateUserStmt:
 		return e.execCreateUser(s)
 	case *DropUserStmt:
@@ -1271,6 +1279,12 @@ func (e *Executor) execInsert(s *InsertStmt) (*Result, error) {
 			ops = append(ops, rops...)
 		}
 	}
+	// M15-2：BEFORE 触发器（在写入提交前执行；失败则整个 DML 随事务回滚）
+	if affected > 0 {
+		if err := e.fireTriggers("BEFORE", s.Table, "INSERT"); err != nil {
+			return nil, err
+		}
+	}
 	if auto {
 		// autocommit：本地 + 远端统一走 2PC 提交（单机零触发）
 		if err := e.exec2pcWrite(tx, ops); err != nil {
@@ -1289,6 +1303,12 @@ func (e *Executor) execInsert(s *InsertStmt) (*Result, error) {
 	// 分裂为独立事务，避免与用户事务交叠）。
 	if err := e.maybeAutoSplit(meta); err != nil {
 		return nil, err
+	}
+	// M15-2：AFTER 触发器（DML 已提交后执行；失败不影响主语句结果）
+	if affected > 0 {
+		if err := e.fireTriggers("AFTER", s.Table, "INSERT"); err != nil {
+			return nil, err
+		}
 	}
 	return &Result{AffectedRows: affected}, nil
 }
@@ -2836,6 +2856,12 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 		ops = append(ops, iops...)
 		affected++
 	}
+	// M15-2：BEFORE 触发器（在写入提交前执行；失败则整个 DML 随事务回滚）
+	if affected > 0 {
+		if err := e.fireTriggers("BEFORE", s.Table, "UPDATE"); err != nil {
+			return nil, err
+		}
+	}
 	if auto {
 		if err := e.exec2pcWrite(tx, ops); err != nil {
 			return nil, err
@@ -2851,6 +2877,12 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 	// M7 自动分裂：写提交后检查本地 region 数据规模（同 execInsert）。
 	if err := e.maybeAutoSplit(meta); err != nil {
 		return nil, err
+	}
+	// M15-2：AFTER 触发器（DML 已提交后执行；失败不影响主语句结果）
+	if affected > 0 {
+		if err := e.fireTriggers("AFTER", s.Table, "UPDATE"); err != nil {
+			return nil, err
+		}
 	}
 	return &Result{AffectedRows: affected}, nil
 }
@@ -2907,6 +2939,12 @@ func (e *Executor) execDelete(s *DeleteStmt) (*Result, error) {
 		ops = append(ops, kvOp{Key: kv.Key, Delete: true})
 		affected++
 	}
+	// M15-2：BEFORE 触发器（在写入提交前执行；失败则整个 DML 随事务回滚）
+	if affected > 0 {
+		if err := e.fireTriggers("BEFORE", s.Table, "DELETE"); err != nil {
+			return nil, err
+		}
+	}
 	if auto {
 		if err := e.exec2pcWrite(tx, ops); err != nil {
 			return nil, err
@@ -2922,6 +2960,12 @@ func (e *Executor) execDelete(s *DeleteStmt) (*Result, error) {
 	// M7 自动分裂：写提交后检查本地 region 数据规模（同 execInsert）。
 	if err := e.maybeAutoSplit(meta); err != nil {
 		return nil, err
+	}
+	// M15-2：AFTER 触发器（DML 已提交后执行；失败不影响主语句结果）
+	if affected > 0 {
+		if err := e.fireTriggers("AFTER", s.Table, "DELETE"); err != nil {
+			return nil, err
+		}
 	}
 	return &Result{AffectedRows: affected}, nil
 }

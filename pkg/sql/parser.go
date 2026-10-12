@@ -9,6 +9,7 @@ import (
 type parser struct {
 	toks []token
 	pos  int
+	src  string
 }
 
 // Parse 解析单条 SQL 语句（结尾分号可选）。
@@ -17,7 +18,7 @@ func Parse(sql string) (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &parser{toks: toks}
+	p := &parser{toks: toks, src: sql}
 	stmt, err := p.parseStmt()
 	if err != nil {
 		return nil, err
@@ -504,8 +505,11 @@ func (p *parser) parseCreate() (Stmt, error) {
 		return p.parseCreateUser()
 	case "TABLE":
 		// 已有 TABLE 分支
+	case "TRIGGER":
+		// M15-2：CREATE TRIGGER <name> BEFORE|AFTER <event> ON <table> FOR EACH ROW <body>
+		return p.parseCreateTrigger()
 	default:
-		return nil, errf("expected TABLE, INDEX or VIEW at %d, got %q", p.cur().pos, p.cur().text)
+		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW, USER or TRIGGER at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
@@ -788,9 +792,12 @@ func (p *parser) parseDrop() (Stmt, error) {
 	case "USER":
 		// M11 用户管理：DROP USER [IF EXISTS] '<name>'
 		return p.parseDropUser()
+	case "TRIGGER":
+		// M15-2：DROP TRIGGER [IF EXISTS] <name>
+		return p.parseDropTrigger()
 	case "TABLE":
 	default:
-		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW or USER at %d, got %q", p.cur().pos, p.cur().text)
+		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW, USER or TRIGGER at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
@@ -878,6 +885,98 @@ func (p *parser) parseDropView() (Stmt, error) {
 		s.IfExists = true
 	}
 	nameTok, err := p.expect(tokIdent, "view name")
+	if err != nil {
+		return nil, err
+	}
+	s.Name = nameTok.text
+	return s, nil
+}
+
+// remaining 返回从当前位置到语句末尾的原始 SQL 文本（用于截取触发器体）。
+func (p *parser) remaining() string {
+	if p.pos >= len(p.toks) {
+		return ""
+	}
+	start := p.toks[p.pos].pos
+	if start < 0 || start >= len(p.src) {
+		return ""
+	}
+	return p.src[start:]
+}
+
+// parseCreateTrigger 解析 CREATE TRIGGER <name> BEFORE|AFTER INSERT|UPDATE|DELETE
+// ON <table> FOR EACH ROW <body>（M15-2）。body 为剩余 SQL 原文，由执行层校验。
+func (p *parser) parseCreateTrigger() (Stmt, error) {
+	if err := p.expectKeyword("TRIGGER"); err != nil {
+		return nil, err
+	}
+	nameTok, err := p.expect(tokIdent, "trigger name")
+	if err != nil {
+		return nil, err
+	}
+	// timing：BEFORE / AFTER（必填）
+	var timing string
+	if p.cur().kind == tokKeyword && (p.cur().text == "BEFORE" || p.cur().text == "AFTER") {
+		timing = p.cur().text
+		p.next()
+	} else {
+		return nil, errf("expected BEFORE or AFTER at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	// event：INSERT / UPDATE / DELETE（必填）
+	var event string
+	if p.cur().kind == tokKeyword && (p.cur().text == "INSERT" || p.cur().text == "UPDATE" || p.cur().text == "DELETE") {
+		event = p.cur().text
+		p.next()
+	} else {
+		return nil, errf("expected INSERT, UPDATE or DELETE at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	if err := p.expectKeyword("ON"); err != nil {
+		return nil, err
+	}
+	tableTok, err := p.expect(tokIdent, "table name")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("FOR"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("EACH"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("ROW"); err != nil {
+		return nil, err
+	}
+	body := strings.TrimSpace(p.remaining())
+	if body == "" {
+		return nil, errf("trigger body required at %d", p.cur().pos)
+	}
+	body = strings.TrimSuffix(body, ";")
+	body = strings.TrimSpace(body)
+	// 语法语义：触发器体必须是完整 SQL 语句（稍后由执行层 Parse 复核）。
+	if _, err := Parse(body); err != nil {
+		return nil, errf("invalid trigger body at %d: %v", nameTok.pos, err)
+	}
+	// 消耗剩余 token（body 已整体接收）
+	p.pos = len(p.toks) - 1
+	return &CreateTriggerStmt{Name: nameTok.text, Timing: timing, Event: event, Table: tableTok.text, Body: body}, nil
+}
+
+// parseDropTrigger 解析 DROP TRIGGER [IF EXISTS] <name>（M15-2）。
+func (p *parser) parseDropTrigger() (Stmt, error) {
+	if err := p.expectKeyword("TRIGGER"); err != nil {
+		return nil, err
+	}
+	s := &DropTriggerStmt{}
+	if p.cur().kind == tokKeyword && p.cur().text == "IF" {
+		if err := p.expectKeyword("IF"); err != nil {
+			return nil, err
+		}
+		if err := p.expectKeyword("EXISTS"); err != nil {
+			return nil, err
+		}
+		s.IfExists = true
+	}
+	nameTok, err := p.expect(tokIdent, "trigger name")
 	if err != nil {
 		return nil, err
 	}
@@ -1992,6 +2091,19 @@ func (p *parser) parseShow() (Stmt, error) {
 	case "VIEWS":
 		p.next()
 		return &ShowViewsStmt{}, nil
+	case "TRIGGERS":
+		// M15-2：SHOW TRIGGERS [FROM <table>]
+		p.next()
+		table := ""
+		if p.cur().kind == tokKeyword && p.cur().text == "FROM" {
+			p.next()
+			nameTok, err := p.expect(tokIdent, "table name")
+			if err != nil {
+				return nil, err
+			}
+			table = nameTok.text
+		}
+		return &ShowTriggersStmt{Table: table}, nil
 	}
 	// SHOW USERS：USERS 不在关键字表（避免与表名 users 冲突），按标识符文本匹配。
 	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "USERS") {

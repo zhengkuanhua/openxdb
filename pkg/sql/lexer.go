@@ -60,6 +60,9 @@ var keywords = map[string]bool{
 	"VIEW": true, "VIEWS": true,
 	// M15：物化视图（CREATE/REFRESH/DROP MATERIALIZED VIEW [CONCURRENTLY]）
 	"MATERIALIZED": true, "REFRESH": true, "CONCURRENTLY": true,
+	// M15-2：触发器（CREATE/DROP TRIGGER、SHOW TRIGGERS、BEFORE/AFTER、FOR EACH ROW）
+	"TRIGGER": true, "TRIGGERS": true, "BEFORE": true, "AFTER": true, "EACH": true, "ROW": true,
+	"FOR": true,
 	// M10：SQL 兼容性增强簇（CTE / 窗口函数 / UPSERT）
 	"WITH": true, "OVER": true, "PARTITION": true,
 	"REPLACE": true, "DUPLICATE": true, "UNIQUE": true,

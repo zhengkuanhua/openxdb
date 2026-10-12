@@ -315,6 +315,37 @@ type DropMatViewStmt struct {
 
 func (DropMatViewStmt) stmt() {}
 
+// CreateTriggerStmt CREATE TRIGGER <name> BEFORE|AFTER INSERT|UPDATE|DELETE
+// ON <table> FOR EACH ROW <body>（M15-2 触发器）。
+// 触发器体为简单 SQL 语句（UPDATE 条件更新 / INSERT 单行插入），以原始 SQL 文本
+// 持久化，DML 触发时重新解析执行。FOR EACH ROW 为语法兼容：体不支持 NEW/OLD
+// 引用，触发粒度为语句级（受影响行数 > 0 时触发）。
+type CreateTriggerStmt struct {
+	Name   string
+	Timing string // "BEFORE" | "AFTER"
+	Event  string // "INSERT" | "UPDATE" | "DELETE"
+	Table  string // 源表
+	Body   string // 触发器体原始 SQL 文本
+}
+
+func (CreateTriggerStmt) stmt() {}
+
+// DropTriggerStmt DROP TRIGGER [IF EXISTS] <name>（M15-2）。
+type DropTriggerStmt struct {
+	Name     string
+	IfExists bool
+}
+
+func (DropTriggerStmt) stmt() {}
+
+// ShowTriggersStmt SHOW TRIGGERS [FROM <table>]（M15-2）。
+// Table 为空表示列出全部触发器。
+type ShowTriggersStmt struct {
+	Table string
+}
+
+func (ShowTriggersStmt) stmt() {}
+
 // BeginStmt 开启会话级显式事务（BEGIN）。
 type BeginStmt struct{}
 
