@@ -40,6 +40,9 @@ const (
 	WALFile = "wal.log"
 	// BinlogFile 复制日志（binlog）文件名。
 	BinlogFile = "binlog.log"
+	// PersistedConfigFile 在线配置热更新持久化文件（M16-1，SET PERSIST 落盘，
+	// 重启由 Open 加载合并：内存 > 持久化 > 默认值）。
+	PersistedConfigFile = "persisted.json"
 	// DefaultEngine 当前存储引擎。
 	DefaultEngine = "rocksdb"
 )
@@ -193,6 +196,15 @@ func Open(dir string) (*DB, error) {
 	eng.SetTSO(ts)
 	// M8(BR)：注入备份/恢复环境（引擎级 Storage 引用 + 数据目录 binlog 路径）。
 	eng.SetBackupEnv(st, filepath.Join(dir, BinlogFile))
+	// M16-1：在线配置热更新——装配持久化配置文件（data 目录 persisted.json）
+	// 并加载合并（优先级：内存 > 持久化 > 默认值）。文件缺失 = 首次启动空表；
+	// 损坏/非法键/非法值明确报错，绝不静默忽略。
+	eng.SetPersistedConfigPath(filepath.Join(dir, PersistedConfigFile))
+	if err := eng.LoadPersistedConfig(); err != nil {
+		_ = tm.Close()
+		_ = st.Close()
+		return nil, fmt.Errorf("db: load persisted config: %w", err)
+	}
 	return &DB{Dir: dir, Storage: st, WAL: w, Txn: tm, SQL: eng, Cluster: mgr, TSO: ts}, nil
 }
 

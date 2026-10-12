@@ -127,16 +127,22 @@ func (p *parser) parseStmt() (Stmt, error) {
 	return nil, errf("unsupported statement %q at %d", p.cur().text, p.cur().pos)
 }
 
-// parseSet SET <name> = <value>：会话变量设置（M9 查询缓存开关等）。
+// parseSet SET [PERSIST] <name> = <value>：会话变量设置（M9 查询缓存开关等；
+// M16-1 起支持 PERSIST，应用后写入持久化配置文件）。
 // 值支持标识符（on/off/true/false）、数字（1/0）与字符串字面量。
 func (p *parser) parseSet() (Stmt, error) {
 	if err := p.expectKeyword("SET"); err != nil {
 		return nil, err
 	}
+	s := &SetStmt{}
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "PERSIST") {
+		s.Persist = true
+		p.next()
+	}
 	if p.cur().kind != tokIdent {
 		return nil, errf("expected variable name at %d, got %q", p.cur().pos, p.cur().text)
 	}
-	s := &SetStmt{Name: strings.ToLower(p.cur().text)}
+	s.Name = strings.ToLower(p.cur().text)
 	p.next()
 	if _, err := p.expect(tokEq, "="); err != nil {
 		return nil, err
@@ -2252,6 +2258,20 @@ func (p *parser) parseShow() (Stmt, error) {
 	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "USERS") {
 		p.next()
 		return &ShowUsersStmt{}, nil
+	}
+	// M16-1：SHOW CONFIG / SHOW PERSISTED CONFIG（CONFIG/PERSISTED 不在关键字表，
+	// 按标识符文本匹配，避免与表名 config 冲突）。
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "CONFIG") {
+		p.next()
+		return &ShowConfigStmt{}, nil
+	}
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "PERSISTED") {
+		p.next()
+		if !(p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "CONFIG")) {
+			return nil, errf("expected keyword CONFIG at %d, got %q", p.pos, p.cur().text)
+		}
+		p.next()
+		return &ShowConfigStmt{Persisted: true}, nil
 	}
 	// SHOW BINLOG EVENTS [FROM <lsn>] [LIMIT <n>]：BINLOG/EVENTS 不在关键字表。
 	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "BINLOG") {

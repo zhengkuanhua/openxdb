@@ -75,6 +75,14 @@ type Executor struct {
 	triggerDepth int
 	// M15-3：存储过程递归防护深度（过程体再次 CALL 时不再展开）。
 	procDepth int
+	// M16-1：在线配置热更新（config.go）。
+	// cfgPath 持久化配置文件路径（db.Open 装配 data/persisted.json；空=未启用持久化）；
+	// persistedCfg 已持久化键→值（SHOW PERSISTED CONFIG / SHOW CONFIG 来源 persisted）；
+	// sessionCfg 本进程 SET（非 PERSIST）覆盖过的键→值（SHOW CONFIG 来源 session）。
+	cfgPath      string
+	cfgMu        sync.Mutex
+	persistedCfg map[string]string
+	sessionCfg   map[string]string
 }
 
 // splitConfig M7 自动分裂配置。
@@ -93,6 +101,9 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 		slowThreshold: slowThresholdDefault, // M13：默认 100ms
 		slowQueryMax:  slowQueryMaxDefault,
 		slowLog:       NewSlowLog(),
+		// M16-1：在线配置热更新（空 map 保证 SHOW / PERSIST 零 nil 访问）。
+		persistedCfg: map[string]string{},
+		sessionCfg:   map[string]string{},
 	}
 }
 
@@ -392,6 +403,8 @@ func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
 		return e.execShowRegionRoutes()
 	case *ShowStatsStmt:
 		return e.execShowStats()
+	case *ShowConfigStmt:
+		return e.execShowConfig(s)
 	case *ShowBinlogEventsStmt:
 		return e.execShowBinlogEvents(s)
 	case *SetStmt:
@@ -3703,48 +3716,30 @@ func (e *Executor) execShowSlowQueries() (*Result, error) {
 	return res, nil
 }
 
-// execSet SET <name> = <value>：会话/服务变量设置（M9 查询缓存开关；
-// M13 慢查询阈值与落盘开关，运行时变更即时生效）。
+// execSet SET [PERSIST] <name> = <value>：会话/服务变量设置（M9 查询缓存开关；
+// M13 慢查询阈值与落盘开关，运行时变更即时生效；M16-1 起 PERSIST 应用后写入
+// 持久化配置文件，重启仍生效）。校验与应用统一走配置注册表（config.go），
+// 非法键报 unknown session variable，非法值/类型按配置项给出明确报错。
 func (e *Executor) execSet(s *SetStmt) (*Result, error) {
-	switch s.Name {
-	case "query_cache":
-		on := false
-		switch s.Value {
-		case "on", "true", "1":
-			on = true
-		case "off", "false", "0":
-			on = false
-		default:
-			return nil, &SQLError{Msg: "invalid value for query_cache: " + s.Value + " (expected on/off/1/0)"}
-		}
-		e.qc.SetEnabled(on)
-		return &Result{Columns: []string{"variable", "value"}}, nil
-	case "slow_query_threshold":
-		// M13：毫秒阈值，<=0 关闭记录。即时生效。
-		ms, err := strconv.ParseInt(s.Value, 10, 64)
-		if err != nil {
-			return nil, &SQLError{Msg: "invalid value for slow_query_threshold: " + s.Value + " (expected integer ms)"}
-		}
-		e.SetSlowThreshold(ms)
-		return &Result{Columns: []string{"variable", "value"}}, nil
-	case "slow_query_log":
-		// M13：慢查询落盘开关 on/off（路径由服务启动配置，见 SetSlowLog）。即时生效。
-		on := false
-		switch s.Value {
-		case "on", "true", "1":
-			on = true
-		case "off", "false", "0":
-			on = false
-		default:
-			return nil, &SQLError{Msg: "invalid value for slow_query_log: " + s.Value + " (expected on/off/1/0)"}
-		}
-		if e.slowLog != nil {
-			e.slowLog.Configure(e.slowLog.Path(), on)
-		}
-		return &Result{Columns: []string{"variable", "value"}}, nil
-	default:
+	spec := lookupConfigSpec(s.Name)
+	if spec == nil {
 		return nil, &SQLError{Msg: "unknown session variable: " + s.Name}
 	}
+	if err := spec.apply(e, s.Value); err != nil {
+		return nil, err
+	}
+	if s.Persist {
+		// SET PERSIST：应用成功后写入持久化配置（校验失败不落盘）。
+		if err := e.persistConfigValue(s.Name, s.Value); err != nil {
+			return nil, &SQLError{Msg: "failed to persist config " + s.Name + ": " + err.Error()}
+		}
+	} else {
+		// 仅当前会话/进程生效：记录来源，重启后由持久化或默认值接管。
+		e.cfgMu.Lock()
+		e.sessionCfg[s.Name] = s.Value
+		e.cfgMu.Unlock()
+	}
+	return &Result{Columns: []string{"variable", "value"}}, nil
 }
 
 // boolVal 布尔值转 SQL 文本值（SHOW STATS 等输出用）。

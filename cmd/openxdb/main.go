@@ -144,9 +144,14 @@ func cmdStart(args []string) error {
 	s.SQL = d.SQL
 	// T20：注入运维统计源（连接数 / binlog 位点），供 SHOW STATS 输出实时指标。
 	d.SQL.SetStatsSources(s.ActiveConns, d.BinlogLSN)
-	// M13：慢查询落盘装配（默认 data/slow.log，阈值 100ms 可由 SET 运行时调）。
+	// M13/M16-1：慢查询落盘装配（默认 data/slow.log，阈值 100ms 可由 SET 运行时调）。
+	// 开关尊重持久化配置（SET PERSIST slow_query_log 的 intent；无记录时默认开启）。
 	slowLogPath := filepath.Join(dir, "slow.log")
-	d.SQL.SetSlowLog(slowLogPath, true)
+	slowLogOn := true
+	if intent := d.SQL.PersistedSlowLogIntent(); intent >= 0 {
+		slowLogOn = intent == 1
+	}
+	d.SQL.SetSlowLog(slowLogPath, slowLogOn)
 	fmt.Printf("slow query log: %s (threshold %dms, use SHOW SLOWQUERIES)\n", slowLogPath, d.SQL.SlowQueryThreshold())
 	// M13：metrics 导出装配（METRICS/STATUS/HTTP /metrics 共享注册表；
 	// 注入连接数/慢查询阈值/存储大小/region 分布实时采集源）。

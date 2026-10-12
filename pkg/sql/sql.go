@@ -129,6 +129,19 @@ func (e *Engine) SlowQueryThreshold() int64 { return e.ex.SlowQueryThreshold() }
 // enabled=false 或 path 空串关闭落盘。变更即时生效，无需重启。
 func (e *Engine) SetSlowLog(path string, enabled bool) { e.ex.SetSlowLog(path, enabled) }
 
+// SetPersistedConfigPath 装配持久化配置文件路径（M16-1，db.Open 注入
+// data/persisted.json；空=未启用持久化，SET PERSIST 报错）。
+func (e *Engine) SetPersistedConfigPath(path string) { e.ex.SetPersistedConfigPath(path) }
+
+// LoadPersistedConfig 加载持久化配置并合并到内存（M16-1，db.Open 启动时调用）。
+// 优先级：内存（SET / SET PERSIST 立即生效）> 持久化（重启合并）> 默认值；
+// 非法键 / 非法值 / 损坏文件返回明确错误，绝不静默忽略。
+func (e *Engine) LoadPersistedConfig() error { return e.ex.LoadPersistedConfig() }
+
+// PersistedSlowLogIntent 返回持久化 slow_query_log 的启动意图
+// （1=on、0=off、-1=无记录），供服务装配慢日志路径时尊重持久化开关。
+func (e *Engine) PersistedSlowLogIntent() int { return e.ex.PersistedSlowLogIntent() }
+
 // SlowLogEnabled 返回当前慢查询落盘开关状态。
 func (e *Engine) SlowLogEnabled() bool { return e.ex.SlowLogEnabled() }
 

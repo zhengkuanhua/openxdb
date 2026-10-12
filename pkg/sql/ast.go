@@ -508,6 +508,15 @@ type ShowStatsStmt struct{}
 
 func (ShowStatsStmt) stmt() {}
 
+// ShowConfigStmt SHOW CONFIG / SHOW PERSISTED CONFIG（M16-1 在线配置热更新）：
+// 前者列出当前生效配置（含来源 default/persisted/session），后者仅列出
+// 已持久化到配置文件的配置项（重启后仍生效的部分）。
+type ShowConfigStmt struct {
+	Persisted bool // true = SHOW PERSISTED CONFIG
+}
+
+func (ShowConfigStmt) stmt() {}
+
 // ShowBinlogEventsStmt SHOW BINLOG EVENTS [FROM <lsn>] [LIMIT <n>]（M14 CDC）：
 // 只读展示 binlog 增量变更流；From 为起始位点（nil=从头），Limit<=0=不限。
 type ShowBinlogEventsStmt struct {
@@ -517,10 +526,12 @@ type ShowBinlogEventsStmt struct {
 
 func (ShowBinlogEventsStmt) stmt() {}
 
-// SetStmt 会话变量设置：SET <name> = <value>（M9 查询缓存开关等）。
+// SetStmt 会话变量设置：SET [PERSIST] <name> = <value>（M9 查询缓存开关等；
+// M16-1 起支持 PERSIST：应用后同时写入持久化配置文件，重启后仍生效）。
 type SetStmt struct {
-	Name  string
-	Value string
+	Name    string
+	Value   string
+	Persist bool // M16-1：true 表示 SET PERSIST <key> = <value>
 }
 
 func (SetStmt) stmt() {}
