@@ -344,6 +344,12 @@ func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
 		return e.execDropView(s)
 	case *ShowViewsStmt:
 		return e.execShowViews()
+	case *CreateMatViewStmt:
+		return e.execCreateMatView(s)
+	case *RefreshMatViewStmt:
+		return e.execRefreshMatView(s)
+	case *DropMatViewStmt:
+		return e.execDropMatView(s)
 	case *CreateUserStmt:
 		return e.execCreateUser(s)
 	case *DropUserStmt:
@@ -1941,7 +1947,7 @@ func (e *Executor) finishSelect(meta *TableMeta, s *SelectStmt, rows [][]Value, 
 	res := &Result{}
 	for _, c := range s.Columns {
 		if c.Name == "*" {
-			for _, col := range meta.Columns {
+			for _, col := range visibleColumns(meta) {
 				res.Columns = append(res.Columns, col.Name)
 			}
 		} else {
@@ -1952,7 +1958,7 @@ func (e *Executor) finishSelect(meta *TableMeta, s *SelectStmt, rows [][]Value, 
 		var out []Value
 		for _, c := range s.Columns {
 			if c.Name == "*" {
-				out = append(out, row...)
+				out = append(out, visibleRow(meta, row)...)
 			} else if c.Case != nil {
 				v, err := evalCaseM1(meta, row, c.Case)
 				if err != nil {
@@ -1977,7 +1983,7 @@ func (e *Executor) finishSelectWindow(meta *TableMeta, s *SelectStmt, rows [][]V
 	res := &Result{}
 	for _, c := range s.Columns {
 		if c.Name == "*" {
-			for _, col := range meta.Columns {
+			for _, col := range visibleColumns(meta) {
 				res.Columns = append(res.Columns, col.Name)
 			}
 		} else {
@@ -2001,7 +2007,7 @@ func (e *Executor) finishSelectWindow(meta *TableMeta, s *SelectStmt, rows [][]V
 		wi := 0
 		for _, c := range s.Columns {
 			if c.Name == "*" {
-				out = append(out, row...)
+				out = append(out, visibleRow(meta, row)...)
 			} else if c.Window != nil {
 				out = append(out, winVals[ri][wi])
 				wi++
@@ -2168,7 +2174,7 @@ func (e *Executor) relFromScan(tx txn.Txn, meta *TableMeta, alias string) (*Rel,
 		return nil, err
 	}
 	rel := &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(pairs))}
-	for _, c := range meta.Columns {
+	for _, c := range visibleColumns(meta) {
 		rel.Cols = append(rel.Cols, alias+"."+c.Name)
 	}
 	for _, kv := range pairs {
@@ -2176,7 +2182,7 @@ func (e *Executor) relFromScan(tx txn.Txn, meta *TableMeta, alias string) (*Rel,
 		if err != nil {
 			return nil, err
 		}
-		rel.Rows = append(rel.Rows, row)
+		rel.Rows = append(rel.Rows, visibleRow(meta, row))
 	}
 	return rel, nil
 }

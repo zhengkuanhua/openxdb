@@ -106,6 +106,9 @@ func (p *parser) parseStmt() (Stmt, error) {
 		return &BalanceStmt{}, nil
 	case "ALTER":
 		return p.parseAlter()
+	case "REFRESH":
+		// M15 物化视图：REFRESH MATERIALIZED VIEW [CONCURRENTLY] <name>
+		return p.parseRefreshMatView()
 	case "SET":
 		return p.parseSet()
 	case "BACKUP":
@@ -491,6 +494,9 @@ func (p *parser) parseCreate() (Stmt, error) {
 	case "UNIQUE":
 		// M10 UPSERT：CREATE UNIQUE INDEX（唯一索引，UPSERT 冲突键来源之一）
 		return p.parseCreateIndex()
+	case "MATERIALIZED":
+		// M15：CREATE MATERIALIZED VIEW <name> AS <SELECT>
+		return p.parseCreateMatView()
 	case "VIEW":
 		return p.parseCreateView()
 	case "USER":
@@ -774,6 +780,9 @@ func (p *parser) parseDrop() (Stmt, error) {
 	switch p.cur().text {
 	case "INDEX":
 		return p.parseDropIndex()
+	case "MATERIALIZED":
+		// M15：DROP MATERIALIZED VIEW [IF EXISTS] <name>
+		return p.parseDropMatView()
 	case "VIEW":
 		return p.parseDropView()
 	case "USER":
@@ -781,7 +790,7 @@ func (p *parser) parseDrop() (Stmt, error) {
 		return p.parseDropUser()
 	case "TABLE":
 	default:
-		return nil, errf("expected TABLE, INDEX, VIEW or USER at %d, got %q", p.cur().pos, p.cur().text)
+		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW or USER at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
@@ -873,6 +882,90 @@ func (p *parser) parseDropView() (Stmt, error) {
 		return nil, err
 	}
 	s.Name = nameTok.text
+	return s, nil
+}
+
+// parseCreateMatView 解析 CREATE MATERIALIZED VIEW <name> AS <SELECT>（M15）。
+func (p *parser) parseCreateMatView() (Stmt, error) {
+	if err := p.expectKeyword("MATERIALIZED"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("VIEW"); err != nil {
+		return nil, err
+	}
+	nameTok, err := p.expect(tokIdent, "materialized view name")
+	if err != nil {
+		return nil, err
+	}
+	if p.cur().kind != tokKeyword || p.cur().text != "AS" {
+		return nil, errf("expected AS at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	p.next()
+	selStmt, err := p.parseSelect()
+	if err != nil {
+		return nil, err
+	}
+	sel, ok := selStmt.(*SelectStmt)
+	if !ok {
+		return nil, errf("expected SELECT after AS at %d", p.cur().pos)
+	}
+	return &CreateMatViewStmt{Name: nameTok.text, Select: sel}, nil
+}
+
+// parseDropMatView 解析 DROP MATERIALIZED VIEW [IF EXISTS] <name>（M15）。
+func (p *parser) parseDropMatView() (Stmt, error) {
+	if err := p.expectKeyword("MATERIALIZED"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("VIEW"); err != nil {
+		return nil, err
+	}
+	s := &DropMatViewStmt{}
+	if p.cur().kind == tokKeyword && p.cur().text == "IF" {
+		if err := p.expectKeyword("IF"); err != nil {
+			return nil, err
+		}
+		if err := p.expectKeyword("EXISTS"); err != nil {
+			return nil, err
+		}
+		s.IfExists = true
+	}
+	nameTok, err := p.expect(tokIdent, "materialized view name")
+	if err != nil {
+		return nil, err
+	}
+	s.Name = nameTok.text
+	return s, nil
+}
+
+// parseRefreshMatView 解析 REFRESH MATERIALIZED VIEW <name> [CONCURRENTLY]（M15）。
+// CONCURRENTLY 为兼容语法，语义忽略（实现始终全量重算）。
+func (p *parser) parseRefreshMatView() (Stmt, error) {
+	if err := p.expectKeyword("REFRESH"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("MATERIALIZED"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("VIEW"); err != nil {
+		return nil, err
+	}
+	s := &RefreshMatViewStmt{}
+	// CONCURRENTLY 兼容标准位置（名称前）：REFRESH MATERIALIZED VIEW CONCURRENTLY <name>
+	if p.cur().kind == tokKeyword && p.cur().text == "CONCURRENTLY" {
+		p.next()
+		s.Concurrently = true
+	}
+	nameTok, err := p.expect(tokIdent, "materialized view name")
+	if err != nil {
+		return nil, err
+	}
+	s.Name = nameTok.text
+	// 亦兼容名称后的 CONCURRENTLY 写法
+	if p.cur().kind == tokKeyword && p.cur().text == "CONCURRENTLY" {
+		p.next()
+		s.Concurrently = true
+	}
 	return s, nil
 }
 

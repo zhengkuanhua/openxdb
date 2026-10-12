@@ -288,6 +288,33 @@ type ShowViewsStmt struct{}
 
 func (ShowViewsStmt) stmt() {}
 
+// CreateMatViewStmt CREATE MATERIALIZED VIEW <name> AS <SELECT>（M15 物化视图）。
+// 物化视图本质是一张"影子表"：定义以 SelectStmt 持久化于 m:matviews，
+// SELECT 直接读同名影子表，REFRESH 全量重算写回。
+type CreateMatViewStmt struct {
+	Name   string
+	Select *SelectStmt
+}
+
+func (CreateMatViewStmt) stmt() {}
+
+// RefreshMatViewStmt REFRESH MATERIALIZED VIEW <name> [CONCURRENTLY]（M15）。
+// Concurrently 仅做语法兼容，语义上全量重算（与 PostgreSQL 的并发刷新等价结果）。
+type RefreshMatViewStmt struct {
+	Name         string
+	Concurrently bool
+}
+
+func (RefreshMatViewStmt) stmt() {}
+
+// DropMatViewStmt DROP MATERIALIZED VIEW [IF EXISTS] <name>（M15）。
+type DropMatViewStmt struct {
+	Name     string
+	IfExists bool
+}
+
+func (DropMatViewStmt) stmt() {}
+
 // BeginStmt 开启会话级显式事务（BEGIN）。
 type BeginStmt struct{}
 
