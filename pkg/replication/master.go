@@ -1,6 +1,7 @@
 package replication
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -23,6 +24,9 @@ type SlaveStatus struct {
 type MasterReplicator struct {
 	store BinlogStore
 	ln    net.Listener
+
+	// tlsConfig 非 nil 时复制端口使用 tls.Listen 加密监听（P0 TLS，可选）。
+	tlsConfig *tls.Config
 
 	mu       sync.Mutex
 	nextNode uint64
@@ -51,13 +55,24 @@ type slaveInfo struct {
 }
 
 // NewMaster 创建主端复制器：打开 binlog 并监听复制端口（addr 支持 ":0" 随机端口，
-// 实际地址用 Addr() 获取）。Serve() 启动服务。
+// 实际地址用 Addr() 获取）。Serve() 启动服务。复制端口为明文（旧行为）。
 func NewMaster(binlogPath, addr string) (*MasterReplicator, error) {
+	return NewMasterTLS(binlogPath, addr, nil)
+}
+
+// NewMasterTLS 创建主端复制器（P0 TLS，可选）：tlsCfg 非 nil 时复制端口
+// 使用 tls.Listen 加密监听（从节点须以 TLS 连接）；nil 保持明文。
+func NewMasterTLS(binlogPath, addr string, tlsCfg *tls.Config) (*MasterReplicator, error) {
 	store, err := OpenBinlog(binlogPath)
 	if err != nil {
 		return nil, fmt.Errorf("replication: open binlog: %w", err)
 	}
-	ln, err := net.Listen("tcp", addr)
+	var ln net.Listener
+	if tlsCfg != nil {
+		ln, err = tls.Listen("tcp", addr, tlsCfg)
+	} else {
+		ln, err = net.Listen("tcp", addr)
+	}
 	if err != nil {
 		_ = store.Close()
 		return nil, fmt.Errorf("replication: listen %s: %w", addr, err)
@@ -65,6 +80,7 @@ func NewMaster(binlogPath, addr string) (*MasterReplicator, error) {
 	return &MasterReplicator{
 		store:             store,
 		ln:                ln,
+		tlsConfig:         tlsCfg,
 		clients:           make(map[string]*slaveConn),
 		known:             make(map[string]*slaveInfo),
 		wake:              make(chan struct{}, 1),

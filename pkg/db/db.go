@@ -11,6 +11,7 @@ package db
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -281,11 +282,18 @@ func clusterNodeID(dir string) string {
 
 // StartReplication 启动主节点复制（M2）：创建 binlog 并监听复制端口 addr，
 // 事务提交成功后同步落 binlog、按位点异步推送从节点。addr 支持 ":0" 随机端口。
+// 复制端口为明文（旧行为）。
 func (d *DB) StartReplication(addr string) error {
+	return d.StartReplicationTLS(addr, nil)
+}
+
+// StartReplicationTLS 与 StartReplication 等价，但复制端口以 TLS 加密监听
+// （P0 TLS，可选）：tlsCfg 非 nil 时从节点须以 TLS 连接；nil 保持明文。
+func (d *DB) StartReplicationTLS(addr string, tlsCfg *tls.Config) error {
 	if d.Replicator != nil {
 		return ErrReplicationStarted
 	}
-	r, err := replication.NewMaster(filepath.Join(d.Dir, BinlogFile), addr)
+	r, err := replication.NewMasterTLS(filepath.Join(d.Dir, BinlogFile), addr, tlsCfg)
 	if err != nil {
 		return fmt.Errorf("db: new replicator: %w", err)
 	}
@@ -303,7 +311,15 @@ func (d *DB) StartReplication(addr string) error {
 
 // StartFollower 以从节点身份连接主节点 masterAddr 并开始异步复制（M2）。
 // 起始位点 = 当前已应用位点 + 1（断线重连可续传）；状态用 FollowerStatus 查询。
+// 复制连接为明文（旧行为）。
 func (d *DB) StartFollower(masterAddr string) error {
+	return d.StartFollowerTLS(masterAddr, nil)
+}
+
+// StartFollowerTLS 与 StartFollower 等价，但以 TLS 加密连接主节点复制端口
+// （P0 TLS，可选）：tlsCfg 非 nil 时使用 TLS（自签名/内网可传
+// InsecureSkipVerify）；nil 保持明文。
+func (d *DB) StartFollowerTLS(masterAddr string, tlsCfg *tls.Config) error {
 	if d.Follower != nil {
 		return ErrFollowerStarted
 	}
@@ -311,7 +327,7 @@ func (d *DB) StartFollower(masterAddr string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		defer cancel()
-		_ = f.Start(ctx, masterAddr) // 错误进入 FollowerStatus.LastError
+		_ = f.StartTLS(ctx, masterAddr, tlsCfg) // 错误进入 FollowerStatus.LastError
 	}()
 	d.Follower = f
 	return nil

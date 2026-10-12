@@ -2,12 +2,14 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_9f528ea6c61c11f19063525400393706
-    ReservedCode1: Auu54661K5+74mHDl6wiT70hI/0E5kvraneLgSlEI4vJr3Wk0ueLPNL4pwbzOcac8qQzN21H07OLLhbnid5Mjky11iDjfxa00U0ZuJUOM/X4yMyCoUmAGQzQNR6Xb0xTuZd36wEChq03BTmgaiaPcLDtrWDvxt/w/cjK0MRU1uPjRESDDwiTTp0HUB0=
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_ead7779cc63511f19063525400393706
+    ReservedCode1: flb+rkifecTSWqMGXbEdhiWEEN5qCDUKd2vEZBjFAn5isQI+yXgRzgrJs9Cc2h1K0SQstH1GNBcnnRJpMGEdo2zwNSM8CMRb6yarHv5LAUOJa/Eess/GAbsR0tpc0IiD01VDM83ajCmoj5YpT0jzJ4xjxE/CBvyanjmcM2rZvw0C6dwTsv4cBlTlJAY=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_9f528ea6c61c11f19063525400393706
-    ReservedCode2: Auu54661K5+74mHDl6wiT70hI/0E5kvraneLgSlEI4vJr3Wk0ueLPNL4pwbzOcac8qQzN21H07OLLhbnid5Mjky11iDjfxa00U0ZuJUOM/X4yMyCoUmAGQzQNR6Xb0xTuZd36wEChq03BTmgaiaPcLDtrWDvxt/w/cjK0MRU1uPjRESDDwiTTp0HUB0=
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_ead7779cc63511f19063525400393706
+    ReservedCode2: flb+rkifecTSWqMGXbEdhiWEEN5qCDUKd2vEZBjFAn5isQI+yXgRzgrJs9Cc2h1K0SQstH1GNBcnnRJpMGEdo2zwNSM8CMRb6yarHv5LAUOJa/Eess/GAbsR0tpc0IiD01VDM83ajCmoj5YpT0jzJ4xjxE/CBvyanjmcM2rZvw0C6dwTsv4cBlTlJAY=
 ---
+
+
 
 
 
@@ -159,6 +161,36 @@ openxdb doctor --data-dir ./data [--addr 127.0.0.1:7788] [--json]
 openxdb stats [--addr 127.0.0.1:7788] [--interval 5] [--json]
 ```
 
+## TLS 加密传输（P0）
+
+主服务监听层支持 TLS：`--tls-cert` 与 `--tls-key` 同时提供时启用加密监听，否则保持明文监听（行为兼容）。复制端口（`--replica-port`）可另配 `--replica-tls` 启用 TLS（未启用保持明文）。
+
+生成自签名证书（开发/测试用，生产请使用受信任 CA 签发的证书，勿将私钥提交仓库）：
+
+```sh
+# 方式一：openssl
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 365 -subj "/CN=openxdb"
+
+# 方式二：Go（单文件，无第三方依赖，写法见 pkg/server/server_tls_test.go）
+go run gen_cert.go cert.pem key.pem
+```
+
+启动 TLS 服务（`--tls-cert` 与 `--tls-key` 必须同时提供，仅提供一个会报错退出）：
+
+```sh
+openxdb start --data-dir ./data --tls-cert cert.pem --tls-key key.pem
+```
+
+验证加密监听（自签名证书场景客户端不校验服务器名/证书）：
+
+```sh
+# openssl s_client 检查 TLS 握手
+openssl s_client -connect 127.0.0.1:7788 -CAfile cert.pem
+
+# 客户端 TLS 连接执行 PING/SET/GET（Go 客户端可参考 pkg/server/client.go 的
+# Dial/InsecureTLSConfig；Python/JDBC 驱动按各自语言关闭证书校验即可）
+```
+
 REPL session:
 
 ```sql
@@ -231,6 +263,7 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 ## License
 
 MIT — see [LICENSE](LICENSE).
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

@@ -2,6 +2,7 @@ package replication
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -95,9 +96,23 @@ func (f *Follower) Status() FollowerStatus {
 }
 
 // Start 连接主节点并进入复制循环（阻塞直到 ctx 取消、连接断开或主节点失联）。
-// 起始位点 = 当前 AppliedLSN+1，实现断线重连续传。
+// 起始位点 = 当前 AppliedLSN+1，实现断线重连续传。复制端口为明文连接。
 func (f *Follower) Start(ctx context.Context, masterAddr string) error {
-	conn, err := net.DialTimeout("tcp", masterAddr, 5*time.Second)
+	return f.StartTLS(ctx, masterAddr, nil)
+}
+
+// StartTLS 与 Start 等价，但以 TLS 加密连接主节点复制端口（P0 TLS，可选）：
+// tlsCfg 非 nil 时使用 tls.DialWithDialer（自签名/内网场景可传
+// InsecureSkipVerify）；nil 保持明文。
+func (f *Follower) StartTLS(ctx context.Context, masterAddr string, tlsCfg *tls.Config) error {
+	var conn net.Conn
+	var err error
+	if tlsCfg != nil {
+		d := &net.Dialer{Timeout: 5 * time.Second}
+		conn, err = tls.DialWithDialer(d, "tcp", masterAddr, tlsCfg)
+	} else {
+		conn, err = net.DialTimeout("tcp", masterAddr, 5*time.Second)
+	}
 	if err != nil {
 		f.setOffline(masterAddr, err.Error())
 		return err

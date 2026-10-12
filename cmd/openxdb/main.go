@@ -3,6 +3,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -69,6 +70,29 @@ func flagValue(args []string, name string) (string, bool) {
 	return "", false
 }
 
+// loadTLSConfig 解析 --tls-cert/--tls-key 并加载服务端 TLS 配置（P0 TLS）：
+//   - 两者都未提供 → 返回 (nil, nil)，保持明文监听（向后兼容）；
+//   - 仅提供一个 → 返回错误（必须成对提供）；
+//   - 两者都提供 → 加载 X509 证书密钥对，返回非 nil *tls.Config。
+func loadTLSConfig(args []string) (*tls.Config, error) {
+	tlsCert, hasCert := flagValue(args, "--tls-cert")
+	tlsKey, hasKey := flagValue(args, "--tls-key")
+	if hasCert != hasKey {
+		if hasCert {
+			return nil, errors.New("--tls-cert provided but --tls-key missing (must provide both)")
+		}
+		return nil, errors.New("--tls-key provided but --tls-cert missing (must provide both)")
+	}
+	if !hasCert {
+		return nil, nil
+	}
+	cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
+	if err != nil {
+		return nil, fmt.Errorf("load TLS cert/key: %w", err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
+}
+
 func needDataDir(args []string) (string, error) {
 	dir, ok := flagValue(args, "--data-dir")
 	if !ok || dir == "" {
@@ -131,6 +155,14 @@ func cmdStart(args []string) error {
 		}
 		shutdownTimeoutFlag = int64(n)
 	}
+	// P0 TLS：主服务监听层加密（可选）。--tls-cert 与 --tls-key 必须同时提供，
+	// 仅提供一个即报错；两者都提供时加载证书并用 tls.Listen 加密监听，
+	// 否则保持明文监听（向后兼容，行为不变）。复制端口（--replica-port）
+	// 同样复用该 TLS 配置。
+	tlsCfg, err := loadTLSConfig(args)
+	if err != nil {
+		return err
+	}
 	d, err := db.Open(dir)
 	if err != nil {
 		return err
@@ -141,13 +173,14 @@ func cmdStart(args []string) error {
 			_ = d.Close()
 		}
 	}()
-	// M2：主节点复制（可选）。--replica-port 非 0 时监听复制端口并生成 binlog。
+	// M2：主节点复制（可选）。--replica-port 非 0 时监听复制端口并生成 binlog；
+	// 已配置 TLS（--tls-cert/--tls-key）时复制端口同样加密监听。
 	if rp, ok := flagValue(args, "--replica-port"); ok {
 		n, err := strconv.Atoi(rp)
 		if err != nil || n < 1 || n > 65535 {
 			return errors.New("invalid --replica-port value: " + rp)
 		}
-		if err := d.StartReplication(fmt.Sprintf(":%d", n)); err != nil {
+		if err := d.StartReplicationTLS(fmt.Sprintf(":%d", n), tlsCfg); err != nil {
 			return err
 		}
 		fmt.Printf("OpenXDB %s replication listening on :%d (binlog: %s)\n", version, n, db.BinlogFile)
@@ -162,9 +195,14 @@ func cmdStart(args []string) error {
 			version, d.Cluster.SelfID, realAddr, d.Cluster.SelfID)
 	}
 	addr := fmt.Sprintf(":%d", port)
-	fmt.Printf("OpenXDB %s serving on %s (data dir: %s)\n", version, addr, dir)
 	s := server.New(d.Txn)
 	s.SQL = d.SQL
+	// P0 TLS：装配监听层加密（--tls-cert/--tls-key 同时提供时启用；
+	// 否则 s.tlsConfig == nil，ServeTCP 保持明文监听）。
+	s.SetTLS(tlsCfg)
+	if tlsCfg != nil {
+		fmt.Printf("TLS enabled (cert/key loaded)\n")
+	}
 	// M11 生产接线（P0-3）：连接鉴权装配。
 	// --auth 启用 TCP 连接握手鉴权（AUTH <user> <password>）；未指定时保持
 	// 旧行为（无鉴权，会话默认超级用户 root），向后兼容。
@@ -269,8 +307,7 @@ func cmdStart(args []string) error {
 		os.Exit(code)
 	}()
 	fmt.Printf("OpenXDB %s serving on %s (data dir: %s), Ctrl-C to stop.\n", version, addr, dir)
-	if err := s.ServeTCP(addr); err != nil {
-		return err
+	if err := s.ServeTCP(addr); err != nil {		return err
 	}
 	// ServeTCP 返回（SHUTDOWN 命令触发停机后监听器关闭）→ 等待收尾。
 	s.WaitShutdown()
@@ -292,6 +329,7 @@ func runSignalLoop(sigCh <-chan os.Signal, s *server.Server, timeout func() time
 }
 
 // cmdReplica 以从节点身份启动：连接主节点复制端口并异步应用 binlog。
+// 默认明文连接；--replica-tls 时以 TLS 连接（自签名/内网测试不校验服务器名）。
 func cmdReplica(args []string) error {
 	dir, err := needDataDir(args)
 	if err != nil {
@@ -306,10 +344,20 @@ func cmdReplica(args []string) error {
 		return err
 	}
 	defer d.Close()
-	if err := d.StartFollower(master); err != nil {
+	var tlsCfg *tls.Config
+	for _, a := range args {
+		if a == "--replica-tls" {
+			tlsCfg = server.InsecureTLSConfig()
+		}
+	}
+	if err := d.StartFollowerTLS(master, tlsCfg); err != nil {
 		return err
 	}
-	fmt.Printf("OpenXDB %s replica of %s (data dir: %s), Ctrl-C to stop.\n", version, master, dir)
+	if tlsCfg != nil {
+		fmt.Printf("OpenXDB %s replica of %s (TLS, data dir: %s), Ctrl-C to stop.\n", version, master, dir)
+	} else {
+		fmt.Printf("OpenXDB %s replica of %s (data dir: %s), Ctrl-C to stop.\n", version, master, dir)
+	}
 	select {} // 阻塞等待；StartFollower 在后台 goroutine 持续复制
 }
 
@@ -325,6 +373,10 @@ Commands:
   repl    --data-dir <dir>    本地交互式命令行
   start   --data-dir <dir>    启动 TCP 服务
           [--port <n>]        监听端口（默认 7788）
+          [--tls-cert <path> --tls-key <path>] 启用监听层 TLS 加密
+                               （两者必须同时提供；仅提供一个报错。
+                               提供后主服务与 --replica-port 复制端口均加密监听；
+                               不提供保持明文，向后兼容）
           [--replica-port <n>] 主节点复制端口（启用 M2 复制并生成 binlog）
           [--cluster-addr <addr>] 集群节点链路地址（启用 M4 节点握手/转发）
           [--metrics-port <n>] Prometheus /metrics 端口（默认 7789，0 禁用）
@@ -335,6 +387,7 @@ Commands:
           [--root-password <pwd>] root 引导密码（无 root 用户时自动 CREATE USER；亦可经环境变量 OPENXDB_ROOT_PASSWORD 传入）
   replica --data-dir <dir> --master <host:port>
                              以从节点身份连接主节点并异步复制
+          [--replica-tls]     以 TLS 加密连接主节点复制端口（自签名/内网测试不校验服务器名）
   doctor  --data-dir <dir>   数据目录/本地服务健康巡检
           [--addr <host:port>] 在线服务检查（端口连通、慢查询等）
           [--json]            输出 JSON 报告（退出码：0=通过 1=警告 2=错误）

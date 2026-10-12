@@ -19,6 +19,7 @@ package server
 
 import (
 	"bufio"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -77,6 +78,10 @@ type Server struct {
 	ShutdownTimeout func() time.Duration
 	// Logf 停机过程日志输出（main 注入 log.Printf；nil = 静默）。
 	Logf func(format string, args ...any)
+
+	// tlsConfig 非 nil 时 ServeTCP 使用 tls.Listen 提供加密监听（P0 TLS）；
+	// nil 保持明文监听（默认行为，向后兼容）。经 SetTLS 装配。
+	tlsConfig *tls.Config
 }
 
 // AuthConfig 连接鉴权配置：经 SetAuth 装配到 Server。
@@ -102,6 +107,11 @@ type session struct {
 func New(tm txn.TxnManager) *Server {
 	return &Server{Txn: tm, shutdownDone: make(chan struct{})}
 }
+
+// SetTLS 装配监听层 TLS 配置（P0 TLS）。传入 nil 恢复明文监听（默认行为，
+// 向后兼容）；非 nil 时 ServeTCP 使用 tls.Listen 提供加密监听，客户端须
+// 以 TLS 连接（pkg/server 的 Dial/InsecureTLSConfig 可配合内网自签名测试）。
+func (s *Server) SetTLS(cfg *tls.Config) { s.tlsConfig = cfg }
 
 // ActiveConns 返回当前活跃 TCP 连接数（T20 会话计数）。
 func (s *Server) ActiveConns() int64 { return atomic.LoadInt64(&s.conns) }
@@ -480,9 +490,16 @@ func (s *Server) REPLSession(r io.Reader, w io.Writer, sess *session) error {
 	return sc.Err()
 }
 
-// ServeTCP 监听 addr 并启动 TCP 服务。
+// ServeTCP 监听 addr 并启动 TCP 服务。已配置 TLS（SetTLS 非 nil）时使用
+// tls.Listen 提供加密监听；未配置时保持明文监听（默认行为）。
 func (s *Server) ServeTCP(addr string) error {
-	ln, err := net.Listen("tcp", addr)
+	var ln net.Listener
+	var err error
+	if s.tlsConfig != nil {
+		ln, err = tls.Listen("tcp", addr, s.tlsConfig)
+	} else {
+		ln, err = net.Listen("tcp", addr)
+	}
 	if err != nil {
 		return fmt.Errorf("server: listen %s: %w", addr, err)
 	}
