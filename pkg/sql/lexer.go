@@ -24,6 +24,7 @@ const (
 	tokGe        // >=
 	tokDot       // .
 	tokKeyword   // 关键字（大写原文）
+	tokVar       // @ident（存储过程变量/参数引用，M15-3）
 )
 
 type token struct {
@@ -63,6 +64,8 @@ var keywords = map[string]bool{
 	// M15-2：触发器（CREATE/DROP TRIGGER、SHOW TRIGGERS、BEFORE/AFTER、FOR EACH ROW）
 	"TRIGGER": true, "TRIGGERS": true, "BEFORE": true, "AFTER": true, "EACH": true, "ROW": true,
 	"FOR": true,
+	// M15-3：存储过程（CREATE/DROP PROCEDURE、SHOW PROCEDURES、CALL）
+	"PROCEDURE": true, "PROCEDURES": true, "CALL": true,
 	// M10：SQL 兼容性增强簇（CTE / 窗口函数 / UPSERT）
 	"WITH": true, "OVER": true, "PARTITION": true,
 	"REPLACE": true, "DUPLICATE": true, "UNIQUE": true,
@@ -93,6 +96,9 @@ func lex(sql string) ([]token, error) {
 			l.emit(tokComma, ",", 1)
 		case c == '.':
 			l.emit(tokDot, ".", 1)
+		case c == '@':
+			// M15-3：存储过程局部变量/参数引用 @ident
+			l.lexVar()
 		case c == ';':
 			l.emit(tokSemicolon, ";", 1)
 		case c == '*':
@@ -145,6 +151,17 @@ func (l *lexer) peek(n int) byte {
 func (l *lexer) emit(k tokKind, text string, width int) {
 	l.toks = append(l.toks, token{kind: k, text: text, pos: l.pos})
 	l.pos += width
+}
+
+// lexVar 词法识别存储过程变量/参数引用 @ident（M15-3）。
+// token 文本为完整 "@name"（保留前缀，变量替换阶段按名匹配）。
+func (l *lexer) lexVar() {
+	start := l.pos
+	l.pos++ // 跳过 @
+	for l.pos < len(l.src) && isIdentPart(l.src[l.pos]) {
+		l.pos++
+	}
+	l.toks = append(l.toks, token{kind: tokVar, text: l.src[start:l.pos], pos: start})
 }
 
 func (l *lexer) lexString(q byte) error {

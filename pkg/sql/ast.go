@@ -346,6 +346,55 @@ type ShowTriggersStmt struct {
 
 func (ShowTriggersStmt) stmt() {}
 
+// ParamMeta 存储过程参数定义（M15-3）。参数类型仅用于元数据展示，
+// 调用时不强制类型检查（参数值按字面量代入过程体）。
+type ParamMeta struct {
+	Name string `json:"name"`
+	Type string `json:"type"` // "INT" | "TEXT"
+}
+
+// ProcedureMeta 存储过程元数据（M15-3）：名称、IN 参数列表、过程体原文。
+// 持久化于独立目录键 m:procedures，与表/视图/物化视图/触发器命名空间互相独立。
+type ProcedureMeta struct {
+	Name   string      `json:"name"`
+	Params []ParamMeta `json:"params,omitempty"`
+	Body   string      `json:"body"`
+}
+
+// CreateProcedureStmt CREATE PROCEDURE <name> [( [IN] <param> <TYPE> [, ...] )]
+// BEGIN <stmt>; [<stmt>; ...] END（M15-3 存储过程）。
+// 过程体为一条或多条受支持语句，以原始 SQL 文本持久化，CALL 时逐条解析执行；
+// IN 关键字可省略（参数默认 IN 输入参数）。
+type CreateProcedureStmt struct {
+	Name   string
+	Params []ParamMeta
+	Body   string
+}
+
+func (CreateProcedureStmt) stmt() {}
+
+// DropProcedureStmt DROP PROCEDURE [IF EXISTS] <name>（M15-3）。
+type DropProcedureStmt struct {
+	Name     string
+	IfExists bool
+}
+
+func (DropProcedureStmt) stmt() {}
+
+// CallStmt CALL <name> [( <value> [, <value> ...] )]（M15-3）。
+// Args 为实参列表，与过程定义参数一一对应代入。
+type CallStmt struct {
+	Name string
+	Args []Value
+}
+
+func (CallStmt) stmt() {}
+
+// ShowProceduresStmt SHOW PROCEDURES（M15-3）。
+type ShowProceduresStmt struct{}
+
+func (ShowProceduresStmt) stmt() {}
+
 // BeginStmt 开启会话级显式事务（BEGIN）。
 type BeginStmt struct{}
 

@@ -73,6 +73,8 @@ type Executor struct {
 	m *metrics.Registry
 	// M15-2：触发器递归防护深度（触发器体再次写同一表时不再触发）。
 	triggerDepth int
+	// M15-3：存储过程递归防护深度（过程体再次 CALL 时不再展开）。
+	procDepth int
 }
 
 // splitConfig M7 自动分裂配置。
@@ -358,6 +360,14 @@ func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
 		return e.execDropTrigger(s)
 	case *ShowTriggersStmt:
 		return e.execShowTriggers(s)
+	case *CreateProcedureStmt:
+		return e.execCreateProcedure(s)
+	case *DropProcedureStmt:
+		return e.execDropProcedure(s)
+	case *ShowProceduresStmt:
+		return e.execShowProcedures(s)
+	case *CallStmt:
+		return e.execCall(s)
 	case *CreateUserStmt:
 		return e.execCreateUser(s)
 	case *DropUserStmt:

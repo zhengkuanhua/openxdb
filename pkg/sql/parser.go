@@ -112,6 +112,9 @@ func (p *parser) parseStmt() (Stmt, error) {
 		return p.parseRefreshMatView()
 	case "SET":
 		return p.parseSet()
+	case "CALL":
+		// M15-3：CALL <procedure> [( <arg>, ... )]
+		return p.parseCall()
 	case "BACKUP":
 		return p.parseBackup()
 	case "RESTORE":
@@ -508,8 +511,11 @@ func (p *parser) parseCreate() (Stmt, error) {
 	case "TRIGGER":
 		// M15-2：CREATE TRIGGER <name> BEFORE|AFTER <event> ON <table> FOR EACH ROW <body>
 		return p.parseCreateTrigger()
+	case "PROCEDURE":
+		// M15-3：CREATE PROCEDURE <name> [( [IN] <param> <TYPE> [, ...] )] BEGIN <body> END
+		return p.parseCreateProcedure()
 	default:
-		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW, USER or TRIGGER at %d, got %q", p.cur().pos, p.cur().text)
+		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW, USER, TRIGGER or PROCEDURE at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
@@ -795,9 +801,12 @@ func (p *parser) parseDrop() (Stmt, error) {
 	case "TRIGGER":
 		// M15-2：DROP TRIGGER [IF EXISTS] <name>
 		return p.parseDropTrigger()
+	case "PROCEDURE":
+		// M15-3：DROP PROCEDURE [IF EXISTS] <name>
+		return p.parseDropProcedure()
 	case "TABLE":
 	default:
-		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW, USER or TRIGGER at %d, got %q", p.cur().pos, p.cur().text)
+		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW, USER, TRIGGER or PROCEDURE at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
@@ -959,6 +968,136 @@ func (p *parser) parseCreateTrigger() (Stmt, error) {
 	// 消耗剩余 token（body 已整体接收）
 	p.pos = len(p.toks) - 1
 	return &CreateTriggerStmt{Name: nameTok.text, Timing: timing, Event: event, Table: tableTok.text, Body: body}, nil
+}
+
+// parseCreateProcedure 解析 CREATE PROCEDURE <name> [( [IN] <param> <TYPE> [, ...] )]
+// BEGIN <stmt>; [<stmt>; ...] END（M15-3 存储过程）。
+// 参数列表可选；IN 关键字可省略（默认 IN）。过程体为 BEGIN ... END 包裹的
+// 一条或多条语句，以原始 SQL 文本保存（内部语句由分号分隔，含参数/变量
+// 引用 @name）。收尾 END 取整个语句的最后一个非 EOF token，因此不受过程体
+// 内 CASE ... END 表达式影响。
+func (p *parser) parseCreateProcedure() (Stmt, error) {
+	if err := p.expectKeyword("PROCEDURE"); err != nil {
+		return nil, err
+	}
+	nameTok, err := p.expect(tokIdent, "procedure name")
+	if err != nil {
+		return nil, err
+	}
+	stmt := &CreateProcedureStmt{Name: nameTok.text}
+	// 可选参数列表：( [IN] <param> <TYPE> [, ...] )
+	if p.cur().kind == tokLParen {
+		p.next()
+		for {
+			if p.cur().kind == tokKeyword && p.cur().text == "IN" {
+				p.next()
+			}
+			paramTok, err := p.expect(tokIdent, "parameter name")
+			if err != nil {
+				return nil, err
+			}
+			typTok, err := p.expect(tokIdent, "parameter type")
+			if err != nil {
+				return nil, err
+			}
+			typ := strings.ToUpper(typTok.text)
+			if typ == "STRING" {
+				typ = "TEXT"
+			}
+			if typ != "INT" && typ != "TEXT" {
+				return nil, errf("unsupported parameter type %q at %d (expected INT or TEXT)", typTok.text, typTok.pos)
+			}
+			stmt.Params = append(stmt.Params, ParamMeta{Name: paramTok.text, Type: typ})
+			if p.cur().kind == tokComma {
+				p.next()
+				continue
+			}
+			if _, err := p.expect(tokRParen, ")"); err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
+	if err := p.expectKeyword("BEGIN"); err != nil {
+		return nil, err
+	}
+	// 过程体：BEGIN 之后到收尾 END（最后一个非 EOF token）之间的原文。
+	if p.cur().kind == tokEOF {
+		return nil, errf("procedure body required at %d", p.cur().pos)
+	}
+	bodyStart := p.cur().pos
+	last := p.toks[len(p.toks)-2]
+	if last.kind != tokKeyword || last.text != "END" {
+		return nil, errf("expected keyword END at %d, got %q", last.pos, last.text)
+	}
+	body := strings.TrimSpace(p.src[bodyStart:last.pos])
+	if body == "" {
+		return nil, errf("procedure body required at %d", nameTok.pos)
+	}
+	stmt.Body = body
+	p.pos = len(p.toks) - 1
+	// 创建期预校验：体可解析（@变量引用以占位字面量代入，运行时再验证）。
+	if err := validateProcedureBody(body); err != nil {
+		return nil, errf("invalid procedure body at %d: %v", nameTok.pos, err)
+	}
+	return stmt, nil
+}
+
+// parseDropProcedure 解析 DROP PROCEDURE [IF EXISTS] <name>（M15-3）。
+func (p *parser) parseDropProcedure() (Stmt, error) {
+	if err := p.expectKeyword("PROCEDURE"); err != nil {
+		return nil, err
+	}
+	s := &DropProcedureStmt{}
+	if p.cur().kind == tokKeyword && p.cur().text == "IF" {
+		if err := p.expectKeyword("IF"); err != nil {
+			return nil, err
+		}
+		if err := p.expectKeyword("EXISTS"); err != nil {
+			return nil, err
+		}
+		s.IfExists = true
+	}
+	nameTok, err := p.expect(tokIdent, "procedure name")
+	if err != nil {
+		return nil, err
+	}
+	s.Name = nameTok.text
+	return s, nil
+}
+
+// parseCall 解析 CALL <name> [( <value> [, <value> ...] )]（M15-3）。
+// 无参过程可省略括号；实参列表与过程定义参数一一对应（个数由执行层校验）。
+func (p *parser) parseCall() (Stmt, error) {
+	if err := p.expectKeyword("CALL"); err != nil {
+		return nil, err
+	}
+	nameTok, err := p.expect(tokIdent, "procedure name")
+	if err != nil {
+		return nil, err
+	}
+	stmt := &CallStmt{Name: nameTok.text}
+	if p.cur().kind == tokLParen {
+		p.next()
+		if p.cur().kind != tokRParen {
+			for {
+				v, err := p.parseValue()
+				if err != nil {
+					return nil, err
+				}
+				stmt.Args = append(stmt.Args, v)
+				if p.cur().kind == tokComma {
+					p.next()
+					continue
+				}
+				break
+			}
+		}
+		if _, err := p.expect(tokRParen, ")"); err != nil {
+			return nil, err
+		}
+	}
+	return stmt, nil
 }
 
 // parseDropTrigger 解析 DROP TRIGGER [IF EXISTS] <name>（M15-2）。
@@ -2104,6 +2243,10 @@ func (p *parser) parseShow() (Stmt, error) {
 			table = nameTok.text
 		}
 		return &ShowTriggersStmt{Table: table}, nil
+	case "PROCEDURES":
+		// M15-3：SHOW PROCEDURES
+		p.next()
+		return &ShowProceduresStmt{}, nil
 	}
 	// SHOW USERS：USERS 不在关键字表（避免与表名 users 冲突），按标识符文本匹配。
 	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "USERS") {
