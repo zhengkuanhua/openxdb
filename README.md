@@ -15,10 +15,14 @@ AIGC:
 
 # OpenXDB
 
+*从零自研的单机/分布式关系型数据库内核（Go + RocksDB），含 WAL、事务、SQL、复制、分片、2PC、HA、备份恢复等完整能力。*
+
 [![CI](https://github.com/zhengkuanhua/openxdb/actions/workflows/ci.yml/badge.svg)](https://github.com/zhengkuanhua/openxdb/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 [![License: MIT](https://img.shields.io/github/license/zhengkuanhua/openxdb)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb/releases)
+[![GitHub stars](https://img.shields.io/github/stars/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
+[![GitHub issues](https://img.shields.io/github/issues/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 
 OpenXDB is a from-scratch, single-node relational database kernel built for learning and experimentation. It implements a storage engine on top of RocksDB via cgo, a write-ahead log (WAL), transactional layer with snapshot isolation, a SQL subset with secondary indexes, and an in-memory B+Tree used as both an LSM comparator and a reference implementation.
 
@@ -63,6 +67,25 @@ OpenXDB is a from-scratch, single-node relational database kernel built for lear
 | Backup / Restore | `pkg/sql/backup.go`, `pkg/sql`, `pkg/db` | Consistent-snapshot logical backup (single file, version + CRC32), idempotent restore (drop-then-recreate, transactional), binlog replay to target LSN (PITR foundation) |
 | Data dir | `pkg/db` | Initialization, engine + WAL + txn manager wiring, crash recovery |
 
+```mermaid
+graph TB
+    Proto["Protocol & CLI (REPL / TCP server / binary protocol)"]
+    SQL["SQL layer (parser / executor / catalog / index)"]
+    Txn["Transaction (snapshot isolation)"]
+    Stor["Storage (RocksDB cgo bridge / B+Tree)"]
+    WAL["WAL"]
+    Dist["Distributed layer (Cluster / Replication / Sharding)"]
+
+    Proto --> SQL
+    Proto --> Txn
+    SQL --> Txn
+    SQL --> Stor
+    SQL --> WAL
+    Txn --> WAL
+    Dist -. "2PC / TSO / HA" .-> SQL
+    Dist -. "2PC / TSO / HA" .-> Txn
+```
+
 ### Row / index key encoding
 
 ```
@@ -90,6 +113,12 @@ export CGO_LDFLAGS=-L<rocksdb-build> -lrocksdb   # Windows: add -lshlwapi -lrpcr
 
 go build ./...
 ```
+
+## Demo
+
+OpenXDB REPL session: create table, insert, secondary index, query, update, delete, explain.
+
+![OpenXDB REPL demo](assets/demo.png)
 
 ## Quick start
 

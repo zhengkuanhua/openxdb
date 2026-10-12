@@ -19,7 +19,7 @@ import (
 	"github.com/zhengkuanhua/openxdb/pkg/server"
 )
 
-const version = "v0.1.0-alpha"
+const version = "v0.20.0-alpha"
 
 func main() {
 	if len(os.Args) < 2 {
