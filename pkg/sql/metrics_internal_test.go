@@ -32,6 +32,9 @@ func TestM13MetricsSQLAndSlow(t *testing.T) {
 	e := newExecutorInternal()
 	m := metrics.New()
 	e.SetMetrics(m)
+	// 关闭自动慢查询记录：本测试只验证显式 recordSlow 的计数路径，
+	// 避免慢机器/高负载下 execTimed 超过默认 100ms 阈值造成时序脆弱。
+	e.SetSlowThreshold(0)
 
 	if _, err := e.execTimed("root", "SELECT 1", func() (*Result, error) {
 		return &Result{}, nil

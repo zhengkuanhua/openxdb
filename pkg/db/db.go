@@ -142,6 +142,11 @@ func Open(dir string) (*DB, error) {
 		_ = st.Close()
 		return nil, fmt.Errorf("db: open wal: %w", err)
 	}
+	// M2 生产接线：默认启用 WAL 组提交（P0-4）。
+	// Append 仅写缓冲并快速分配 LSN，持久化由 txn 提交路径的 SyncUpTo 兜底，
+	// 多事务并发提交时合并 fsync；语义与逐条 fsync 等价（崩溃恢复由
+	// SyncUpTo/Close 保证），显著降低高并发写入的 fsync 开销。
+	w.SetGroupCommit(true)
 	tm, err := txn.New(st, w)
 	if err != nil {
 		_ = w.Close()

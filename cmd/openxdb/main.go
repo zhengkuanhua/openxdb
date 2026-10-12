@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -38,6 +39,8 @@ func main() {
 		err = cmdREPL(os.Args[2:])
 	case "start":
 		err = cmdStart(os.Args[2:])
+	case "replica":
+		err = cmdReplica(os.Args[2:])
 	case "doctor":
 		err = cmdDoctor(os.Args[2:])
 	case "stats":
@@ -162,6 +165,50 @@ func cmdStart(args []string) error {
 	fmt.Printf("OpenXDB %s serving on %s (data dir: %s)\n", version, addr, dir)
 	s := server.New(d.Txn)
 	s.SQL = d.SQL
+	// M11 生产接线（P0-3）：连接鉴权装配。
+	// --auth 启用 TCP 连接握手鉴权（AUTH <user> <password>）；未指定时保持
+	// 旧行为（无鉴权，会话默认超级用户 root），向后兼容。
+	// --auth-allow-legacy 允许无凭证旧客户端以降级 guest 身份继续使用连接
+	// （默认 false = 强制鉴权，未鉴权连接除 AUTH/PING/HELP/QUIT 外一律拒绝）。
+	// root 凭据：--root-password <pwd> 优先，其次环境变量 OPENXDB_ROOT_PASSWORD；
+	// 启用鉴权且用户表尚无 root 时自动执行 CREATE USER 'root' 完成引导初始化。
+	authOn := false
+	for _, a := range args {
+		if a == "--auth" {
+			authOn = true
+		}
+	}
+	allowLegacy := false
+	for _, a := range args {
+		if a == "--auth-allow-legacy" {
+			allowLegacy = true
+		}
+	}
+	if authOn {
+		rootPwd := ""
+		if p, ok := flagValue(args, "--root-password"); ok {
+			rootPwd = p
+		} else {
+			rootPwd = os.Getenv("OPENXDB_ROOT_PASSWORD")
+		}
+		if rootPwd == "" {
+			fmt.Fprintln(os.Stderr, "openxdb: WARN --auth enabled without --root-password/OPENXDB_ROOT_PASSWORD: 仅可通过既有 SQL 用户完成 AUTH")
+		} else {
+			okAuth, err := d.SQL.AuthenticateUser("root", rootPwd)
+			if err != nil {
+				return fmt.Errorf("auth: check root user: %w", err)
+			}
+			if !okAuth {
+				esc := strings.ReplaceAll(rootPwd, "'", "''")
+				if _, err := d.SQL.Execute("CREATE USER 'root' IDENTIFIED BY '" + esc + "'"); err != nil {
+					return fmt.Errorf("auth: bootstrap root user: %w", err)
+				}
+				fmt.Printf("auth: bootstrapped root user (password via --root-password/OPENXDB_ROOT_PASSWORD)\n")
+			}
+		}
+		s.SetAuth(&server.AuthConfig{Engine: d.SQL, AllowLegacy: allowLegacy})
+		fmt.Printf("authentication enabled (allow-legacy=%v)\n", allowLegacy)
+	}
 	// T20：注入运维统计源（连接数 / binlog 位点），供 SHOW STATS 输出实时指标。
 	d.SQL.SetStatsSources(s.ActiveConns, d.BinlogLSN)
 	// M13/M16-1：慢查询落盘装配（默认 data/slow.log，阈值 100ms 可由 SET 运行时调）。
@@ -283,6 +330,9 @@ Commands:
           [--metrics-port <n>] Prometheus /metrics 端口（默认 7789，0 禁用）
           [--shutdown-timeout <sec>] 优雅停机 drain 超时（默认取配置 shutdown_timeout，30s）
                               服务内发 SHUTDOWN [GRACEFUL] 或 Ctrl-C/SIGTERM 触发
+          [--auth]            启用连接握手鉴权（AUTH <user> <password>）
+          [--auth-allow-legacy] --auth 时允许无凭证客户端降级 guest（默认强制鉴权）
+          [--root-password <pwd>] root 引导密码（无 root 用户时自动 CREATE USER；亦可经环境变量 OPENXDB_ROOT_PASSWORD 传入）
   replica --data-dir <dir> --master <host:port>
                              以从节点身份连接主节点并异步复制
   doctor  --data-dir <dir>   数据目录/本地服务健康巡检

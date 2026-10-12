@@ -2,12 +2,14 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_1a6f9c20c31311f197eb525400393706
-    ReservedCode1: UMvmyo9vd97tPqgcL7KAc0nQ/6xchD4v7m4dVoS2Tn4JUb2vOzJnh39LkIJgS9ZVA55qrSsa/JxUvcZIk1wHBdYLJU3/QfBYzrYkfCv3XkOx3+1VXoXWJt/FSrh/VCe952atpnszTfKeRR82akERWOvxNFFC8eoKnrJbNWkxtXdzhvBMLsSOvSg1MdE=
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_9f528ea6c61c11f19063525400393706
+    ReservedCode1: Auu54661K5+74mHDl6wiT70hI/0E5kvraneLgSlEI4vJr3Wk0ueLPNL4pwbzOcac8qQzN21H07OLLhbnid5Mjky11iDjfxa00U0ZuJUOM/X4yMyCoUmAGQzQNR6Xb0xTuZd36wEChq03BTmgaiaPcLDtrWDvxt/w/cjK0MRU1uPjRESDDwiTTp0HUB0=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_1a6f9c20c31311f197eb525400393706
-    ReservedCode2: UMvmyo9vd97tPqgcL7KAc0nQ/6xchD4v7m4dVoS2Tn4JUb2vOzJnh39LkIJgS9ZVA55qrSsa/JxUvcZIk1wHBdYLJU3/QfBYzrYkfCv3XkOx3+1VXoXWJt/FSrh/VCe952atpnszTfKeRR82akERWOvxNFFC8eoKnrJbNWkxtXdzhvBMLsSOvSg1MdE=
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_9f528ea6c61c11f19063525400393706
+    ReservedCode2: Auu54661K5+74mHDl6wiT70hI/0E5kvraneLgSlEI4vJr3Wk0ueLPNL4pwbzOcac8qQzN21H07OLLhbnid5Mjky11iDjfxa00U0ZuJUOM/X4yMyCoUmAGQzQNR6Xb0xTuZd36wEChq03BTmgaiaPcLDtrWDvxt/w/cjK0MRU1uPjRESDDwiTTp0HUB0=
 ---
+
+
 
 
 
@@ -101,10 +103,25 @@ Every stored key carries a region prefix (`r` + 8-byte big-endian regionID); the
 Requirements:
 
 - Go 1.22+
-- A C/C++ toolchain for cgo (e.g. MinGW-w64 on Windows)
+- A C/C++ toolchain for cgo (e.g. MinGW-w64 on Windows, gcc/clang on Linux/macOS)
 - RocksDB (tested with v11.8.1 source build, no third-party compression libs)
 
-Point cgo at your RocksDB installation and build:
+One-shot reproducible build scripts (auto-detect RocksDB install, then `go build` + optional `go test`):
+
+```powershell
+# Windows: build bin\openxdb.exe, verify go build ./..., run go test ./...
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -RunTests
+# explicit paths:
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -RocksSrcDir C:\rocksdb-src -RocksBuildDir C:\rocksdb-build -RunTests
+```
+
+```sh
+# Linux/macOS:
+./scripts/build.sh --test
+./scripts/build.sh --rocks-src /path/to/rocksdb-11.8.1 --rocks-build /path/to/librocksdb-dir --test
+```
+
+Manual cgo setup (equivalent, for custom toolchains):
 
 ```sh
 export CGO_CFLAGS=-I<rocksdb>/include
@@ -113,6 +130,11 @@ export CGO_LDFLAGS=-L<rocksdb-build> -lrocksdb   # Windows: add -lshlwapi -lrpcr
 
 go build ./...
 ```
+
+`pkg/storage/rocksdb` declares per-platform `#cgo` link flags (Windows
+`-lwinpthread -lshlwapi -lrpcrt4 -lws2_32`, Linux `-lstdc++ -lpthread`,
+Darwin `-lstdc++`), so only the RocksDB include/lib dirs need to be supplied
+via `CGO_CFLAGS` / `CGO_LDFLAGS`.
 
 ## Demo
 
@@ -209,6 +231,7 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 ## License
 
 MIT — see [LICENSE](LICENSE).
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
