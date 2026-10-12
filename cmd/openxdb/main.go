@@ -5,10 +5,14 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/db"
 	"github.com/zhengkuanhua/openxdb/pkg/metrics"
@@ -113,11 +117,26 @@ func cmdStart(args []string) error {
 		}
 		port = n
 	}
+	// M16-2：--shutdown-timeout 命令行覆盖停机超时（秒），优先级高于
+	// 持久化配置 shutdown_timeout；不传时由 SQL 引擎按 内存>持久化>默认 取。
+	shutdownTimeoutFlag := int64(-1)
+	if p, ok := flagValue(args, "--shutdown-timeout"); ok {
+		n, err := strconv.Atoi(p)
+		if err != nil || n <= 0 {
+			return errors.New("invalid --shutdown-timeout value: " + p)
+		}
+		shutdownTimeoutFlag = int64(n)
+	}
 	d, err := db.Open(dir)
 	if err != nil {
 		return err
 	}
-	defer d.Close()
+	shutdownClosed := false
+	defer func() {
+		if !shutdownClosed {
+			_ = d.Close()
+		}
+	}()
 	// M2：主节点复制（可选）。--replica-port 非 0 时监听复制端口并生成 binlog。
 	if rp, ok := flagValue(args, "--replica-port"); ok {
 		n, err := strconv.Atoi(rp)
@@ -174,7 +193,54 @@ func cmdStart(args []string) error {
 			fmt.Printf("metrics endpoint: http://127.0.0.1:%d/metrics\n", n)
 		}
 	}
-	return s.ServeTCP(addr)
+	// ---- M16-2 优雅停机装配 ----
+	// 停机流程：拒绝新连接/新事务 → drain 进行中事务（超时强制）→
+	// flush/关闭存储（txn/WAL/storage 由 db.Close 按序处理，退出码 0/1）。
+	s.SetShutdownHook(func() error {
+		shutdownClosed = true
+		return d.Close()
+	})
+	// 停机超时来源：命令行 > SQL 引擎（内存>持久化>默认 30s）。
+	s.ShutdownTimeout = func() time.Duration {
+		if shutdownTimeoutFlag > 0 {
+			return time.Duration(shutdownTimeoutFlag) * time.Second
+		}
+		return d.SQL.ShutdownTimeout()
+	}
+	s.Logf = log.Printf
+	// SIGINT/SIGTERM 走同一优雅停机流程（默认超时，正常退出码 0，
+	// 超时强制退出码 1）。
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	go func() {
+		code := runSignalLoop(sigCh, s, d.SQL.ShutdownTimeout)
+		if code != 0 {
+			fmt.Fprintf(os.Stderr, "openxdb: graceful shutdown forced exit (drain timeout)\n")
+		}
+		os.Exit(code)
+	}()
+	fmt.Printf("OpenXDB %s serving on %s (data dir: %s), Ctrl-C to stop.\n", version, addr, dir)
+	if err := s.ServeTCP(addr); err != nil {
+		return err
+	}
+	// ServeTCP 返回（SHUTDOWN 命令触发停机后监听器关闭）→ 等待收尾。
+	s.WaitShutdown()
+	if s.ForceExited() {
+		return errors.New("graceful shutdown timed out, forced exit")
+	}
+	return nil
+}
+
+// runSignalLoop 等待 SIGINT/SIGTERM 并触发优雅停机（M16-2），返回进程
+// 退出码：0=正常停机（drain 完成，存储已关闭），1=超时强制退出。
+// sigCh 为 nil 时（测试路径）调用方已自行触发 GracefulShutdown。
+func runSignalLoop(sigCh <-chan os.Signal, s *server.Server, timeout func() time.Duration) int {
+	<-sigCh
+	if err := s.GracefulShutdown(timeout()); err != nil {
+		return 1
+	}
+	return 0
 }
 
 // cmdReplica 以从节点身份启动：连接主节点复制端口并异步应用 binlog。
@@ -211,6 +277,8 @@ Commands:
           [--replica-port <n>] 主节点复制端口（启用 M2 复制并生成 binlog）
           [--cluster-addr <addr>] 集群节点链路地址（启用 M4 节点握手/转发）
           [--metrics-port <n>] Prometheus /metrics 端口（默认 7789，0 禁用）
+          [--shutdown-timeout <sec>] 优雅停机 drain 超时（默认取配置 shutdown_timeout，30s）
+                              服务内发 SHUTDOWN [GRACEFUL] 或 Ctrl-C/SIGTERM 触发
   replica --data-dir <dir> --master <host:port>
                              以从节点身份连接主节点并异步复制
   doctor  --data-dir <dir>   数据目录/本地服务健康巡检

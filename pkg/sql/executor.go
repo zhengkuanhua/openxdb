@@ -71,6 +71,10 @@ type Executor struct {
 	qc *QueryCache
 	// M13：metrics 导出注册表（nil = 未装配，计数零触发）。
 	m *metrics.Registry
+	// M16-2：优雅停机超时（秒）。SHUTDOWN/SIGINT 触发 drain 的最长等待时间，
+	// 超时未排空强制退出（非 0 退出码 + 告警日志）。可经
+	// SET [PERSIST] shutdown_timeout 热更新，默认 30 秒。
+	shutdownTimeoutSec int64
 	// M15-2：触发器递归防护深度（触发器体再次写同一表时不再触发）。
 	triggerDepth int
 	// M15-3：存储过程递归防护深度（过程体再次 CALL 时不再展开）。
@@ -104,6 +108,8 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 		// M16-1：在线配置热更新（空 map 保证 SHOW / PERSIST 零 nil 访问）。
 		persistedCfg: map[string]string{},
 		sessionCfg:   map[string]string{},
+		// M16-2：优雅停机默认超时 30s（可 SET shutdown_timeout 热更新）。
+		shutdownTimeoutSec: shutdownTimeoutDefaultSec,
 	}
 }
 
@@ -3326,6 +3332,21 @@ const slowThresholdDefault int64 = 100
 
 // slowQueryMaxDefault 内存慢查询记录默认上限（可 SetSlowQueryMax 调整）。
 const slowQueryMaxDefault = 64
+
+// shutdownTimeoutDefaultSec M16-2 优雅停机默认超时（秒）。
+const shutdownTimeoutDefaultSec int64 = 30
+
+// SetShutdownTimeoutSec 设置优雅停机超时（秒，M16-2）。<=0 视为默认 30s。
+// 运行时调用即时生效（SET/SET PERSIST shutdown_timeout 的 apply 入口）。
+func (e *Executor) SetShutdownTimeoutSec(sec int64) {
+	if sec < 1 {
+		sec = shutdownTimeoutDefaultSec
+	}
+	e.shutdownTimeoutSec = sec
+}
+
+// ShutdownTimeoutSec 返回当前优雅停机超时（秒，M16-2）。
+func (e *Executor) ShutdownTimeoutSec() int64 { return e.shutdownTimeoutSec }
 
 // timeNowMs 当前 Unix 毫秒。
 func timeNowMs() int64 {

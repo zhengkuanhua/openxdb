@@ -151,6 +151,13 @@ func (e *Engine) SlowLogPath() string { return e.ex.SlowLogPath() }
 // SetSlowQueryMax 设置内存慢查询记录保留条数（>=1 生效；默认 64）。
 func (e *Engine) SetSlowQueryMax(n int) { e.ex.SetSlowQueryMax(n) }
 
+// ShutdownTimeout 返回优雅停机超时（M16-2，默认 30s；可由
+// SET [PERSIST] shutdown_timeout 热更新）。供服务端 SHUTDOWN/SIGINT 触发
+// drain 时读取当前生效超时。
+func (e *Engine) ShutdownTimeout() time.Duration {
+	return time.Duration(e.ex.ShutdownTimeoutSec()) * time.Second
+}
+
 // SetStatsSources 注入运维统计源（T20）：连接数来源与 binlog 位点来源，
 // 供 SHOW STATS 输出实时指标；不注入时对应指标为 0。
 func (e *Engine) SetStatsSources(connSource func() int64, binlogLSN func() (uint64, error)) {

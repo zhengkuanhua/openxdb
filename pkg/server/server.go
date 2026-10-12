@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/metrics"
 	"github.com/zhengkuanhua/openxdb/pkg/sql"
@@ -52,6 +53,30 @@ type Server struct {
 
 	// M13：metrics 导出注册表（nil = 未装配，METRICS 返回 ERR not enabled）。
 	m *metrics.Registry
+
+	// ---- M16-2 优雅停机状态机 ----
+	// state：0=运行，1=停机中（拒绝新连接/新事务，drain 进行中事务），
+	// 2=已关闭（GracefulShutdown 完成，存储已 flush/关闭）。
+	state int32
+	// active 正在锁内执行命令数（含被拒命令）：drain 判断无进行中命令的依据。
+	active int64
+	// forced 标记超时强制退出（GracefulShutdown 超时置位，调用方据此决定退出码）。
+	forced int32
+	// ln 当前监听器（ServeListener 记录，GracefulShutdown 关闭以拒绝新连接）。
+	lnMu sync.Mutex
+	ln   net.Listener
+	// shutdownHook 在 drain 完成后调用（main 注入 db.Close：flush WAL/rocksdb/
+	// 持久化配置后关闭存储）。nil 时仅完成状态机（测试/纯逻辑场景）。
+	shutdownHook func() error
+	// shutdownDone 在 GracefulShutdown 完成（含超时强制路径）时关闭，
+	// 供 ServeTCP 返回后 WaitShutdown 阻塞等待停机流程收尾。
+	shutdownOnce sync.Once
+	shutdownDone chan struct{}
+	// ShutdownTimeout 返回停机 drain 超时（main 注入 SQL 引擎配置；
+	// nil = 默认 30s）。
+	ShutdownTimeout func() time.Duration
+	// Logf 停机过程日志输出（main 注入 log.Printf；nil = 静默）。
+	Logf func(format string, args ...any)
 }
 
 // AuthConfig 连接鉴权配置：经 SetAuth 装配到 Server。
@@ -75,7 +100,7 @@ type session struct {
 
 // New 创建协议执行器。
 func New(tm txn.TxnManager) *Server {
-	return &Server{Txn: tm}
+	return &Server{Txn: tm, shutdownDone: make(chan struct{})}
 }
 
 // ActiveConns 返回当前活跃 TCP 连接数（T20 会话计数）。
@@ -127,6 +152,9 @@ func (s *Server) Handle(line string) (string, error) {
 func (s *Server) HandleSession(line string, sess *session) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// M16-2：正在执行命令计数（drain 判断无进行中命令的依据）。
+	atomic.AddInt64(&s.active, 1)
+	defer atomic.AddInt64(&s.active, -1)
 	return s.handleLocked(line, sess)
 }
 
@@ -157,13 +185,24 @@ func (s *Server) handleLocked(line string, sess *session) (string, error) {
 			sess.user = "" // 降级 guest：无任何表级/管理权限
 		}
 	}
+	// M16-2 停机中：拒绝新连接/新事务；仅放行事务终态命令（COMMIT/ROLLBACK）
+	// 与 QUIT/PING/HELP/SHUTDOWN，让进行中显式事务在 drain 窗口内收尾。
+	if atomic.LoadInt32(&s.state) != 0 {
+		switch cmd {
+		case "COMMIT", "ROLLBACK", "QUIT", "PING", "HELP", "SHUTDOWN":
+		default:
+			return "", errors.New("ERR server shutting down: rejecting new connections/transactions")
+		}
+	}
 	switch cmd {
 	case "PING":
 		return "PONG", nil
 	case "HELP":
-		return "PING GET SET DEL BEGIN COMMIT ROLLBACK METRICS STATUS QUIT", nil
+		return "PING GET SET DEL BEGIN COMMIT ROLLBACK SHUTDOWN METRICS STATUS QUIT", nil
 	case "QUIT":
 		return "BYE", nil
+	case "SHUTDOWN":
+		return s.doShutdown(toks, sess)
 	case "AUTH":
 		if s.Auth == nil {
 			return "", errors.New("ERR auth unavailable: connection auth not enabled")
@@ -454,18 +493,169 @@ func (s *Server) ServeTCP(addr string) error {
 // ServeListener 在既有监听器上提供 TCP 服务：每连接独立协程跑 REPL 循环
 // （命令处理由 Server 锁串行化，保证多连接下事务安全）。
 func (s *Server) ServeListener(ln net.Listener) error {
+	// M16-2：记录当前监听器，GracefulShutdown 时关闭以拒绝新连接。
+	s.lnMu.Lock()
+	s.ln = ln
+	s.lnMu.Unlock()
+	defer func() {
+		s.lnMu.Lock()
+		if s.ln == ln {
+			s.ln = nil
+		}
+		s.lnMu.Unlock()
+	}()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				// M16-2：GracefulShutdown 主动关闭监听器（拒绝新连接），
+				// 属正常退出路径；退出码由调用方据 ForceExited 判定。
+				return nil
+			}
 			return fmt.Errorf("server: accept: %w", err)
 		}
-		go func(c net.Conn) {
-			defer c.Close()
-			atomic.AddInt64(&s.conns, 1)
-			defer atomic.AddInt64(&s.conns, -1)
-			// 每连接独立会话：Auth 启用时默认未鉴权 guest，需先 AUTH；
-			// Auth 未启用时直接以超级用户 root 进入（旧行为）。
-			_ = s.REPLSession(c, c, s.defaultSession())
-		}(conn)
+		go s.serveConn(conn)
+	}
+}
+
+// serveConn 单个 TCP 连接的处理协程：进入时连接计数 +1，退出时 -1。
+func (s *Server) serveConn(c net.Conn) {
+	defer c.Close()
+	atomic.AddInt64(&s.conns, 1)
+	defer atomic.AddInt64(&s.conns, -1)
+	// 每连接独立会话：Auth 启用时默认未鉴权 guest，需先 AUTH；
+	// Auth 未启用时直接以超级用户 root 进入（旧行为）。
+	_ = s.REPLSession(c, c, s.defaultSession())
+}
+
+// ---- M16-2 优雅停机 ----
+
+// ErrShutdownTimeout 优雅停机超时强制退出错误：drain 窗口内仍有进行中事务
+// 未收尾，存储已强制关闭（数据完整，可 reopen），调用方应使用非 0 退出码。
+var ErrShutdownTimeout = errors.New("server: graceful shutdown timed out")
+
+// SetShutdownHook 注入 drain 完成后执行的关闭钩子（main 装配 db.Close：
+// 按序停止 txn/WAL/storage，flush RocksDB 与持久化配置）。
+func (s *Server) SetShutdownHook(hook func() error) { s.shutdownHook = hook }
+
+// ForceExited 返回停机是否因超时强制退出（main 据此决定退出码 0/1）。
+func (s *Server) ForceExited() bool { return atomic.LoadInt32(&s.forced) != 0 }
+
+// ShuttingDown 返回是否已进入停机流程（拒绝新连接/新事务）。
+func (s *Server) ShuttingDown() bool { return atomic.LoadInt32(&s.state) != 0 }
+
+// WaitShutdown 阻塞直到优雅停机流程完成（含超时强制路径）。
+// 未触发过停机时永不返回：仅 ServeTCP 返回后确认停机收尾时调用。
+func (s *Server) WaitShutdown() { <-s.shutdownDone }
+
+// logf 输出停机过程日志（未装配 Logf 时静默，测试可注入收集器断言）。
+func (s *Server) logf(format string, args ...any) {
+	if s.Logf != nil {
+		s.Logf(format, args...)
+	}
+}
+
+// shutdownTimeout 返回当前生效停机超时：优先 ShutdownTimeout 注入源
+// （main 装配 SQL 引擎 shutdown_timeout 配置），否则默认 30s。
+func (s *Server) shutdownTimeout() time.Duration {
+	if s.ShutdownTimeout != nil {
+		if d := s.ShutdownTimeout(); d > 0 {
+			return d
+		}
+	}
+	return 30 * time.Second
+}
+
+// doShutdown 处理 SHUTDOWN [GRACEFUL] 命令（M16-2）：进入优雅停机流程。
+// 管理操作仅 root（鉴权模式）；Auth 未启用时默认 root（旧行为）。
+// 停机在独立协程执行，避免占用命令串行化锁；命令返回后本连接后续命令
+// 被拒绝（仅 QUIT/事务终态放行）。
+func (s *Server) doShutdown(toks []string, sess *session) (string, error) {
+	if s.Auth != nil && sess.user != sql.SuperUser {
+		return "", errors.New("ERR permission denied: SHUTDOWN requires root")
+	}
+	if len(toks) > 1 && strings.ToUpper(toks[1]) != "GRACEFUL" {
+		return "", errors.New("ERR syntax: SHUTDOWN [GRACEFUL]")
+	}
+	if atomic.LoadInt32(&s.state) != 0 {
+		return "", errors.New("ERR already shutting down")
+	}
+	go func() {
+		if err := s.GracefulShutdown(s.shutdownTimeout()); err != nil {
+			s.logf("graceful shutdown: error: %v", err)
+		}
+	}()
+	return "OK: graceful shutdown started", nil
+}
+
+// drained 判断 drain 是否完成：无正在执行命令（active==0 且锁空闲）且
+// 无未收尾显式事务。锁被占用时视为未排空（避免阻塞轮询导致超时判断延迟）。
+func (s *Server) drained() bool {
+	if atomic.LoadInt64(&s.active) != 0 {
+		return false
+	}
+	if !s.mu.TryLock() {
+		return false
+	}
+	defer s.mu.Unlock()
+	return s.cur == nil
+}
+
+// GracefulShutdown 执行优雅停机（M16-2）：拒绝新连接/新事务 → drain 进行中
+// 事务（超时强制）→ flush/关闭存储。SHUTDOWN 命令与 SIGINT/SIGTERM 共用
+// 此流程。
+// 正常路径返回 nil（调用方退出码 0）；超时强制路径返回 ErrShutdownTimeout
+// （调用方退出码非 0），但存储仍会完成关闭，保证 reopen 数据完整。
+func (s *Server) GracefulShutdown(timeout time.Duration) error {
+	if !atomic.CompareAndSwapInt32(&s.state, 0, 1) {
+		return errors.New("server: already shutting down")
+	}
+	if timeout <= 0 {
+		timeout = s.shutdownTimeout()
+	}
+	s.logf("graceful shutdown: start, drain timeout=%s", timeout)
+	// 1) 拒绝新连接：关闭监听器；已建连会话在命令入口拒绝新事务。
+	s.closeListener()
+	s.logf("graceful shutdown: rejecting new connections")
+	deadline := time.Now().Add(timeout)
+	for {
+		if s.drained() {
+			break
+		}
+		if time.Now().After(deadline) {
+			atomic.StoreInt32(&s.forced, 1)
+			s.mu.Lock()
+			hasTxn := s.cur != nil
+			s.mu.Unlock()
+			s.logf("graceful shutdown: TIMEOUT after %s, force exit (active cmds=%d, active conns=%d, explicit txn=%v)", timeout, atomic.LoadInt64(&s.active), atomic.LoadInt64(&s.conns), hasTxn)
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	atomic.StoreInt32(&s.state, 2)
+	// 2) flush/关闭存储（txn/WAL/storage 由 db.Close 按序处理，持久化配置已落盘）。
+	if s.shutdownHook != nil {
+		if err := s.shutdownHook(); err != nil {
+			s.logf("graceful shutdown: close storage error: %v", err)
+			s.shutdownOnce.Do(func() { close(s.shutdownDone) })
+			return err
+		}
+	}
+	s.shutdownOnce.Do(func() { close(s.shutdownDone) })
+	if atomic.LoadInt32(&s.forced) != 0 {
+		s.logf("graceful shutdown: forced exit (exit code 1)")
+		return ErrShutdownTimeout
+	}
+	s.logf("graceful shutdown: drained, storage closed (exit code 0)")
+	return nil
+}
+
+// closeListener 关闭当前监听器（拒绝新 TCP 连接）。
+func (s *Server) closeListener() {
+	s.lnMu.Lock()
+	ln := s.ln
+	s.lnMu.Unlock()
+	if ln != nil {
+		_ = ln.Close()
 	}
 }

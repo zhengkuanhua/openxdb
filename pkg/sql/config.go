@@ -6,6 +6,7 @@ package sql
 //   - query_cache           查询结果缓存开关（M9，query_cache.go）
 //   - slow_query_threshold  慢查询阈值毫秒（M13，executor.go slowThreshold）
 //   - slow_query_log        慢查询落盘开关（M13，slowlog.go）
+//   - shutdown_timeout      优雅停机超时秒（M16-2，executor.go shutdownTimeoutSec）
 //
 // 持久化文件：数据目录下 persisted.json（db.Open 装配路径后由 Engine
 // LoadPersistedConfig 加载合并）。优先级：内存（SET / SET PERSIST 立即生效）
@@ -88,6 +89,20 @@ var configSpecs = []*configSpec{
 			return nil
 		},
 		read: func(e *Executor) string { return boolValStr(e.SlowLogEnabled()) },
+	},
+	{
+		key:  "shutdown_timeout",
+		desc: "优雅停机超时秒数（M16-2）：正整数；SHUTDOWN/SIGINT drain 超过则强制退出",
+		def:  "30",
+		apply: func(e *Executor, v string) error {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 1 {
+				return &SQLError{Msg: "invalid value for shutdown_timeout: " + v + " (expected positive integer seconds)"}
+			}
+			e.SetShutdownTimeoutSec(n)
+			return nil
+		},
+		read: func(e *Executor) string { return strconv.FormatInt(e.ShutdownTimeoutSec(), 10) },
 	},
 }
 
