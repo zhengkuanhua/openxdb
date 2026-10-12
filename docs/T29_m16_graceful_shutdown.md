@@ -2,12 +2,14 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_21a7466fc5f011f19063525400393706
-    ReservedCode1: BY9h0qVKCLR0xq91LqhDJxteTNkbD+H5J0Zd55W9r3BWjvFDFEAaLlN2rc3auc1gJCyxqLpwjjy/FtQ1P2LKq1WrnlomVsTzLQ04XguggqGXVgk94hZ8SILJjTdlbaqSthgJR4Pp5lA+mmjyLvNXi/35hRL5tvT1M2AaUHh1xAovCngI9//YWb8RvTY=
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_832d10fec60711f19063525400393706
+    ReservedCode1: wJ4kwp7sogdo0Bp0/2cOyDYmIWtJ88P7WbHPt5UrfDL9rKQGJ5/NQt0eREvw/+m2jodalXo/iJ1qNu3uU98/VwDKPCqKKfYIX7iSTIjDOn/Nj4WUkc5iU19D7BgA3j9NBKcsqMyc19XuKwwUH2N/QcJSqV3Muv+M//ClIAD7KGbBWXIqJ7E/K3fCIPo=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_21a7466fc5f011f19063525400393706
-    ReservedCode2: BY9h0qVKCLR0xq91LqhDJxteTNkbD+H5J0Zd55W9r3BWjvFDFEAaLlN2rc3auc1gJCyxqLpwjjy/FtQ1P2LKq1WrnlomVsTzLQ04XguggqGXVgk94hZ8SILJjTdlbaqSthgJR4Pp5lA+mmjyLvNXi/35hRL5tvT1M2AaUHh1xAovCngI9//YWb8RvTY=
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_832d10fec60711f19063525400393706
+    ReservedCode2: wJ4kwp7sogdo0Bp0/2cOyDYmIWtJ88P7WbHPt5UrfDL9rKQGJ5/NQt0eREvw/+m2jodalXo/iJ1qNu3uU98/VwDKPCqKKfYIX7iSTIjDOn/Nj4WUkc5iU19D7BgA3j9NBKcsqMyc19XuKwwUH2N/QcJSqV3Muv+M//ClIAD7KGbBWXIqJ7E/K3fCIPo=
 ---
+
+
 
 
 
@@ -100,3 +102,4 @@ SET PERSIST shutdown_timeout = 120;
 | `TestShutdownRejectsNewConnections` | 停机后监听器关闭：新 TCP 连接被拒；已建连拒绝新命令、QUIT 放行 |
 | `TestRunSignalLoopInterruptExitZero` | SIGINT（os.Interrupt）路径正常退出码 0 |
 | `TestRunSignalLoopSIGTERMTimeoutExitOne` | SIGTERM 路径挂起事务超时强制退出码 1；已提交数据 reopen 完整、未提交回滚 |
+*（内容由AI生成，仅供参考）*

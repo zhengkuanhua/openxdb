@@ -2,12 +2,14 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_21a7466fc5f011f19063525400393706
-    ReservedCode1: BY9h0qVKCLR0xq91LqhDJxteTNkbD+H5J0Zd55W9r3BWjvFDFEAaLlN2rc3auc1gJCyxqLpwjjy/FtQ1P2LKq1WrnlomVsTzLQ04XguggqGXVgk94hZ8SILJjTdlbaqSthgJR4Pp5lA+mmjyLvNXi/35hRL5tvT1M2AaUHh1xAovCngI9//YWb8RvTY=
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_81f83e36c60711f19063525400393706
+    ReservedCode1: JyGNFgnuYtngAKrwFiEqvb287/l2I3q9QPWV0LudbycN3UBGBO28BuLYx878AVpMgBeJJLclcqR6YWxEbPGE5O0VRdfM2T5ORLu4FhO5x8MElIH9mkZVXz6X+9+vVV9GKoup3EtDkkwLeRz+korKiAAq1ZAf9rIzBXa/MjHmhCUSL3wHGF2L++LWM4Y=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_21a7466fc5f011f19063525400393706
-    ReservedCode2: BY9h0qVKCLR0xq91LqhDJxteTNkbD+H5J0Zd55W9r3BWjvFDFEAaLlN2rc3auc1gJCyxqLpwjjy/FtQ1P2LKq1WrnlomVsTzLQ04XguggqGXVgk94hZ8SILJjTdlbaqSthgJR4Pp5lA+mmjyLvNXi/35hRL5tvT1M2AaUHh1xAovCngI9//YWb8RvTY=
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_81f83e36c60711f19063525400393706
+    ReservedCode2: JyGNFgnuYtngAKrwFiEqvb287/l2I3q9QPWV0LudbycN3UBGBO28BuLYx878AVpMgBeJJLclcqR6YWxEbPGE5O0VRdfM2T5ORLu4FhO5x8MElIH9mkZVXz6X+9+vVV9GKoup3EtDkkwLeRz+korKiAAq1ZAf9rIzBXa/MjHmhCUSL3wHGF2L++LWM4Y=
 ---
+
+
 
 
 
@@ -74,3 +76,4 @@ M16 运维增强簇按 Roadmap 依次落地三个子功能：在线配置热更�
 | `TestHotConfigCompatExistingSet` | 兼容既有 SET slow_query_threshold（阈值口径 + 原报错） |
 | `TestHotConfigPersistRequiresPath` | 未装配持久化路径时 SET PERSIST 明确报错 |
 | `TestHotConfigCorruptFileRejected` | 损坏 JSON / 未知键 / 非法值：Open 明确报错拒绝启动 |
+*（内容由AI生成，仅供参考）*
