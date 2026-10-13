@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_b893c54bc6a511f19063525400393706
+    ReservedCode1: DVnEXXcIgst4BJ5eRsA2e30igAn88UWv5cm/QC8nwfTHXUs6hWsoe7vRKH7Uh6mDLvua/UqnKr6gglM1myMzA83GGhGNe4Q4krp41CruCRtvM6jStFb2AGiS4XvmbFSqOxGnq8YoBLNS7svbON1cAY1M3X9uASopV2Qhmj8b+bOnxBWeNIw269HfKjw=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_b893c54bc6a511f19063525400393706
+    ReservedCode2: DVnEXXcIgst4BJ5eRsA2e30igAn88UWv5cm/QC8nwfTHXUs6hWsoe7vRKH7Uh6mDLvua/UqnKr6gglM1myMzA83GGhGNe4Q4krp41CruCRtvM6jStFb2AGiS4XvmbFSqOxGnq8YoBLNS7svbON1cAY1M3X9uASopV2Qhmj8b+bOnxBWeNIw269HfKjw=
+---
+
 # openxdb tests/bench 性能基准
 
 本目录存放 openxdb 的可重复运行性能基准，按层级分为：**SQL 层基准**（`sql_bench/`）与
@@ -65,3 +76,4 @@ go run ./tests/bench/sql_bench -n 100000 -dir sql_bench_data -out tests/bench/do
 
 `e1_data_1m/`、`e1_data_200k/` 为引擎层基准产生的 RocksDB 数据目录（只读样例，勿手动修改）；
 `sql_bench_data/` 由 SQL 层基准自动生成（默认在仓库根目录，可用后删除重建）。
+*（内容由AI生成，仅供参考）*

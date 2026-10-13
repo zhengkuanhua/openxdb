@@ -219,6 +219,54 @@ func (e *Executor) execShowTriggers(s *ShowTriggersStmt) (*Result, error) {
 	return res, nil
 }
 
+// loadTriggerCatalog 读取当前可见的触发器目录。
+// 读取策略（避免 DML 高频路径的事务与 WAL 开销）：
+//   - 显式会话事务内：复用会话事务读（getTx），保证 read-your-writes
+//     （本事务未提交的 CREATE/DROP TRIGGER 立即可见），与旧行为一致；
+//   - autocommit：优先引擎直读 e.st.Get（无事务、无 WAL、无 fsync，
+//     始终读到最新已提交目录——DDL 未提交时不可见，等价于快照隔离下
+//     的 loadTriggers(tx.Get)）；e.st 为空（纯测试装配）时退回临时只读
+//     事务读（空批次 Commit 免 WAL/fsync，不产生 Rollback 审计记录）。
+func (e *Executor) loadTriggerCatalog() ([]*TriggerMeta, error) {
+	if !e.autocommit() {
+		tx, err := e.getTx()
+		if err != nil {
+			return nil, err
+		}
+		return loadTriggers(tx.Get)
+	}
+	if e.st != nil {
+		raw, err := e.st.Get(triggersKey)
+		if err == storage.ErrNotFound {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(raw) == 0 {
+			return nil, nil
+		}
+		var trs []*TriggerMeta
+		if err := json.Unmarshal(raw, &trs); err != nil {
+			return nil, &SQLError{Msg: "corrupted trigger catalog"}
+		}
+		return trs, nil
+	}
+	tx, err := e.getTx()
+	if err != nil {
+		return nil, err
+	}
+	trs, err := loadTriggers(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	// 只读临时事务：空批次 Commit 直接结束（无 WAL / 无 fsync）。
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return trs, nil
+}
+
 // fireTriggers 在源表 DML 提交前（BEFORE）/提交后（AFTER）执行匹配的触发器体。
 // 匹配规则：时机 + 事件 + 源表名全部一致；触发粒度为语句级（受影响行数>0 时
 // 触发一次）。触发器体经完整 Parse + execStmt 执行，与普通语句共用执行路径。
@@ -230,15 +278,7 @@ func (e *Executor) fireTriggers(timing, table, event string) error {
 	if e.triggerDepth > 0 {
 		return nil
 	}
-	tx, err := e.getTx()
-	if err != nil {
-		return err
-	}
-	auto := e.autocommit()
-	if auto {
-		defer tx.Rollback()
-	}
-	trs, err := loadTriggers(tx.Get)
+	trs, err := e.loadTriggerCatalog()
 	if err != nil {
 		return err
 	}
@@ -250,6 +290,14 @@ func (e *Executor) fireTriggers(timing, table, event string) error {
 	}
 	if len(hit) == 0 {
 		return nil
+	}
+	tx, err := e.getTx()
+	if err != nil {
+		return err
+	}
+	auto := e.autocommit()
+	if auto {
+		defer tx.Rollback()
 	}
 	e.triggerDepth++
 	defer func() { e.triggerDepth-- }()
