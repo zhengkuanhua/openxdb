@@ -112,7 +112,7 @@ func toClusterTxnOps(ops []kvOp) []cluster.TxnOp {
 //     PREPARE/TSO 失败：abort 已就绪参与者 + 删除记录；本地提交失败：
 //     abort 参与者；远端 COMMIT 失败：返回 TXN_COMMIT_UNCERTAIN（记录保留
 //     committing，重启后 RecoverCoordinated2PC 决策 commit 完成收尾）。
-func (e *Executor) exec2pcWrite(tx txn.Txn, ops []kvOp) error {
+func (e *Executor) exec2pcWrite(sess *Session, tx txn.Txn, ops []kvOp) error {
 	if len(ops) == 0 {
 		return nil
 	}
@@ -129,7 +129,7 @@ func (e *Executor) exec2pcWrite(tx txn.Txn, ops []kvOp) error {
 	if err := applyOps(tx, local); err != nil {
 		return err
 	}
-	beginTS := e.snapshotTS()
+	beginTS := e.snapshotTS(sess)
 	if len(remote) == 0 {
 		// 全本地：装配了 TSO 时登记版本记录（保证快照过滤覆盖本地提交）。
 		commitTS, err := e.tsoGet()

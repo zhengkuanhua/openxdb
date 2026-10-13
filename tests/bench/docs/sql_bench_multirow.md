@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_76aa14a1c6b011f197b3525400248c00
+    ReservedCode1: HgYLs7CpbZ6XsGPF9/JKjRuJCkGJVLTNSuVyMbswsL+wKCGWFHokEpzk0u07KmAy2MLAZBjvaNUwUgqhqhVv6NQqyC3V5sRhXjOs5MfDxLhICSN0VzoSx6wvWo3dBhS9B/UIpJYSTmD6ztGrPDpjPIiIunp5V8qGgh0A8tgMQsCm2zOCV6Thp1S4GHw=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_76aa14a1c6b011f197b3525400248c00
+    ReservedCode2: HgYLs7CpbZ6XsGPF9/JKjRuJCkGJVLTNSuVyMbswsL+wKCGWFHokEpzk0u07KmAy2MLAZBjvaNUwUgqhqhVv6NQqyC3V5sRhXjOs5MfDxLhICSN0VzoSx6wvWo3dBhS9B/UIpJYSTmD6ztGrPDpjPIiIunp5V8qGgh0A8tgMQsCm2zOCV6Thp1S4GHw=
+---
+
 # OpenXDB SQL 层性能基准结果（P0-5）
 
 - 运行时间：2026-10-13 10:41:07
@@ -35,3 +46,4 @@
 - 多行批量 vs 逐行单条：F 场景（每语句 100 行，同一事务批次单次提交）行速率为 A 场景的 **18.7x**（A 单行 1298.6 行/秒；F 语句 242.3 语句/秒 ≈ 24231 行/秒），逐条 WAL 提交粒度与逐行解释开销被批量摊薄。
 - 延迟均以微秒（us）计；速率以 QPS（查询/秒）或 TPS（写入/事务 每秒）计。
 - 本基准运行于本机 CGO（RocksDB）环境，绝对数值与机器相关；相对开销（SQL vs 引擎）更具可比性。
+*（内容由AI生成，仅供参考）*

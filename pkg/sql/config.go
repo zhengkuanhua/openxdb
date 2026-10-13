@@ -236,7 +236,7 @@ func (e *Executor) persistConfigValue(key, value string) error {
 // execShowConfig SHOW CONFIG / SHOW PERSISTED CONFIG（M16-1）。
 // SHOW CONFIG：当前生效配置，含来源（default / persisted / session）；
 // SHOW PERSISTED CONFIG：仅已持久化到配置文件的配置。
-func (e *Executor) execShowConfig(s *ShowConfigStmt) (*Result, error) {
+func (e *Executor) execShowConfig(sess *Session, s *ShowConfigStmt) (*Result, error) {
 	if s.Persisted {
 		e.cfgMu.Lock()
 		cfg := e.persistedCfg

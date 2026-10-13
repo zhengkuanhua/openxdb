@@ -101,6 +101,11 @@ type AuthConfig struct {
 type session struct {
 	user   string
 	authed bool
+	// useGlobalSQL 标记 SQL 语句是否使用引擎内置全局会话（true=旧行为，
+	// CLI/Handle 路径；false=每连接独立 SQL 会话，TCP 多连接并行）。
+	useGlobalSQL bool
+	// sqlSess 每连接独立 SQL 会话（懒创建，仅 useGlobalSQL=false 时使用）。
+	sqlSess *sql.Session
 }
 
 // New 创建协议执行器。
@@ -141,11 +146,23 @@ func (s *Server) incRollback() {
 
 // defaultSession 返回当前模式的默认会话：无鉴权（Auth==nil）时会话为超级
 // 用户 root（旧行为）；启用鉴权时为未鉴权 guest（user 为空串，等待 AUTH）。
+// SQL 语句使用引擎全局会话（旧行为，CLI/Handle 路径；显式事务状态跨
+// Handle 调用保持）。
 func (s *Server) defaultSession() *session {
 	if s.Auth == nil {
-		return &session{user: sql.SuperUser, authed: true}
+		return &session{user: sql.SuperUser, authed: true, useGlobalSQL: true}
 	}
-	return &session{user: "", authed: false}
+	return &session{user: "", authed: false, useGlobalSQL: true}
+}
+
+// connSession 创建每 TCP 连接独立会话：鉴权状态跨命令保持（同
+// defaultSession），SQL 语句使用引擎独立会话（跨连接并行执行互不干扰）。
+func (s *Server) connSession() *session {
+	ss := s.defaultSession()
+	if s.SQL != nil {
+		ss.sqlSess = s.SQL.NewSession()
+	}
+	return ss
 }
 
 // Handle 处理一行命令，返回响应文本（成功时不含 ERR 前缀）。
@@ -159,13 +176,77 @@ func (s *Server) Handle(line string) (string, error) {
 
 // HandleSession 处理一行命令，携带连接会话状态（AUTH 握手/降级后的用户）。
 // 与 REPLSession 配合用于 TCP 连接：每连接一个 session，跨命令保持。
+//
+// 并发模型：SQL 语句（含 SQL 形态 BEGIN/COMMIT/ROLLBACK 与 SET 变量赋值）
+// 路由到锁外 handleSQL 执行——每连接持有独立 SQL 会话，跨连接并行执行
+// 互不干扰（引擎层事务/存储已保证 WAL 顺序与原子性，见 pkg/txn 组提交）；
+// 其余命令（KV/协议/停机管理）持 Server 全局锁串行（依赖共享状态 s.cur
+// 与监听器，频率低，锁竞争可忽略）。
 func (s *Server) HandleSession(line string, sess *session) (string, error) {
+	line = strings.TrimSpace(strings.TrimPrefix(line, "\ufeff")) // 容忍 Windows 控制台 BOM
+	if line == "" {
+		return "", nil
+	}
+	toks := strings.Fields(line)
+	cmd := strings.ToUpper(toks[0])
+	// SQL 语句判定：SQL 引擎已挂载且行首为 SQL 关键字（含 BEGIN/COMMIT/
+	// ROLLBACK 的 SQL 形态）；SET 特殊处理——仅 SQL 变量赋值
+	// （SET <name> = <value>）走 SQL，其余保持 KV 语义（GET/SET/DEL）。
+	isSQL := s.SQL != nil
+	if isSQL {
+		if cmd == "SET" {
+			isSQL = len(toks) >= 2 && isSQLSetAssign(toks[1:])
+		} else {
+			isSQL = sql.IsSQL(line)
+		}
+	}
+	if isSQL {
+		return s.handleSQL(line, cmd, sess)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// M16-2：正在执行命令计数（drain 判断无进行中命令的依据）。
 	atomic.AddInt64(&s.active, 1)
 	defer atomic.AddInt64(&s.active, -1)
 	return s.handleLocked(line, sess)
+}
+
+// handleSQL 锁外执行 SQL 语句：鉴权降级/停机检查语义与 handleLocked 一致；
+// active 计数在锁内与 state 检查原子递增，drain 可正确等待进行中 SQL。
+// 执行阶段不持全局锁，跨连接 SQL 并行；共享状态（会话字段）仅本连接访问。
+func (s *Server) handleSQL(line string, cmd string, sess *session) (string, error) {
+	// M11 连接握手鉴权：未鉴权会话仅放行 AUTH/PING/HELP/QUIT（非 SQL 路径）；
+	// SQL 语句按 AllowLegacy 降级 guest（user=""，SQL 层权限校验拒绝无授权）。
+	if s.Auth != nil && !sess.authed {
+		if !s.Auth.AllowLegacy {
+			return "", errors.New("ERR auth required: send AUTH <user> <password> first")
+		}
+		sess.user = ""
+	}
+	// M16-2：停机检查与 active 递增在同一临界区内，避免 drain 漏判进行中
+	// SQL（锁外执行期间 drained() 的 TryLock 可成功，依赖 active 判定）。
+	s.mu.Lock()
+	if atomic.LoadInt32(&s.state) != 0 {
+		s.mu.Unlock()
+		switch cmd {
+		case "COMMIT", "ROLLBACK": // 放行事务终态，drain 窗口内收尾
+		default:
+			return "", errors.New("ERR server shutting down: rejecting new connections/transactions")
+		}
+	}
+	atomic.AddInt64(&s.active, 1)
+	s.mu.Unlock()
+	defer atomic.AddInt64(&s.active, -1)
+
+	switch cmd {
+	case "BEGIN", "COMMIT", "ROLLBACK":
+		if _, err := s.doSQL(line, sess); err != nil {
+			return "", err
+		}
+		return "OK", nil
+	default:
+		return s.doSQL(line, sess)
+	}
 }
 
 func (s *Server) handleLocked(line string, sess *session) (string, error) {
@@ -352,8 +433,21 @@ func isSQLSetAssign(toks []string) bool {
 
 // doSQL 执行一条 SQL 语句并格式化输出（以会话用户身份执行，触发执行期
 // 权限校验：管理语句仅 root，DML 需对应表级授权，见 pkg/sql/authz.go）。
+// 使用会话的独立 SQL 会话（TCP 连接，跨连接并行）；默认会话（CLI/Handle）
+// 标记 useGlobalSQL 时沿用引擎全局会话（旧行为，显式事务状态跨调用保持）。
 func (s *Server) doSQL(line string, sess *session) (string, error) {
-	res, err := s.SQL.ExecuteAs(line, sess.user)
+	var (
+		res *sql.Result
+		err error
+	)
+	if sess.useGlobalSQL {
+		res, err = s.SQL.ExecuteAs(line, sess.user)
+	} else {
+		if sess.sqlSess == nil {
+			sess.sqlSess = s.SQL.NewSession()
+		}
+		res, err = s.SQL.ExecuteAsSession(line, sess.user, sess.sqlSess)
+	}
 	if err != nil {
 		return "", fmt.Errorf("ERR sql: %v", err)
 	}
@@ -540,9 +634,10 @@ func (s *Server) serveConn(c net.Conn) {
 	defer c.Close()
 	atomic.AddInt64(&s.conns, 1)
 	defer atomic.AddInt64(&s.conns, -1)
-	// 每连接独立会话：Auth 启用时默认未鉴权 guest，需先 AUTH；
+	// 每连接独立会话（含独立 SQL 会话：跨连接 SQL 并行执行；显式事务
+	// 状态与语句快照隔离）：Auth 启用时默认未鉴权 guest，需先 AUTH；
 	// Auth 未启用时直接以超级用户 root 进入（旧行为）。
-	_ = s.REPLSession(c, c, s.defaultSession())
+	_ = s.REPLSession(c, c, s.connSession())
 }
 
 // ---- M16-2 优雅停机 ----

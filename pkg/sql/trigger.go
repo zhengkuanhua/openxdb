@@ -72,7 +72,7 @@ func triggerBodyTable(stmt Stmt) string {
 // 创建时校验：名称唯一、时机/事件合法、源表存在、体可解析且为受支持语句
 // （UPDATE 条件更新 / INSERT 单行插入）、体引用表存在；随后注册到
 // m:triggers 持久化。整个创建在单个事务内完成。
-func (e *Executor) execCreateTrigger(s *CreateTriggerStmt) (*Result, error) {
+func (e *Executor) execCreateTrigger(sess *Session, s *CreateTriggerStmt) (*Result, error) {
 	if s.Name == "" {
 		return nil, &SQLError{Msg: "trigger name required"}
 	}
@@ -93,11 +93,11 @@ func (e *Executor) execCreateTrigger(s *CreateTriggerStmt) (*Result, error) {
 	if bodyTable == "" {
 		return nil, &SQLError{Msg: "unsupported trigger body: only UPDATE and INSERT statements are supported"}
 	}
-	tx, err := e.getTx()
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -151,12 +151,12 @@ func (e *Executor) execCreateTrigger(s *CreateTriggerStmt) (*Result, error) {
 
 // execDropTrigger DROP TRIGGER [IF EXISTS] <name>（M15-2）。
 // 仅移除元数据注册，不动任何表数据。
-func (e *Executor) execDropTrigger(s *DropTriggerStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execDropTrigger(sess *Session, s *DropTriggerStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	trs, err := loadTriggers(tx.Get)
 	if err != nil {
 		return nil, err
@@ -190,12 +190,12 @@ func (e *Executor) execDropTrigger(s *DropTriggerStmt) (*Result, error) {
 }
 
 // execShowTriggers SHOW TRIGGERS [FROM <table>]（M15-2）。
-func (e *Executor) execShowTriggers(s *ShowTriggersStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execShowTriggers(sess *Session, s *ShowTriggersStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	if e.autocommit() {
+	if e.autocommit(sess) {
 		defer tx.Rollback()
 	}
 	trs, err := loadTriggers(tx.Get)
@@ -227,9 +227,9 @@ func (e *Executor) execShowTriggers(s *ShowTriggersStmt) (*Result, error) {
 //     始终读到最新已提交目录——DDL 未提交时不可见，等价于快照隔离下
 //     的 loadTriggers(tx.Get)）；e.st 为空（纯测试装配）时退回临时只读
 //     事务读（空批次 Commit 免 WAL/fsync，不产生 Rollback 审计记录）。
-func (e *Executor) loadTriggerCatalog() ([]*TriggerMeta, error) {
-	if !e.autocommit() {
-		tx, err := e.getTx()
+func (e *Executor) loadTriggerCatalog(sess *Session) ([]*TriggerMeta, error) {
+	if !e.autocommit(sess) {
+		tx, err := e.getTx(sess)
 		if err != nil {
 			return nil, err
 		}
@@ -252,7 +252,7 @@ func (e *Executor) loadTriggerCatalog() ([]*TriggerMeta, error) {
 		}
 		return trs, nil
 	}
-	tx, err := e.getTx()
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
@@ -274,11 +274,11 @@ func (e *Executor) loadTriggerCatalog() ([]*TriggerMeta, error) {
 // 提交；主 DML 提交失败时已提交的体不会回滚——文档化限制，简单 SQL 体场景
 // 可接受）。triggerDepth 递归防护：触发器体再次写同一表时不再触发，
 // 避免无限递归（体对其它表的写入同样被抑制，文档化限制）。
-func (e *Executor) fireTriggers(timing, table, event string) error {
-	if e.triggerDepth > 0 {
+func (e *Executor) fireTriggers(sess *Session, timing, table, event string) error {
+	if sess.triggerDepth > 0 {
 		return nil
 	}
-	trs, err := e.loadTriggerCatalog()
+	trs, err := e.loadTriggerCatalog(sess)
 	if err != nil {
 		return err
 	}
@@ -291,22 +291,22 @@ func (e *Executor) fireTriggers(timing, table, event string) error {
 	if len(hit) == 0 {
 		return nil
 	}
-	tx, err := e.getTx()
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
-	e.triggerDepth++
-	defer func() { e.triggerDepth-- }()
+	sess.triggerDepth++
+	defer func() { sess.triggerDepth-- }()
 	for _, t := range hit {
 		stmt, err := Parse(t.Body)
 		if err != nil {
 			return &SQLError{Msg: "trigger " + t.Name + ": invalid body: " + err.Error()}
 		}
-		if _, err := e.execStmt(stmt); err != nil {
+		if _, err := e.execStmt(sess, stmt); err != nil {
 			return &SQLError{Msg: "trigger " + t.Name + " failed: " + err.Error()}
 		}
 	}

@@ -27,17 +27,20 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/db"
+	"github.com/zhengkuanhua/openxdb/pkg/sql"
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 )
 
 var (
-	n   = flag.Int("n", 100000, "数据量（行数/操作数，默认 100000）")
-	dir = flag.String("dir", "sql_bench_data", "基准数据目录（自动 init，可复用；干净数据请换新目录）")
-	out = flag.String("out", "tests/bench/docs/sql_bench_result.md", "结果 Markdown 输出路径")
+	n     = flag.Int("n", 100000, "数据量（行数/操作数，默认 100000）")
+	dir   = flag.String("dir", "sql_bench_data", "基准数据目录（自动 init，可复用；干净数据请换新目录）")
+	out   = flag.String("out", "tests/bench/docs/sql_bench_result.md", "结果 Markdown 输出路径")
 	multi = flag.Int("multi", 100, "F 场景多行导入：单条 INSERT 的 VALUES 行数（默认 100）")
+	conns = flag.Int("conns", 1, "A/F/D 写入场景的并发连接数（每连接独立 SQL 会话，默认 1=串行，与历史基线可比）")
 )
 
 // opStat 收集单场景操作耗时（微秒）并输出统计。
@@ -55,6 +58,63 @@ func newOpStat(label string, count int) *opStat {
 func (s *opStat) add(d time.Duration) {
 	s.lats = append(s.lats, d.Microseconds())
 	s.total += d
+}
+
+// merge 合并另一个 opStat 的耗时/延迟样本（并发 worker 聚合用）。
+// count 由调用方在 newOpStat 时预置为总操作数，仅作输出口径，不参与累加。
+func (s *opStat) merge(o *opStat) {
+	s.total += o.total
+	s.lats = append(s.lats, o.lats...)
+}
+
+// runSQLWorkers 将 count 个操作按 conns 个独立 SQL 会话并发执行：每连接
+// 一个 Session（显式事务/语句快照状态隔离，连接内串行），操作按连续分片
+// 分配给各连接（写键不重叠），worker 本地统计后合并到 st。
+// conns<=1 时单会话串行，路径与历史基线（单连接串行）对齐。
+func runSQLWorkers(st *opStat, conns, count int, e *sql.Engine, fn func(sess *sql.Session, i int) time.Duration) {
+	if conns <= 1 {
+		sess := e.NewSession()
+		for i := 0; i < count; i++ {
+			st.add(fn(sess, i))
+		}
+		return
+	}
+	per := (count + conns - 1) / conns
+	var wg sync.WaitGroup
+	lst := make([]*opStat, conns)
+	for w := 0; w < conns; w++ {
+		start := w * per
+		end := start + per
+		if end > count {
+			end = count
+		}
+		if start >= count {
+			break
+		}
+		wg.Add(1)
+		go func(w, start, end int) {
+			defer wg.Done()
+			sess := e.NewSession()
+			ls := newOpStat(st.label, end-start)
+			for i := start; i < end; i++ {
+				ls.add(fn(sess, i))
+			}
+			lst[w] = ls
+		}(w, start, end)
+	}
+	wg.Wait()
+	for _, ls := range lst {
+		if ls != nil {
+			st.merge(ls)
+		}
+	}
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // pct 返回已排序延迟的分位数（us）。
@@ -107,18 +167,20 @@ func main() {
 		os.Exit(2)
 	}
 
-	fmt.Printf("OpenXDB SQL layer benchmark: n=%d, dir=%s, go=%s\n", *n, *dir, runtime.Version())
+	fmt.Printf("OpenXDB SQL layer benchmark: n=%d, dir=%s, go=%s, conns=%d\n", *n, *dir, runtime.Version(), *conns)
 
 	// A. 单点写入（INSERT，逐条 autocommit：解析+事务+WAL+存储 全链路）
+	// 按 -conns 个独立 SQL 会话并发（默认 1 串行；每连接写不重叠键，见
+	// runSQLWorkers 分片），验证多连接下引擎层 WAL 组提交的并发扩展性。
 	ins := newOpStat("A.单点写入 INSERT", *n)
-	for i := 0; i < *n; i++ {
+	runSQLWorkers(ins, *conns, *n, e, func(sess *sql.Session, i int) time.Duration {
 		t0 := time.Now()
-		if _, err := e.Execute(fmt.Sprintf("INSERT INTO bench VALUES (%d, 'name-%08d', %d)", i, i, i%1000)); err != nil {
+		if _, err := e.ExecuteAsSession(fmt.Sprintf("INSERT INTO bench VALUES (%d, 'name-%08d', %d)", i, i, i%1000), sql.SuperUser, sess); err != nil {
 			fmt.Fprintf(os.Stderr, "insert %d: %v\n", i, err)
 			os.Exit(2)
 		}
-		ins.add(time.Since(t0))
-	}
+		return time.Since(t0)
+	})
 
 	// B. 单点查询（主键 SELECT，随机点查，种子 42）
 	get := newOpStat("B.单点查询 SELECT", *n)
@@ -135,36 +197,39 @@ func main() {
 	}
 
 	// D. 混合事务（BEGIN / 10x INSERT + 5x SELECT / COMMIT；事务数 = n/10）
+	// 按 -conns 个独立会话并发：每个 Session 维护独立显式事务，跨连接事务
+	// 并行提交（引擎层 WAL 组提交 + 按提交序号串行应用存储，保证 WAL 顺序）。
 	txnCount := *n / 10
 	txn := newOpStat("D.混合事务 TPS", txnCount)
 	rng = newRng(99)
 	base := *n
-	for t := 0; t < txnCount; t++ {
+	runSQLWorkers(txn, *conns, txnCount, e, func(sess *sql.Session, t int) time.Duration {
+		localRng := newRng(99 + uint64(t)) // 每事务独立种子：并发安全且确定性
 		t0 := time.Now()
-		if _, err := e.Execute("BEGIN"); err != nil {
+		if _, err := e.ExecuteAsSession("BEGIN", sql.SuperUser, sess); err != nil {
 			fmt.Fprintf(os.Stderr, "begin: %v\n", err)
 			os.Exit(2)
 		}
 		for j := 0; j < 10; j++ {
 			id := base + t*10 + j
-			if _, err := e.Execute(fmt.Sprintf("INSERT INTO bench VALUES (%d, 'txn-%08d', %d)", id, id, id%1000)); err != nil {
+			if _, err := e.ExecuteAsSession(fmt.Sprintf("INSERT INTO bench VALUES (%d, 'txn-%08d', %d)", id, id, id%1000), sql.SuperUser, sess); err != nil {
 				fmt.Fprintf(os.Stderr, "txn insert %d: %v\n", id, err)
 				os.Exit(2)
 			}
 		}
 		for j := 0; j < 5; j++ {
-			k := int(rng() % uint64(*n))
-			if _, err := e.Execute(fmt.Sprintf("SELECT id FROM bench WHERE id = %d", k)); err != nil {
+			k := int(localRng() % uint64(*n))
+			if _, err := e.ExecuteAsSession(fmt.Sprintf("SELECT id FROM bench WHERE id = %d", k), sql.SuperUser, sess); err != nil {
 				fmt.Fprintf(os.Stderr, "txn select %d: %v\n", k, err)
 				os.Exit(2)
 			}
 		}
-		if _, err := e.Execute("COMMIT"); err != nil {
+		if _, err := e.ExecuteAsSession("COMMIT", sql.SuperUser, sess); err != nil {
 			fmt.Fprintf(os.Stderr, "commit: %v\n", err)
 			os.Exit(2)
 		}
-		txn.add(time.Since(t0))
-	}
+		return time.Since(t0)
+	})
 
 	// C. 范围扫描（WHERE 范围，每次返回 100 行）。
 	// 现状：SQL 层主键（PK）不在 Indexes（仅二级索引），WHERE id >= a 范围条件回退全表扫描 +
@@ -248,6 +313,7 @@ func main() {
 	// F. 多行 VALUES 批量导入（单条 INSERT 多行，全语句单次提交）。
 	// 总行数 = n，语句数 = n/multi；统计口径为行/秒，直接对比 A 场景（逐行单条）。
 	// id 使用独立区间 [2n+txnCount*10, ...) 避免与 A/D 场景冲突。
+	// 按 -conns 个独立会话并发（每语句批次连续分片，跨连接行区间不重叠）。
 	batchRows := *multi
 	if batchRows <= 0 {
 		batchRows = 100
@@ -256,27 +322,25 @@ func main() {
 	multiImport := newOpStat(fmt.Sprintf("F.多行导入INSERT(%d行/语句)", batchRows), stmtCount)
 	rng = newRng(1234)
 	startID := 2**n + txnCount*10
-	for i := 0; i < *n; i += batchRows {
-		rows := batchRows
-		if *n-i < batchRows {
-			rows = *n - i
-		}
+	runSQLWorkers(multiImport, *conns, stmtCount, e, func(sess *sql.Session, i int) time.Duration {
+		start := i * batchRows
+		rows := minInt(batchRows, *n-start)
 		var sb strings.Builder
 		sb.WriteString("INSERT INTO bench VALUES ")
 		for j := 0; j < rows; j++ {
-			id := startID + i + j
+			id := startID + start + j
 			if j > 0 {
 				sb.WriteString(", ")
 			}
 			fmt.Fprintf(&sb, "(%d, 'multi-%08d', %d)", id, id, id%1000)
 		}
 		t0 := time.Now()
-		if _, err := e.Execute(sb.String()); err != nil {
-			fmt.Fprintf(os.Stderr, "multi insert batch@%d: %v\n", i, err)
+		if _, err := e.ExecuteAsSession(sb.String(), sql.SuperUser, sess); err != nil {
+			fmt.Fprintf(os.Stderr, "multi insert batch@%d: %v\n", start, err)
 			os.Exit(2)
 		}
-		multiImport.add(time.Since(t0))
-	}
+		return time.Since(t0)
+	})
 
 	// 控制台输出
 	header := fmt.Sprintf("%-24s | %-8s | %-12s | %-9s | %-8s | %-6s | %-6s | %-6s",
@@ -299,7 +363,7 @@ func main() {
 	b.WriteString("# OpenXDB SQL 层性能基准结果（P0-5）\n\n")
 	b.WriteString(fmt.Sprintf("- 运行时间：%s\n", time.Now().Format("2006-01-02 15:04:05")))
 	b.WriteString(fmt.Sprintf("- 环境：%s / %s，go %s\n", runtime.GOOS, runtime.GOARCH, runtime.Version()))
-	b.WriteString(fmt.Sprintf("- 参数：n=%d, data-dir=%s\n", *n, *dir))
+	b.WriteString(fmt.Sprintf("- 参数：n=%d, data-dir=%s, conns=%d（A/F/D 写入场景并发连接数；每连接独立 SQL 会话，跨连接事务并行提交）\n", *n, *dir, *conns))
 	b.WriteString(fmt.Sprintf("- 引擎：RocksDB 11.8.1 + WAL（真实 db.Open 路径，含 SQL 解析/事务/WAL/存储全链路）\n\n"))
 	b.WriteString("## 场景汇总\n\n")
 	b.WriteString("| 场景 | 操作数 | 总耗时 | 速率 | 平均 | P50 | P95 | P99 |\n")

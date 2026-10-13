@@ -46,6 +46,18 @@ xscan* xdb_snapshot_scan(xsnap* s, const unsigned char* start, size_t slen,
                          const unsigned char* end, size_t elen, int limit, char** errmsg);
 void xdb_snapshot_release(xsnap* s);
 
+/* 快照批量读：keys[i] 长度 klens[i]（i=0..n-1），返回 n 个 item 的 malloc 数组
+   （整体失败返回 NULL 并置 errmsg）。item.found: 1=命中, 0=未命中；命中时
+   val 为 malloc 缓冲区，配合 xmget_free 释放。 */
+typedef struct xmget_item {
+    int found;
+    unsigned char* val;
+    size_t vlen;
+} xmget_item;
+xmget_item* xdb_snapshot_multi_get(xsnap* s, const unsigned char** keys,
+                                   const size_t* klens, int n, char** errmsg);
+void xmget_free(xmget_item* items, int n);
+
 void xdb_free_str(char* p);
 
 #ifdef __cplusplus

@@ -101,18 +101,18 @@ func hasMvHiddenColumns(meta *TableMeta) bool {
 // 流程：名称/循环/引用检查 → 事务内执行 SELECT 得到快照结果 → 推断影子表 schema →
 // 注册影子表（m:tables）→ 落盘快照行 → 持久化物化视图元数据（m:matviews）。
 // 整个创建在单个事务内完成：影子表注册、快照落盘、元数据持久化要么全部生效要么全部回滚。
-func (e *Executor) execCreateMatView(s *CreateMatViewStmt) (*Result, error) {
+func (e *Executor) execCreateMatView(sess *Session, s *CreateMatViewStmt) (*Result, error) {
 	if s.Name == "" {
 		return nil, &SQLError{Msg: "materialized view name required"}
 	}
 	if s.Select == nil {
 		return nil, &SQLError{Msg: "materialized view requires AS SELECT"}
 	}
-	tx, err := e.getTx()
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -150,19 +150,19 @@ func (e *Executor) execCreateMatView(s *CreateMatViewStmt) (*Result, error) {
 		}
 	}
 	// 单语句自动提交场景包装为事务，保证创建原子性；显式事务中由用户 COMMIT。
-	needTx := !e.inTx
+	needTx := !sess.inTx
 	if needTx {
-		if err := e.beginTx(); err != nil {
+		if err := e.beginTx(sess); err != nil {
 			return nil, err
 		}
 		defer func() {
-			if e.inTx {
-				_ = e.rollbackTx()
+			if sess.inTx {
+				_ = e.rollbackTx(sess)
 			}
 		}()
-		tx = e.curTx
+		tx = sess.curTx
 	}
-	res, err := e.execSelect(s.Select)
+	res, err := e.execSelect(sess, s.Select)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +201,7 @@ func (e *Executor) execCreateMatView(s *CreateMatViewStmt) (*Result, error) {
 		return nil, err
 	}
 	if needTx {
-		if err := e.commitTx(); err != nil {
+		if err := e.commitTx(sess); err != nil {
 			return nil, err
 		}
 	}
@@ -212,12 +212,12 @@ func (e *Executor) execCreateMatView(s *CreateMatViewStmt) (*Result, error) {
 // CONCURRENTLY 仅做语法兼容，语义为全量重算。整个刷新在单个事务内完成：
 // 重算 SELECT → 若列集/类型变化则重建影子表 schema → 清空旧快照 → 写回新快照。
 // 重算失败（如源表被 DDL 删除/改列）时整个事务回滚，旧快照保持不变。
-func (e *Executor) execRefreshMatView(s *RefreshMatViewStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execRefreshMatView(sess *Session, s *RefreshMatViewStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -239,7 +239,7 @@ func (e *Executor) execRefreshMatView(s *RefreshMatViewStmt) (*Result, error) {
 	}
 	// 整个刷新在同一事务内完成：重算 SELECT → 重建 schema（若变化）→
 	// 清空旧快照 → 写回新快照。重算失败时 defer Rollback 整体回滚，旧快照不变。
-	res, err := e.execSelect(mv.Select)
+	res, err := e.execSelect(sess, mv.Select)
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +262,7 @@ func (e *Executor) execRefreshMatView(s *RefreshMatViewStmt) (*Result, error) {
 			return nil, err
 		}
 	}
-	n, err := e.refreshMatViewRows(tx, shadow, normRows)
+	n, err := e.refreshMatViewRows(sess, tx, shadow, normRows)
 	if err != nil {
 		return nil, err
 	}
@@ -277,12 +277,12 @@ func (e *Executor) execRefreshMatView(s *RefreshMatViewStmt) (*Result, error) {
 // execDropMatView DROP MATERIALIZED VIEW [IF EXISTS] <name>（M15）。
 // 删除影子表数据与表目录条目 + 物化视图元数据；被其它虚拟视图/物化视图
 // 引用时按 RESTRICT 语义拒绝删除。
-func (e *Executor) execDropMatView(s *DropMatViewStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execDropMatView(sess *Session, s *DropMatViewStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	mvs, err := loadMatViews(tx.Get)
 	if err != nil {
 		return nil, err
@@ -322,7 +322,7 @@ func (e *Executor) execDropMatView(s *DropMatViewStmt) (*Result, error) {
 	}
 	shadow := findTable(tabs, s.Name)
 	if shadow != nil {
-		if err := e.clearMatViewRows(tx, shadow); err != nil {
+		if err := e.clearMatViewRows(sess, tx, shadow); err != nil {
 			return nil, err
 		}
 	}
@@ -499,7 +499,7 @@ func (e *Executor) writeMatViewRows(tx txn.Txn, shadow *TableMeta, rows [][]Valu
 //  1) 先在未写入前扫描旧行，构造新快照 key 集合；
 //  2) 仅删除旧行中不存在于新快照的 key（残留行）；
 //  3) 全量 Put 新快照（与 Delete 无同 key 冲突，Put 全部生效）。
-func (e *Executor) refreshMatViewRows(tx txn.Txn, shadow *TableMeta, rows [][]Value) (int, error) {
+func (e *Executor) refreshMatViewRows(sess *Session, tx txn.Txn, shadow *TableMeta, rows [][]Value) (int, error) {
 	keys := make([][]byte, len(rows))
 	rawRows := make([][]byte, len(rows))
 	newKeys := make(map[string]struct{}, len(rows))
@@ -525,7 +525,7 @@ func (e *Executor) refreshMatViewRows(tx txn.Txn, shadow *TableMeta, rows [][]Va
 		newKeys[string(key)] = struct{}{}
 	}
 	// 删除旧快照中不在新快照的残留行（避免与后续 Put 同 key 冲突）。
-	oldPairs, err := e.scanMergedCluster(tx, e.rowRanges(shadow))
+	oldPairs, err := e.scanMergedCluster(sess, tx, e.rowRanges(shadow))
 	if err != nil {
 		return 0, err
 	}
@@ -546,8 +546,8 @@ func (e *Executor) refreshMatViewRows(tx txn.Txn, shadow *TableMeta, rows [][]Va
 }
 
 // clearMatViewRows 删除影子表全部旧行。
-func (e *Executor) clearMatViewRows(tx txn.Txn, shadow *TableMeta) error {
-	pairs, err := e.scanMergedCluster(tx, e.rowRanges(shadow))
+func (e *Executor) clearMatViewRows(sess *Session, tx txn.Txn, shadow *TableMeta) error {
+	pairs, err := e.scanMergedCluster(sess, tx, e.rowRanges(shadow))
 	if err != nil {
 		return err
 	}

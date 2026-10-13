@@ -23,7 +23,7 @@ import (
 // 导入语义：主键重复的行跳过（不覆盖、不报错）；任一行的列数/类型非法则整体报错回滚（原子导入）。
 
 // execExport 导出表（或指定列）为 CSV 文件。
-func (e *Executor) execExport(s *ExportStmt) (*Result, error) {
+func (e *Executor) execExport(sess *Session, s *ExportStmt) (*Result, error) {
 	tx, err := e.tm.Begin()
 	if err != nil {
 		return nil, err
@@ -50,7 +50,7 @@ func (e *Executor) execExport(s *ExportStmt) (*Result, error) {
 			}
 		}
 	}
-	pairs, err := e.scanMergedCluster(tx, e.rowRanges(meta))
+	pairs, err := e.scanMergedCluster(sess, tx, e.rowRanges(meta))
 	if err != nil {
 		return nil, err
 	}
@@ -111,10 +111,10 @@ func csvValue(v Value) string {
 // 保留一批的 ops，每批提交落 WAL，失败批次不影响已提交批次）。
 // `IGNORE ERRORS`：宽松模式——坏行（列数/类型非法）计数跳过并继续，
 // 不再整体回滚（主键重复始终只跳过计数）。
-func (e *Executor) execImport(s *ImportStmt) (*Result, error) {
+func (e *Executor) execImport(sess *Session, s *ImportStmt) (*Result, error) {
 	// M14：mysqldump 兼容导入走独立实现（解析 CREATE TABLE/INSERT 灌入）
 	if s.Format == "MYSQLDUMP" {
-		return e.execImportDump(s)
+		return e.execImportDump(sess, s)
 	}
 	tx, err := e.tm.Begin()
 	if err != nil {
@@ -159,7 +159,7 @@ func (e *Executor) execImport(s *ImportStmt) (*Result, error) {
 		if len(ops) == 0 {
 			return nil
 		}
-		if err := e.exec2pcWrite(tx, ops); err != nil {
+		if err := e.exec2pcWrite(sess, tx, ops); err != nil {
 			return err
 		}
 		ops = nil
@@ -241,7 +241,7 @@ func (e *Executor) execImport(s *ImportStmt) (*Result, error) {
 			continue
 		}
 		seen[string(pk)] = true
-		rops, ok, err := e.insertRowOps(tx, tabs, meta, nil, vals, true)
+		rops, ok, err := e.insertRowOps(sess, tx, tabs, meta, nil, vals, true)
 		if err != nil {
 			if s.IgnoreErrors {
 				bad++

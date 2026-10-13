@@ -79,8 +79,8 @@ func (e *Executor) hasRemoteRegion(meta *TableMeta) bool {
 // execDistributedOrder 分布式排序分页主路径：
 // 各分片本地排序取 top-(offset+limit) 窗口行 → coordinator 归并排序
 // → finishSelect 应用 OFFSET/LIMIT 与投影（ordered=true 跳过重复排序）。
-func (e *Executor) execDistributedOrder(tx txn.Txn, meta *TableMeta, s *SelectStmt) (*Result, error) {
-	bs := e.snapshotTS()
+func (e *Executor) execDistributedOrder(sess *Session, tx txn.Txn, meta *TableMeta, s *SelectStmt) (*Result, error) {
+	bs := e.snapshotTS(sess)
 	ob := s.OrderBy
 	ci := colIndex(meta, ob.Col)
 	if ci < 0 {
@@ -157,8 +157,8 @@ func (e *Executor) execDistributedOrder(tx txn.Txn, meta *TableMeta, s *SelectSt
 // scanMergedClusterTop 无 ORDER BY 分页优化：各分片按内层物理键序取足量 n 行，
 // coordinator 按键序合并后截断；结果序 = 内层物理键序（与 scanMergedCluster 一致）。
 // 仅由 canDistributedTop 调用（无 WHERE 保证键序截断正确）。
-func (e *Executor) scanMergedClusterTop(tx txn.Txn, ranges []storage.KeyRange, n int) ([]storage.KVPair, error) {
-	bs := e.snapshotTS()
+func (e *Executor) scanMergedClusterTop(sess *Session, tx txn.Txn, ranges []storage.KeyRange, n int) ([]storage.KVPair, error) {
+	bs := e.snapshotTS(sess)
 	var out []storage.KVPair
 	for _, r := range ranges {
 		rid, _ := sharding.DecodeRegionKey(r.Start)

@@ -23,8 +23,9 @@ import (
 type Executor struct {
 	tm    txn.TxnManager
 	mu    sync.Mutex
-	curTx txn.Txn
-	inTx  bool
+	// 全局会话（旧单会话 API 使用：Engine.Execute/ExecuteAs、CLI、既有测试）。
+	// 服务端多连接场景使用 NewSession 创建独立会话，显式事务状态互不干扰。
+	globalSess *Session
 	// M3 分片路由（sql.New 注入默认 Router；db.Open 加载落盘元数据后覆盖）
 	router *sharding.Router
 	// M4 集群管理器（nil = 单机模式，转发路径零触发）。
@@ -32,11 +33,9 @@ type Executor struct {
 	mgr    *cluster.Manager
 	selfID string
 	// M8 分布式快照隔离：ts 为全局时间戳源（nil = 未装配，旧路径零回归）。
-	// curBeginTS 为显式事务 BEGIN 时获取的快照版本；stmtBeginTS 为
-	// autocommit 语句首次读时惰性获取的语句快照（每条语句独立）。
-	ts          tso.Source
-	curBeginTS  uint64
-	stmtBeginTS uint64
+	// 快照版本与会话状态见 Session（显式事务 curBeginTS / autocommit
+	// 语句 stmtBeginTS）。
+	ts tso.Source
 	// M6 故障转移状态：自动重指派互斥 + 已处理 down 节点去重。
 	failoverMu   sync.Mutex
 	failoverDone map[string]bool
@@ -75,10 +74,6 @@ type Executor struct {
 	// 超时未排空强制退出（非 0 退出码 + 告警日志）。可经
 	// SET [PERSIST] shutdown_timeout 热更新，默认 30 秒。
 	shutdownTimeoutSec int64
-	// M15-2：触发器递归防护深度（触发器体再次写同一表时不再触发）。
-	triggerDepth int
-	// M15-3：存储过程递归防护深度（过程体再次 CALL 时不再展开）。
-	procDepth int
 	// M16-1：在线配置热更新（config.go）。
 	// cfgPath 持久化配置文件路径（db.Open 装配 data/persisted.json；空=未启用持久化）；
 	// persistedCfg 已持久化键→值（SHOW PERSISTED CONFIG / SHOW CONFIG 来源 persisted）；
@@ -98,6 +93,7 @@ type splitConfig struct {
 func NewExecutor(tm txn.TxnManager) *Executor {
 	return &Executor{
 		tm:            tm,
+		globalSess:    &Session{},
 		router:        sharding.NewRouter(),
 		failoverDone:  map[string]bool{},
 		splitAcc:      map[uint64]int64{},
@@ -223,7 +219,7 @@ func (e *Executor) recordSlow(r SlowQueryRecord) {
 
 // execTimed 执行一条语句并统计耗时（毫秒）：先取开始时间，执行结束后
 // 若超过阈值（含执行失败，Err 记录错误信息）才构造记录与格式化，正常语句零开销。
-func (e *Executor) execTimed(user, sql string, fn func() (*Result, error)) (*Result, error) {
+func (e *Executor) execTimed(sess *Session, user, sql string, fn func() (*Result, error)) (*Result, error) {
 	startMs := timeNowMs()
 	startAt := timeNow()
 	res, err := fn()
@@ -278,25 +274,35 @@ func (e *Executor) ExecuteText(stmt Stmt, sqlText string) (*Result, error) {
 // ExecuteTextAs 同 ExecuteText，但以指定用户身份执行：执行前经权限校验。
 // 非 root 用户执行管理语句或无表级权限的 DML 时返回权限拒绝错误；
 // 降级 guest（user 为空串）同样受控（见 authz.go）。
+//
+// 使用全局会话（globalSess）执行：与旧版行为完全一致，适用于 CLI、
+// 既有测试与单会话调用方。服务端多连接场景请使用 ExecuteTextAsSession。
 func (e *Executor) ExecuteTextAs(stmt Stmt, sqlText, user string) (*Result, error) {
+	return e.ExecuteTextAsSession(stmt, sqlText, user, e.globalSess)
+}
+
+// ExecuteTextAsSession 同 ExecuteTextAs，但以独立会话执行：显式事务
+// 状态（BEGIN/COMMIT/ROLLBACK）与语句快照属于指定会话，多连接可并行
+// 执行互不干扰。会话对象由 Executor.NewSession 创建。
+func (e *Executor) ExecuteTextAsSession(stmt Stmt, sqlText, user string, sess *Session) (*Result, error) {
 	if err := e.checkPrivilege(stmt, user); err != nil {
 		return nil, err
 	}
-	return e.execTimed(user, sqlText, func() (*Result, error) {
+	return e.execTimed(sess, user, sqlText, func() (*Result, error) {
 		// M9 查询缓存：仅 autocommit 下的 SELECT 参与缓存（显式事务内
 		// 依赖事务快照，结果不缓存也不查缓存，保持快照隔离语义）。
-		if ss, ok := stmt.(*SelectStmt); ok && e.qc.Enabled() && e.autocommit() {
+		if ss, ok := stmt.(*SelectStmt); ok && e.qc.Enabled() && e.autocommit(sess) {
 			key := NormalizeSQL(sqlText)
 			if res, hit := e.qc.Get(key); hit {
 				return res, nil
 			}
-			res, err := e.execStmt(ss)
+			res, err := e.execStmt(sess, ss)
 			if err == nil {
 				e.qc.Put(key, res)
 			}
 			return res, err
 		}
-		res, err := e.execStmt(stmt)
+		res, err := e.execStmt(sess, stmt)
 		if err == nil && isWriteStmt(stmt) {
 			e.qc.Invalidate()
 		}
@@ -318,117 +324,117 @@ func isWriteStmt(stmt Stmt) bool {
 }
 
 // execStmt 语句分发（不计时/不记录慢查询，供 ExecuteText 包装）。
-func (e *Executor) execStmt(stmt Stmt) (*Result, error) {
+func (e *Executor) execStmt(sess *Session, stmt Stmt) (*Result, error) {
 	// M8：每条语句独立快照（显式事务内不重置，复用 BEGIN 快照）。
-	e.resetStmtSnapshot()
+	e.resetStmtSnapshot(sess)
 	switch s := stmt.(type) {
 	case *CreateTableStmt:
-		return e.execCreateTable(s)
+		return e.execCreateTable(sess, s)
 	case *DropTableStmt:
-		return e.execDropTable(s)
+		return e.execDropTable(sess, s)
 	case *CreateIndexStmt:
-		return e.execCreateIndex(s)
+		return e.execCreateIndex(sess, s)
 	case *DropIndexStmt:
-		return e.execDropIndex(s)
+		return e.execDropIndex(sess, s)
 	case *AlterTableStmt:
-		return e.execAlterTable(s)
+		return e.execAlterTable(sess, s)
 	case *InsertStmt:
-		return e.execInsert(s)
+		return e.execInsert(sess, s)
 	case *SelectStmt:
-		return e.execSelect(s)
+		return e.execSelect(sess, s)
 	case *UpdateStmt:
-		return e.execUpdate(s)
+		return e.execUpdate(sess, s)
 	case *DeleteStmt:
-		return e.execDelete(s)
+		return e.execDelete(sess, s)
 	case *BeginStmt:
-		if err := e.beginTx(); err != nil {
+		if err := e.beginTx(sess); err != nil {
 			return nil, err
 		}
 		return &Result{}, nil
 	case *CommitStmt:
-		if err := e.commitTx(); err != nil {
+		if err := e.commitTx(sess); err != nil {
 			return nil, err
 		}
 		return &Result{}, nil
 	case *RollbackStmt:
-		if err := e.rollbackTx(); err != nil {
+		if err := e.rollbackTx(sess); err != nil {
 			return nil, err
 		}
 		return &Result{}, nil
 	case *ExportStmt:
-		return e.execExport(s)
+		return e.execExport(sess, s)
 	case *ImportStmt:
-		return e.execImport(s)
+		return e.execImport(sess, s)
 	case *CreateViewStmt:
-		return e.execCreateView(s)
+		return e.execCreateView(sess, s)
 	case *DropViewStmt:
-		return e.execDropView(s)
+		return e.execDropView(sess, s)
 	case *ShowViewsStmt:
-		return e.execShowViews()
+		return e.execShowViews(sess)
 	case *CreateMatViewStmt:
-		return e.execCreateMatView(s)
+		return e.execCreateMatView(sess, s)
 	case *RefreshMatViewStmt:
-		return e.execRefreshMatView(s)
+		return e.execRefreshMatView(sess, s)
 	case *DropMatViewStmt:
-		return e.execDropMatView(s)
+		return e.execDropMatView(sess, s)
 	case *CreateTriggerStmt:
-		return e.execCreateTrigger(s)
+		return e.execCreateTrigger(sess, s)
 	case *DropTriggerStmt:
-		return e.execDropTrigger(s)
+		return e.execDropTrigger(sess, s)
 	case *ShowTriggersStmt:
-		return e.execShowTriggers(s)
+		return e.execShowTriggers(sess, s)
 	case *CreateProcedureStmt:
-		return e.execCreateProcedure(s)
+		return e.execCreateProcedure(sess, s)
 	case *DropProcedureStmt:
-		return e.execDropProcedure(s)
+		return e.execDropProcedure(sess, s)
 	case *ShowProceduresStmt:
-		return e.execShowProcedures(s)
+		return e.execShowProcedures(sess, s)
 	case *CallStmt:
-		return e.execCall(s)
+		return e.execCall(sess, s)
 	case *CreateUserStmt:
-		return e.execCreateUser(s)
+		return e.execCreateUser(sess, s)
 	case *DropUserStmt:
-		return e.execDropUser(s)
+		return e.execDropUser(sess, s)
 	case *AlterUserStmt:
-		return e.execAlterUser(s)
+		return e.execAlterUser(sess, s)
 	case *ShowUsersStmt:
-		return e.execShowUsers()
+		return e.execShowUsers(sess)
 	case *ShowTablesStmt:
-		return e.execShowTables()
+		return e.execShowTables(sess)
 	case *ShowIndexStmt:
-		return e.execShowIndex(s)
+		return e.execShowIndex(sess, s)
 	case *ShowSlowQueriesStmt:
-		return e.execShowSlowQueries()
+		return e.execShowSlowQueries(sess)
 	case *ExplainStmt:
-		return e.execExplain(s)
+		return e.execExplain(sess, s)
 	case *AddNodeStmt:
-		return e.execAddNode(s)
+		return e.execAddNode(sess, s)
 	case *ShowNodesStmt:
-		return e.execShowNodes()
+		return e.execShowNodes(sess)
 	case *ShowRegionRoutesStmt:
-		return e.execShowRegionRoutes()
+		return e.execShowRegionRoutes(sess)
 	case *ShowStatsStmt:
-		return e.execShowStats()
+		return e.execShowStats(sess)
 	case *ShowConfigStmt:
-		return e.execShowConfig(s)
+		return e.execShowConfig(sess, s)
 	case *ShowBinlogEventsStmt:
-		return e.execShowBinlogEvents(s)
+		return e.execShowBinlogEvents(sess, s)
 	case *SetStmt:
-		return e.execSet(s)
+		return e.execSet(sess, s)
 	case *AssignRegionStmt:
-		return e.execAssignRegion(s)
+		return e.execAssignRegion(sess, s)
 	case *SplitRegionStmt:
-		return e.execSplitRegion(s)
+		return e.execSplitRegion(sess, s)
 	case *BalanceStmt:
-		return e.execBalance(s)
+		return e.execBalance(sess, s)
 	case *BackupStmt:
-		return e.execBackup(s)
+		return e.execBackup(sess, s)
 	case *RestoreStmt:
-		return e.execRestore(s)
+		return e.execRestore(sess, s)
 	case *GrantStmt:
-		return e.execGrant(s)
+		return e.execGrant(sess, s)
 	case *RevokeStmt:
-		return e.execRevoke(s)
+		return e.execRevoke(sess, s)
 	}
 	return nil, ErrUnsupported
 }
@@ -443,10 +449,10 @@ func (e *Executor) SetBackupEnv(st storage.Storage, binlogPath string) {
 // ---- 会话级显式事务 ----
 
 // beginTx 开启会话事务（已开启时报错）。
-func (e *Executor) beginTx() error {
+func (e *Executor) beginTx(sess *Session) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.inTx {
+	if sess.inTx {
 		return &SQLError{Msg: "transaction already started"}
 	}
 	// M8 分布式快照隔离：BEGIN 时向 TSO 取全局 begin_ts 作为事务快照。
@@ -455,8 +461,8 @@ func (e *Executor) beginTx() error {
 	if err != nil {
 		return err
 	}
-	e.curTx = tx
-	e.inTx = true
+	sess.curTx = tx
+	sess.inTx = true
 	if e.ts != nil {
 		// 事务起点刷新 TSO 缓存：丢弃残余预取批次，取权威节点当前序列
 		// 的新鲜号作为快照，避免批量缓存让 begin_ts 滞后于已提交事务。
@@ -466,24 +472,24 @@ func (e *Executor) beginTx() error {
 			tx.Rollback()
 			return &SQLError{Msg: fmt.Sprintf("BEGIN_FAILED: tso unavailable: %v", terr)}
 		}
-		e.curBeginTS = ts
+		sess.curBeginTS = ts
 	} else {
-		e.curBeginTS = 0
+		sess.curBeginTS = 0
 	}
 	return nil
 }
 
 // commitTx 提交会话事务（未开启时报错）。
-func (e *Executor) commitTx() error {
+func (e *Executor) commitTx(sess *Session) error {
 	e.mu.Lock()
-	if !e.inTx {
+	if !sess.inTx {
 		e.mu.Unlock()
 		return &SQLError{Msg: "no active transaction"}
 	}
-	tx := e.curTx
-	e.inTx = false
-	e.curTx = nil
-	e.curBeginTS = 0
+	tx := sess.curTx
+	sess.inTx = false
+	sess.curTx = nil
+	sess.curBeginTS = 0
 	e.mu.Unlock()
 	if e.ts != nil {
 		// 事务结束后刷新 TSO 缓存：后续新事务/新语句取权威当前序列
@@ -500,16 +506,16 @@ func (e *Executor) commitTx() error {
 }
 
 // rollbackTx 回滚会话事务（未开启时报错）。
-func (e *Executor) rollbackTx() error {
+func (e *Executor) rollbackTx(sess *Session) error {
 	e.mu.Lock()
-	if !e.inTx {
+	if !sess.inTx {
 		e.mu.Unlock()
 		return &SQLError{Msg: "no active transaction"}
 	}
-	tx := e.curTx
-	e.inTx = false
-	e.curTx = nil
-	e.curBeginTS = 0
+	tx := sess.curTx
+	sess.inTx = false
+	sess.curTx = nil
+	sess.curBeginTS = 0
 	e.mu.Unlock()
 	if e.ts != nil {
 		e.ts.Reset()
@@ -529,7 +535,7 @@ func (e *Executor) SetTSO(src tso.Source) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.ts = src
-	e.stmtBeginTS = 0
+	e.globalSess.stmtBeginTS = 0
 }
 
 // tsoGet 从装配的时间戳源取号；未装配返回 0（旧路径）。
@@ -549,60 +555,60 @@ func (e *Executor) tsoGet() (uint64, error) {
 //   - autocommit 语句：首次读时惰性获取并缓存 stmtBeginTS（每条语句独立）。
 //
 // 取号失败（如远程 TSO 不可达）退回 0：读不过滤、尽力而为，不阻塞语句。
-func (e *Executor) snapshotTS() uint64 {
+func (e *Executor) snapshotTS(sess *Session) uint64 {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.ts == nil {
 		return 0
 	}
-	if e.inTx {
-		return e.curBeginTS
+	if sess.inTx {
+		return sess.curBeginTS
 	}
-	if e.stmtBeginTS == 0 {
+	if sess.stmtBeginTS == 0 {
 		ts, err := e.ts.Get()
 		if err != nil {
 			return 0
 		}
-		e.stmtBeginTS = ts
+		sess.stmtBeginTS = ts
 	}
-	return e.stmtBeginTS
+	return sess.stmtBeginTS
 }
 
 // resetStmtSnapshot 在每条语句执行入口重置 autocommit 语句快照，
 // 保证每条语句拥有独立快照（显式事务内不重置）。
-func (e *Executor) resetStmtSnapshot() {
+func (e *Executor) resetStmtSnapshot(sess *Session) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if !e.inTx {
-		e.stmtBeginTS = 0
+	if !sess.inTx {
+		sess.stmtBeginTS = 0
 	}
 }
 
 // getTx 获取当前语句的事务：会话事务内复用 curTx；否则新建临时事务。
-func (e *Executor) getTx() (txn.Txn, error) {
+func (e *Executor) getTx(sess *Session) (txn.Txn, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.inTx {
-		return e.curTx, nil
+	if sess.inTx {
+		return sess.curTx, nil
 	}
 	return e.tm.Begin()
 }
 
 // autocommit 判断当前语句是否以隐式事务提交（不在显式事务中时为 true）。
-func (e *Executor) autocommit() bool {
+func (e *Executor) autocommit(sess *Session) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return !e.inTx
+	return !sess.inTx
 }
 
 // ---- DDL ----
 
-func (e *Executor) execCreateTable(s *CreateTableStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execCreateTable(sess *Session, s *CreateTableStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -637,12 +643,12 @@ func (e *Executor) execCreateTable(s *CreateTableStmt) (*Result, error) {
 	return &Result{AffectedRows: 0}, nil
 }
 
-func (e *Executor) execDropTable(s *DropTableStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execDropTable(sess *Session, s *DropTableStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -746,12 +752,12 @@ func (e *Executor) execDropTable(s *DropTableStmt) (*Result, error) {
 
 // execCreateUser CREATE USER '<name>' IDENTIFIED BY '<pwd>'。
 // 密码以 SHA-256+salt 哈希落库（user.go），绝不保存明文；重复用户报错。
-func (e *Executor) execCreateUser(s *CreateUserStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execCreateUser(sess *Session, s *CreateUserStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -784,12 +790,12 @@ func (e *Executor) execCreateUser(s *CreateUserStmt) (*Result, error) {
 
 // execDropUser DROP USER [IF EXISTS] '<name>'。
 // 用户不存在时：IF EXISTS 静默成功，否则报错。
-func (e *Executor) execDropUser(s *DropUserStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execDropUser(sess *Session, s *DropUserStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -838,12 +844,12 @@ func (e *Executor) execDropUser(s *DropUserStmt) (*Result, error) {
 }
 
 // execAlterUser ALTER USER '<name>' IDENTIFIED BY '<pwd>'（重置密码）。
-func (e *Executor) execAlterUser(s *AlterUserStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execAlterUser(sess *Session, s *AlterUserStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -876,12 +882,12 @@ func (e *Executor) execAlterUser(s *AlterUserStmt) (*Result, error) {
 }
 
 // execShowUsers SHOW USERS：列出全部用户（按名称排序）。
-func (e *Executor) execShowUsers() (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execShowUsers(sess *Session) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	if e.autocommit() {
+	if e.autocommit(sess) {
 		defer tx.Rollback()
 	}
 	users, err := loadUsers(tx.Get)
@@ -897,12 +903,12 @@ func (e *Executor) execShowUsers() (*Result, error) {
 }
 
 // execCreateIndex 建二级索引：元数据登记 + 对现有数据回填索引键。
-func (e *Executor) execCreateIndex(s *CreateIndexStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execCreateIndex(sess *Session, s *CreateIndexStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -935,7 +941,7 @@ func (e *Executor) execCreateIndex(s *CreateIndexStmt) (*Result, error) {
 			return nil, err
 		}
 		pk := pkSuffixOf(meta, innerOf(kv.Key))
-		if err := e.putIndexKeys(tx, meta, row, pk, ridOf(kv.Key), &pending); err != nil {
+		if err := e.putIndexKeys(sess, tx, meta, row, pk, ridOf(kv.Key), &pending); err != nil {
 			return nil, err
 		}
 		pending = append(pending, row)
@@ -956,12 +962,12 @@ func (e *Executor) execCreateIndex(s *CreateIndexStmt) (*Result, error) {
 }
 
 // execDropIndex 删索引：元数据移除 + 删除全部索引键。
-func (e *Executor) execDropIndex(s *DropIndexStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execDropIndex(sess *Session, s *DropIndexStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -1018,7 +1024,7 @@ func (e *Executor) execDropIndex(s *DropIndexStmt) (*Result, error) {
 // 数据行 ops 在 autocommit 下走 2PC（单机零触发）+ tx.Commit() 落 WAL，
 // 显式事务内本地应用由用户 COMMIT 统一落盘。任一环节失败整体回滚，
 // 保证崩溃安全。
-func (e *Executor) ddlCommit(tx txn.Txn, tabs []*TableMeta, ops []kvOp, auto bool) error {
+func (e *Executor) ddlCommit(sess *Session, tx txn.Txn, tabs []*TableMeta, ops []kvOp, auto bool) error {
 	raw, err := saveTables(tabs)
 	if err != nil {
 		return err
@@ -1030,7 +1036,7 @@ func (e *Executor) ddlCommit(tx txn.Txn, tabs []*TableMeta, ops []kvOp, auto boo
 		if len(ops) == 0 {
 			return tx.Commit()
 		}
-		if err := e.exec2pcWrite(tx, ops); err != nil {
+		if err := e.exec2pcWrite(sess, tx, ops); err != nil {
 			return err
 		}
 	} else {
@@ -1048,12 +1054,12 @@ func (e *Executor) ddlCommit(tx txn.Txn, tabs []*TableMeta, ops []kvOp, auto boo
 // RENAME TABLE、ADD/DROP INDEX）。整个操作在单个事务内完成：
 // 元数据变更 + 数据重写要么全部生效要么全部回滚；Commit 时经 WAL 落盘，
 // 崩溃后 WAL 重放保持目录与数据一致（SHOW TABLES / SHOW INDEX 同步可见）。
-func (e *Executor) execAlterTable(s *AlterTableStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -1094,7 +1100,7 @@ func (e *Executor) execAlterTable(s *AlterTableStmt) (*Result, error) {
 			ops = append(ops, kvOp{Key: kv.Key, Value: raw})
 		}
 		affected = len(pairs)
-		if err := e.ddlCommit(tx, tabs, ops, auto); err != nil {
+		if err := e.ddlCommit(sess, tx, tabs, ops, auto); err != nil {
 			return nil, err
 		}
 		return &Result{AffectedRows: affected}, nil
@@ -1156,7 +1162,7 @@ func (e *Executor) execAlterTable(s *AlterTableStmt) (*Result, error) {
 			ops = append(ops, kvOp{Key: kv.Key, Value: raw})
 		}
 		affected += len(pairs)
-		if err := e.ddlCommit(tx, tabs, ops, auto); err != nil {
+		if err := e.ddlCommit(sess, tx, tabs, ops, auto); err != nil {
 			return nil, err
 		}
 		return &Result{AffectedRows: affected}, nil
@@ -1181,7 +1187,7 @@ func (e *Executor) execAlterTable(s *AlterTableStmt) (*Result, error) {
 				meta.Indexes[i].Col = s.NewName
 			}
 		}
-		if err := e.ddlCommit(tx, tabs, nil, auto); err != nil {
+		if err := e.ddlCommit(sess, tx, tabs, nil, auto); err != nil {
 			return nil, err
 		}
 		return &Result{AffectedRows: 0}, nil
@@ -1190,7 +1196,7 @@ func (e *Executor) execAlterTable(s *AlterTableStmt) (*Result, error) {
 			return nil, &SQLError{Msg: "table already exists: " + s.NewName}
 		}
 		meta.Name = s.NewName
-		if err := e.ddlCommit(tx, tabs, nil, auto); err != nil {
+		if err := e.ddlCommit(sess, tx, tabs, nil, auto); err != nil {
 			return nil, err
 		}
 		return &Result{AffectedRows: 0}, nil
@@ -1216,7 +1222,7 @@ func (e *Executor) execAlterTable(s *AlterTableStmt) (*Result, error) {
 				return nil, err
 			}
 			pk := pkSuffixOf(meta, innerOf(kv.Key))
-			if err := e.putIndexKeys(tx, meta, row, pk, ridOf(kv.Key), &pending); err != nil {
+			if err := e.putIndexKeys(sess, tx, meta, row, pk, ridOf(kv.Key), &pending); err != nil {
 				return nil, err
 			}
 			pending = append(pending, row)
@@ -1276,12 +1282,12 @@ func (e *Executor) execAlterTable(s *AlterTableStmt) (*Result, error) {
 
 // ---- DML ----
 
-func (e *Executor) execInsert(s *InsertStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -1299,7 +1305,7 @@ func (e *Executor) execInsert(s *InsertStmt) (*Result, error) {
 	// ON DUPLICATE 更新后的目标行），用于语句内主键/唯一键冲突判定。
 	var pending [][]Value
 	for _, row := range s.Rows {
-		rops, aff, err := e.insertRowUpsertOps(tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &pending)
+		rops, aff, err := e.insertRowUpsertOps(sess, tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &pending)
 		if err != nil {
 			return nil, err
 		}
@@ -1310,13 +1316,13 @@ func (e *Executor) execInsert(s *InsertStmt) (*Result, error) {
 	}
 	// M15-2：BEFORE 触发器（在写入提交前执行；失败则整个 DML 随事务回滚）
 	if affected > 0 {
-		if err := e.fireTriggers("BEFORE", s.Table, "INSERT"); err != nil {
+		if err := e.fireTriggers(sess, "BEFORE", s.Table, "INSERT"); err != nil {
 			return nil, err
 		}
 	}
 	if auto {
 		// autocommit：本地 + 远端统一走 2PC 提交（单机零触发）
-		if err := e.exec2pcWrite(tx, ops); err != nil {
+		if err := e.exec2pcWrite(sess, tx, ops); err != nil {
 			return nil, err
 		}
 	} else {
@@ -1335,7 +1341,7 @@ func (e *Executor) execInsert(s *InsertStmt) (*Result, error) {
 	}
 	// M15-2：AFTER 触发器（DML 已提交后执行；失败不影响主语句结果）
 	if affected > 0 {
-		if err := e.fireTriggers("AFTER", s.Table, "INSERT"); err != nil {
+		if err := e.fireTriggers(sess, "AFTER", s.Table, "INSERT"); err != nil {
 			return nil, err
 		}
 	}
@@ -1346,12 +1352,12 @@ func (e *Executor) execInsert(s *InsertStmt) (*Result, error) {
 // 返回该行所需的全部键操作（行 Put + 索引键 Put），供调用方本地应用
 // 或 2PC 分组提交（M5）。dupSkip 语义同 insertRow。
 // M9 外键：插入前校验引用完整性（父表行存在且类型匹配）。
-func (e *Executor) insertRowOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, dupSkip bool) ([]kvOp, bool, error) {
+func (e *Executor) insertRowOps(sess *Session, tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, dupSkip bool) ([]kvOp, bool, error) {
 	vals, err := e.buildRow(meta, cols, row)
 	if err != nil {
 		return nil, false, err
 	}
-	if err := e.checkFKOnRow(tx, tabs, meta, vals); err != nil {
+	if err := e.checkFKOnRow(sess, tx, tabs, meta, vals); err != nil {
 		return nil, false, err
 	}
 	pk, err := e.pkOf(meta, vals)
@@ -1365,7 +1371,7 @@ func (e *Executor) insertRowOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, 
 		return nil, false, err
 	}
 	key := e.rowKeyAt(meta, rid, pk)
-	if _, err := e.getKVCluster(tx, key); err == nil {
+	if _, err := e.getKVCluster(sess, tx, key); err == nil {
 		if dupSkip {
 			return nil, false, nil
 		}
@@ -1378,7 +1384,7 @@ func (e *Executor) insertRowOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, 
 		return nil, false, err
 	}
 	ops := []kvOp{{Key: key, Value: raw}}
-	idxOps, err := e.putIndexKeyOps(tx, meta, vals, pk, rid, nil, nil)
+	idxOps, err := e.putIndexKeyOps(sess, tx, meta, vals, pk, rid, nil, nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1392,12 +1398,12 @@ func (e *Executor) insertRowOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, 
 //   - REPLACE INTO：冲突时删除所有冲突行后插入新行（affected=删除数+1），无冲突插入（affected=1）。
 //
 // pending 记录本语句已计划的最终行（用于语句内主键/唯一键重复判定）。
-func (e *Executor) insertRowUpsertOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, onDup *OnDuplicateUpdate, replace bool, pending *[][]Value) ([]kvOp, int, error) {
+func (e *Executor) insertRowUpsertOps(sess *Session, tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, onDup *OnDuplicateUpdate, replace bool, pending *[][]Value) ([]kvOp, int, error) {
 	vals, err := e.buildRow(meta, cols, row)
 	if err != nil {
 		return nil, 0, err
 	}
-	if err := e.checkFKOnRow(tx, tabs, meta, vals); err != nil {
+	if err := e.checkFKOnRow(sess, tx, tabs, meta, vals); err != nil {
 		return nil, 0, err
 	}
 	pk, err := e.pkOf(meta, vals)
@@ -1410,13 +1416,13 @@ func (e *Executor) insertRowUpsertOps(tx txn.Txn, tabs []*TableMeta, meta *Table
 	}
 	key := e.rowKeyAt(meta, rid, pk)
 	diskExists := false
-	if _, err := e.getKVCluster(tx, key); err == nil {
+	if _, err := e.getKVCluster(sess, tx, key); err == nil {
 		diskExists = true
 	} else if err != storage.ErrNotFound {
 		return nil, 0, err
 	}
 	// 收集全部冲突行（主键 + 唯一索引，磁盘 + pending，去重）
-	conflicts, err := e.upsertConflicts(tx, meta, vals, pk, diskExists, *pending)
+	conflicts, err := e.upsertConflicts(sess, tx, meta, vals, pk, diskExists, *pending)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1427,7 +1433,7 @@ func (e *Executor) insertRowUpsertOps(tx txn.Txn, tabs []*TableMeta, meta *Table
 			return nil, 0, err
 		}
 		ops := []kvOp{{Key: key, Value: raw}}
-		idxOps, err := e.putIndexKeyOps(tx, meta, vals, pk, rid, pending, nil)
+		idxOps, err := e.putIndexKeyOps(sess, tx, meta, vals, pk, rid, pending, nil)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -1444,10 +1450,10 @@ func (e *Executor) insertRowUpsertOps(tx txn.Txn, tabs []*TableMeta, meta *Table
 				break
 			}
 		}
-		return e.onDupUpdateOps(tx, tabs, meta, vals, pk, rid, target, diskExists, onDup, pending)
+		return e.onDupUpdateOps(sess, tx, tabs, meta, vals, pk, rid, target, diskExists, onDup, pending)
 	}
 	if replace {
-		return e.replaceRowOps(tx, tabs, meta, vals, pk, rid, conflicts, diskExists, pending)
+		return e.replaceRowOps(sess, tx, tabs, meta, vals, pk, rid, conflicts, diskExists, pending)
 	}
 	// 普通 INSERT：报冲突错误
 	if diskExists || bytes.Equal(conflicts[0], pk) {
@@ -1459,7 +1465,7 @@ func (e *Executor) insertRowUpsertOps(tx txn.Txn, tabs []*TableMeta, meta *Table
 // upsertConflicts 收集与待插入行冲突的所有既有行 pk（去重）：
 // 磁盘主键冲突、磁盘各唯一索引冲突、pending 主键/唯一冲突。
 // 返回按发现顺序；普通 INSERT 报错时主键冲突优先。
-func (e *Executor) upsertConflicts(tx txn.Txn, meta *TableMeta, vals []Value, pk []byte, diskExists bool, pending [][]Value) ([][]byte, error) {
+func (e *Executor) upsertConflicts(sess *Session, tx txn.Txn, meta *TableMeta, vals []Value, pk []byte, diskExists bool, pending [][]Value) ([][]byte, error) {
 	seen := map[string]bool{}
 	var out [][]byte
 	add := func(cpk []byte) {
@@ -1489,7 +1495,7 @@ func (e *Executor) upsertConflicts(tx txn.Txn, meta *TableMeta, vals []Value, pk
 		}
 		start := EncodeIndexKey2(meta.ID, idx.ID, val, nil)
 		end := EncodeIndexKey2(meta.ID, idx.ID, append(append([]byte{}, val...), 0xff), nil)
-		pairs, err := e.scanMergedCluster(tx, e.indexRanges(meta, idx.ID, start, end))
+		pairs, err := e.scanMergedCluster(sess, tx, e.indexRanges(meta, idx.ID, start, end))
 		if err != nil {
 			return nil, err
 		}
@@ -1544,14 +1550,14 @@ func (e *Executor) upsertConflicts(tx txn.Txn, meta *TableMeta, vals []Value, pk
 
 // onDupUpdateOps ON DUPLICATE KEY UPDATE：更新冲突行（不改变其主键身份）。
 // SET 应用在冲突行上（MySQL 语义：待插入值被丢弃，仅更新既有行）；主键列禁止修改。
-func (e *Executor) onDupUpdateOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, newVals []Value, newPK []byte, newRid storage.ID, targetPK []byte, diskExists bool, onDup *OnDuplicateUpdate, pending *[][]Value) ([]kvOp, int, error) {
+func (e *Executor) onDupUpdateOps(sess *Session, tx txn.Txn, tabs []*TableMeta, meta *TableMeta, newVals []Value, newPK []byte, newRid storage.ID, targetPK []byte, diskExists bool, onDup *OnDuplicateUpdate, pending *[][]Value) ([]kvOp, int, error) {
 	for _, set := range onDup.Sets {
 		if set.Col == meta.PK {
 			return nil, 0, &SQLError{Msg: "cannot update primary key column in ON DUPLICATE KEY UPDATE: " + set.Col}
 		}
 	}
 	// 定位冲突行（磁盘或 pending）
-	target, rid, key, onDisk, err := e.upsertTargetRow(tx, meta, newPK, newRid, targetPK, diskExists, *pending)
+	target, rid, key, onDisk, err := e.upsertTargetRow(sess, tx, meta, newPK, newRid, targetPK, diskExists, *pending)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1568,7 +1574,7 @@ func (e *Executor) onDupUpdateOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta
 		}
 		updated[idx] = v
 	}
-	if err := e.checkFKOnRow(tx, tabs, meta, updated); err != nil {
+	if err := e.checkFKOnRow(sess, tx, tabs, meta, updated); err != nil {
 		return nil, 0, err
 	}
 	// 被更新行若被外键引用（作为父表）则禁止（ON UPDATE RESTRICT 语义）
@@ -1592,7 +1598,7 @@ func (e *Executor) onDupUpdateOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta
 		return nil, 0, err
 	}
 	ops = append(ops, kvOp{Key: key, Value: raw})
-	iops, err := e.putIndexKeyOps(tx, meta, updated, targetPK, rid, pending, nil)
+	iops, err := e.putIndexKeyOps(sess, tx, meta, updated, targetPK, rid, pending, nil)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1603,7 +1609,7 @@ func (e *Executor) onDupUpdateOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta
 
 // replaceRowOps REPLACE INTO：删除全部冲突行（含外键 CASCADE 联动）后插入新行，
 // 删除与插入在同一个提交内原子完成。
-func (e *Executor) replaceRowOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, newVals []Value, newPK []byte, newRid storage.ID, conflicts [][]byte, diskExists bool, pending *[][]Value) ([]kvOp, int, error) {
+func (e *Executor) replaceRowOps(sess *Session, tx txn.Txn, tabs []*TableMeta, meta *TableMeta, newVals []Value, newPK []byte, newRid storage.ID, conflicts [][]byte, diskExists bool, pending *[][]Value) ([]kvOp, int, error) {
 	var ops []kvOp
 	deleted := 0
 	// 待删除 pk 集合：REPLACE 插入时唯一性检查跳过这些行
@@ -1612,7 +1618,7 @@ func (e *Executor) replaceRowOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta,
 		ignore[string(cp)] = true
 	}
 	for _, cp := range conflicts {
-		target, rid, key, onDisk, err := e.upsertTargetRow(tx, meta, newPK, newRid, cp, diskExists && bytes.Equal(cp, newPK), *pending)
+		target, rid, key, onDisk, err := e.upsertTargetRow(sess, tx, meta, newPK, newRid, cp, diskExists && bytes.Equal(cp, newPK), *pending)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -1643,7 +1649,7 @@ func (e *Executor) replaceRowOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta,
 		return nil, 0, err
 	}
 	ops = append(ops, kvOp{Key: e.rowKeyAt(meta, newRid, newPK), Value: raw})
-	iops, err := e.putIndexKeyOps(tx, meta, newVals, newPK, newRid, pending, ignore)
+	iops, err := e.putIndexKeyOps(sess, tx, meta, newVals, newPK, newRid, pending, ignore)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1653,10 +1659,10 @@ func (e *Executor) replaceRowOps(tx txn.Txn, tabs []*TableMeta, meta *TableMeta,
 }
 
 // upsertTargetRow 定位冲突行：优先 pending（语句内最终状态），否则磁盘行。
-func (e *Executor) upsertTargetRow(tx txn.Txn, meta *TableMeta, newPK []byte, newRid storage.ID, targetPK []byte, diskExists bool, pending [][]Value) ([]Value, storage.ID, []byte, bool, error) {
+func (e *Executor) upsertTargetRow(sess *Session, tx txn.Txn, meta *TableMeta, newPK []byte, newRid storage.ID, targetPK []byte, diskExists bool, pending [][]Value) ([]Value, storage.ID, []byte, bool, error) {
 	if bytes.Equal(targetPK, newPK) {
 		if diskExists {
-			raw, err := e.getKVCluster(tx, e.rowKeyAt(meta, newRid, newPK))
+			raw, err := e.getKVCluster(sess, tx, e.rowKeyAt(meta, newRid, newPK))
 			if err != nil {
 				return nil, 0, nil, false, err
 			}
@@ -1686,7 +1692,7 @@ func (e *Executor) upsertTargetRow(tx txn.Txn, meta *TableMeta, newPK []byte, ne
 	if err != nil {
 		return nil, 0, nil, false, err
 	}
-	raw, err := e.getKVCluster(tx, e.rowKeyAt(meta, tr, targetPK))
+	raw, err := e.getKVCluster(sess, tx, e.rowKeyAt(meta, tr, targetPK))
 	if err != nil {
 		return nil, 0, nil, false, err
 	}
@@ -1736,8 +1742,8 @@ func (e *Executor) dropPending(pending *[][]Value, meta *TableMeta, pk []byte) {
 // insertRow 单行插入（类型强制 + 主键唯一性 + 行写入 + 索引维护）。
 // dupSkip=true 时主键已存在返回 (false, nil)（导入语义跳过）；
 // dupSkip=false 时主键已存在返回错误（INSERT 唯一性约束）。
-func (e *Executor) insertRow(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, dupSkip bool) (bool, error) {
-	ops, ok, err := e.insertRowOps(tx, tabs, meta, cols, row, dupSkip)
+func (e *Executor) insertRow(sess *Session, tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, dupSkip bool) (bool, error) {
+	ops, ok, err := e.insertRowOps(sess, tx, tabs, meta, cols, row, dupSkip)
 	if err != nil {
 		return false, err
 	}
@@ -1750,12 +1756,12 @@ func (e *Executor) insertRow(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, col
 	return true, nil
 }
 
-func (e *Executor) execSelect(s *SelectStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -1771,7 +1777,7 @@ func (e *Executor) execSelect(s *SelectStmt) (*Result, error) {
 	}
 	// P0 增强路径：JOIN / GROUP BY / FROM 子查询 / BETWEEN / IN / 限定列引用
 	if hasAdvancedSelect(s) {
-		return e.execSelectRel(tx, s)
+		return e.execSelectRel(sess, tx, s)
 	}
 	tabs, err := loadTables(tx.Get)
 	if err != nil {
@@ -1795,7 +1801,7 @@ func (e *Executor) execSelect(s *SelectStmt) (*Result, error) {
 			if err != nil {
 				return nil, err
 			}
-			raw, err := e.getKVCluster(tx, e.rowKeyAt(meta, rid, pk))
+			raw, err := e.getKVCluster(sess, tx, e.rowKeyAt(meta, rid, pk))
 			if err == nil {
 				row, err := decodeRow(meta, raw)
 				if err != nil {
@@ -1809,22 +1815,22 @@ func (e *Executor) execSelect(s *SelectStmt) (*Result, error) {
 		}
 	}
 	// 二级索引优化：WHERE 命中索引列等值/范围
-	if rows, ordered, err = e.indexLookup(tx, meta, s); err != nil {
+	if rows, ordered, err = e.indexLookup(sess, tx, meta, s); err != nil {
 		return nil, err
 	}
 	if rows == nil {
 		// M12-2 分布式排序分页捷径（无 WHERE：窗口截断正确性前提）
 		if e.canDistributedOrder(meta, s) {
-			return e.execDistributedOrder(tx, meta, s)
+			return e.execDistributedOrder(sess, tx, meta, s)
 		}
 		// 全表扫描 + 过滤（跨 region/跨节点展开后按内层键序合并，等价单 region 全表序）
 		var pairs []storage.KVPair
 		var err error
 		if e.canDistributedTop(meta, s) {
 			// M12-2 无 ORDER BY 仅 LIMIT/OFFSET：各分片取足量再截断
-			pairs, err = e.scanMergedClusterTop(tx, e.rowRanges(meta), s.Offset+s.Limit)
+			pairs, err = e.scanMergedClusterTop(sess, tx, e.rowRanges(meta), s.Offset+s.Limit)
 		} else {
-			pairs, err = e.scanMergedCluster(tx, e.rowRanges(meta))
+			pairs, err = e.scanMergedCluster(sess, tx, e.rowRanges(meta))
 		}
 		if err != nil {
 			return nil, err
@@ -1849,7 +1855,7 @@ func (e *Executor) execSelect(s *SelectStmt) (*Result, error) {
 
 // indexLookup 用二级索引满足 WHERE（等值/范围）与 ORDER BY。
 // 返回 rows=nil 表示无可用索引条件，应回退全表扫描。
-func (e *Executor) indexLookup(tx txn.Txn, meta *TableMeta, s *SelectStmt) ([][]Value, bool, error) {
+func (e *Executor) indexLookup(sess *Session, tx txn.Txn, meta *TableMeta, s *SelectStmt) ([][]Value, bool, error) {
 	if s.Where == nil || len(meta.Indexes) == 0 {
 		return nil, false, nil
 	}
@@ -1910,27 +1916,37 @@ func (e *Executor) indexLookup(tx txn.Txn, meta *TableMeta, s *SelectStmt) ([][]
 	default:
 		return nil, false, nil
 	}
-	pairs, err := e.scanMergedCluster(tx, e.indexRanges(meta, idx.ID, start, end))
+	pairs, err := e.scanMergedCluster(sess, tx, e.indexRanges(meta, idx.ID, start, end))
 	if err != nil {
 		return nil, false, err
 	}
 	rows := make([][]Value, 0, len(pairs))
+	// 批量回表：先收集全部行键，一次批量读（本地键经 tx.MGet，减少 cgo 往返），
+	// 远端键由 mgetKVCluster 逐条转发；与逐行 getKVCluster 语义等价。
+	rowKeys := make([][]byte, 0, len(pairs))
 	for _, kv := range pairs {
 		inner := innerOf(kv.Key)
 		pk := indexPKSuffixLen(inner, len(val))
 		// 回表：索引键与行键同 region（写入时同路由），按 region 前缀读取（跨节点经转发）
-		raw, err := e.getKVCluster(tx, e.rowKeyAt(meta, ridOf(kv.Key), pk))
-		if err != nil {
-			if err == storage.ErrNotFound {
-				continue // 索引脏键（理论上不出现）
-			}
-			return nil, false, err
+		rowKeys = append(rowKeys, e.rowKeyAt(meta, ridOf(kv.Key), pk))
+	}
+	got, err := e.mgetKVCluster(sess, tx, rowKeys)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, kv := range pairs {
+		inner := innerOf(kv.Key)
+		pk := indexPKSuffixLen(inner, len(val))
+		rk := e.rowKeyAt(meta, ridOf(kv.Key), pk)
+		raw, ok := got[string(rk)]
+		if !ok {
+			continue // 索引脏键（理论上不出现）
 		}
 		row, err := decodeRow(meta, raw)
 		if err != nil {
 			return nil, false, err
 		}
-		ok, err := matchWhere(meta, row, s.Where)
+		ok, err = matchWhere(meta, row, s.Where)
 		if err != nil {
 			return nil, false, err
 		}
@@ -2196,9 +2212,9 @@ func baseColName(name string) string {
 }
 
 // relFromTable 解析 FROM / JOIN 右侧关系：物理表或子查询派生表。
-func (e *Executor) relFromTable(tx txn.Txn, tabs []*TableMeta, table, alias string, sub *SelectStmt, subAlias string) (*Rel, error) {
+func (e *Executor) relFromTable(sess *Session, tx txn.Txn, tabs []*TableMeta, table, alias string, sub *SelectStmt, subAlias string) (*Rel, error) {
 	if sub != nil {
-		subRes, err := e.execSelect(sub)
+		subRes, err := e.execSelect(sess, sub)
 		if err != nil {
 			return nil, err
 		}
@@ -2213,12 +2229,12 @@ func (e *Executor) relFromTable(tx txn.Txn, tabs []*TableMeta, table, alias stri
 	if meta == nil {
 		return nil, &SQLError{Msg: "table not exists: " + table}
 	}
-	return e.relFromScan(tx, meta, alias)
+	return e.relFromScan(sess, tx, meta, alias)
 }
 
 // relFromScan 全表扫描生成 Rel（列名限定为 alias.col；跨 region/跨节点展开）。
-func (e *Executor) relFromScan(tx txn.Txn, meta *TableMeta, alias string) (*Rel, error) {
-	pairs, err := e.scanMergedCluster(tx, e.rowRanges(meta))
+func (e *Executor) relFromScan(sess *Session, tx txn.Txn, meta *TableMeta, alias string) (*Rel, error) {
+	pairs, err := e.scanMergedCluster(sess, tx, e.rowRanges(meta))
 	if err != nil {
 		return nil, err
 	}
@@ -2331,7 +2347,7 @@ func relValue(rel *Rel, row []Value, name string) (Value, error) {
 }
 
 // execSelectRel 增强路径主流程：FROM（表/子查询）→ JOIN → WHERE → 聚合/分组 → 排序/投影。
-func (e *Executor) execSelectRel(tx txn.Txn, s *SelectStmt) (*Result, error) {
+func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Result, error) {
 	tabs, err := loadTables(tx.Get)
 	if err != nil {
 		return nil, err
@@ -2340,35 +2356,35 @@ func (e *Executor) execSelectRel(tx txn.Txn, s *SelectStmt) (*Result, error) {
 	// 走分布式排序捷径（各分片排序窗口 + coordinator 归并）；否则全量 Rel 路径。
 	if s.Subquery == nil && len(s.Joins) == 0 && len(s.GroupBy) == 0 {
 		if meta := findTable(tabs, s.From); meta != nil && e.canDistributedOrder(meta, s) {
-			return e.execDistributedOrder(tx, meta, s)
+			return e.execDistributedOrder(sess, tx, meta, s)
 		}
 	}
-	rel, err := e.relFromTable(tx, tabs, s.From, orAlias(s.From, s.FromAlias), s.Subquery, s.SubAlias)
+	rel, err := e.relFromTable(sess, tx, tabs, s.From, orAlias(s.From, s.FromAlias), s.Subquery, s.SubAlias)
 	if err != nil {
 		return nil, err
 	}
 	for i := range s.Joins {
 		jc := &s.Joins[i]
-		right, err := e.relFromTable(tx, tabs, jc.Table, orAlias(jc.Table, jc.Alias), jc.Subquery, jc.Alias)
+		right, err := e.relFromTable(sess, tx, tabs, jc.Table, orAlias(jc.Table, jc.Alias), jc.Subquery, jc.Alias)
 		if err != nil {
 			return nil, err
 		}
 		// M12：右表物理表且 ON 含右主键等值条件时走分布式路由 JOIN（跨 region/节点
 		// 路由点查 + 合并）；否则回退 joinRels 全量拼接，行为与单机一致。
-		rel, err = e.joinRel(tx, tabs, rel, right, jc)
+		rel, err = e.joinRel(sess, tx, tabs, rel, right, jc)
 		if err != nil {
 			return nil, err
 		}
 	}
 	// WHERE 过滤（M12-3：子查询条件预计算一次，行级过滤复用缓存）
 	if s.Where != nil && len(s.Where.Conds) > 0 {
-		cache, err := e.precomputeSubqueries(tx, tabs, rel, s.Where)
+		cache, err := e.precomputeSubqueries(sess, tx, tabs, rel, s.Where)
 		if err != nil {
 			return nil, err
 		}
 		filtered := make([][]Value, 0, len(rel.Rows))
 		for _, r := range rel.Rows {
-			ok, err := e.matchWhereRelCached(tx, rel, r, s.Where, cache)
+			ok, err := e.matchWhereRelCached(sess, tx, rel, r, s.Where, cache)
 			if err != nil {
 				return nil, err
 			}
@@ -2393,7 +2409,7 @@ func (e *Executor) execSelectRel(tx txn.Txn, s *SelectStmt) (*Result, error) {
 		if hasWindow {
 			return nil, &SQLError{Msg: "window function not supported with GROUP BY"}
 		}
-		return e.groupRel(tx, s, rel)
+		return e.groupRel(sess, tx, s, rel)
 	}
 	if hasAgg && hasWindow {
 		return nil, &SQLError{Msg: "window function cannot be mixed with aggregate without GROUP BY"}
@@ -2401,23 +2417,23 @@ func (e *Executor) execSelectRel(tx txn.Txn, s *SelectStmt) (*Result, error) {
 	if hasAgg {
 		return e.aggRel(s, rel)
 	}
-	return e.finishRel(tx, s, rel, rel.Rows)
+	return e.finishRel(sess, tx, s, rel, rel.Rows)
 }
 
 // matchWhereRel 对 Rel 行执行 WHERE（支持限定列/右列引用/BETWEEN/IN/IN 子查询）。
 // 子查询条件走 matchCondRel 动态执行（CASE 分支等无缓存场景兜底）。
-func (e *Executor) matchWhereRel(tx txn.Txn, rel *Rel, row []Value, w *Where) (bool, error) {
-	return e.matchWhereRelCached(tx, rel, row, w, nil)
+func (e *Executor) matchWhereRel(sess *Session, tx txn.Txn, rel *Rel, row []Value, w *Where) (bool, error) {
+	return e.matchWhereRelCached(sess, tx, rel, row, w, nil)
 }
 
-func (e *Executor) matchCondRel(tx txn.Txn, rel *Rel, row []Value, c *Cond) (bool, error) {
-	return e.matchCondRelCached(tx, rel, row, c, nil)
+func (e *Executor) matchCondRel(sess *Session, tx txn.Txn, rel *Rel, row []Value, c *Cond) (bool, error) {
+	return e.matchCondRelCached(sess, tx, rel, row, c, nil)
 }
 
 // evalCaseRel Rel 行级 CASE 求值（分支条件走 matchWhereRel，支持嵌套/限定列）。
-func (e *Executor) evalCaseRel(tx txn.Txn, rel *Rel, row []Value, cc *CaseWhenClause) (Value, error) {
+func (e *Executor) evalCaseRel(sess *Session, tx txn.Txn, rel *Rel, row []Value, cc *CaseWhenClause) (Value, error) {
 	for i := range cc.Branches {
-		ok, err := e.matchWhereRel(tx, rel, row, &cc.Branches[i].Conds)
+		ok, err := e.matchWhereRel(sess, tx, rel, row, &cc.Branches[i].Conds)
 		if err != nil {
 			return Value{}, err
 		}
@@ -2432,8 +2448,8 @@ func (e *Executor) evalCaseRel(tx txn.Txn, rel *Rel, row []Value, cc *CaseWhenCl
 }
 
 // inSubquery 执行 IN 子查询并判断包含（取子查询第一列）。
-func (e *Executor) inSubquery(tx txn.Txn, v Value, sub *SelectStmt) (bool, error) {
-	res, err := e.execSelect(sub)
+func (e *Executor) inSubquery(sess *Session, tx txn.Txn, v Value, sub *SelectStmt) (bool, error) {
+	res, err := e.execSelect(sess, sub)
 	if err != nil {
 		return false, err
 	}
@@ -2638,7 +2654,7 @@ func (e *Executor) aggRel(s *SelectStmt, rel *Rel) (*Result, error) {
 }
 
 // groupRel GROUP BY 分组聚合：每组一行；非聚合列必须属于分组键，取组内首行值。
-func (e *Executor) groupRel(tx txn.Txn, s *SelectStmt, rel *Rel) (*Result, error) {
+func (e *Executor) groupRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel) (*Result, error) {
 	keys := make([]int, len(s.GroupBy))
 	for i, g := range s.GroupBy {
 		keys[i] = relColIndex(rel, g)
@@ -2671,7 +2687,7 @@ func (e *Executor) groupRel(tx txn.Txn, s *SelectStmt, rel *Rel) (*Result, error
 		out := make([]Value, 0, len(s.Columns))
 		for _, c := range s.Columns {
 			if c.Case != nil {
-				v, err := e.evalCaseRel(tx, rel, g.rows[0], c.Case)
+				v, err := e.evalCaseRel(sess, tx, rel, g.rows[0], c.Case)
 				if err != nil {
 					return nil, err
 				}
@@ -2719,7 +2735,7 @@ func inGroupBy(groups []string, qname string) bool {
 
 // finishRel 排序 / LIMIT / 投影（非聚合场景）。
 // SELECT * 输出列名为限定名（t.col），避免多表重名歧义。
-func (e *Executor) finishRel(tx txn.Txn, s *SelectStmt, rel *Rel, rows [][]Value) (*Result, error) {
+func (e *Executor) finishRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel, rows [][]Value) (*Result, error) {
 	if s.OrderBy != nil {
 		ob := s.OrderBy
 		sort.SliceStable(rows, func(i, j int) bool {
@@ -2781,7 +2797,7 @@ func (e *Executor) finishRel(tx txn.Txn, s *SelectStmt, rel *Rel, rows [][]Value
 				out = append(out, winVals[ri][wi])
 				wi++
 			} else if c.Case != nil {
-				v, err := e.evalCaseRel(tx, rel, row, c.Case)
+				v, err := e.evalCaseRel(sess, tx, rel, row, c.Case)
 				if err != nil {
 					return nil, err
 				}
@@ -2799,12 +2815,12 @@ func (e *Executor) finishRel(tx txn.Txn, s *SelectStmt, rel *Rel, rows [][]Value
 	return res, nil
 }
 
-func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -2817,7 +2833,7 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 		return nil, &SQLError{Msg: "table not exists: " + s.Table}
 	}
 	// 全表扫描 + 过滤（跨 region 展开后按内层键序合并）
-	pairs, err := e.scanMergedCluster(tx, e.rowRanges(meta))
+	pairs, err := e.scanMergedCluster(sess, tx, e.rowRanges(meta))
 	if err != nil {
 		return nil, err
 	}
@@ -2866,7 +2882,7 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 			row[idx] = v
 		}
 		// 更新后行须满足自身引用完整性。
-		if err := e.checkFKOnRow(tx, tabs, meta, row); err != nil {
+		if err := e.checkFKOnRow(sess, tx, tabs, meta, row); err != nil {
 			return nil, err
 		}
 		raw, err := encodeRow(meta, row)
@@ -2878,7 +2894,7 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 		e.dropPending(&pending, meta, pk)
 		e.replacePending(&pending, meta, pk, row)
 		// 写新索引键（收集 ops；唯一索引做磁盘 + pending 双重冲突检查）
-		iops, err := e.putIndexKeyOps(tx, meta, row, pk, rid, &pending, nil)
+		iops, err := e.putIndexKeyOps(sess, tx, meta, row, pk, rid, &pending, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -2887,12 +2903,12 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 	}
 	// M15-2：BEFORE 触发器（在写入提交前执行；失败则整个 DML 随事务回滚）
 	if affected > 0 {
-		if err := e.fireTriggers("BEFORE", s.Table, "UPDATE"); err != nil {
+		if err := e.fireTriggers(sess, "BEFORE", s.Table, "UPDATE"); err != nil {
 			return nil, err
 		}
 	}
 	if auto {
-		if err := e.exec2pcWrite(tx, ops); err != nil {
+		if err := e.exec2pcWrite(sess, tx, ops); err != nil {
 			return nil, err
 		}
 	} else {
@@ -2909,19 +2925,19 @@ func (e *Executor) execUpdate(s *UpdateStmt) (*Result, error) {
 	}
 	// M15-2：AFTER 触发器（DML 已提交后执行；失败不影响主语句结果）
 	if affected > 0 {
-		if err := e.fireTriggers("AFTER", s.Table, "UPDATE"); err != nil {
+		if err := e.fireTriggers(sess, "AFTER", s.Table, "UPDATE"); err != nil {
 			return nil, err
 		}
 	}
 	return &Result{AffectedRows: affected}, nil
 }
 
-func (e *Executor) execDelete(s *DeleteStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -2934,7 +2950,7 @@ func (e *Executor) execDelete(s *DeleteStmt) (*Result, error) {
 		return nil, &SQLError{Msg: "table not exists: " + s.Table}
 	}
 	// 全表扫描 + 过滤（跨 region 展开后按内层键序合并）
-	pairs, err := e.scanMergedCluster(tx, e.rowRanges(meta))
+	pairs, err := e.scanMergedCluster(sess, tx, e.rowRanges(meta))
 	if err != nil {
 		return nil, err
 	}
@@ -2970,12 +2986,12 @@ func (e *Executor) execDelete(s *DeleteStmt) (*Result, error) {
 	}
 	// M15-2：BEFORE 触发器（在写入提交前执行；失败则整个 DML 随事务回滚）
 	if affected > 0 {
-		if err := e.fireTriggers("BEFORE", s.Table, "DELETE"); err != nil {
+		if err := e.fireTriggers(sess, "BEFORE", s.Table, "DELETE"); err != nil {
 			return nil, err
 		}
 	}
 	if auto {
-		if err := e.exec2pcWrite(tx, ops); err != nil {
+		if err := e.exec2pcWrite(sess, tx, ops); err != nil {
 			return nil, err
 		}
 	} else {
@@ -2992,7 +3008,7 @@ func (e *Executor) execDelete(s *DeleteStmt) (*Result, error) {
 	}
 	// M15-2：AFTER 触发器（DML 已提交后执行；失败不影响主语句结果）
 	if affected > 0 {
-		if err := e.fireTriggers("AFTER", s.Table, "DELETE"); err != nil {
+		if err := e.fireTriggers(sess, "AFTER", s.Table, "DELETE"); err != nil {
 			return nil, err
 		}
 	}
@@ -3064,7 +3080,7 @@ func pkSuffixOf(meta *TableMeta, rowKey []byte) []byte {
 // M10 UPSERT：UNIQUE 索引写入前做唯一性检查（磁盘 + 语句内 pending 双通道）；
 // ignore 为本次语句将删除的行 pk 集合（REPLACE 删旧插新时跳过被删行的旧键），
 // 可为 nil。
-func (e *Executor) putIndexKeyOps(tx txn.Txn, meta *TableMeta, row []Value, pk []byte, rid storage.ID, pending *[][]Value, ignore map[string]bool) ([]kvOp, error) {
+func (e *Executor) putIndexKeyOps(sess *Session, tx txn.Txn, meta *TableMeta, row []Value, pk []byte, rid storage.ID, pending *[][]Value, ignore map[string]bool) ([]kvOp, error) {
 	ops := make([]kvOp, 0, len(meta.Indexes))
 	for i := range meta.Indexes {
 		idx := &meta.Indexes[i]
@@ -3077,7 +3093,7 @@ func (e *Executor) putIndexKeyOps(tx txn.Txn, meta *TableMeta, row []Value, pk [
 			// 磁盘唯一性：扫描同值索引键区间，键归属行必须与当前行相同
 			start := EncodeIndexKey2(meta.ID, idx.ID, val, nil)
 			end := EncodeIndexKey2(meta.ID, idx.ID, append(append([]byte{}, val...), 0xff), nil)
-			pairs, err := e.scanMergedCluster(tx, e.indexRanges(meta, idx.ID, start, end))
+			pairs, err := e.scanMergedCluster(sess, tx, e.indexRanges(meta, idx.ID, start, end))
 			if err != nil {
 				return nil, err
 			}
@@ -3140,8 +3156,8 @@ func (e *Executor) delIndexKeyOps(meta *TableMeta, row []Value, pk []byte, rid s
 // putIndexKeys 为一行写入其所有索引键（值 = 存在标记）。
 // rid 为行所在 region；索引键与行键同 region（保证回表同前缀）。
 // pending 为语句内已计划写入的最终行（唯一索引回填/更新时做语句内唯一性检查），可为 nil。
-func (e *Executor) putIndexKeys(tx txn.Txn, meta *TableMeta, row []Value, pk []byte, rid storage.ID, pending *[][]Value) error {
-	ops, err := e.putIndexKeyOps(tx, meta, row, pk, rid, pending, nil)
+func (e *Executor) putIndexKeys(sess *Session, tx txn.Txn, meta *TableMeta, row []Value, pk []byte, rid storage.ID, pending *[][]Value) error {
+	ops, err := e.putIndexKeyOps(sess, tx, meta, row, pk, rid, pending, nil)
 	if err != nil {
 		return err
 	}
@@ -3362,12 +3378,12 @@ func timeNow() string {
 
 // execCreateView CREATE VIEW：校验重名（表/视图）、定义引用的表/视图存在、
 // 循环引用防护（含间接环），随后持久化视图目录。
-func (e *Executor) execCreateView(s *CreateViewStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execCreateView(sess *Session, s *CreateViewStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -3416,12 +3432,12 @@ func (e *Executor) execCreateView(s *CreateViewStmt) (*Result, error) {
 }
 
 // execDropView DROP VIEW [IF EXISTS]：被其它视图引用的视图禁止删除（RESTRICT）。
-func (e *Executor) execDropView(s *DropViewStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execDropView(sess *Session, s *DropViewStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -3468,12 +3484,12 @@ func (e *Executor) execDropView(s *DropViewStmt) (*Result, error) {
 }
 
 // execShowViews SHOW VIEWS：列出全部视图名与定义摘要。
-func (e *Executor) execShowViews() (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execShowViews(sess *Session) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	if e.autocommit() {
+	if e.autocommit(sess) {
 		defer tx.Rollback()
 	}
 	views, err := loadViews(tx.Get)
@@ -3655,12 +3671,12 @@ func cyclicView(stack []string, name string) bool {
 }
 
 // execShowTables SHOW TABLES：列出全部表（表名 / 列定义 / 主键 / 索引概要）。
-func (e *Executor) execShowTables() (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execShowTables(sess *Session) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	if e.autocommit() {
+	if e.autocommit(sess) {
 		defer tx.Rollback()
 	}
 	tabs, err := loadTables(tx.Get)
@@ -3689,12 +3705,12 @@ func (e *Executor) execShowTables() (*Result, error) {
 }
 
 // execShowIndex SHOW INDEX FROM t：列出指定表全部二级索引。
-func (e *Executor) execShowIndex(s *ShowIndexStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execShowIndex(sess *Session, s *ShowIndexStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	if e.autocommit() {
+	if e.autocommit(sess) {
 		defer tx.Rollback()
 	}
 	tabs, err := loadTables(tx.Get)
@@ -3720,7 +3736,7 @@ func (e *Executor) execShowIndex(s *ShowIndexStmt) (*Result, error) {
 
 // execShowSlowQueries SHOW SLOWQUERIES：查看内存慢查询记录（新->旧）。
 // M13 列：time | user | duration_ms | rows | error | sql。
-func (e *Executor) execShowSlowQueries() (*Result, error) {
+func (e *Executor) execShowSlowQueries(sess *Session) (*Result, error) {
 	recs := e.SlowQueries()
 	res := &Result{Columns: []string{"time", "user", "duration_ms", "rows", "error", "sql"}}
 	for i := len(recs) - 1; i >= 0; i-- {
@@ -3741,7 +3757,7 @@ func (e *Executor) execShowSlowQueries() (*Result, error) {
 // M13 慢查询阈值与落盘开关，运行时变更即时生效；M16-1 起 PERSIST 应用后写入
 // 持久化配置文件，重启仍生效）。校验与应用统一走配置注册表（config.go），
 // 非法键报 unknown session variable，非法值/类型按配置项给出明确报错。
-func (e *Executor) execSet(s *SetStmt) (*Result, error) {
+func (e *Executor) execSet(sess *Session, s *SetStmt) (*Result, error) {
 	spec := lookupConfigSpec(s.Name)
 	if spec == nil {
 		return nil, &SQLError{Msg: "unknown session variable: " + s.Name}
@@ -3774,7 +3790,7 @@ func boolVal(b bool) Value {
 // execShowStats SHOW STATS：输出服务器运行指标（T20 运维监控）。
 // 覆盖：活跃连接数（server 会话计数）、表数量、region 数量、
 // 慢查询数量、binlog 最大位点。注入源未装配时输出 0。
-func (e *Executor) execShowStats() (*Result, error) {
+func (e *Executor) execShowStats(sess *Session) (*Result, error) {
 	res := &Result{Columns: []string{"metric", "value"}}
 	appendKV := func(k string, v Value) {
 		res.Rows = append(res.Rows, []Value{StrVal(k), v})
@@ -3784,11 +3800,11 @@ func (e *Executor) execShowStats() (*Result, error) {
 	} else {
 		appendKV("connection_count", IntVal(0))
 	}
-	tx, err := e.getTx()
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	if e.autocommit() {
+	if e.autocommit(sess) {
 		defer tx.Rollback()
 	}
 	tabs, err := loadTables(tx.Get)
@@ -3815,12 +3831,12 @@ func (e *Executor) execShowStats() (*Result, error) {
 }
 
 // execExplain EXPLAIN <SELECT>：输出执行计划文本（不实际执行查询）。
-func (e *Executor) execExplain(s *ExplainStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execExplain(sess *Session, s *ExplainStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	if e.autocommit() {
+	if e.autocommit(sess) {
 		defer tx.Rollback()
 	}
 	tabs, err := loadTables(tx.Get)

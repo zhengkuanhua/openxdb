@@ -24,6 +24,9 @@ type WriteBatch struct {
 // Snapshot 一致性快照（备份/迁移复用）。
 type Snapshot interface {
 	Get(key []byte) ([]byte, error)
+	// MGet 批量读取：返回命中键（string(key)）→ 值；未命中键不出现在结果中。
+	// 等价于对每个键分别 Get 但仅一次底层批量调用（减少 cgo 往返）。
+	MGet(keys [][]byte) (map[string][]byte, error)
 	Scan(r KeyRange, limit int) ([]KVPair, error)
 	Release()
 }

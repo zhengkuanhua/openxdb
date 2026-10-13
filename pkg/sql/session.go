@@ -1,0 +1,39 @@
+package sql
+
+import (
+	"sync"
+
+	"github.com/zhengkuanhua/openxdb/pkg/txn"
+)
+
+// Session 会话对象：承载会话级显式事务状态与快照版本。
+//
+// 并发模型：服务端（pkg/server）每 TCP 连接创建一个 Session，连接内
+// 串行执行、跨连接并行；SQL 层 autocommit 语句不使用显式事务状态，
+// 各自构造独立临时事务，天然可并发。
+//
+// 兼容性：旧 API（Engine.Execute / ExecuteAs 等单会话调用方，含 CLI、
+// 既有测试与 sql_bench）使用 Executor 内置的全局会话 globalSess，
+// 行为与旧版完全一致（显式事务状态全局共享，无并发隔离要求）。
+type Session struct {
+	mu sync.Mutex
+
+	// 显式事务状态（BEGIN 后置位，COMMIT/ROLLBACK 复位）。
+	inTx  bool
+	curTx txn.Txn
+	// M8 快照隔离版本：curBeginTS 为显式事务 BEGIN 时获取的快照版本；
+	// stmtBeginTS 为 autocommit 语句首次读时惰性获取的语句快照版本
+	// （每条语句独立，显式事务内不重置）。
+	curBeginTS  uint64
+	stmtBeginTS uint64
+	// 递归防护深度：triggerDepth 防触发器无限递归；
+	// procDepth 防存储过程嵌套展开。
+	triggerDepth int
+	procDepth    int
+}
+
+// NewSession 创建独立会话。服务端每 TCP 连接调用一次；
+// 同一 Session 不应被多个 goroutine 同时使用（连接内串行语义）。
+func (e *Executor) NewSession() *Session {
+	return &Session{}
+}

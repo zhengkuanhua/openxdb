@@ -98,12 +98,30 @@ func (e *Engine) SetBackupEnv(st storage.Storage, binlogPath string) {
 func (e *Engine) SplitRegionNow(regionID uint64) error { return e.ex.splitRegionByID(regionID) }
 
 // BalanceNow 手动触发一次负载均衡（迁移过载本地 region 到最闲存活节点）。
-func (e *Engine) BalanceNow() (*Result, error) { return e.ex.execBalance(&BalanceStmt{}) }
+func (e *Engine) BalanceNow() (*Result, error) { return e.ex.execBalance(e.ex.globalSess, &BalanceStmt{}) }
 
 // Execute 解析并执行一条 SQL 语句。
 // 以超级用户（root）身份执行，向后兼容未接入鉴权的调用方（CLI/旧驱动）。
 func (e *Engine) Execute(stmt string) (*Result, error) {
 	return e.ExecuteAs(stmt, SuperUser)
+}
+
+// NewSession 创建独立 SQL 会话（服务端每 TCP 连接一个，见 pkg/server）。
+// 会话承载独立显式事务状态（BEGIN/COMMIT/ROLLBACK）与语句快照，多连接
+// 可并行执行互不干扰；同一 Session 不得被多个 goroutine 并发使用
+// （连接内串行语义）。旧 API（Execute/ExecuteAs）仍使用内置全局会话，
+// 行为与旧版完全一致。
+func (e *Engine) NewSession() *Session { return e.ex.NewSession() }
+
+// ExecuteAsSession 解析并以指定用户身份、在指定独立会话上执行一条 SQL
+// 语句：显式事务状态与语句快照属于该会话，跨连接并行安全。会话由
+// NewSession 创建；多行/多语句需同一 Session 串行调用。
+func (e *Engine) ExecuteAsSession(stmt, user string, sess *Session) (*Result, error) {
+	ast, err := Parse(stmt)
+	if err != nil {
+		return nil, err
+	}
+	return e.ex.ExecuteTextAsSession(ast, stmt, user, sess)
 }
 
 // ExecuteAs 解析并以指定用户身份执行一条 SQL 语句：执行前经权限校验

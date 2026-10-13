@@ -94,14 +94,14 @@ func fkRowMatches(parent *TableMeta, parentRow []Value, child *TableMeta, childR
 }
 
 // checkFKOnRow 子表插入/更新前检查全部外键引用存在性（父表行必须存在且匹配）。
-func (e *Executor) checkFKOnRow(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, vals []Value) error {
+func (e *Executor) checkFKOnRow(sess *Session, tx txn.Txn, tabs []*TableMeta, meta *TableMeta, vals []Value) error {
 	for i := range meta.ForeignKeys {
 		fk := &meta.ForeignKeys[i]
 		parent := findTable(tabs, fk.RefTable)
 		if parent == nil {
 			return &SQLError{Msg: "foreign key referenced table not exists: " + fk.RefTable}
 		}
-		if !e.fkParentRowExists(tx, parent, meta, vals, fk) {
+		if !e.fkParentRowExists(sess, tx, parent, meta, vals, fk) {
 			return &SQLError{Msg: "foreign key constraint violated: no matching row in " + fk.RefTable + " for column(s) " + strings.Join(fk.Columns, ",")}
 		}
 	}
@@ -109,7 +109,7 @@ func (e *Executor) checkFKOnRow(tx txn.Txn, tabs []*TableMeta, meta *TableMeta, 
 }
 
 // fkParentRowExists 读取父表主键行并做完整匹配。
-func (e *Executor) fkParentRowExists(tx txn.Txn, parent *TableMeta, child *TableMeta, childRow []Value, fk *ForeignKey) bool {
+func (e *Executor) fkParentRowExists(sess *Session, tx txn.Txn, parent *TableMeta, child *TableMeta, childRow []Value, fk *ForeignKey) bool {
 	// 子表外键列值
 	subVals := make([]Value, len(fk.Columns))
 	for j, c := range fk.Columns {
@@ -127,7 +127,7 @@ func (e *Executor) fkParentRowExists(tx txn.Txn, parent *TableMeta, child *Table
 	if err != nil {
 		return false
 	}
-	raw, err := e.getKVCluster(tx, e.rowKeyAt(parent, rid, pk))
+	raw, err := e.getKVCluster(sess, tx, e.rowKeyAt(parent, rid, pk))
 	if err != nil {
 		if err == storage.ErrNotFound {
 			return false

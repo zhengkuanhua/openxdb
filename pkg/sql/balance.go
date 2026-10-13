@@ -205,7 +205,7 @@ func (e *Executor) splitRegion(meta *TableMeta, rg sharding.RegionInfo) error {
 }
 
 // execSplitRegion SPLIT REGION <regionID>：手动分裂入口（沿数据中点）。
-func (e *Executor) execSplitRegion(s *SplitRegionStmt) (*Result, error) {
+func (e *Executor) execSplitRegion(sess *Session, s *SplitRegionStmt) (*Result, error) {
 	rid := storage.ID(s.RegionID)
 	rg, ok := e.router.FindRegion(rid)
 	if !ok {
@@ -275,7 +275,7 @@ type regionLoad struct {
 }
 
 // execBalance BALANCE：手动触发一次负载均衡。
-func (e *Executor) execBalance(s *BalanceStmt) (*Result, error) {
+func (e *Executor) execBalance(sess *Session, s *BalanceStmt) (*Result, error) {
 	// 集群启用判据：管理器存在且注册了至少一个远端节点。
 	// 单机模式（db.Open 默认创建 Manager 但无远端节点）视作未启用，拒绝执行。
 	if e.mgr == nil || !e.mgr.HasRemoteNodes() {

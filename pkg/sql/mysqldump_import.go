@@ -19,7 +19,7 @@ import (
 //     IgnoreErrors 时坏行/建表错误/执行错误跳过计数，否则首个错误即回滚。
 //
 // 返回 Result：Columns=[tables, inserted, skipped, errors, batches]。
-func (e *Executor) execImportDump(s *ImportStmt) (*Result, error) {
+func (e *Executor) execImportDump(sess *Session, s *ImportStmt) (*Result, error) {
 	dump, err := mysqldump.ParseFile(s.Path, mysqldump.Options{IgnoreErrors: s.IgnoreErrors})
 	if err != nil {
 		return nil, &SQLError{Msg: "import failed: " + err.Error()}
@@ -27,15 +27,15 @@ func (e *Executor) execImportDump(s *ImportStmt) (*Result, error) {
 	// 导入事务：已在显式会话事务中则复用（不自行提交）；否则自开并控制提交（BATCH 按批）。
 	outer := false
 	e.mu.Lock()
-	if !e.inTx {
+	if !sess.inTx {
 		outer = true
 	}
 	e.mu.Unlock()
 	if outer {
-		if err := e.beginTx(); err != nil {
+		if err := e.beginTx(sess); err != nil {
 			return nil, err
 		}
-		defer func() { _ = e.rollbackTx() }()
+		defer func() { _ = e.rollbackTx(sess) }()
 	}
 	tables, inserted, skipped, bad, batches := 0, 0, 0, 0, 0
 	// flush：仅 BATCH 模式真正提交并开启新事务；原子模式为空操作（结尾统一提交）。
@@ -43,10 +43,10 @@ func (e *Executor) execImportDump(s *ImportStmt) (*Result, error) {
 		if !outer || s.Batch <= 0 {
 			return nil
 		}
-		if err := e.commitTx(); err != nil {
+		if err := e.commitTx(sess); err != nil {
 			return err
 		}
-		if err := e.beginTx(); err != nil {
+		if err := e.beginTx(sess); err != nil {
 			return err
 		}
 		batches++
@@ -54,7 +54,7 @@ func (e *Executor) execImportDump(s *ImportStmt) (*Result, error) {
 	}
 	// 1) DROP TABLE IF EXISTS（重建语义：目标库同名表被替换）
 	for _, dn := range dump.Drops {
-		if _, err := e.execDropTable(&DropTableStmt{Name: dn, IfExists: true}); err != nil {
+		if _, err := e.execDropTable(sess, &DropTableStmt{Name: dn, IfExists: true}); err != nil {
 			if !s.IgnoreErrors {
 				return nil, err
 			}
@@ -74,7 +74,7 @@ func (e *Executor) execImportDump(s *ImportStmt) (*Result, error) {
 				pk = c.Name
 			}
 		}
-		if _, err := e.execCreateTable(&CreateTableStmt{Name: t.Name, Columns: cols, PK: pk}); err != nil {
+		if _, err := e.execCreateTable(sess, &CreateTableStmt{Name: t.Name, Columns: cols, PK: pk}); err != nil {
 			if !s.IgnoreErrors {
 				return nil, err
 			}
@@ -82,7 +82,7 @@ func (e *Executor) execImportDump(s *ImportStmt) (*Result, error) {
 			continue
 		}
 		tables++
-		tx, err := e.getTx()
+		tx, err := e.getTx(sess)
 		if err != nil {
 			return nil, err
 		}
@@ -119,7 +119,7 @@ func (e *Executor) execImportDump(s *ImportStmt) (*Result, error) {
 				continue
 			}
 			seen[string(pk)] = true
-			rops, ok, oerr := e.insertRowOps(tx, tabs, meta, nil, vals, true)
+			rops, ok, oerr := e.insertRowOps(sess, tx, tabs, meta, nil, vals, true)
 			if oerr != nil {
 				if !s.IgnoreErrors {
 					return nil, oerr
@@ -142,7 +142,7 @@ func (e *Executor) execImportDump(s *ImportStmt) (*Result, error) {
 					return nil, err
 				}
 				// flush 已开启新事务，重新取 tx/tabs/meta
-				tx, err = e.getTx()
+				tx, err = e.getTx(sess)
 				if err != nil {
 					return nil, err
 				}
@@ -167,12 +167,12 @@ func (e *Executor) execImportDump(s *ImportStmt) (*Result, error) {
 	}
 	if outer && s.Batch <= 0 {
 		batches = 1
-		if err := e.commitTx(); err != nil {
+		if err := e.commitTx(sess); err != nil {
 			return nil, err
 		}
 	} else if outer {
 		// BATCH 模式：末批已提交，回滚残余空事务（数据已在各批落盘）
-		_ = e.rollbackTx()
+		_ = e.rollbackTx(sess)
 		if batches == 0 {
 			batches = 1 // 空导入也计为一次事务（无数据）
 		}

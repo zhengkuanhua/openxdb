@@ -23,6 +23,9 @@ type Txn interface {
 	ID() uint64
 	// Get 读取：优先自己未提交的写（read-your-writes），否则走 BEGIN 时刻快照（隔离读）。
 	Get(key []byte) ([]byte, error)
+	// MGet 批量读取：优先自己未提交的写（read-your-writes），其余走快照批量读。
+	// 返回命中键（string(key)）→ 值；未命中键不出现在结果中。与逐键 Get 语义等价。
+	MGet(keys [][]byte) (map[string][]byte, error)
 	// Scan 范围扫描 [Start, End)：快照数据 + 合并事务内未提交写（read-your-writes）。
 	// limit<=0 表示不限制；结果按 Key 升序。
 	Scan(r storage.KeyRange, limit int) ([]storage.KVPair, error)

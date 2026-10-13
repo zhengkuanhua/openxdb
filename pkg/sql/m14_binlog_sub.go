@@ -17,16 +17,16 @@ import (
 //     IsIndex 事件显示 "(index)"（二级索引键，跟随行变更，消费方通常忽略）；
 //   - pk：主键字节文本；
 //   - row：PUT 行值按表列解码为 "col=val, ..." 摘要（元数据缺失时显示原始 JSON 字节）。
-func (e *Executor) execShowBinlogEvents(s *ShowBinlogEventsStmt) (*Result, error) {
+func (e *Executor) execShowBinlogEvents(sess *Session, s *ShowBinlogEventsStmt) (*Result, error) {
 	if e.binlogPath == "" {
 		return nil, &SQLError{Msg: "binlog not enabled"}
 	}
 	// 表目录：tableID -> 表元数据（行值列级解码用）。
-	tx, err := e.getTx()
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	if e.autocommit() {
+	if e.autocommit(sess) {
 		defer tx.Rollback()
 	}
 	tabs, err := loadTables(tx.Get)

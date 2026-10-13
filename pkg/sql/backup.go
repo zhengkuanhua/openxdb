@@ -62,7 +62,7 @@ type backupMeta struct {
 }
 
 // execBackup BACKUP TO '<path>'：基于一致快照生成完整逻辑备份文件。
-func (e *Executor) execBackup(s *BackupStmt) (*Result, error) {
+func (e *Executor) execBackup(sess *Session, s *BackupStmt) (*Result, error) {
 	if e.st == nil {
 		return nil, &SQLError{Msg: "backup failed: storage not injected"}
 	}
@@ -198,7 +198,7 @@ func (e *Executor) execBackup(s *BackupStmt) (*Result, error) {
 // execRestore RESTORE FROM '<path>' [TO LSN <n>]：校验并恢复备份快照。
 // 幂等语义：目标库同名表先删（行+索引物理键）再按备份重建；整体事务，失败回滚。
 // PITR：备份点之后的 binlog 记录回放到 TO LSN（含），物理写直接落到引擎级 Storage。
-func (e *Executor) execRestore(s *RestoreStmt) (*Result, error) {
+func (e *Executor) execRestore(sess *Session, s *RestoreStmt) (*Result, error) {
 	if e.st == nil {
 		return nil, &SQLError{Msg: "restore failed: storage not injected"}
 	}

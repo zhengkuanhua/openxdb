@@ -76,11 +76,11 @@ func planJoinRoute(left *Rel, jc *JoinClause, rmeta *TableMeta) (joinRoutePlan, 
 
 // joinRel 统一 JOIN 入口：满足分布式路由条件时走 routedJoin（路由点查 + 合并），
 // 否则回退 joinRels（单机全量内存 JOIN，行为与 M1 一致）。
-func (e *Executor) joinRel(tx txn.Txn, tabs []*TableMeta, left, right *Rel, jc *JoinClause) (*Rel, error) {
+func (e *Executor) joinRel(sess *Session, tx txn.Txn, tabs []*TableMeta, left, right *Rel, jc *JoinClause) (*Rel, error) {
 	if jc.Subquery == nil && len(jc.On) > 0 {
 		meta := findTable(tabs, jc.Table)
 		if plan, ok := planJoinRoute(left, jc, meta); ok {
-			rel, err := e.routedJoin(tx, left, right, meta, jc, plan)
+			rel, err := e.routedJoin(sess, tx, left, right, meta, jc, plan)
 			if err == errJoinUnroutable {
 				// 键值类型与右主键编码不兼容 → 回退全量 JOIN 保证语义一致。
 				return joinRels(left, right, jc)
@@ -94,7 +94,7 @@ func (e *Executor) joinRel(tx txn.Txn, tabs []*TableMeta, left, right *Rel, jc *
 // routedJoin 分布式路由 JOIN：驱动左行按右表主键路由点查并合并。
 // 每左行至多命中 1 个右行（右主键唯一）；未命中 / 条件不满足时
 // INNER 丢弃该行、LEFT 以空值补右列，语义与 joinRels 一致。
-func (e *Executor) routedJoin(tx txn.Txn, left, right *Rel, rmeta *TableMeta, jc *JoinClause, plan joinRoutePlan) (*Rel, error) {
+func (e *Executor) routedJoin(sess *Session, tx txn.Txn, left, right *Rel, rmeta *TableMeta, jc *JoinClause, plan joinRoutePlan) (*Rel, error) {
 	out := &Rel{Cols: append(append([]string{}, left.Cols...), right.Cols...)}
 	for _, lr := range left.Rows {
 		lv := lr[plan.leftIdx]
@@ -112,7 +112,7 @@ func (e *Executor) routedJoin(tx txn.Txn, left, right *Rel, rmeta *TableMeta, jc
 			return nil, err
 		}
 		key := e.rowKeyAt(rmeta, rid, pk)
-		raw, err := e.getKVCluster(tx, key)
+		raw, err := e.getKVCluster(sess, tx, key)
 		if err != nil {
 			if err == storage.ErrNotFound {
 				if jc.Type == "LEFT" {

@@ -487,6 +487,23 @@ func (s *snap) Get(key []byte) ([]byte, error) {
 	}
 }
 
+// MGet 批量读取：与 rocksdb 快照 MGet 语义等价（仅一次底层批量调用，未命中键不出现在结果）。
+// btree 为纯内存实现无 cgo 往返，逐键 Get 即可保证语义一致。
+func (s *snap) MGet(keys [][]byte) (map[string][]byte, error) {
+	got := make(map[string][]byte, len(keys))
+	for _, key := range keys {
+		v, err := s.Get(key)
+		if err == storage.ErrNotFound {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		got[string(key)] = v
+	}
+	return got, nil
+}
+
 func (s *snap) Scan(r storage.KeyRange, limit int) ([]storage.KVPair, error) {
 	var out []storage.KVPair
 	seen := 0

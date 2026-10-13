@@ -71,8 +71,8 @@ func (e *Executor) checkWritable(rid storage.ID) error {
 // getKVCluster 集群感知点查：定位 region 后，本地直读、远端转发。
 // 与 tx.Get 相同的错误语义（未命中返回 storage.ErrNotFound）。
 // M8 快照隔离：读路径携带 begin_ts，本地/远端均按版本过滤。
-func (e *Executor) getKVCluster(tx txn.Txn, key []byte) ([]byte, error) {
-	bs := e.snapshotTS()
+func (e *Executor) getKVCluster(sess *Session, tx txn.Txn, key []byte) ([]byte, error) {
+	bs := e.snapshotTS(sess)
 	if e.mgr == nil {
 		e.incLocal()
 		return e.getKVVisible(tx, key, bs)
@@ -91,6 +91,70 @@ func (e *Executor) getKVCluster(tx txn.Txn, key []byte) ([]byte, error) {
 	}
 	e.incRemote()
 	return e.mgr.GetRemote(node, key, bs)
+}
+
+// mgetKVCluster 集群感知批量点查：本地键一次批量读（tx.MGet，减少 cgo 往返），
+// 远端键逐条走 getKVCluster 转发。与逐条 getKVCluster 语义等价：
+// 未命中键不出现在结果中，M8 快照版本过滤行为一致。
+func (e *Executor) mgetKVCluster(sess *Session, tx txn.Txn, keys [][]byte) (map[string][]byte, error) {
+	bs := e.snapshotTS(sess)
+	got := make(map[string][]byte, len(keys))
+	if e.mgr == nil {
+		e.incLocal()
+		m, err := tx.MGet(keys)
+		if err != nil {
+			return nil, err
+		}
+		if bs == 0 {
+			return m, nil
+		}
+		for k, v := range m {
+			visible, verr := cluster.VersionVisible(tx.Scan, []byte(k), bs)
+			if verr != nil {
+				return nil, verr
+			}
+			if visible {
+				got[k] = v
+			}
+		}
+		return got, nil
+	}
+	var localKeys [][]byte
+	for _, key := range keys {
+		rid, _ := sharding.DecodeRegionKey(key)
+		if e.regionLocal(rid) {
+			localKeys = append(localKeys, key)
+			continue
+		}
+		v, err := e.getKVCluster(sess, tx, key)
+		if err != nil && err != storage.ErrNotFound {
+			return nil, err
+		}
+		if err == nil {
+			got[string(key)] = v
+		}
+	}
+	if len(localKeys) > 0 {
+		e.incLocal()
+		m, err := tx.MGet(localKeys)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range m {
+			if bs == 0 {
+				got[k] = v
+				continue
+			}
+			visible, verr := cluster.VersionVisible(tx.Scan, []byte(k), bs)
+			if verr != nil {
+				return nil, verr
+			}
+			if visible {
+				got[k] = v
+			}
+		}
+	}
+	return got, nil
 }
 
 // getKVVisible 本地读取 + M8 快照版本过滤：begin_ts=0 时不过滤（旧路径零回归）。
@@ -139,8 +203,8 @@ func (e *Executor) scanMergedVisible(tx txn.Txn, ranges []storage.KeyRange, begi
 // 与 scanMerged 相同的结果语义（按内层键序合并、等价单机全表序）：
 //   - 本地 region → 直接扫描本事务（M8 按 begin_ts 快照过滤）；
 //   - 远端 region → QUERY_REQ 转发区间扫描（携带 beginTS，归属节点按版本过滤）。
-func (e *Executor) scanMergedCluster(tx txn.Txn, ranges []storage.KeyRange) ([]storage.KVPair, error) {
-	bs := e.snapshotTS()
+func (e *Executor) scanMergedCluster(sess *Session, tx txn.Txn, ranges []storage.KeyRange) ([]storage.KVPair, error) {
+	bs := e.snapshotTS(sess)
 	if e.mgr == nil {
 		e.incLocal()
 		return e.scanMergedVisible(tx, ranges, bs)
@@ -190,7 +254,7 @@ func (e *Executor) scanMergedCluster(tx txn.Txn, ranges []storage.KeyRange) ([]s
 
 // execAddNode ADD NODE '<addr>'：注册远端节点。
 // 先 TCP 握手（NODE_HELLO/NODE_HELLO_OK 双向身份确认），成功后再写入注册表。
-func (e *Executor) execAddNode(s *AddNodeStmt) (*Result, error) {
+func (e *Executor) execAddNode(sess *Session, s *AddNodeStmt) (*Result, error) {
 	if e.mgr == nil {
 		return nil, &SQLError{Msg: "cluster not enabled"}
 	}
@@ -209,7 +273,7 @@ func (e *Executor) execAddNode(s *AddNodeStmt) (*Result, error) {
 }
 
 // execShowNodes SHOW NODES：列出节点注册表。
-func (e *Executor) execShowNodes() (*Result, error) {
+func (e *Executor) execShowNodes(sess *Session) (*Result, error) {
 	if e.mgr == nil {
 		return nil, &SQLError{Msg: "cluster not enabled"}
 	}
@@ -227,7 +291,7 @@ func (e *Executor) execShowNodes() (*Result, error) {
 }
 
 // execShowRegionRoutes SHOW REGION ROUTES：列出集群 region 路由表（region → 归属节点）。
-func (e *Executor) execShowRegionRoutes() (*Result, error) {
+func (e *Executor) execShowRegionRoutes(sess *Session) (*Result, error) {
 	regions := e.router.AllRegions()
 	res := &Result{
 		Columns: []string{"region_id", "table_id", "start_key", "end_key", "state", "node", "local"},
@@ -251,7 +315,7 @@ func (e *Executor) execShowRegionRoutes() (*Result, error) {
 // 将 region 数据全量推送到目标节点（REGION_PUSH，目标节点学习路由并落盘），
 // 随后更新本节点路由归属并落盘 m:regions。
 // 数据保留在源节点（第一簇不做删除搬迁）；写路径分布式语义下簇统一。
-func (e *Executor) execAssignRegion(s *AssignRegionStmt) (*Result, error) {
+func (e *Executor) execAssignRegion(sess *Session, s *AssignRegionStmt) (*Result, error) {
 	if e.mgr == nil {
 		return nil, &SQLError{Msg: "cluster not enabled"}
 	}

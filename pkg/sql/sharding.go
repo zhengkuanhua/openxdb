@@ -157,11 +157,11 @@ func saveRegionMeta(e *Executor) ([]byte, error) {
 // 首个 region StartKey=nil（表起始），末个 region EndKey=nil（表结束），保证连续无空洞。
 // 存量数据（行 + 索引键）在同一事务内按新边界重路由迁移到对应 region 前缀。
 func (e *Executor) SplitTable(name string, boundaries [][]byte) error {
-	tx, err := e.getTx()
+	tx, err := e.getTx(e.globalSess)
 	if err != nil {
 		return err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(e.globalSess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -293,11 +293,11 @@ func (e *Executor) remapTable(tx txn.Txn, meta *TableMeta, rs []sharding.RegionI
 //   - 显式划分时返回全部显式 region（按 StartKey 升序）；
 //   - 未划分时返回隐式整表单 region（Explicit=false，RegionID 高位带标记）。
 func (e *Executor) ListRegions(name string) ([]sharding.RegionInfo, error) {
-	tx, err := e.getTx()
+	tx, err := e.getTx(e.globalSess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(e.globalSess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -317,11 +317,11 @@ func (e *Executor) ListRegions(name string) ([]sharding.RegionInfo, error) {
 
 // LocateRegion 按主键字节定位 region（路由未命中返回 sharding.ErrRegionNotFound）。
 func (e *Executor) LocateRegion(name string, pk []byte) (storage.ID, error) {
-	tx, err := e.getTx()
+	tx, err := e.getTx(e.globalSess)
 	if err != nil {
 		return 0, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(e.globalSess)
 	if auto {
 		defer tx.Rollback()
 	}

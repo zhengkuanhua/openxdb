@@ -30,7 +30,7 @@ func TestM13ExecTimedErr(t *testing.T) {
 	e.SetSlowThreshold(1)
 	logPath := filepath.Join(t.TempDir(), "slow.log")
 	e.SetSlowLog(logPath, true)
-	_, err := e.execTimed("alice", "SELECT FAIL", func() (*Result, error) {
+	_, err := e.execTimed(e.globalSess, "alice", "SELECT FAIL", func() (*Result, error) {
 		time.Sleep(2 * time.Millisecond)
 		return nil, errors.New("boom")
 	})
@@ -61,7 +61,7 @@ func TestM13SlowQueryMax(t *testing.T) {
 	e.SetSlowThreshold(1)
 	e.SetSlowQueryMax(2)
 	for i := 0; i < 5; i++ {
-		_, _ = e.execTimed("u", "SLOW", func() (*Result, error) {
+		_, _ = e.execTimed(e.globalSess, "u", "SLOW", func() (*Result, error) {
 			time.Sleep(2 * time.Millisecond)
 			return &Result{}, nil
 		})
@@ -108,7 +108,7 @@ func TestM13SlowLogConfigure(t *testing.T) {
 	if !e.SlowLogEnabled() || e.SlowLogPath() != path {
 		t.Fatalf("slow log config: enabled=%v path=%q", e.SlowLogEnabled(), e.SlowLogPath())
 	}
-	_, err := e.execTimed("u", "SLOW", func() (*Result, error) {
+	_, err := e.execTimed(e.globalSess, "u", "SLOW", func() (*Result, error) {
 		time.Sleep(2 * time.Millisecond)
 		return &Result{}, nil
 	})
@@ -120,7 +120,7 @@ func TestM13SlowLogConfigure(t *testing.T) {
 		t.Fatalf("slow.log missing entry: %q", string(data))
 	}
 	e.SetSlowLog(path, false)
-	_, _ = e.execTimed("u", "SLOW2", func() (*Result, error) {
+	_, _ = e.execTimed(e.globalSess, "u", "SLOW2", func() (*Result, error) {
 		time.Sleep(2 * time.Millisecond)
 		return &Result{}, nil
 	})
@@ -134,7 +134,7 @@ func TestM13SlowLogConfigure(t *testing.T) {
 func TestM13ExecTimedLowOverhead(t *testing.T) {
 	e := newExecutorInternal()
 	e.SetSlowThreshold(100000) // 大阈值：正常语句必然不触发
-	res, err := e.execTimed("u", "SELECT 1", func() (*Result, error) {
+	res, err := e.execTimed(e.globalSess, "u", "SELECT 1", func() (*Result, error) {
 		return &Result{Rows: [][]Value{{IntVal(1)}}}, nil
 	})
 	if err != nil || len(res.Rows) != 1 {

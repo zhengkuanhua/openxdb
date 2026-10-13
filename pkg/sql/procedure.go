@@ -290,7 +290,7 @@ func validateProcedureBody(body string) error {
 // 创建时校验：名称唯一、参数类型合法（parser 已校验）、体可解析且为受支持
 // 语句；随后注册到 m:procedures 持久化。与触发器 / 物化视图 / 虚拟视图 /
 // 表命名空间互相独立，不触发任何 DML。
-func (e *Executor) execCreateProcedure(s *CreateProcedureStmt) (*Result, error) {
+func (e *Executor) execCreateProcedure(sess *Session, s *CreateProcedureStmt) (*Result, error) {
 	if s.Name == "" {
 		return nil, &SQLError{Msg: "procedure name required"}
 	}
@@ -300,11 +300,11 @@ func (e *Executor) execCreateProcedure(s *CreateProcedureStmt) (*Result, error) 
 	if err := validateProcedureBody(s.Body); err != nil {
 		return nil, &SQLError{Msg: "invalid procedure body: " + err.Error()}
 	}
-	tx, err := e.getTx()
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -337,12 +337,12 @@ func (e *Executor) execCreateProcedure(s *CreateProcedureStmt) (*Result, error) 
 
 // execDropProcedure DROP PROCEDURE [IF EXISTS] <name>（M15-3）。
 // 仅移除元数据注册，不动任何表数据。
-func (e *Executor) execDropProcedure(s *DropProcedureStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execDropProcedure(sess *Session, s *DropProcedureStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	procs, err := loadProcedures(tx.Get)
 	if err != nil {
 		return nil, err
@@ -376,12 +376,12 @@ func (e *Executor) execDropProcedure(s *DropProcedureStmt) (*Result, error) {
 }
 
 // execShowProcedures SHOW PROCEDURES（M15-3）。
-func (e *Executor) execShowProcedures(s *ShowProceduresStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execShowProcedures(sess *Session, s *ShowProceduresStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	if e.autocommit() {
+	if e.autocommit(sess) {
 		defer tx.Rollback()
 	}
 	procs, err := loadProcedures(tx.Get)
@@ -411,15 +411,15 @@ func (e *Executor) execShowProcedures(s *ShowProceduresStmt) (*Result, error) {
 // execStmt 路径（INSERT/UPDATE/DELETE 各自独立隐式事务提交，SELECT 执行
 // 但结果集不返回——CALL 返回固定 AffectedRows=1）。procDepth 递归防护：
 // 过程体再次 CALL 时不再展开，避免无限递归（文档化限制）。
-func (e *Executor) execCall(s *CallStmt) (*Result, error) {
+func (e *Executor) execCall(sess *Session, s *CallStmt) (*Result, error) {
 	if s.Name == "" {
 		return nil, &SQLError{Msg: "procedure name required"}
 	}
-	tx, err := e.getTx()
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	if e.autocommit() {
+	if e.autocommit(sess) {
 		defer tx.Rollback()
 	}
 	procs, err := loadProcedures(tx.Get)
@@ -433,23 +433,23 @@ func (e *Executor) execCall(s *CallStmt) (*Result, error) {
 	if len(s.Args) != len(proc.Params) {
 		return nil, &SQLError{Msg: "procedure " + s.Name + " expects " + strconv.Itoa(len(proc.Params)) + " argument(s), got " + strconv.Itoa(len(s.Args))}
 	}
-	if e.procDepth > 0 {
+	if sess.procDepth > 0 {
 		return nil, &SQLError{Msg: "procedure recursion not supported: " + s.Name}
 	}
 	env := make(map[string]Value, len(proc.Params))
 	for i, pm := range proc.Params {
 		env[strings.ToLower(pm.Name)] = s.Args[i]
 	}
-	e.procDepth++
-	defer func() { e.procDepth-- }()
-	if err := e.execProcedureBody(proc.Body, env); err != nil {
+	sess.procDepth++
+	defer func() { sess.procDepth-- }()
+	if err := e.execProcedureBody(sess, proc.Body, env); err != nil {
 		return nil, &SQLError{Msg: "procedure " + s.Name + " failed: " + err.Error()}
 	}
 	return &Result{AffectedRows: 1}, nil
 }
 
 // execProcedureBody 逐条执行过程体语句（M15-3 内部实现）。
-func (e *Executor) execProcedureBody(body string, env map[string]Value) error {
+func (e *Executor) execProcedureBody(sess *Session, body string, env map[string]Value) error {
 	stmts, err := splitBodyStatements(body)
 	if err != nil {
 		return err
@@ -479,7 +479,7 @@ func (e *Executor) execProcedureBody(body string, env map[string]Value) error {
 		if !procedureBodySupported(stmt) {
 			return &SQLError{Msg: "unsupported statement in procedure body"}
 		}
-		if _, err := e.execStmt(stmt); err != nil {
+		if _, err := e.execStmt(sess, stmt); err != nil {
 			return err
 		}
 	}

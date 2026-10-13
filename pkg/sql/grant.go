@@ -74,12 +74,12 @@ func parsePrivilege(priv string) (Privilege, error) {
 // execGrant GRANT <priv[,priv...]> ON <table> TO '<user>'。
 // 语义：授权用户必须存在（否则报错）；表存在性宽松处理（不校验，
 // 见 T24_m11_grant.md 边界说明）；重复 GRANT 幂等（权限位 OR 合并）。
-func (e *Executor) execGrant(s *GrantStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execGrant(sess *Session, s *GrantStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -124,12 +124,12 @@ func (e *Executor) execGrant(s *GrantStmt) (*Result, error) {
 // execRevoke REVOKE <priv[,priv...]> ON <table> FROM '<user>'。
 // 语义：用户必须存在（否则报错）；未授予的权限 REVOKE 幂等成功
 // （清除对应位；位清零后移除表条目与空用户条目，无变化也不报错）。
-func (e *Executor) execRevoke(s *RevokeStmt) (*Result, error) {
-	tx, err := e.getTx()
+func (e *Executor) execRevoke(sess *Session, s *RevokeStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit()
+	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}

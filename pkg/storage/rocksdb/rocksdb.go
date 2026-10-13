@@ -143,6 +143,55 @@ func (sn *snapshot) Scan(rng storage.KeyRange, limit int) ([]storage.KVPair, err
 		C.int(limit), &cscanErr), rng)
 }
 
+func (sn *snapshot) MGet(keys [][]byte) (map[string][]byte, error) {
+	if sn.s == nil {
+		return nil, fmt.Errorf("rocksdb: snapshot released")
+	}
+	n := len(keys)
+	got := make(map[string][]byte, n)
+	if n == 0 {
+		return got, nil
+	}
+	keyPtrs := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof((*C.uchar)(nil))))
+	lenPtrs := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(C.size_t(0))))
+	if keyPtrs == nil || lenPtrs == nil {
+		if keyPtrs != nil {
+			C.free(keyPtrs)
+		}
+		if lenPtrs != nil {
+			C.free(lenPtrs)
+		}
+		return nil, fmt.Errorf("rocksdb: malloc failed for MGet")
+	}
+	defer C.free(keyPtrs)
+	defer C.free(lenPtrs)
+	kp := unsafe.Slice((**C.uchar)(keyPtrs), n)
+	lp := unsafe.Slice((*C.size_t)(lenPtrs), n)
+	for i, k := range keys {
+		kp[i] = cBytes(k)
+		lp[i] = C.size_t(len(k))
+	}
+	var errmsg *C.char
+	items := C.xdb_snapshot_multi_get(sn.s, (**C.uchar)(keyPtrs), (*C.size_t)(lenPtrs), C.int(n), &errmsg)
+	if items == nil {
+		if errmsg != nil {
+			err := fmt.Errorf("rocksdb: snapshot mget: %s", cString(errmsg))
+			freeStr(errmsg)
+			return nil, err
+		}
+		return nil, fmt.Errorf("rocksdb: snapshot mget: no items")
+	}
+	defer C.xmget_free(items, C.int(n))
+	it := unsafe.Slice((*C.xmget_item)(items), n)
+	for i := 0; i < n; i++ {
+		if it[i].found == 0 {
+			continue
+		}
+		got[string(keys[i])] = C.GoBytes(unsafe.Pointer(it[i].val), C.int(it[i].vlen))
+	}
+	return got, nil
+}
+
 func (sn *snapshot) Release() {
 	if sn.s == nil {
 		return

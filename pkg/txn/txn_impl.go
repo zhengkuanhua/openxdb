@@ -129,6 +129,41 @@ func (t *txnImpl) Get(key []byte) ([]byte, error) {
 	return t.snap.Get(key)
 }
 
+// MGet 批量读取：read-your-writes 命中优先，其余键走快照批量读（单次底层调用）。
+func (t *txnImpl) MGet(keys [][]byte) (map[string][]byte, error) {
+	if t.state != TxnActive {
+		return nil, ErrTxnClosed
+	}
+	got := make(map[string][]byte, len(keys))
+	missing := make([][]byte, 0, len(keys))
+	for _, key := range keys {
+		found := false
+		for i := len(t.ops) - 1; i >= 0; i-- {
+			o := t.ops[i]
+			if bytes.Equal(o.key, key) {
+				found = true
+				if !o.isDelete {
+					got[string(key)] = o.value
+				}
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		snapGot, err := t.snap.MGet(missing)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range snapGot {
+			got[k] = v
+		}
+	}
+	return got, nil
+}
+
 // Scan 合并快照数据与事务内未提交写（read-your-writes），结果按 Key 升序。
 func (t *txnImpl) Scan(r storage.KeyRange, limit int) ([]storage.KVPair, error) {
 	if t.state != TxnActive {
@@ -287,8 +322,8 @@ func (t *txnImpl) Commit() error {
 }
 
 // Rollback：丢弃缓冲并释放快照。未写存储，恢复时不会被重放。
-// 写一条 StateRollback 记录留审计；追加后同步 SyncUpTo 确保审计记录落盘
-// （失败不阻断回滚语义，审计非关键路径；默认模式下 Append 已 fsync，SyncUpTo 零额外开销）。
+// 空批次直接结束（无写入可回滚，审计无可记录内容）；非空批次写一条 StateRollback
+// 记录留审计，追加后同步 SyncUpTo 确保审计记录落盘（失败不阻断回滚语义，审计非关键路径）。
 func (t *txnImpl) Rollback() error {
 	if t.state != TxnActive {
 		return ErrTxnClosed
@@ -296,6 +331,12 @@ func (t *txnImpl) Rollback() error {
 	m := t.mgr
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// 空批次：与空批次 Commit 对称，跳过 WAL。恢复语义不变——Rollback 记录本就不重放，
+	// 崩溃时缺失的审计记录等同从未存在的事务，无任何可恢复状态。
+	if len(t.batch.Puts) == 0 && len(t.batch.Deletes) == 0 {
+		t.finish(TxnRolledBack)
+		return nil
+	}
 	en := &wal.WalEntry{
 		TxnID: t.id,
 		Batch: t.batch,
