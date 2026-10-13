@@ -93,6 +93,26 @@ func (e *Engine) StopAutoBalance() { e.ex.stopAutoBalance() }
 func (e *Engine) SetBackupEnv(st storage.Storage, binlogPath string) {
 	e.ex.SetBackupEnv(st, binlogPath)
 }
+// SetBackupScheduleConfig 装配备份调度配置（BR 方向②，cmd/main start 装配）。
+// 全量覆盖：intervalSec 周期秒（0=关闭）、keep 保留份数（0=不清理）、
+// dir 备份输出目录、remoteURL 远程 HTTP PUT 目标（空=不上传）。
+func (e *Engine) SetBackupScheduleConfig(cfg BackupScheduleConfig) {
+	e.ex.SetBackupScheduleConfig(cfg)
+}
+
+// StartBackupScheduler 启动备份调度循环（cmd/main start 装配后调用；
+// 与 db 启动流程衔接，确保 BACKUP 环境已注入）。
+func (e *Engine) StartBackupScheduler() { e.ex.StartBackupScheduler() }
+
+// StopBackupScheduler 停止备份调度循环（db 关闭流程装配，避免关闭竞态）。
+func (e *Engine) StopBackupScheduler() { e.ex.StopBackupScheduler() }
+
+// BackupScheduleStatus 返回备份调度状态快照（SHOW BACKUP STATUS 数据源）。
+func (e *Engine) BackupScheduleStatus() BackupScheduleStatus { return e.ex.BackupScheduleStatus() }
+
+// BackupNow 手动立即执行一次备份（运维/测试接口），返回备份文件路径。
+// 正在执行时返回错误；结果同时记录到 SHOW BACKUP STATUS 最近状态。
+func (e *Engine) BackupNow() (string, error) { return e.ex.BackupNow() }
 
 // SplitRegionNow 手动触发 region 分裂（函数式入口，兼容旧手动 SPLIT）。
 func (e *Engine) SplitRegionNow(regionID uint64) error { return e.ex.splitRegionByID(regionID) }

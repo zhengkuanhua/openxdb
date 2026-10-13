@@ -373,6 +373,11 @@ func (d *DB) Close() error {
 	if d.SQL != nil {
 		d.SQL.StopAutoBalance()
 	}
+	// BR 方向②：停止备份调度循环，避免 Close 过程中误触发 BACKUP
+	//（备份依赖存储快照，存储关闭前必须停）。
+	if d.SQL != nil {
+		d.SQL.StopBackupScheduler()
+	}
 	if d.Follower != nil {
 		if err := d.Follower.Stop(); err != nil {
 			errs = append(errs, fmt.Errorf("db: close follower: %w", err))

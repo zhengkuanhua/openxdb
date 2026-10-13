@@ -82,6 +82,10 @@ type Executor struct {
 	cfgMu        sync.Mutex
 	persistedCfg map[string]string
 	sessionCfg   map[string]string
+	// BR 方向②扩展：备份调度器（周期自动 BACKUP + 保留份数 + 状态接口，
+	// backup_schedule.go）。NewExecutor 初始化；config.go 的 backup_* 键
+	// 热更新、cmd/main 启动装配与 SHOW BACKUP STATUS 均读写此调度器。
+	backupSched *BackupScheduler
 }
 
 // splitConfig M7 自动分裂配置。
@@ -91,7 +95,7 @@ type splitConfig struct {
 }
 
 func NewExecutor(tm txn.TxnManager) *Executor {
-	return &Executor{
+e := &Executor{
 		tm:            tm,
 		globalSess:    &Session{},
 		router:        sharding.NewRouter(),
@@ -106,6 +110,20 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 		sessionCfg:   map[string]string{},
 		// M16-2：优雅停机默认超时 30s（可 SET shutdown_timeout 热更新）。
 		shutdownTimeoutSec: shutdownTimeoutDefaultSec,
+	}
+	// BR 方向②：备份调度器单点装配（需引用 Executor 本身执行 BACKUP，
+	// 故构造后单独初始化；db.Close 停止调度亦依赖此字段非 nil）。
+	e.initBackupScheduler()
+	return e
+}
+
+// newExecutor 为 NewExecutor 的辅助装配，见 NewExecutor。
+
+// NewExecutorWithScheduler 保持 NewExecutor 单点装配：调度器需引用 Executor
+// 本身（执行 BACKUP），故在结构体构造后单独初始化。
+func (e *Executor) initBackupScheduler() {
+	if e.backupSched == nil {
+		e.backupSched = newBackupScheduler(e)
 	}
 }
 
@@ -417,6 +435,8 @@ func (e *Executor) execStmt(sess *Session, stmt Stmt) (*Result, error) {
 		return e.execShowStats(sess)
 	case *ShowConfigStmt:
 		return e.execShowConfig(sess, s)
+	case *ShowBackupStatusStmt:
+		return e.execShowBackupStatus(sess, s)
 	case *ShowBinlogEventsStmt:
 		return e.execShowBinlogEvents(sess, s)
 	case *SetStmt:

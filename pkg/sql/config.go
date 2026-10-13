@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // configSpec 一个可热更新的配置项：校验与应用（apply）以及当前值读取（read）。
@@ -103,6 +104,69 @@ var configSpecs = []*configSpec{
 			return nil
 		},
 		read: func(e *Executor) string { return strconv.FormatInt(e.ShutdownTimeoutSec(), 10) },
+	},
+	// BR 方向②扩展：备份调度（周期自动 BACKUP + 保留份数 + 状态接口）与远程备份。
+	// backup_interval 正整数开启周期备份，0 关闭；backup_keep 保留份数（0=不清理）；
+	// backup_dir 备份输出目录；backup_remote_url 远程 HTTP PUT 目标（空=不上传）。
+	// 热更新即时生效：调度器重算下次执行时间；SHOW BACKUP STATUS 查看状态。
+	{
+		key:  "backup_interval",
+		desc: "备份调度周期秒（BR 方向②）：正整数开启周期 BACKUP，0 关闭；配合 backup_dir/backup_keep/backup_remote_url",
+		def:  "0",
+		apply: func(e *Executor, v string) error {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 0 {
+				return &SQLError{Msg: "invalid value for backup_interval: " + v + " (expected non-negative integer seconds)"}
+			}
+			cfg := e.backupSched.Config()
+			cfg.IntervalSec = n
+			e.backupSched.Update(cfg)
+			return nil
+		},
+		read: func(e *Executor) string { return strconv.FormatInt(e.backupSched.Config().IntervalSec, 10) },
+	},
+	{
+		key:  "backup_keep",
+		desc: "备份保留份数（BR 方向②）：N>0 仅保留最近 N 份调度备份，0 不清理",
+		def:  "0",
+		apply: func(e *Executor, v string) error {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 0 {
+				return &SQLError{Msg: "invalid value for backup_keep: " + v + " (expected non-negative integer)"}
+			}
+			cfg := e.backupSched.Config()
+			cfg.Keep = n
+			e.backupSched.Update(cfg)
+			return nil
+		},
+		read: func(e *Executor) string { return strconv.FormatInt(e.backupSched.Config().Keep, 10) },
+	},
+	{
+		key:  "backup_dir",
+		desc: "备份输出目录（BR 方向②）：周期备份写入目录；空=未配置",
+		def:  "",
+		apply: func(e *Executor, v string) error {
+			cfg := e.backupSched.Config()
+			cfg.Dir = v
+			e.backupSched.Update(cfg)
+			return nil
+		},
+		read: func(e *Executor) string { return e.backupSched.Config().Dir },
+	},
+	{
+		key:  "backup_remote_url",
+		desc: "远程备份 HTTP PUT 目标（BR 方向②）：备份完成后上传；空=不上传",
+		def:  "",
+		apply: func(e *Executor, v string) error {
+			if v != "" && !(strings.HasPrefix(v, "http://") || strings.HasPrefix(v, "https://")) {
+				return &SQLError{Msg: "invalid value for backup_remote_url: " + v + " (expected http(s) URL or empty)"}
+			}
+			cfg := e.backupSched.Config()
+			cfg.RemoteURL = v
+			e.backupSched.Update(cfg)
+			return nil
+		},
+		read: func(e *Executor) string { return e.backupSched.Config().RemoteURL },
 	},
 }
 

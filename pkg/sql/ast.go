@@ -516,6 +516,11 @@ type ShowConfigStmt struct {
 }
 
 func (ShowConfigStmt) stmt() {}
+// ShowBackupStatusStmt SHOW BACKUP STATUS（BR 方向②）：输出备份调度配置
+// （周期/保留份数/目录/远程目标）与最近执行状态（下次执行/最近结果/错误）。
+type ShowBackupStatusStmt struct{}
+
+func (ShowBackupStatusStmt) stmt() {}
 
 // ShowBinlogEventsStmt SHOW BINLOG EVENTS [FROM <lsn>] [LIMIT <n>]（M14 CDC）：
 // 只读展示 binlog 增量变更流；From 为起始位点（nil=从头），Limit<=0=不限。

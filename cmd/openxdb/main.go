@@ -19,6 +19,7 @@ import (
 	"github.com/zhengkuanhua/openxdb/pkg/db"
 	"github.com/zhengkuanhua/openxdb/pkg/metrics"
 	"github.com/zhengkuanhua/openxdb/pkg/server"
+"github.com/zhengkuanhua/openxdb/pkg/sql"
 )
 
 const version = "v0.20.0-alpha"
@@ -50,6 +51,8 @@ func main() {
 		err = cmdStatus(os.Args[2:])
 	case "import":
 		err = cmdImport(os.Args[2:])
+	case "backup":
+		err = cmdBackup(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -258,6 +261,52 @@ func cmdStart(args []string) error {
 	}
 	d.SQL.SetSlowLog(slowLogPath, slowLogOn)
 	fmt.Printf("slow query log: %s (threshold %dms, use SHOW SLOWQUERIES)\n", slowLogPath, d.SQL.SlowQueryThreshold())
+	// BR 方向②：备份调度装配。CLI flag 显式提供时覆盖持久化配置
+	//（SET PERSIST backup_*）；未提供时按 持久化>默认 生效。
+	// --backup-interval 秒（0=关闭）开启周期自动 BACKUP；--backup-keep 保留份数
+	//（0=不清理）；--backup-dir 输出目录（默认 <data>/backups）；--backup-remote-url
+	// 远程 HTTP PUT 上传目标（可选，配合 openxdb backup push/pull 传输）。
+	bsCfg := d.SQL.BackupScheduleStatus().Config
+	backupDir := bsCfg.Dir
+	if p, ok := flagValue(args, "--backup-dir"); ok && p != "" {
+		backupDir = p
+	}
+	if backupDir == "" {
+		backupDir = filepath.Join(dir, "backups")
+	}
+	if p, ok := flagValue(args, "--backup-interval"); ok {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return errors.New("invalid --backup-interval value: " + p + " (expected non-negative integer seconds)")
+		}
+		bsCfg.IntervalSec = int64(n)
+	}
+	if p, ok := flagValue(args, "--backup-keep"); ok {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return errors.New("invalid --backup-keep value: " + p + " (expected non-negative integer)")
+		}
+		bsCfg.Keep = int64(n)
+	}
+	if p, ok := flagValue(args, "--backup-remote-url"); ok {
+		if p != "" && !strings.HasPrefix(p, "http://") && !strings.HasPrefix(p, "https://") {
+			return errors.New("invalid --backup-remote-url value: " + p + " (expected http(s) URL or empty)")
+		}
+		bsCfg.RemoteURL = p
+	}
+	bsCfg.Dir = backupDir
+	d.SQL.SetBackupScheduleConfig(bsCfg)
+	if bsCfg.IntervalSec > 0 {
+		d.SQL.StartBackupScheduler()
+		remoteTxt := "none"
+		if bsCfg.RemoteURL != "" {
+			remoteTxt = bsCfg.RemoteURL
+		}
+		fmt.Printf("backup scheduler: every %ds -> %s (keep %d, remote %s, use SHOW BACKUP STATUS)\n",
+			bsCfg.IntervalSec, bsCfg.Dir, bsCfg.Keep, remoteTxt)
+	} else {
+		fmt.Printf("backup scheduler: disabled (use --backup-interval <sec> / SET PERSIST backup_interval)\n")
+	}
 	// M13：metrics 导出装配（METRICS/STATUS/HTTP /metrics 共享注册表；
 	// 注入连接数/慢查询阈值/存储大小/region 分布实时采集源）。
 	m := metrics.New()
@@ -328,6 +377,52 @@ func runSignalLoop(sigCh <-chan os.Signal, s *server.Server, timeout func() time
 	return 0
 }
 
+// cmdBackup 远程备份传输子命令：push 上传本地备份文件到远程目标
+// （HTTP PUT，配合 --backup-remote-url 的 WebDAV/自定义端点）；
+// pull 从远程目标下载备份到本地，再通过 RESTORE FROM '<path>' 恢复。
+func cmdBackup(args []string) error {
+	if len(args) < 1 {
+		return errors.New("backup: missing subcommand (push|pull), see usage")
+	}
+	switch args[0] {
+	case "push":
+		path, ok := flagValue(args[1:], "--file")
+		if !ok || path == "" {
+			return errors.New("backup push: missing --file <path>")
+		}
+		url, ok := flagValue(args[1:], "--url")
+		if !ok || url == "" {
+			return errors.New("backup push: missing --url <http(s) url>")
+		}
+		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			return errors.New("backup push: --url must be http(s) URL")
+		}
+		if err := sql.UploadBackupFile(path, url); err != nil {
+			return fmt.Errorf("backup push: %w", err)
+		}
+		fmt.Printf("backup pushed: %s -> %s\n", path, url)
+		return nil
+	case "pull":
+		url, ok := flagValue(args[1:], "--url")
+		if !ok || url == "" {
+			return errors.New("backup pull: missing --url <http(s) url>")
+		}
+		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			return errors.New("backup pull: --url must be http(s) URL")
+		}
+		out, ok := flagValue(args[1:], "--out")
+		if !ok || out == "" {
+			return errors.New("backup pull: missing --out <path>")
+		}
+		if err := sql.DownloadBackupFile(url, out); err != nil {
+			return fmt.Errorf("backup pull: %w", err)
+		}
+		fmt.Printf("backup pulled: %s -> %s (RESTORE FROM '<path>' TO 恢复)\n", url, out)
+		return nil
+	default:
+		return errors.New("backup: unknown subcommand '" + args[0] + "' (expected push|pull)")
+	}
+}
 // cmdReplica 以从节点身份启动：连接主节点复制端口并异步应用 binlog。
 // 默认明文连接；--replica-tls 时以 TLS 连接（自签名/内网测试不校验服务器名）。
 func cmdReplica(args []string) error {
@@ -385,6 +480,10 @@ Commands:
           [--auth]            启用连接握手鉴权（AUTH <user> <password>）
           [--auth-allow-legacy] --auth 时允许无凭证客户端降级 guest（默认强制鉴权）
           [--root-password <pwd>] root 引导密码（无 root 用户时自动 CREATE USER；亦可经环境变量 OPENXDB_ROOT_PASSWORD 传入）
+  backup push --file <path> --url <http(s) url>
+                              将本地备份文件上传到远程目标
+  backup pull --url <http(s) url> --out <path>
+                              从远程目标下载备份到本地（再 RESTORE FROM 恢复）
   replica --data-dir <dir> --master <host:port>
                              以从节点身份连接主节点并异步复制
           [--replica-tls]     以 TLS 加密连接主节点复制端口（自签名/内网测试不校验服务器名）

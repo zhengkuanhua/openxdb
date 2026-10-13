@@ -2307,6 +2307,16 @@ func (p *parser) parseShow() (Stmt, error) {
 		}
 		return stmt, nil
 	}
+	// SHOW BACKUP STATUS（BR 方向②）：BACKUP/STATUS 可能为关键字，统一按
+	// 文本匹配（与 SHOW BINLOG EVENTS / SHOW CONFIG 同风格，兼容关键字表）。
+	if strings.EqualFold(p.cur().text, "BACKUP") {
+		p.next()
+		if !strings.EqualFold(p.cur().text, "STATUS") {
+			return nil, errf("expected keyword STATUS at %d, got %q", p.pos, p.cur().text)
+		}
+		p.next()
+		return &ShowBackupStatusStmt{}, nil
+	}
 	return nil, errf("expected TABLES, INDEX, SLOWQUERIES, NODES, REGION ROUTES, VIEWS or USERS after SHOW at %d, got %q", p.cur().pos, p.cur().text)
 }
 
