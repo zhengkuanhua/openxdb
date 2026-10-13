@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_675d0425c6ab11f197b3525400248c00
+    ReservedCode1: fOljklP0WXJ+XouAWkQIYDvkQZKrv4P73wcQvpb0rq1VU8iB3S6SAZBGTUptthaHObH3zSXAR4GbZ26txAtclKT0OhSW8goGiQ9RUj34hjUobeh1IwOBx/nixsT+Bze27Vqd5Feda2TpMD8ybhtSOneke38XPBl2nkStQfFTjJUYMgZZHog6WlBT96Y=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_675d0425c6ab11f197b3525400248c00
+    ReservedCode2: fOljklP0WXJ+XouAWkQIYDvkQZKrv4P73wcQvpb0rq1VU8iB3S6SAZBGTUptthaHObH3zSXAR4GbZ26txAtclKT0OhSW8goGiQ9RUj34hjUobeh1IwOBx/nixsT+Bze27Vqd5Feda2TpMD8ybhtSOneke38XPBl2nkStQfFTjJUYMgZZHog6WlBT96Y=
+---
+
 # OpenXDB SQL 层写入路径优化 —— 基准前后对比（P0-5）
 
 - 生成时间：2026-10-13
@@ -62,3 +73,4 @@ SQL 层单点写入与引擎批量写损耗比：337.1x（优化前）→ **110.
   1. 多行 VALUES INSERT 批量写入接口（新增能力，不改 autocommit 单条语义，可进一步摊薄 WAL fsync，对多行导入类场景收益大）；
   2. 表目录（m:tables）引擎直读缓存（需处理显式事务 DDL read-your-writes，收益 ~3us/op 较小）；
   3. 异步/延迟提交（会改变崩溃恢复语义，不符合本任务约束，不建议）。
+*（内容由AI生成，仅供参考）*

@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_6826bfe4c6ab11f19063525400393706
+    ReservedCode1: M3qWpVw9X8Ik9bRfwI0L9EOgcZyqR0UEYK7V+F+YlpeBtgt5tr+GQBP6L3g1swRyf6x+qXIK0tEsQAKElq/xOJ1296B/gPEF/7zU8aC2it6/thNL1Y0PpPiBdhMYDj2q9Jrtu3VEIt16qYEadGSJYIfZl6qaRdNIyGtJguu+18TWHmAokzhxmlRdQVA=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_6826bfe4c6ab11f19063525400393706
+    ReservedCode2: M3qWpVw9X8Ik9bRfwI0L9EOgcZyqR0UEYK7V+F+YlpeBtgt5tr+GQBP6L3g1swRyf6x+qXIK0tEsQAKElq/xOJ1296B/gPEF/7zU8aC2it6/thNL1Y0PpPiBdhMYDj2q9Jrtu3VEIt16qYEadGSJYIfZl6qaRdNIyGtJguu+18TWHmAokzhxmlRdQVA=
+---
+
 # OpenXDB SQL 层性能基准结果（P0-5）
 
 - 运行时间：2026-10-13 10:02:26
@@ -32,3 +43,4 @@
 - SQL 单点查询 vs 引擎点查：SQL 点查耗时为引擎点查的 **99.7x**（含 SQL 解析、类型解码与结果组装）。
 - 延迟均以微秒（us）计；速率以 QPS（查询/秒）或 TPS（写入/事务 每秒）计。
 - 本基准运行于本机 CGO（RocksDB）环境，绝对数值与机器相关；相对开销（SQL vs 引擎）更具可比性。
+*（内容由AI生成，仅供参考）*
