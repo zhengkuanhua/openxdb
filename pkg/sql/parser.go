@@ -2273,6 +2273,19 @@ func (p *parser) parseShow() (Stmt, error) {
 		p.next()
 		return &ShowConfigStmt{Persisted: true}, nil
 	}
+	// 日志告警体系：SHOW ALERTS / SHOW ALERT STATUS（ALERTS/ALERT/STATUS 不在关键字表）。
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "ALERTS") {
+		p.next()
+		return &ShowAlertsStmt{}, nil
+	}
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "ALERT") {
+		p.next()
+		if !(p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "STATUS")) {
+			return nil, errf("expected keyword STATUS at %d, got %q", p.pos, p.cur().text)
+		}
+		p.next()
+		return &ShowAlertStatusStmt{}, nil
+	}
 	// SHOW BINLOG EVENTS [FROM <lsn>] [LIMIT <n>]：BINLOG/EVENTS 不在关键字表。
 	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "BINLOG") {
 		p.next()

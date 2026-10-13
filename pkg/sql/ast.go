@@ -522,6 +522,18 @@ type ShowBackupStatusStmt struct{}
 
 func (ShowBackupStatusStmt) stmt() {}
 
+// ShowAlertsStmt SHOW ALERTS（日志告警体系）：列出最近告警记录
+// （时间/级别/模块/事件/消息，最多 alert_keep 条）。
+type ShowAlertsStmt struct{}
+
+func (ShowAlertsStmt) stmt() {}
+
+// ShowAlertStatusStmt SHOW ALERT STATUS（日志告警体系）：查看告警开关与出口
+// 配置（enabled/file/webhook/keep）。
+type ShowAlertStatusStmt struct{}
+
+func (ShowAlertStatusStmt) stmt() {}
+
 // ShowBinlogEventsStmt SHOW BINLOG EVENTS [FROM <lsn>] [LIMIT <n>]（M14 CDC）：
 // 只读展示 binlog 增量变更流；From 为起始位点（nil=从头），Limit<=0=不限。
 type ShowBinlogEventsStmt struct {

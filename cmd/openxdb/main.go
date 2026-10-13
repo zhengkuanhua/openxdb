@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,10 +15,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zhengkuanhua/openxdb/pkg/configfile"
 	"github.com/zhengkuanhua/openxdb/pkg/db"
+	"github.com/zhengkuanhua/openxdb/pkg/logx"
 	"github.com/zhengkuanhua/openxdb/pkg/metrics"
 	"github.com/zhengkuanhua/openxdb/pkg/server"
-"github.com/zhengkuanhua/openxdb/pkg/sql"
+	"github.com/zhengkuanhua/openxdb/pkg/sql"
 )
 
 const version = "v0.20.0-alpha"
@@ -37,6 +38,8 @@ func main() {
 		err = cmdPreflight(os.Args[2:])
 	case "init":
 		err = cmdInit(os.Args[2:])
+	case "config-check":
+		err = cmdConfigCheck(os.Args[2:])
 	case "repl":
 		err = cmdREPL(os.Args[2:])
 	case "start":
@@ -104,6 +107,85 @@ func needDataDir(args []string) (string, error) {
 	return dir, nil
 }
 
+// serverKeys [server] 段白名单：启动参数 + 结构化日志/告警默认值。
+// 存储/网络/TLS/备份等现有配置项归 [sql] 段（白名单来自 sql.ConfigKeys）。
+var serverKeys = []string{
+	"data_dir", "port", "replica_port", "metrics_port", "shutdown_timeout",
+	"cluster_addr", "log_level", "alert_enabled", "alert_file", "alert_webhook", "alert_keep",
+}
+
+// loadStartConfig 加载并校验统一配置文件（--config <path>，INI 风格）。
+// 未提供 --config 时返回 (nil, nil)；校验失败（未知段/键、值格式非法）直接报错。
+func loadStartConfig(args []string) (*configfile.File, error) {
+	p, ok := flagValue(args, "--config")
+	if !ok || p == "" {
+		return nil, nil
+	}
+	f, err := configfile.Load(p)
+	if err != nil {
+		return nil, err
+	}
+	known := map[string]map[string]bool{
+		"server": {},
+		"sql":    {},
+	}
+	for _, k := range serverKeys {
+		known["server"][k] = true
+	}
+	for _, k := range sql.ConfigKeys() {
+		known["sql"][k] = true
+	}
+	if errs := configfile.Validate(f, known); len(errs) > 0 {
+		return nil, errors.New("config " + p + " invalid: " + strings.Join(errs, "; "))
+	}
+	if errs := configfile.ValidateServerValues(f); len(errs) > 0 {
+		return nil, errors.New("config " + p + " invalid: " + strings.Join(errs, "; "))
+	}
+	return f, nil
+}
+
+// cmdConfigCheck 校验配置文件：解析、未知段/键、服务端值格式，并回显有效配置。
+func cmdConfigCheck(args []string) error {
+	p, ok := flagValue(args, "--config")
+	if !ok || p == "" {
+		return errors.New("config-check requires --config <path>")
+	}
+	f, err := loadStartConfig(args)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("config OK: %s\n", p)
+	for _, name := range []string{"server", "sql"} {
+		sec := f.Section(name)
+		if sec == nil || len(sec.Order) == 0 {
+			continue
+		}
+		fmt.Printf("[%s]\n", name)
+		for _, k := range sec.Order {
+			fmt.Printf("  %s = %s\n", k, sec.Vals[k])
+		}
+	}
+	return nil
+}
+
+// escSQL 转义 SQL 字符串字面量（单引号翻倍），用于 SET 装配。
+func escSQL(s string) string { return strings.ReplaceAll(s, "'", "''") }
+
+// applySQLFileConfig 将配置文件 [sql] 段逐键通过 SET 装配到 SQL 引擎（内存级）。
+// 优先级：持久化配置（persisted.json）之后、命令行参数之前。
+func applySQLFileConfig(e *sql.Engine, f *configfile.File) error {
+	sec := f.Section("sql")
+	if sec == nil {
+		return nil
+	}
+	for _, k := range sec.Order {
+		if _, err := e.Execute("SET " + k + " = '" + escSQL(sec.Vals[k]) + "'"); err != nil {
+			return fmt.Errorf("config file [sql] %s=%s: %w", k, sec.Vals[k], err)
+		}
+	}
+	return nil
+}
+
 func cmdInit(args []string) error {
 	dir, err := needDataDir(args)
 	if err != nil {
@@ -136,11 +218,34 @@ func cmdREPL(args []string) error {
 }
 
 func cmdStart(args []string) error {
-	dir, err := needDataDir(args)
+	// 统一配置文件（--config <path>，INI 风格）：集中管理启动参数与现有配置项；
+	// 命令行参数优先级高于文件配置（CLI flag 覆盖 [server]/[sql] 段同名键）。
+	cfgFile, err := loadStartConfig(args)
 	if err != nil {
 		return err
 	}
+	dir := ""
+	if p, ok := flagValue(args, "--data-dir"); ok && p != "" {
+		dir = p
+	}
+	if cfgFile != nil {
+		if v, ok := cfgFile.Get("server", "data_dir"); ok && dir == "" {
+			dir = v
+		}
+	}
+	if dir == "" {
+		return errors.New("missing --data-dir <dir> or [server] data_dir in config file")
+	}
 	port := 7788
+	if cfgFile != nil {
+		if v, ok := cfgFile.Get("server", "port"); ok {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 65535 {
+				return errors.New("invalid [server] port value: " + v)
+			}
+			port = n
+		}
+	}
 	if p, ok := flagValue(args, "--port"); ok {
 		n, err := strconv.Atoi(p)
 		if err != nil || n < 1 || n > 65535 {
@@ -148,15 +253,100 @@ func cmdStart(args []string) error {
 		}
 		port = n
 	}
+	replicaPort := 0
+	if cfgFile != nil {
+		if v, ok := cfgFile.Get("server", "replica_port"); ok {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 || n > 65535 {
+				return errors.New("invalid [server] replica_port value: " + v)
+			}
+			replicaPort = n
+		}
+	}
+	if p, ok := flagValue(args, "--replica-port"); ok {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return errors.New("invalid --replica-port value: " + p)
+		}
+		replicaPort = n
+	}
+	metricsPort := 0
+	if cfgFile != nil {
+		if v, ok := cfgFile.Get("server", "metrics_port"); ok {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 || n > 65535 {
+				return errors.New("invalid [server] metrics_port value: " + v)
+			}
+			metricsPort = n
+		}
+	}
+	if p, ok := flagValue(args, "--metrics-port"); ok {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return errors.New("invalid --metrics-port value: " + p)
+		}
+		metricsPort = n
+	}
 	// M16-2：--shutdown-timeout 命令行覆盖停机超时（秒），优先级高于
 	// 持久化配置 shutdown_timeout；不传时由 SQL 引擎按 内存>持久化>默认 取。
 	shutdownTimeoutFlag := int64(-1)
+	if cfgFile != nil {
+		if v, ok := cfgFile.Get("server", "shutdown_timeout"); ok {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n <= 0 {
+				return errors.New("invalid [server] shutdown_timeout value: " + v + " (expected positive integer seconds)")
+			}
+			shutdownTimeoutFlag = n
+		}
+	}
 	if p, ok := flagValue(args, "--shutdown-timeout"); ok {
 		n, err := strconv.Atoi(p)
 		if err != nil || n <= 0 {
 			return errors.New("invalid --shutdown-timeout value: " + p)
 		}
 		shutdownTimeoutFlag = int64(n)
+	}
+	clusterAddr := ""
+	if cfgFile != nil {
+		if v, ok := cfgFile.Get("server", "cluster_addr"); ok {
+			clusterAddr = v
+		}
+	}
+	if ca, ok := flagValue(args, "--cluster-addr"); ok {
+		clusterAddr = ca
+	}
+	// 结构化日志级别与告警配置（[server] 段默认值）：db.Open 前的失败路径亦使用；
+	// [sql] 段与 CLI 覆盖在 db.Open 后装配（见下）。
+	if cfgFile != nil {
+		if v, ok := cfgFile.Get("server", "log_level"); ok {
+			lv, lerr := logx.ParseLevel(v)
+			if lerr != nil {
+				return errors.New("invalid [server] log_level value: " + v)
+			}
+			logx.Default.SetLevel(lv)
+		}
+		ac := logx.DefaultAlerts.Config()
+		if v, ok := cfgFile.Get("server", "alert_enabled"); ok {
+			b, berr := strconv.ParseBool(v)
+			if berr != nil {
+				return errors.New("invalid [server] alert_enabled value: " + v + " (expected true/false/1/0)")
+			}
+			ac.Enabled = b
+		}
+		if v, ok := cfgFile.Get("server", "alert_file"); ok {
+			ac.File = v
+		}
+		if v, ok := cfgFile.Get("server", "alert_webhook"); ok {
+			ac.Webhook = v
+		}
+		if v, ok := cfgFile.Get("server", "alert_keep"); ok {
+			n, aerr := strconv.Atoi(v)
+			if aerr != nil || n < 1 {
+				return errors.New("invalid [server] alert_keep value: " + v + " (expected positive integer)")
+			}
+			ac.Keep = n
+		}
+		logx.DefaultAlerts.Configure(ac)
 	}
 	// P0 TLS：主服务监听层加密（可选）。--tls-cert 与 --tls-key 必须同时提供，
 	// 仅提供一个即报错；两者都提供时加载证书并用 tls.Listen 加密监听，
@@ -170,27 +360,63 @@ func cmdStart(args []string) error {
 	if err != nil {
 		return err
 	}
+	// 配置文件 [sql] 段：SET 装配到 SQL 引擎（内存级，覆盖持久化默认值）。
+	// 优先级：持久化配置 < 配置文件 [sql] 段 < 命令行参数。
+	if cfgFile != nil {
+		if err := applySQLFileConfig(d.SQL, cfgFile); err != nil {
+			_ = d.Close()
+			return err
+		}
+	}
+	// 命令行参数覆盖（最高优先级）：日志级别与告警开关/出口。
+	if p, ok := flagValue(args, "--log-level"); ok {
+		if _, err := d.SQL.Execute("SET log_level = '" + escSQL(p) + "'"); err != nil {
+			_ = d.Close()
+			return err
+		}
+	}
+	if p, ok := flagValue(args, "--alert-enabled"); ok {
+		if _, err := d.SQL.Execute("SET alert_enabled = '" + escSQL(p) + "'"); err != nil {
+			_ = d.Close()
+			return err
+		}
+	}
+	if p, ok := flagValue(args, "--alert-file"); ok {
+		if _, err := d.SQL.Execute("SET alert_file = '" + escSQL(p) + "'"); err != nil {
+			_ = d.Close()
+			return err
+		}
+	}
+	if p, ok := flagValue(args, "--alert-webhook"); ok {
+		if _, err := d.SQL.Execute("SET alert_webhook = '" + escSQL(p) + "'"); err != nil {
+			_ = d.Close()
+			return err
+		}
+	}
+	if p, ok := flagValue(args, "--alert-keep"); ok {
+		if _, err := d.SQL.Execute("SET alert_keep = '" + escSQL(p) + "'"); err != nil {
+			_ = d.Close()
+			return err
+		}
+	}
 	shutdownClosed := false
 	defer func() {
 		if !shutdownClosed {
 			_ = d.Close()
 		}
 	}()
-	// M2：主节点复制（可选）。--replica-port 非 0 时监听复制端口并生成 binlog；
-	// 已配置 TLS（--tls-cert/--tls-key）时复制端口同样加密监听。
-	if rp, ok := flagValue(args, "--replica-port"); ok {
-		n, err := strconv.Atoi(rp)
-		if err != nil || n < 1 || n > 65535 {
-			return errors.New("invalid --replica-port value: " + rp)
-		}
-		if err := d.StartReplicationTLS(fmt.Sprintf(":%d", n), tlsCfg); err != nil {
+	// M2：主节点复制（可选）。--replica-port 或配置文件 [server] replica_port
+	// 非 0 时监听复制端口并生成 binlog；已配置 TLS 时复制端口同样加密监听。
+	if replicaPort > 0 {
+		if err := d.StartReplicationTLS(fmt.Sprintf(":%d", replicaPort), tlsCfg); err != nil {
 			return err
 		}
-		fmt.Printf("OpenXDB %s replication listening on :%d (binlog: %s)\n", version, n, db.BinlogFile)
+		fmt.Printf("OpenXDB %s replication listening on :%d (binlog: %s)\n", version, replicaPort, db.BinlogFile)
 	}
-	// M4：集群节点链路（可选）。--cluster-addr 非空时监听节点握手/转发端口。
-	if ca, ok := flagValue(args, "--cluster-addr"); ok && ca != "" {
-		realAddr, err := d.StartCluster(ca)
+	// M4：集群节点链路（可选）。--cluster-addr 或配置文件 [server] cluster_addr
+	// 非空时监听节点握手/转发端口。
+	if clusterAddr != "" {
+		realAddr, err := d.StartCluster(clusterAddr)
 		if err != nil {
 			return err
 		}
@@ -316,17 +542,11 @@ func cmdStart(args []string) error {
 	m.SetRegionStatsSource(d.SQL.MetricsRegionStats)
 	s.SetMetrics(m)
 	d.SQL.SetMetrics(m)
-	if mp, ok := flagValue(args, "--metrics-port"); ok {
-		n, err := strconv.Atoi(mp)
-		if err != nil || n < 1 || n > 65535 {
-			return errors.New("invalid --metrics-port value: " + mp)
-		}
-		if n > 0 {
-			go func() {
-				_ = http.ListenAndServe(fmt.Sprintf(":%d", n), m.Handler())
-			}()
-			fmt.Printf("metrics endpoint: http://127.0.0.1:%d/metrics\n", n)
-		}
+	if metricsPort > 0 {
+		go func() {
+			_ = http.ListenAndServe(fmt.Sprintf(":%d", metricsPort), m.Handler())
+		}()
+		fmt.Printf("metrics endpoint: http://127.0.0.1:%d/metrics\n", metricsPort)
 	}
 	// ---- M16-2 优雅停机装配 ----
 	// 停机流程：拒绝新连接/新事务 → drain 进行中事务（超时强制）→
@@ -342,7 +562,11 @@ func cmdStart(args []string) error {
 		}
 		return d.SQL.ShutdownTimeout()
 	}
-	s.Logf = log.Printf
+	// 结构化日志：server 内部日志统一走 logx JSON 行（module=server），
+	// 输出至 stderr；级别受 [server]/SET log_level 动态控制。
+	s.Logf = func(format string, a ...any) {
+		logx.Default.Info("server", "server_log", fmt.Sprintf(format, a...))
+	}
 	// SIGINT/SIGTERM 走同一优雅停机流程（默认超时，正常退出码 0，
 	// 超时强制退出码 1）。
 	sigCh := make(chan os.Signal, 1)

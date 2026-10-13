@@ -437,6 +437,10 @@ func (e *Executor) execStmt(sess *Session, stmt Stmt) (*Result, error) {
 		return e.execShowConfig(sess, s)
 	case *ShowBackupStatusStmt:
 		return e.execShowBackupStatus(sess, s)
+	case *ShowAlertsStmt:
+		return e.execShowAlerts(sess, s)
+	case *ShowAlertStatusStmt:
+		return e.execShowAlertStatus(sess, s)
 	case *ShowBinlogEventsStmt:
 		return e.execShowBinlogEvents(sess, s)
 	case *SetStmt:

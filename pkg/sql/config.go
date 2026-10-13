@@ -18,6 +18,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/zhengkuanhua/openxdb/pkg/logx"
 )
 
 // configSpec 一个可热更新的配置项：校验与应用（apply）以及当前值读取（read）。
@@ -167,6 +169,89 @@ var configSpecs = []*configSpec{
 			return nil
 		},
 		read: func(e *Executor) string { return e.backupSched.Config().RemoteURL },
+	},
+	// 结构化日志与告警体系：日志级别动态调整 + 关键模块告警（文件/webhook 出口）。
+	// log_level 控制 JSON 行日志输出级别（debug/info/warn/error），即时生效；
+	// alert_enabled 总开关（off 时告警仅入内存缓冲 + Error 日志），alert_file 为
+	// JSON 行告警文件路径，alert_webhook 为 HTTP POST 目标，alert_keep 为内存
+	// 保留最近告警条数。SHOW ALERTS / SHOW ALERT STATUS 查看。
+	{
+		key:  "log_level",
+		desc: "结构化日志级别（日志告警体系）：debug/info/warn/error，即时生效",
+		def:  "info",
+		apply: func(e *Executor, v string) error {
+			lv, err := logx.ParseLevel(v)
+			if err != nil {
+				return &SQLError{Msg: "invalid value for log_level: " + v + " (expected debug/info/warn/error)"}
+			}
+			logx.Default.SetLevel(lv)
+			return nil
+		},
+		read: func(e *Executor) string { return logx.Default.Level().String() },
+	},
+	{
+		key:  "alert_enabled",
+		desc: "告警总开关（日志告警体系）：on/off/1/0；off 时告警仅入内存缓冲与 Error 日志",
+		def:  "off",
+		apply: func(e *Executor, v string) error {
+			on := false
+			switch v {
+			case "on", "true", "1":
+				on = true
+			case "off", "false", "0":
+				on = false
+			default:
+				return &SQLError{Msg: "invalid value for alert_enabled: " + v + " (expected on/off/1/0)"}
+			}
+			cfg := logx.DefaultAlerts.Config()
+			cfg.Enabled = on
+			logx.DefaultAlerts.Configure(cfg)
+			return nil
+		},
+		read: func(e *Executor) string { return boolValStr(logx.DefaultAlerts.Config().Enabled) },
+	},
+	{
+		key:  "alert_file",
+		desc: "告警 JSON 行文件路径（日志告警体系）：告警追加写入；空=不落盘",
+		def:  "",
+		apply: func(e *Executor, v string) error {
+			cfg := logx.DefaultAlerts.Config()
+			cfg.File = v
+			logx.DefaultAlerts.Configure(cfg)
+			return nil
+		},
+		read: func(e *Executor) string { return logx.DefaultAlerts.Config().File },
+	},
+	{
+		key:  "alert_webhook",
+		desc: "告警 HTTP webhook 目标（日志告警体系）：POST JSON；空=不推送",
+		def:  "",
+		apply: func(e *Executor, v string) error {
+			if v != "" && !(strings.HasPrefix(v, "http://") || strings.HasPrefix(v, "https://")) {
+				return &SQLError{Msg: "invalid value for alert_webhook: " + v + " (expected http(s) URL or empty)"}
+			}
+			cfg := logx.DefaultAlerts.Config()
+			cfg.Webhook = v
+			logx.DefaultAlerts.Configure(cfg)
+			return nil
+		},
+		read: func(e *Executor) string { return logx.DefaultAlerts.Config().Webhook },
+	},
+	{
+		key:  "alert_keep",
+		desc: "告警内存保留条数（日志告警体系）：最近 N 条；0 使用默认 100",
+		def:  "100",
+		apply: func(e *Executor, v string) error {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 0 {
+				return &SQLError{Msg: "invalid value for alert_keep: " + v + " (expected non-negative integer)"}
+			}
+			cfg := logx.DefaultAlerts.Config()
+			cfg.Keep = int(n)
+			logx.DefaultAlerts.Configure(cfg)
+			return nil
+		},
+		read: func(e *Executor) string { return strconv.Itoa(logx.DefaultAlerts.Config().Keep) },
 	},
 }
 
@@ -327,4 +412,13 @@ func (e *Executor) execShowConfig(sess *Session, s *ShowConfigStmt) (*Result, er
 		res.Rows = append(res.Rows, []Value{StrVal(spec.key), StrVal(spec.read(e)), StrVal(source)})
 	}
 	return res, nil
+}
+
+// ConfigKeys 返回 configSpecs 注册表全部配置键（配置文件 [sql] 段白名单来源）。
+func ConfigKeys() []string {
+	keys := make([]string, 0, len(configSpecs))
+	for _, spec := range configSpecs {
+		keys = append(keys, spec.key)
+	}
+	return keys
 }

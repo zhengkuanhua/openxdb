@@ -1,0 +1,69 @@
+# OpenXDB 统一配置文件示例（INI 风格，UTF-8 编码）
+#
+# 启动：openxdb start --config openxdb.conf
+# 校验：openxdb config-check --config openxdb.conf
+#
+# 配置优先级（从高到低）：
+#   1. 命令行参数（如 --port 7788 覆盖 [server] port）
+#   2. 配置文件（本文件，[server] 段启动参数 / [sql] 段 SQL 引擎配置项）
+#   3. 持久化配置（SET PERSIST <key>，落盘到 data/persisted.json）
+#   4. 内置默认值
+#
+# 语法：段名 [xxx]，键 = 值；# 或 ; 开头为注释；空行忽略。
+# 未知段/未知键会被 config-check / start 拒绝（防拼写错误）。
+
+[server]
+# 数据目录（必填，可用 --data-dir 覆盖）。
+data_dir = ./data
+# 主服务监听端口，1-65535，默认 7788（可用 --port 覆盖）。
+port = 7788
+# 主备复制监听端口，0=关闭（可用 --replica-port 覆盖）。
+replica_port = 0
+# 指标 HTTP 端口（/metrics），0=关闭（可用 --metrics-port 覆盖）。
+metrics_port = 0
+# 优雅停机超时秒数（正数，可用 --shutdown-timeout 覆盖）。
+shutdown_timeout = 30
+# 集群节点地址，空=不加入集群（可用 --cluster-addr 覆盖）。
+cluster_addr =
+# 结构化日志级别：debug/info/warn/error。
+# 运行时可 SET log_level = 'warn' 动态调整（内存级）。
+log_level = info
+# 告警总开关：true/false/1/0（可用 --alert-enabled 覆盖）。
+alert_enabled = true
+# 告警 JSON 行落盘文件，空=不落盘（可用 --alert-file 覆盖）。
+alert_file = ./data/alerts.jsonl
+# 告警 HTTP webhook 地址，空=不推送（可用 --alert-webhook 覆盖）。
+# 触发时 POST JSON 体 {"time":"...","level":"error","module":"...","event":"...","msg":"..."} 到该 URL。
+alert_webhook =
+# 告警环形缓冲保留条数（正数，可用 --alert-keep 覆盖）。
+alert_keep = 100
+
+# [sql] 段：与 SET / SET PERSIST 完全同键，覆盖存储/备份/日志告警等现有配置项。
+# 启动时逐个装配为内存级 SET（优先级高于持久化配置，低于命令行参数）。
+[sql]
+# 查询缓存开关
+query_cache = 1
+# 慢查询阈值（毫秒）
+slow_query_threshold = 100
+# 慢查询日志落盘开关
+slow_query_log = 1
+# SQL 引擎停机超时（秒）
+shutdown_timeout = 30
+# 自动备份周期（秒，0=关闭）
+backup_interval = 0
+# 备份保留天数（0=不清理）
+backup_keep = 7
+# 备份输出目录
+backup_dir = ./data/backups
+# 备份远端 HTTP PUT 目标（空=仅本地）
+backup_remote_url =
+# 结构化日志级别（与 [server] log_level 同义；两处都配时以 [sql] 段 SET 装配为准）
+log_level = info
+# 告警开关（与 [server] alert_enabled 同义）
+alert_enabled = true
+# 告警落盘文件（与 [server] alert_file 同义）
+alert_file = ./data/alerts.jsonl
+# 告警 webhook（与 [server] alert_webhook 同义）
+alert_webhook =
+# 告警保留条数（与 [server] alert_keep 同义）
+alert_keep = 100

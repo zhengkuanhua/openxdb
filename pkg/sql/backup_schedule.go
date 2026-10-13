@@ -36,6 +36,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/zhengkuanhua/openxdb/pkg/logx"
 )
 
 // 调度备份文件命名：openxdb_backup_<20060102_150405>.bak（文件名时间戳
@@ -237,10 +239,12 @@ func (bs *BackupScheduler) runBackup() (string, error) {
 	cfg := bs.Config()
 	if cfg.Dir == "" {
 		err := errors.New("backup dir not configured")
+		logx.DefaultAlerts.Alert("backup", "backup_failed", err.Error())
 		bs.recordRun("", err, time.Now())
 		return "", err
 	}
 	if err := os.MkdirAll(cfg.Dir, 0o755); err != nil {
+		logx.DefaultAlerts.Alert("backup", "backup_failed", fmt.Sprintf("create backup dir: %v", err))
 		bs.recordRun("", fmt.Errorf("create backup dir: %w", err), time.Now())
 		return "", err
 	}
@@ -248,12 +252,14 @@ func (bs *BackupScheduler) runBackup() (string, error) {
 		backupSchedFilePrefix, time.Now().Format("20060102_150405"), backupSchedFileSuffix))
 	// 直接调用 execBackup（同 BACKUP TO '<path>' 语句，复用一致快照导出逻辑）。
 	if _, err := bs.e.execBackup(bs.e.globalSess, &BackupStmt{Path: path}); err != nil {
+		logx.DefaultAlerts.Alert("backup", "backup_failed", fmt.Sprintf("run backup: %v", err))
 		bs.recordRun("", err, time.Now())
 		return "", err
 	}
 	// 远程上传：失败仅记录 last_remote，不视为备份失败（本地文件仍有效）。
 	if cfg.RemoteURL != "" {
 		if uerr := UploadBackupFile(path, cfg.RemoteURL); uerr != nil {
+			logx.DefaultAlerts.Alert("backup", "upload_failed", fmt.Sprintf("upload %s: %v", path, uerr))
 			bs.mu.Lock()
 			bs.lastRemote = "failed: " + uerr.Error()
 			bs.mu.Unlock()

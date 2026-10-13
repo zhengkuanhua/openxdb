@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
+	"github.com/zhengkuanhua/openxdb/pkg/logx"
 	"github.com/zhengkuanhua/openxdb/pkg/replication"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
 	"github.com/zhengkuanhua/openxdb/pkg/sql"
@@ -136,10 +137,12 @@ func Open(dir string) (*DB, error) {
 	// 后续 Open 引擎文件已存在，true 亦无害（不会覆盖已有数据）。
 	st, err := rocksdb.Open(filepath.Join(dir, DataSubDir), true)
 	if err != nil {
+		logx.DefaultAlerts.Alert("storage", "storage_open_failed", fmt.Sprintf("open storage in %s: %v", dir, err))
 		return nil, fmt.Errorf("db: open storage: %w", err)
 	}
 	w, err := wal.Open(filepath.Join(dir, WALFile))
 	if err != nil {
+		logx.DefaultAlerts.Alert("wal", "wal_open_failed", fmt.Sprintf("open wal in %s: %v", dir, err))
 		_ = st.Close()
 		return nil, fmt.Errorf("db: open wal: %w", err)
 	}
@@ -150,11 +153,13 @@ func Open(dir string) (*DB, error) {
 	w.SetGroupCommit(true)
 	tm, err := txn.New(st, w)
 	if err != nil {
+		logx.DefaultAlerts.Alert("storage", "txn_init_failed", fmt.Sprintf("new txn manager: %v", err))
 		_ = w.Close()
 		_ = st.Close()
 		return nil, fmt.Errorf("db: new txn manager: %w", err)
 	}
 	if err := tm.Recover(); err != nil {
+		logx.DefaultAlerts.Alert("wal", "wal_recover_failed", fmt.Sprintf("recover wal: %v", err))
 		_ = tm.Close()
 		_ = st.Close()
 		return nil, fmt.Errorf("db: recover: %w", err)

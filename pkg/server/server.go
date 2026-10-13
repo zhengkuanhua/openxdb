@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/zhengkuanhua/openxdb/pkg/logx"
 	"github.com/zhengkuanhua/openxdb/pkg/metrics"
 	"github.com/zhengkuanhua/openxdb/pkg/sql"
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
@@ -595,6 +596,7 @@ func (s *Server) ServeTCP(addr string) error {
 		ln, err = net.Listen("tcp", addr)
 	}
 	if err != nil {
+		logx.DefaultAlerts.Alert("network", "listen_failed", fmt.Sprintf("listen %s: %v", addr, err))
 		return fmt.Errorf("server: listen %s: %w", addr, err)
 	}
 	defer ln.Close()
@@ -623,6 +625,7 @@ func (s *Server) ServeListener(ln net.Listener) error {
 				// 属正常退出路径；退出码由调用方据 ForceExited 判定。
 				return nil
 			}
+			logx.DefaultAlerts.Alert("network", "accept_failed", fmt.Sprintf("accept: %v", err))
 			return fmt.Errorf("server: accept: %w", err)
 		}
 		go s.serveConn(conn)
