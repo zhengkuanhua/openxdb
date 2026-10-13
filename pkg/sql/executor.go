@@ -1494,7 +1494,7 @@ func (e *Executor) upsertConflicts(tx txn.Txn, meta *TableMeta, vals []Value, pk
 			return nil, err
 		}
 		for _, kv := range pairs {
-			epk := indexPKSuffix(innerOf(kv.Key))
+			epk := indexPKSuffixLen(innerOf(kv.Key), len(val))
 			if !bytes.Equal(epk, pk) {
 				add(epk)
 			}
@@ -1917,7 +1917,7 @@ func (e *Executor) indexLookup(tx txn.Txn, meta *TableMeta, s *SelectStmt) ([][]
 	rows := make([][]Value, 0, len(pairs))
 	for _, kv := range pairs {
 		inner := innerOf(kv.Key)
-		pk := indexPKSuffix(inner)
+		pk := indexPKSuffixLen(inner, len(val))
 		// 回表：索引键与行键同 region（写入时同路由），按 region 前缀读取（跨节点经转发）
 		raw, err := e.getKVCluster(tx, e.rowKeyAt(meta, ridOf(kv.Key), pk))
 		if err != nil {
@@ -3082,7 +3082,7 @@ func (e *Executor) putIndexKeyOps(tx txn.Txn, meta *TableMeta, row []Value, pk [
 				return nil, err
 			}
 			for _, kv := range pairs {
-				epk := indexPKSuffix(innerOf(kv.Key))
+				epk := indexPKSuffixLen(innerOf(kv.Key), len(val))
 				if bytes.Equal(epk, pk) {
 					continue
 				}

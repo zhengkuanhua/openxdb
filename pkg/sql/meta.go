@@ -57,10 +57,38 @@ func EncodeIndexKey2(tableID, indexID uint64, idxVal, pk []byte) []byte {
 	return key
 }
 
-// indexPKSuffix 从索引键 i{tid}{idxID}{idxVal}p{pk} 提取主键后缀。
-func indexPKSuffix(key []byte) []byte {
+// indexPKSuffixLen 从索引键 i{tid}{idxID}{idxVal}p{pk} 提取主键后缀。
+// idxValLen 为索引列编码后的定长字节数（INT/DECIMAL 恒 8B）：>=0 时 pk 位于固定偏移
+// key[1+8+8+idxValLen+1:]，避免 LastIndexByte 定位受 pk/idxVal 内 0x70('p') 字节干扰
+// （如 INT 主键低字节 0x70 → id≡112 mod 256 时旧解析会提取空 pk 导致索引扫描漏行）。
+// idxValLen<0（变长索引值）时回退最后一个 'p' 定位（已知限制：变长 pk 末字节 0x70 仍歧义）。
+func indexPKSuffixLen(key []byte, idxValLen int) []byte {
+	if idxValLen >= 0 {
+		off := 1 + 8 + 8 + idxValLen + 1
+		if off <= len(key) {
+			return key[off:]
+		}
+	}
 	i := bytes.LastIndexByte(key, 'p')
 	return key[i+1:]
+}
+
+// indexPKSuffix 变长索引值场景的旧入口（最后一个 'p' 定位）。
+func indexPKSuffix(key []byte) []byte {
+	return indexPKSuffixLen(key, -1)
+}
+
+// idxValLenOf 索引列编码后的定长字节数：INT/DECIMAL 恒 8B（idxBytes 翻转符号位），
+// 其余类型（TEXT/DATE/BLOB）变长返回 -1，解码走 LastIndexByte 兜底。
+func idxValLenOf(meta *TableMeta, idx *IndexMeta) int {
+	ci := colIndex(meta, idx.Col)
+	if ci >= 0 {
+		switch meta.Columns[ci].Type {
+		case "INT", "DECIMAL":
+			return 8
+		}
+	}
+	return -1
 }
 
 // IndexRange 索引扫描范围：[i{tableID}{indexID}{lo}, 上界)

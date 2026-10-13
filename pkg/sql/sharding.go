@@ -269,7 +269,7 @@ func (e *Executor) remapTable(tx txn.Txn, meta *TableMeta, rs []sharding.RegionI
 		}
 		for _, kv := range idxPairs {
 			inner := innerOf(kv.Key)
-			pk := indexPKSuffix(inner)
+			pk := indexPKSuffixLen(inner, idxValLenOf(meta, idx))
 			newRID, err := locate(EncodeTableKey(meta.ID, pk))
 			if err != nil {
 				return err
