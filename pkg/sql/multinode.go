@@ -90,7 +90,7 @@ func (e *Executor) getKVCluster(sess *Session, tx txn.Txn, key []byte) ([]byte, 
 		return e.getKVVisible(tx, key, bs)
 	}
 	e.incRemote()
-	return e.mgr.GetRemote(node, key, bs)
+	return e.mgr.GetRemote(node, key, bs, e.txContextID(sess))
 }
 
 // mgetKVCluster 集群感知批量点查：本地键一次批量读（tx.MGet，减少 cgo 往返），
@@ -225,7 +225,7 @@ func (e *Executor) scanMergedCluster(sess *Session, tx txn.Txn, ranges []storage
 				pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 			} else {
 				e.incRemote()
-				rows, rerr := e.mgr.ScanRemote(node, r.Start, r.End, 0, bs)
+				rows, rerr := e.mgr.ScanRemote(node, r.Start, r.End, 0, bs, e.txContextID(sess))
 				if rerr != nil {
 					return nil, rerr
 				}

@@ -18,21 +18,24 @@ type Client struct {
 
 // Scan 转发区间扫描 [start, end)，返回远端行（原样字节）。
 // beginTS>0 时远端按快照版本过滤（M8 分布式快照隔离）。
-func (c *Client) Scan(start, end []byte, limit int, beginTS uint64) ([]QueryRow, error) {
-	return c.roundTrip(QueryReq{Op: OpScan, Start: start, End: end, Limit: limit, BeginTS: beginTS})
+// txID 为发起方显式事务 ID（M18-A 事务上下文），随 QUERY_REQ 传播；空串不携带。
+func (c *Client) Scan(start, end []byte, limit int, beginTS uint64, txID string) ([]QueryRow, error) {
+	return c.roundTrip(QueryReq{Op: OpScan, Start: start, End: end, Limit: limit, BeginTS: beginTS, TxID: txID})
 }
 
 // ScanSorted 转发带排序窗口的区间扫描（M12-2）：远端本地排序后截取
 // [spec.Offset, spec.Offset+spec.Limit) 返回，支持 LIMIT 下推 top-N。
 // beginTS>0 时远端按快照版本过滤后再排序截窗。
-func (c *Client) ScanSorted(start, end []byte, beginTS uint64, spec *SortSpec) ([]QueryRow, error) {
-	return c.roundTrip(QueryReq{Op: OpScan, Start: start, End: end, BeginTS: beginTS, Sort: spec})
+// txID 为发起方显式事务 ID（M18-A 事务上下文），随 QUERY_REQ 传播；空串不携带。
+func (c *Client) ScanSorted(start, end []byte, beginTS uint64, spec *SortSpec, txID string) ([]QueryRow, error) {
+	return c.roundTrip(QueryReq{Op: OpScan, Start: start, End: end, BeginTS: beginTS, Sort: spec, TxID: txID})
 }
 
 // Get 转发点查；未命中返回 storage.ErrNotFound。
 // beginTS>0 时远端按快照版本过滤（M8 分布式快照隔离）。
-func (c *Client) Get(key []byte, beginTS uint64) ([]byte, error) {
-	rows, err := c.roundTrip(QueryReq{Op: OpGet, Start: key, BeginTS: beginTS})
+// txID 为发起方显式事务 ID（M18-A 事务上下文），随 QUERY_REQ 传播；空串不携带。
+func (c *Client) Get(key []byte, beginTS uint64, txID string) ([]byte, error) {
+	rows, err := c.roundTrip(QueryReq{Op: OpGet, Start: key, BeginTS: beginTS, TxID: txID})
 	if err != nil {
 		return nil, err
 	}

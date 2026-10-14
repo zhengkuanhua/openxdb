@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_e052cde5c75a11f197b3525400248c00
+    ReservedCode1: ngA7jRrlGeSD6TpVF3C4GbfkR7EMMqNvrnUBmTD/xGeln8sWJm5vcyy4A7eZtAMHeFFP/O1E/vUIfK94p2wnTEMKG8/I4Psekg8uO4ZWo6qgUswNUI/+fNeIbaW6RxxszzWONKffkrv9XuCEoXYgI/Ne9YyovDlHNogzq+3QXOQJbik5JHwFSrpmwhc=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_e052cde5c75a11f197b3525400248c00
+    ReservedCode2: ngA7jRrlGeSD6TpVF3C4GbfkR7EMMqNvrnUBmTD/xGeln8sWJm5vcyy4A7eZtAMHeFFP/O1E/vUIfK94p2wnTEMKG8/I4Psekg8uO4ZWo6qgUswNUI/+fNeIbaW6RxxszzWONKffkrv9XuCEoXYgI/Ne9YyovDlHNogzq+3QXOQJbik5JHwFSrpmwhc=
+---
+
 # T30 配置文件与结构化日志告警体系
 
 > 版本：v0.20.0-alpha
@@ -119,3 +130,4 @@ openxdb config-check --config docs/openxdb.conf.example
 | `cmd/openxdb/main.go` | 修改 |
 | `docs/openxdb.conf.example` | 新增示例 |
 | `docs/T30_config_log_alert.md` | 本文档 |
+*（内容由AI生成，仅供参考）*

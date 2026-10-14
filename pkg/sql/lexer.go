@@ -73,6 +73,12 @@ var keywords = map[string]bool{
 	"USER": true, "IDENTIFIED": true,
 	// M11：权限模型（GRANT/REVOKE ... ON ... TO/FROM ...）
 	"GRANT": true, "REVOKE": true, "ALL": true,
+	// M17：细粒度权限与角色体系（库级/列级授权、CREATE ROLE、GRANT ROLE、
+	// SHOW ROLES / SHOW GRANTS）
+	"ROLE": true, "ROLES": true, "DATABASE": true, "GRANTS": true,
+	// M17：审计日志（SHOW AUDITLOG；SET audit_log 配置名走 ident 不注册关键字，
+	// 避免保留 audit 作为表名破坏既有测试/用户库表）
+	"AUDITLOG": true,
 }
 
 type lexer struct {

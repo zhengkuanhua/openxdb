@@ -109,7 +109,7 @@ func (e *Executor) execDistributedOrder(sess *Session, tx txn.Txn, meta *TableMe
 				pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 			} else {
 				e.incRemote()
-				rows, rerr := e.mgr.ScanSortedRemote(node, r.Start, r.End, bs, spec)
+				rows, rerr := e.mgr.ScanSortedRemote(node, r.Start, r.End, bs, spec, e.txContextID(sess))
 				if rerr != nil {
 					return nil, rerr
 				}
@@ -174,7 +174,7 @@ func (e *Executor) scanMergedClusterTop(sess *Session, tx txn.Txn, ranges []stor
 				pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 			} else {
 				e.incRemote()
-				rows, rerr := e.mgr.ScanRemote(node, r.Start, r.End, n, bs)
+				rows, rerr := e.mgr.ScanRemote(node, r.Start, r.End, n, bs, e.txContextID(sess))
 				if rerr != nil {
 					return nil, rerr
 				}

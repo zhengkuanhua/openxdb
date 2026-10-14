@@ -26,6 +26,10 @@ type Session struct {
 	// （每条语句独立，显式事务内不重置）。
 	curBeginTS  uint64
 	stmtBeginTS uint64
+	// M18-A 显式事务 ID：BEGIN 时生成，COMMIT/ROLLBACK 清零；
+	// 随 QUERY_REQ 等集群帧跨节点传播（事务上下文），供参与者识别
+	// 写请求所属会话事务；空串表示无显式事务上下文（零回归）。
+	curTxID string
 	// 递归防护深度：triggerDepth 防触发器无限递归；
 	// procDepth 防存储过程嵌套展开。
 	triggerDepth int

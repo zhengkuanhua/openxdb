@@ -56,6 +56,16 @@ type Executor struct {
 	slowQueries   []SlowQueryRecord
 	slowQueryMax  int // 内存保留条数（默认 slowQueryMaxDefault，可 SetSlowQueryMax 调整）
 	slowLog       *SlowLog
+	// M17-1 审计日志：auditEnabled 总开关（默认开，安全默认）；
+	// auditThreshold 慢审计阈值毫秒（<=0 不标记 slow）；auditRecords 内存环
+	// 缓冲（保留最近 auditMax 条，SHOW AUDITLOG 查询）；auditLog 落盘器
+	// （db/cmd 装配路径与开关后写入 data/audit.log）。
+	auditEnabled  bool
+	auditThreshold int64
+	auditRecords  []AuditRecord
+	auditMax      int
+	auditID       int64
+	auditLog      *AuditLog
 	// M8(BR)：备份/恢复环境（db.Open 装配注入）。
 	// st 为引擎级 Storage 引用：BACKUP 基于一致快照导出、RESTORE 物理写与 PITR 回放；
 	// binlogPath 为数据目录 binlog 文件路径（TO LSN 回放读取，M2 pkg/replication）。
@@ -105,6 +115,9 @@ e := &Executor{
 		slowThreshold: slowThresholdDefault, // M13：默认 100ms
 		slowQueryMax:  slowQueryMaxDefault,
 		slowLog:       NewSlowLog(),
+		// M17-1：审计默认开启（安全默认）+ 内存环 1000 条；落盘器懒创建。
+		auditEnabled: true,
+		auditMax:     auditMaxDefault,
 		// M16-1：在线配置热更新（空 map 保证 SHOW / PERSIST 零 nil 访问）。
 		persistedCfg: map[string]string{},
 		sessionCfg:   map[string]string{},
@@ -237,7 +250,7 @@ func (e *Executor) recordSlow(r SlowQueryRecord) {
 
 // execTimed 执行一条语句并统计耗时（毫秒）：先取开始时间，执行结束后
 // 若超过阈值（含执行失败，Err 记录错误信息）才构造记录与格式化，正常语句零开销。
-func (e *Executor) execTimed(sess *Session, user, sql string, fn func() (*Result, error)) (*Result, error) {
+func (e *Executor) execTimed(sess *Session, user, sql string, stmt Stmt, fn func() (*Result, error)) (*Result, error) {
 	startMs := timeNowMs()
 	startAt := timeNow()
 	res, err := fn()
@@ -253,6 +266,20 @@ func (e *Executor) execTimed(sess *Session, user, sql string, fn func() (*Result
 			Duration: ms,
 			Rows:     rowsOf(res),
 			Err:      errString(err),
+		})
+	}
+	// M17 审计埋点：DML/DDL/PRIVILEGE 语句记录审计事件（SELECT/SHOW 等
+	// 非审计语句跳过；总开关关闭零开销；失败语句 success=false + Err）。
+	if event, obj, ok := auditEventOf(stmt); ok {
+		e.recordAudit(AuditRecord{
+			User:       user,
+			Event:      event,
+			Object:     obj,
+			Detail:     sql,
+			Success:    err == nil,
+			Err:        errString(err),
+			DurationMs: ms,
+			Slow:       e.auditThreshold > 0 && ms >= e.auditThreshold,
 		})
 	}
 	return res, err
@@ -306,7 +333,7 @@ func (e *Executor) ExecuteTextAsSession(stmt Stmt, sqlText, user string, sess *S
 	if err := e.checkPrivilege(stmt, user); err != nil {
 		return nil, err
 	}
-	return e.execTimed(sess, user, sqlText, func() (*Result, error) {
+	return e.execTimed(sess, user, sqlText, stmt, func() (*Result, error) {
 		// M9 查询缓存：仅 autocommit 下的 SELECT 参与缓存（显式事务内
 		// 依赖事务快照，结果不缓存也不查缓存，保持快照隔离语义）。
 		if ss, ok := stmt.(*SelectStmt); ok && e.qc.Enabled() && e.autocommit(sess) {
@@ -335,7 +362,7 @@ func isWriteStmt(stmt Stmt) bool {
 	case *CreateTableStmt, *DropTableStmt, *CreateIndexStmt, *DropIndexStmt,
 		*AlterTableStmt, *InsertStmt, *UpdateStmt, *DeleteStmt, *ImportStmt,
 		*AssignRegionStmt, *SplitRegionStmt, *BalanceStmt, *BackupStmt, *RestoreStmt,
-		*GrantStmt, *RevokeStmt:
+		*GrantStmt, *RevokeStmt, *CreateRoleStmt, *DropRoleStmt:
 		return true
 	}
 	return false
@@ -456,9 +483,17 @@ func (e *Executor) execStmt(sess *Session, stmt Stmt) (*Result, error) {
 	case *RestoreStmt:
 		return e.execRestore(sess, s)
 	case *GrantStmt:
-		return e.execGrant(sess, s)
+		return e.execGrantDispatch(sess, s)
 	case *RevokeStmt:
-		return e.execRevoke(sess, s)
+		return e.execRevokeDispatch(sess, s)
+	case *CreateRoleStmt:
+		return e.execCreateRole(sess, s)
+	case *DropRoleStmt:
+		return e.execDropRole(sess, s)
+	case *ShowRolesStmt:
+		return e.execShowRoles(sess, s)
+	case *ShowGrantsStmt:
+		return e.execShowGrants(sess, s)
 	}
 	return nil, ErrUnsupported
 }
@@ -487,6 +522,7 @@ func (e *Executor) beginTx(sess *Session) error {
 	}
 	sess.curTx = tx
 	sess.inTx = true
+	sess.curTxID = e.newTxID()
 	if e.ts != nil {
 		// 事务起点刷新 TSO 缓存：丢弃残余预取批次，取权威节点当前序列
 		// 的新鲜号作为快照，避免批量缓存让 begin_ts 滞后于已提交事务。
@@ -514,6 +550,7 @@ func (e *Executor) commitTx(sess *Session) error {
 	sess.inTx = false
 	sess.curTx = nil
 	sess.curBeginTS = 0
+	sess.curTxID = ""
 	e.mu.Unlock()
 	if e.ts != nil {
 		// 事务结束后刷新 TSO 缓存：后续新事务/新语句取权威当前序列
@@ -540,6 +577,7 @@ func (e *Executor) rollbackTx(sess *Session) error {
 	sess.inTx = false
 	sess.curTx = nil
 	sess.curBeginTS = 0
+	sess.curTxID = ""
 	e.mu.Unlock()
 	if e.ts != nil {
 		e.ts.Reset()
@@ -571,6 +609,17 @@ func (e *Executor) tsoGet() (uint64, error) {
 		return 0, nil
 	}
 	return ts.Get()
+}
+
+// txContextID 返回当前语句所属会话事务 ID（M18-A 事务上下文）：
+// 显式事务内返回 BEGIN 时生成的事务 ID；autocommit 返回空串（不携带）。
+func (e *Executor) txContextID(sess *Session) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if sess.inTx {
+		return sess.curTxID
+	}
+	return ""
 }
 
 // snapshotTS 返回当前读快照版本：
@@ -751,7 +800,8 @@ func (e *Executor) execDropTable(sess *Session, s *DropTableStmt) (*Result, erro
 	if err := tx.Put(metaRegionsKey, rraw); err != nil {
 		return nil, err
 	}
-	// M11 联动：DROP TABLE 一并清理所有用户对该表的权限记录（m:grants）。
+	// M17 联动：DROP TABLE 一并清理所有用户对该表的表级权限（m:grants）、
+	// 列级权限（m:colgrants）与角色内表授权（m:roles）。
 	grants, err := loadGrants(tx.Get)
 	if err != nil {
 		return nil, err
@@ -762,6 +812,29 @@ func (e *Executor) execDropTable(sess *Session, s *DropTableStmt) (*Result, erro
 		return nil, err
 	}
 	if err := tx.Put(grantsMetaKey, graw); err != nil {
+		return nil, err
+	}
+	colGrants, err := loadColGrants(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	roles, err := loadRoles(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	removeTablePrivileges(colGrants, roles, s.Name)
+	craw, err := saveColGrants(colGrants)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(colGrantsMetaKey, craw); err != nil {
+		return nil, err
+	}
+	rraw2, err := saveRoles(roles)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(rolesMetaKey, rraw2); err != nil {
 		return nil, err
 	}
 	if auto {
@@ -846,17 +919,51 @@ func (e *Executor) execDropUser(sess *Session, s *DropUserStmt) (*Result, error)
 	if err := tx.Put(usersMetaKey, raw); err != nil {
 		return nil, err
 	}
-	// M11 联动：DROP USER 一并清理该用户的全部权限记录（m:grants）。
+	// M17 联动：DROP USER 一并清理该用户的全部权限记录
+	// （表级 m:grants / 库级 m:dbgrants / 列级 m:colgrants / 角色映射 m:userroles）。
 	grants, err := loadGrants(tx.Get)
 	if err != nil {
 		return nil, err
 	}
-	removeUserGrants(grants, s.Name)
+	dbGrants, err := loadDbGrants(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	colGrants, err := loadColGrants(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	userRoles, err := loadUserRoles(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	removeUserPrivileges(grants, dbGrants, colGrants, userRoles, s.Name)
 	graw, err := saveGrants(grants)
 	if err != nil {
 		return nil, err
 	}
 	if err := tx.Put(grantsMetaKey, graw); err != nil {
+		return nil, err
+	}
+	dbraw, err := saveDbGrants(dbGrants)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(dbGrantsMetaKey, dbraw); err != nil {
+		return nil, err
+	}
+	craw, err := saveColGrants(colGrants)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(colGrantsMetaKey, craw); err != nil {
+		return nil, err
+	}
+	urraw, err := saveUserRoles(userRoles)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(userRolesMetaKey, urraw); err != nil {
 		return nil, err
 	}
 	if auto {
@@ -2856,10 +2963,35 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 	if meta == nil {
 		return nil, &SQLError{Msg: "table not exists: " + s.Table}
 	}
-	// 全表扫描 + 过滤（跨 region 展开后按内层键序合并）
-	pairs, err := e.scanMergedCluster(sess, tx, e.rowRanges(meta))
-	if err != nil {
-		return nil, err
+	// 主键等值快速路径：WHERE 仅含主键等值条件时直接定位目标行，
+	// 避免单行 UPDATE 退化为全表扫描（与 execSelect 点查优化对称）。
+	var pairs []storage.KVPair
+	if s.Where != nil && len(s.Where.Conds) == 1 {
+		c := s.Where.Conds[0]
+		if c.Col == meta.PK && c.Op == "=" {
+			pk, err := pkBytes(meta, c.Val)
+			if err != nil {
+				return nil, err
+			}
+			rid, err := e.locateRow(meta, pk)
+			if err != nil {
+				return nil, err
+			}
+			key := e.rowKeyAt(meta, rid, pk)
+			raw, err := e.getKVCluster(sess, tx, key)
+			if err == nil {
+				pairs = []storage.KVPair{{Key: key, Value: raw}}
+			} else if err != storage.ErrNotFound {
+				return nil, err
+			}
+		}
+	}
+	if pairs == nil {
+		// 全表扫描 + 过滤（跨 region 展开后按内层键序合并）
+		pairs, err = e.scanMergedCluster(sess, tx, e.rowRanges(meta))
+		if err != nil {
+			return nil, err
+		}
 	}
 	affected := 0
 	var ops []kvOp

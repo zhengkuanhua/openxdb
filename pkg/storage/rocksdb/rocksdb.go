@@ -10,6 +10,7 @@ package rocksdb
 #cgo linux LDFLAGS: -lstdc++ -lpthread
 #cgo darwin LDFLAGS: -lstdc++
 #include <stdlib.h>
+#include <string.h>
 #include "bridge.h"
 */
 import "C"
@@ -60,11 +61,12 @@ func (r *rocks) Get(key []byte) ([]byte, error) {
 }
 
 func (r *rocks) Scan(rng storage.KeyRange, limit int) ([]storage.KVPair, error) {
+	var errmsg *C.char
 	return doScan(C.xdb_scan(
 		r.h,
 		cBytesOrNil(rng.Start), C.size_t(len(rng.Start)),
 		cBytesOrNil(rng.End), C.size_t(len(rng.End)),
-		C.int(limit), &cscanErr), rng)
+		C.int(limit), &errmsg), rng, errmsg)
 }
 
 func (r *rocks) Write(batch *storage.WriteBatch) error {
@@ -136,11 +138,12 @@ func (sn *snapshot) Get(key []byte) ([]byte, error) {
 }
 
 func (sn *snapshot) Scan(rng storage.KeyRange, limit int) ([]storage.KVPair, error) {
+	var errmsg *C.char
 	return doScan(C.xdb_snapshot_scan(
 		sn.s,
 		cBytesOrNil(rng.Start), C.size_t(len(rng.Start)),
 		cBytesOrNil(rng.End), C.size_t(len(rng.End)),
-		C.int(limit), &cscanErr), rng)
+		C.int(limit), &errmsg), rng, errmsg)
 }
 
 func (sn *snapshot) MGet(keys [][]byte) (map[string][]byte, error) {
@@ -152,27 +155,42 @@ func (sn *snapshot) MGet(keys [][]byte) (map[string][]byte, error) {
 	if n == 0 {
 		return got, nil
 	}
-	keyPtrs := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof((*C.uchar)(nil))))
+	// cgo 指针安全：Go 指针不得存入 C 内存，key 数据整体拷贝到 C 连续缓冲区。
+	total := 0
+	for _, k := range keys {
+		total += len(k)
+	}
+	kbuf := C.malloc(C.size_t(total))
+	offsPtr := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(C.size_t(0))))
 	lenPtrs := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(C.size_t(0))))
-	if keyPtrs == nil || lenPtrs == nil {
-		if keyPtrs != nil {
-			C.free(keyPtrs)
+	if kbuf == nil || offsPtr == nil || lenPtrs == nil {
+		if kbuf != nil {
+			C.free(kbuf)
+		}
+		if offsPtr != nil {
+			C.free(offsPtr)
 		}
 		if lenPtrs != nil {
 			C.free(lenPtrs)
 		}
 		return nil, fmt.Errorf("rocksdb: malloc failed for MGet")
 	}
-	defer C.free(keyPtrs)
+	defer C.free(kbuf)
+	defer C.free(offsPtr)
 	defer C.free(lenPtrs)
-	kp := unsafe.Slice((**C.uchar)(keyPtrs), n)
-	lp := unsafe.Slice((*C.size_t)(lenPtrs), n)
+	offs := unsafe.Slice((*C.size_t)(offsPtr), n)
+	lens := unsafe.Slice((*C.size_t)(lenPtrs), n)
+	off := 0
 	for i, k := range keys {
-		kp[i] = cBytes(k)
-		lp[i] = C.size_t(len(k))
+		if len(k) > 0 {
+			C.memcpy(unsafe.Add(kbuf, uintptr(off)), unsafe.Pointer(cBytes(k)), C.size_t(len(k)))
+		}
+		offs[i] = C.size_t(off)
+		lens[i] = C.size_t(len(k))
+		off += len(k)
 	}
 	var errmsg *C.char
-	items := C.xdb_snapshot_multi_get(sn.s, (**C.uchar)(keyPtrs), (*C.size_t)(lenPtrs), C.int(n), &errmsg)
+	items := C.xdb_snapshot_multi_get2(sn.s, (*C.uchar)(kbuf), (*C.size_t)(offsPtr), (*C.size_t)(lenPtrs), C.int(n), &errmsg)
 	if items == nil {
 		if errmsg != nil {
 			err := fmt.Errorf("rocksdb: snapshot mget: %s", cString(errmsg))
@@ -182,12 +200,14 @@ func (sn *snapshot) MGet(keys [][]byte) (map[string][]byte, error) {
 		return nil, fmt.Errorf("rocksdb: snapshot mget: no items")
 	}
 	defer C.xmget_free(items, C.int(n))
-	it := unsafe.Slice((*C.xmget_item)(items), n)
+	itemSize := unsafe.Sizeof(C.xmget_item{})
+	base := unsafe.Pointer(items)
 	for i := 0; i < n; i++ {
-		if it[i].found == 0 {
+		it := (*C.xmget_item)(unsafe.Add(base, uintptr(i)*itemSize))
+		if it.found == 0 {
 			continue
 		}
-		got[string(keys[i])] = C.GoBytes(unsafe.Pointer(it[i].val), C.int(it[i].vlen))
+		got[string(keys[i])] = C.GoBytes(unsafe.Pointer(it.val), C.int(it.vlen))
 	}
 	return got, nil
 }
@@ -202,13 +222,10 @@ func (sn *snapshot) Release() {
 
 // ---- cgo 辅助 ----
 
-var cscanErr *C.char
-
-func doScan(s *C.xscan, rng storage.KeyRange) ([]storage.KVPair, error) {
+func doScan(s *C.xscan, rng storage.KeyRange, errmsg *C.char) ([]storage.KVPair, error) {
 	if s == nil {
-		err := fmt.Errorf("rocksdb: scan: %s", cString(cscanErr))
-		freeStr(cscanErr)
-		cscanErr = nil
+		err := fmt.Errorf("rocksdb: scan: %s", cString(errmsg))
+		freeStr(errmsg)
 		return nil, err
 	}
 	defer C.xscan_free(s)

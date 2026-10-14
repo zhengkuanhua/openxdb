@@ -379,30 +379,137 @@ func (p *parser) parsePrivList() ([]string, error) {
 	}
 }
 
-// parseGrant GRANT <priv[,priv...]> ON <table> TO '<user>'。
+// parseCreateRole CREATE ROLE '<role>'：创建角色（M17 RBAC）。
+func (p *parser) parseCreateRole() (Stmt, error) {
+	if err := p.expectKeyword("ROLE"); err != nil {
+		return nil, err
+	}
+	roleTok, err := p.expect(tokString, "role name")
+	if err != nil {
+		return nil, err
+	}
+	return &CreateRoleStmt{Name: roleTok.text}, nil
+}
+
+// parseDropRole DROP ROLE [IF EXISTS] '<role>'：删除角色（M17 RBAC）。
+func (p *parser) parseDropRole() (Stmt, error) {
+	if err := p.expectKeyword("ROLE"); err != nil {
+		return nil, err
+	}
+	s := &DropRoleStmt{}
+	if p.cur().kind == tokKeyword && p.cur().text == "IF" {
+		if err := p.expectKeyword("IF"); err != nil {
+			return nil, err
+		}
+		if err := p.expectKeyword("EXISTS"); err != nil {
+			return nil, err
+		}
+		s.IfExists = true
+	}
+	roleTok, err := p.expect(tokString, "role name")
+	if err != nil {
+		return nil, err
+	}
+	s.Name = roleTok.text
+	return s, nil
+}
+
+// parseGrant GRANT <priv[,priv...]> ON <object> TO [ROLE] '<target>'。
+// 支持四种范围：表级 GRANT SELECT ON users TO 'alice'；
+// 库级 GRANT SELECT ON DATABASE default TO 'alice'；
+// 列级 GRANT SELECT ON users (id, name) TO 'alice'；
+// 角色挂载 GRANT ROLE <role> TO 'alice'（Scope=ROLE）；
+// 角色授权 GRANT SELECT ON users TO ROLE 'analyst'（ToRole=true）。
 func (p *parser) parseGrant() (Stmt, error) {
 	if err := p.expectKeyword("GRANT"); err != nil {
 		return nil, err
+	}
+	s := &GrantStmt{}
+	// GRANT ROLE <role> TO '<user>'：角色挂载（ROLE 为关键字，不走权限列表）。
+	if p.cur().kind == tokKeyword && p.cur().text == "ROLE" {
+		p.next()
+		roleTok, err := p.expect(tokIdent, "role name")
+		if err != nil {
+			return nil, err
+		}
+		s.Role = roleTok.text
+		if err := p.expectKeyword("TO"); err != nil {
+			return nil, err
+		}
+		userTok, err := p.expect(tokString, "user name")
+		if err != nil {
+			return nil, err
+		}
+		s.User = userTok.text
+		s.Scope = "ROLE"
+		return s, nil
 	}
 	privs, err := p.parsePrivList()
 	if err != nil {
 		return nil, err
 	}
+	s.Privileges = privs
 	if err := p.expectKeyword("ON"); err != nil {
 		return nil, err
 	}
-	tableTok, err := p.expect(tokIdent, "table name")
-	if err != nil {
-		return nil, err
+	// 库级：ON DATABASE <db>
+	if p.cur().kind == tokKeyword && p.cur().text == "DATABASE" {
+		p.next()
+		dbTok, err := p.expect(tokIdent, "database name")
+		if err != nil {
+			return nil, err
+		}
+		s.Database = dbTok.text
+		s.Scope = "DATABASE"
+	} else {
+		// 表级/列级：ON <table> [(col, ...)]
+		tblTok, err := p.expect(tokIdent, "table name")
+		if err != nil {
+			return nil, err
+		}
+		s.Table = tblTok.text
+		if p.cur().kind == tokLParen {
+			p.next()
+			for {
+				colTok, err := p.expect(tokIdent, "column name")
+				if err != nil {
+					return nil, err
+				}
+				s.Columns = append(s.Columns, colTok.text)
+				if p.cur().kind == tokComma {
+					p.next()
+					continue
+				}
+				if _, err := p.expect(tokRParen, ")"); err != nil {
+					return nil, err
+				}
+				break
+			}
+			s.Scope = "COLUMN"
+		} else {
+			s.Scope = "TABLE"
+		}
 	}
 	if err := p.expectKeyword("TO"); err != nil {
 		return nil, err
+	}
+	// TO ROLE '<role>'：向角色授权（对象为表或库）。
+	if p.cur().kind == tokKeyword && p.cur().text == "ROLE" {
+		p.next()
+		roleTok, err := p.expect(tokString, "role name")
+		if err != nil {
+			return nil, err
+		}
+		s.Role = roleTok.text
+		s.ToRole = true
+		return s, nil
 	}
 	userTok, err := p.expect(tokString, "user name")
 	if err != nil {
 		return nil, err
 	}
-	return &GrantStmt{Privileges: privs, Table: tableTok.text, User: userTok.text}, nil
+	s.User = userTok.text
+	return s, nil
 }
 
 // parseRevoke REVOKE <priv[,priv...]> ON <table> FROM '<user>'。
@@ -410,25 +517,92 @@ func (p *parser) parseRevoke() (Stmt, error) {
 	if err := p.expectKeyword("REVOKE"); err != nil {
 		return nil, err
 	}
+	s := &RevokeStmt{}
+	// REVOKE ROLE <role> FROM '<user>'：回收角色挂载。
+	if p.cur().kind == tokKeyword && p.cur().text == "ROLE" {
+		p.next()
+		roleTok, err := p.expect(tokIdent, "role name")
+		if err != nil {
+			return nil, err
+		}
+		s.Role = roleTok.text
+		if err := p.expectKeyword("FROM"); err != nil {
+			return nil, err
+		}
+		userTok, err := p.expect(tokString, "user name")
+		if err != nil {
+			return nil, err
+		}
+		s.User = userTok.text
+		s.Scope = "ROLE"
+		return s, nil
+	}
 	privs, err := p.parsePrivList()
 	if err != nil {
 		return nil, err
 	}
+	s.Privileges = privs
 	if err := p.expectKeyword("ON"); err != nil {
 		return nil, err
 	}
-	tableTok, err := p.expect(tokIdent, "table name")
-	if err != nil {
-		return nil, err
+	// 库级：ON DATABASE <db>
+	if p.cur().kind == tokKeyword && p.cur().text == "DATABASE" {
+		p.next()
+		dbTok, err := p.expect(tokIdent, "database name")
+		if err != nil {
+			return nil, err
+		}
+		s.Database = dbTok.text
+		s.Scope = "DATABASE"
+	} else {
+		// 表级/列级：ON <table> [(col, ...)]
+		tblTok, err := p.expect(tokIdent, "table name")
+		if err != nil {
+			return nil, err
+		}
+		s.Table = tblTok.text
+		if p.cur().kind == tokLParen {
+			p.next()
+			for {
+				colTok, err := p.expect(tokIdent, "column name")
+				if err != nil {
+					return nil, err
+				}
+				s.Columns = append(s.Columns, colTok.text)
+				if p.cur().kind == tokComma {
+					p.next()
+					continue
+				}
+				if _, err := p.expect(tokRParen, ")"); err != nil {
+					return nil, err
+				}
+				break
+			}
+			s.Scope = "COLUMN"
+		} else {
+			s.Scope = "TABLE"
+		}
 	}
 	if err := p.expectKeyword("FROM"); err != nil {
 		return nil, err
+	}
+	// FROM ROLE '<role>'：从角色回收授权。
+	if p.cur().kind == tokKeyword && p.cur().text == "ROLE" {
+		p.next()
+		roleTok, err := p.expect(tokString, "role name")
+		if err != nil {
+			return nil, err
+		}
+		s.Role = roleTok.text
+		s.ToRole = true
+		return s, nil
 	}
 	userTok, err := p.expect(tokString, "user name")
 	if err != nil {
 		return nil, err
 	}
-	return &RevokeStmt{Privileges: privs, Table: tableTok.text, User: userTok.text}, nil
+	s.User = userTok.text
+	return s, nil
 }
 
 // parseAddNode ADD NODE '<addr>'：注册远端节点（地址字符串，如 '127.0.0.1:7791'）。
@@ -520,8 +694,11 @@ func (p *parser) parseCreate() (Stmt, error) {
 	case "PROCEDURE":
 		// M15-3：CREATE PROCEDURE <name> [( [IN] <param> <TYPE> [, ...] )] BEGIN <body> END
 		return p.parseCreateProcedure()
+	case "ROLE":
+		// M17：CREATE ROLE '<role>'
+		return p.parseCreateRole()
 	default:
-		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW, USER, TRIGGER or PROCEDURE at %d, got %q", p.cur().pos, p.cur().text)
+		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW, USER, TRIGGER, PROCEDURE or ROLE at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
@@ -810,9 +987,12 @@ func (p *parser) parseDrop() (Stmt, error) {
 	case "PROCEDURE":
 		// M15-3：DROP PROCEDURE [IF EXISTS] <name>
 		return p.parseDropProcedure()
+	case "ROLE":
+		// M17：DROP ROLE [IF EXISTS] '<role>'
+		return p.parseDropRole()
 	case "TABLE":
 	default:
-		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW, USER, TRIGGER or PROCEDURE at %d, got %q", p.cur().pos, p.cur().text)
+		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW, USER, TRIGGER, PROCEDURE or ROLE at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
@@ -2253,6 +2433,23 @@ func (p *parser) parseShow() (Stmt, error) {
 		// M15-3：SHOW PROCEDURES
 		p.next()
 		return &ShowProceduresStmt{}, nil
+	case "ROLES":
+		// M17：SHOW ROLES
+		p.next()
+		return &ShowRolesStmt{}, nil
+	case "GRANTS":
+		// M17：SHOW GRANTS [FOR '<user>']
+		p.next()
+		user := ""
+		if p.cur().kind == tokKeyword && p.cur().text == "FOR" {
+			p.next()
+			userTok, err := p.expect(tokString, "user name")
+			if err != nil {
+				return nil, err
+			}
+			user = userTok.text
+		}
+		return &ShowGrantsStmt{User: user}, nil
 	}
 	// SHOW USERS：USERS 不在关键字表（避免与表名 users 冲突），按标识符文本匹配。
 	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "USERS") {

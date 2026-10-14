@@ -218,6 +218,42 @@ void xdb_snapshot_release(xsnap* s) {
     delete s;
 }
 
+xmget_item* xdb_snapshot_multi_get2(xsnap* s, const unsigned char* keys,
+                                    const size_t* offsets, const size_t* klens,
+                                    int n, char** errmsg) {
+    if (!s || n <= 0 || !keys || !offsets || !klens) return nullptr;
+    rocksdb::ReadOptions ro;
+    ro.snapshot = s->snap;
+    std::vector<rocksdb::Slice> slices;
+    slices.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        slices.emplace_back(reinterpret_cast<const char*>(keys + offsets[i]), klens[i]);
+    }
+    std::vector<std::string> vals(n);
+    std::vector<rocksdb::Status> statuses = s->db->MultiGet(ro, slices, &vals);
+    xmget_item* items = static_cast<xmget_item*>(std::calloc(n, sizeof(xmget_item)));
+    if (!items) {
+        if (errmsg) *errmsg = dup_status(rocksdb::Status::IOError("xmget items alloc failed"));
+        return nullptr;
+    }
+    for (int i = 0; i < n; ++i) {
+        if (statuses[i].IsNotFound()) {
+            items[i].found = 0;
+            continue;
+        }
+        if (!statuses[i].ok()) {
+            if (errmsg) *errmsg = dup_status(statuses[i]);
+            xmget_free(items, n);
+            return nullptr;
+        }
+        items[i].found = 1;
+        items[i].vlen = vals[i].size();
+        items[i].val = static_cast<unsigned char*>(std::malloc(vals[i].empty() ? 1 : vals[i].size()));
+        if (!vals[i].empty()) std::memcpy(items[i].val, vals[i].data(), vals[i].size());
+    }
+    return items;
+}
+
 xmget_item* xdb_snapshot_multi_get(xsnap* s, const unsigned char** keys,
                                    const size_t* klens, int n, char** errmsg) {
     if (!s || n <= 0) return nullptr;

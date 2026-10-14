@@ -307,33 +307,36 @@ func (m *Manager) ensureRemote(id string) (*NodeInfo, error) {
 
 // ScanRemote 将物理区间 [start, end) 转发到归属节点执行，返回远端行。
 // beginTS>0 时远端按快照版本过滤（M8 分布式快照隔离）。
-func (m *Manager) ScanRemote(nodeID string, start, end []byte, limit int, beginTS uint64) ([]QueryRow, error) {
+// txID 为发起方显式事务 ID（M18-A 事务上下文），随 QUERY_REQ 传播；空串不携带。
+func (m *Manager) ScanRemote(nodeID string, start, end []byte, limit int, beginTS uint64, txID string) ([]QueryRow, error) {
 	n, err := m.ensureRemote(nodeID)
 	if err != nil {
 		return nil, err
 	}
-	return m.clientFor(n.ID).Scan(start, end, limit, beginTS)
+	return m.clientFor(n.ID).Scan(start, end, limit, beginTS, txID)
 }
 
 // ScanSortedRemote 转发带排序窗口的区间扫描（M12-2）：
 // 远端本地排序后截取 [spec.Offset, spec.Offset+spec.Limit) 返回，
 // 支持 LIMIT 下推 top-N / OFFSET 下推窗口行。
-func (m *Manager) ScanSortedRemote(nodeID string, start, end []byte, beginTS uint64, spec *SortSpec) ([]QueryRow, error) {
+// txID 为发起方显式事务 ID（M18-A 事务上下文），随 QUERY_REQ 传播；空串不携带。
+func (m *Manager) ScanSortedRemote(nodeID string, start, end []byte, beginTS uint64, spec *SortSpec, txID string) ([]QueryRow, error) {
 	n, err := m.ensureRemote(nodeID)
 	if err != nil {
 		return nil, err
 	}
-	return m.clientFor(n.ID).ScanSorted(start, end, beginTS, spec)
+	return m.clientFor(n.ID).ScanSorted(start, end, beginTS, spec, txID)
 }
 
 // GetRemote 将点查转发到归属节点执行；未命中返回 storage.ErrNotFound。
 // beginTS>0 时远端按快照版本过滤（M8 分布式快照隔离）。
-func (m *Manager) GetRemote(nodeID string, key []byte, beginTS uint64) ([]byte, error) {
+// txID 为发起方显式事务 ID（M18-A 事务上下文），随 QUERY_REQ 传播；空串不携带。
+func (m *Manager) GetRemote(nodeID string, key []byte, beginTS uint64, txID string) ([]byte, error) {
 	n, err := m.ensureRemote(nodeID)
 	if err != nil {
 		return nil, err
 	}
-	return m.clientFor(n.ID).Get(key, beginTS)
+	return m.clientFor(n.ID).Get(key, beginTS, txID)
 }
 
 // helloRemote 与远端完成节点握手（连接 + NODE_HELLO -> NODE_HELLO_OK）。

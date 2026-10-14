@@ -146,7 +146,7 @@ func (e *Executor) scanRegionRows(nodeID string, start, end []byte) ([]storage.K
 		return e.scanMerged(tx, []storage.KeyRange{{Start: start, End: end}})
 	}
 	e.incRemote()
-	rows, err := e.mgr.ScanRemote(nodeID, start, end, 0, 0)
+	rows, err := e.mgr.ScanRemote(nodeID, start, end, 0, 0, "")
 	if err != nil {
 		return nil, err
 	}

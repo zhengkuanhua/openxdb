@@ -1,6 +1,8 @@
 package cluster_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -90,7 +92,7 @@ func TestQueryForwardScanAndGet(t *testing.T) {
 	}
 
 	// 转发区间扫描 [k1, k3)
-	rows, err := mgrA.ScanRemote("node-b", []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k1"), []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k3"), 0, 0)
+	rows, err := mgrA.ScanRemote("node-b", []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k1"), []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k3"), 0, 0, "")
 	if err != nil {
 		t.Fatalf("ScanRemote: %v", err)
 	}
@@ -101,7 +103,7 @@ func TestQueryForwardScanAndGet(t *testing.T) {
 		t.Fatalf("ScanRemote values: %q %q", rows[0].Value, rows[1].Value)
 	}
 	// 转发点查
-	v, err := mgrA.GetRemote("node-b", []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k2"), 0)
+	v, err := mgrA.GetRemote("node-b", []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k2"), 0, "")
 	if err != nil {
 		t.Fatalf("GetRemote: %v", err)
 	}
@@ -109,11 +111,11 @@ func TestQueryForwardScanAndGet(t *testing.T) {
 		t.Fatalf("GetRemote: want v2, got %q", v)
 	}
 	// 未命中
-	if _, err := mgrA.GetRemote("node-b", []byte("r\x00\x00\x00\x00\x00\x00\x00\x01kx"), 0); !errors.Is(err, storage.ErrNotFound) {
+	if _, err := mgrA.GetRemote("node-b", []byte("r\x00\x00\x00\x00\x00\x00\x00\x01kx"), 0, ""); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("GetRemote(miss): want ErrNotFound, got %v", err)
 	}
 	// 未知节点
-	if _, err := mgrA.ScanRemote("ghost", nil, nil, 0, 0); err == nil {
+	if _, err := mgrA.ScanRemote("ghost", nil, nil, 0, 0, ""); err == nil {
 		t.Fatalf("ScanRemote(unknown node): want error, got nil")
 	}
 }
@@ -186,5 +188,50 @@ func TestRegionPushLearnsRoutes(t *testing.T) {
 	got, ok = routerB.FindRegion(5)
 	if !ok || got.Node != "node-a" || got.Local {
 		t.Fatalf("B region5: want node-a remote, got %+v ok=%v", got, ok)
+	}
+}
+
+// TestQueryForwardCarriesTxID M18-A 事务上下文传播：显式事务 ID 随
+// QUERY_REQ 等集群帧跨节点传播到目标节点（目标节点兼容解析 tx_id，
+// 空串旧路径零回归由 TestQueryForwardScanAndGet 覆盖）。
+func TestQueryForwardCarriesTxID(t *testing.T) {
+	mgrA, srvA, _, _ := newTestNode(t, "node-a", nil)
+	defer srvA.Close()
+	_, srvB, stB, _ := newTestNode(t, "node-b", nil)
+	defer srvB.Close()
+	if _, err := mgrA.AddNode(srvB.SelfAddr); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	batch := &storage.WriteBatch{Puts: []storage.KVPair{
+		{Key: []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k1"), Value: []byte("v1")},
+	}}
+	if err := stB.Write(batch); err != nil {
+		t.Fatalf("seed B: %v", err)
+	}
+
+	txID := "tx-123-1"
+	// 带事务 ID 的区间扫描转发：帧到达目标节点并成功返回（对端解析 tx_id 兼容）。
+	rows, err := mgrA.ScanRemote("node-b", []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k1"), []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k2"), 0, 0, txID)
+	if err != nil {
+		t.Fatalf("ScanRemote(tx): %v", err)
+	}
+	if len(rows) != 1 || string(rows[0].Value) != "v1" {
+		t.Fatalf("ScanRemote(tx): want 1 row v1, got %d rows", len(rows))
+	}
+	// 带事务 ID 的点查转发。
+	v, err := mgrA.GetRemote("node-b", []byte("r\x00\x00\x00\x00\x00\x00\x00\x01k1"), 0, txID)
+	if err != nil {
+		t.Fatalf("GetRemote(tx): %v", err)
+	}
+	if string(v) != "v1" {
+		t.Fatalf("GetRemote(tx): want v1, got %q", v)
+	}
+	// 帧序列化：tx_id 随 QUERY_REQ 携带（事务上下文传播的协议载体）。
+	raw, err := json.Marshal(cluster.QueryReq{Op: cluster.OpGet, Start: []byte("k"), BeginTS: 42, TxID: txID})
+	if err != nil {
+		t.Fatalf("marshal QueryReq: %v", err)
+	}
+	if !bytes.Contains(raw, []byte(`"tx_id":"tx-123-1"`)) {
+		t.Fatalf("QueryReq JSON missing tx_id: %s", raw)
 	}
 }

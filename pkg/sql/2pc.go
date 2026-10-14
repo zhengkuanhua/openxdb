@@ -87,6 +87,15 @@ func (e *Executor) new2pcID() string {
 	return fmt.Sprintf("2pc-%d-%d", time.Now().UnixNano(), seq)
 }
 
+var _txSeq uint64
+
+// newTxID 生成会话级显式事务 ID（M18-A）：时间戳 + 进程内递增序列，
+// 跨节点唯一，随 QUERY_REQ 等集群帧传播，供参与者识别写请求所属会话事务。
+func (e *Executor) newTxID() string {
+	seq := atomic.AddUint64(&_txSeq, 1)
+	return fmt.Sprintf("tx-%d-%d", time.Now().UnixNano(), seq)
+}
+
 // toClusterTxnOps 转换 SQL 内部操作为 cluster 协议单元。
 func toClusterTxnOps(ops []kvOp) []cluster.TxnOp {
 	out := make([]cluster.TxnOp, 0, len(ops))

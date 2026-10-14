@@ -37,12 +37,12 @@ func TestM13MetricsSQLAndSlow(t *testing.T) {
 	// 避免慢机器/高负载下 execTimed 超过默认 100ms 阈值造成时序脆弱。
 	e.SetSlowThreshold(0)
 
-	if _, err := e.execTimed(e.globalSess, "root", "SELECT 1", func() (*Result, error) {
+	if _, err := e.execTimed(e.globalSess, "root", "SELECT 1", nil, func() (*Result, error) {
 		return &Result{}, nil
 	}); err != nil {
 		t.Fatalf("execTimed: %v", err)
 	}
-	if _, err := e.execTimed(e.globalSess, "root", "SELECT 2", func() (*Result, error) {
+	if _, err := e.execTimed(e.globalSess, "root", "SELECT 2", nil, func() (*Result, error) {
 		return &Result{}, nil
 	}); err != nil {
 		t.Fatalf("execTimed: %v", err)
@@ -126,7 +126,7 @@ func TestM13MetricsNilSafety(t *testing.T) {
 	e.incLocal()
 	e.incRemote()
 	e.recordSlow(SlowQueryRecord{SQL: "x"})
-	_, _ = e.execTimed(e.globalSess, "root", "SELECT 1", func() (*Result, error) { return &Result{}, nil })
+	_, _ = e.execTimed(e.globalSess, "root", "SELECT 1", nil, func() (*Result, error) { return &Result{}, nil })
 	e.mu.Lock()
 	e.globalSess.inTx = true
 	e.globalSess.curTx = &fakeTxn{}

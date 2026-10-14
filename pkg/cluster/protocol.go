@@ -61,12 +61,15 @@ const (
 // Start/End 为带 region 前缀的物理键（JSON 序列化时自动 base64）。
 // BeginTS 为发起方快照版本（M8 分布式快照隔离）：远端按该版本做
 // MVCC 过滤，begin_ts=0 表示不过滤（旧路径/单机零回归）。
+// TxID 为发起方显式事务 ID（M18-A 事务上下文）：随帧传播到目标节点，
+// 供参与者识别写请求所属会话事务；空串表示无显式事务上下文（零回归）。
 type QueryReq struct {
 	Op      QueryOp `json:"op"`
 	Start   []byte  `json:"start,omitempty"`
 	End     []byte  `json:"end,omitempty"`
 	Limit   int     `json:"limit,omitempty"`
 	BeginTS uint64  `json:"begin_ts,omitempty"`
+	TxID    string  `json:"tx_id,omitempty"`
 	// Sort 非空时（M12-2 跨节点 ORDER BY/LIMIT 分页）：远端扫描完成后
 	// 按 Sort 提取第 ColIndex 列排序，再截取 [Offset, Offset+Limit) 窗口返回。
 	// 仅影响 OpScan，OpGet 忽略。

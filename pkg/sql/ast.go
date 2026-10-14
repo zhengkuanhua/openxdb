@@ -107,25 +107,73 @@ type ShowUsersStmt struct{}
 
 func (ShowUsersStmt) stmt() {}
 
-// GrantStmt GRANT <priv[,priv...]> ON <table> TO '<user>'。
+// GrantStmt GRANT <priv[,priv...]> ON <table> TO '<user>'（M17 扩展：
+// Scope 为 TABLE / DATABASE / COLUMN / ROLE，分别配合 Table+Database /
+// Database / Table+Columns / Role 使用）。
 // Privileges 为大写权限名：SELECT / INSERT / UPDATE / DELETE / ALL。
 type GrantStmt struct {
 	Privileges []string
 	Table      string
 	User       string
+	Scope      string   // M17：授权范围（TABLE/DATABASE/COLUMN/ROLE），空=TABLE
+	Database   string   // M17：库级/列级授权目标库
+	Columns    []string // M17：列级授权目标列
+	Role       string   // M17：角色授权（GRANT <role> TO '<user>'）
+	ToRole     bool     // M17：目标为角色（GRANT <privs> ON <obj> TO ROLE '<role>'）
 }
 
 func (GrantStmt) stmt() {}
 
-// RevokeStmt REVOKE <priv[,priv...]> ON <table> FROM '<user>'。
+// RevokeStmt REVOKE <priv[,priv...]> ON <table> FROM '<user>'（M17 扩展同
+// GrantStmt.Scope 语义）。
 // Privileges 为大写权限名：SELECT / INSERT / UPDATE / DELETE / ALL。
 type RevokeStmt struct {
 	Privileges []string
 	Table      string
 	User       string
+	Scope      string   // M17：授权范围（TABLE/DATABASE/COLUMN/ROLE），空=TABLE
+	Database   string   // M17：库级/列级授权目标库
+	Columns    []string // M17：列级授权目标列
+	Role       string   // M17：角色授权（REVOKE <role> FROM '<user>'）
+	ToRole     bool     // M17：目标为角色（REVOKE <privs> ON <obj> FROM ROLE '<role>'）
 }
 
 func (RevokeStmt) stmt() {}
+
+// CreateRoleStmt CREATE ROLE '<role>'（M17 RBAC）：创建角色（空权限集合）。
+type CreateRoleStmt struct {
+	Name string
+}
+
+func (CreateRoleStmt) stmt() {}
+
+// DropRoleStmt DROP ROLE [IF EXISTS] '<role>'（M17 RBAC）：删除角色并联动
+// 清理用户-角色映射与角色内授权。
+type DropRoleStmt struct {
+	Name     string
+	IfExists bool
+}
+
+func (DropRoleStmt) stmt() {}
+
+// ShowRolesStmt SHOW ROLES（M17 RBAC）：列出全部角色。
+type ShowRolesStmt struct{}
+
+func (ShowRolesStmt) stmt() {}
+
+// ShowGrantsStmt SHOW GRANTS FOR '<user>'（M17 RBAC）：列出用户全部权限来源。
+type ShowGrantsStmt struct {
+	User string
+}
+
+func (ShowGrantsStmt) stmt() {}
+
+// ShowAuditLogStmt SHOW AUDITLOG [LIMIT n]（M17-1 审计）：查看内存审计记录。
+type ShowAuditLogStmt struct {
+	Limit int
+}
+
+func (ShowAuditLogStmt) stmt() {}
 
 // CreateIndexStmt CREATE INDEX（T6 二级索引；M10 支持 UNIQUE）。
 type CreateIndexStmt struct {

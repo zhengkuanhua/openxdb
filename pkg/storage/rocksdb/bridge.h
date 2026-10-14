@@ -56,6 +56,11 @@ typedef struct xmget_item {
 } xmget_item;
 xmget_item* xdb_snapshot_multi_get(xsnap* s, const unsigned char** keys,
                                    const size_t* klens, int n, char** errmsg);
+/* 安全版快照批量读：keys 为 n 个 key 的连续拼接缓冲区（完全位于 C 内存，
+   不包含 Go 指针），offsets[i] 为第 i 个 key 的起始偏移，klens[i] 为其长度。 */
+xmget_item* xdb_snapshot_multi_get2(xsnap* s, const unsigned char* keys,
+                                    const size_t* offsets, const size_t* klens,
+                                    int n, char** errmsg);
 void xmget_free(xmget_item* items, int n);
 
 void xdb_free_str(char* p);

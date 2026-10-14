@@ -193,27 +193,11 @@ func (e *Executor) execRevoke(sess *Session, s *RevokeStmt) (*Result, error) {
 	return &Result{AffectedRows: 0}, nil
 }
 
-// hasPrivilege 查询用户对某表是否拥有指定权限（执行期校验预留）。
+// hasPrivilege 查询用户对某表是否拥有指定权限（执行期校验预留，M17 聚合）。
 // op 为 "SELECT"/"INSERT"/"UPDATE"/"DELETE"；用户/表无授权记录返回 false。
+// M17 扩展：聚合直授表级/库级授权与角色内含授权（同 effectiveTableMask）。
 func (e *Executor) hasPrivilege(user, table, op string) (bool, error) {
-	tx, err := e.tm.Begin()
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-	bit, err := parsePrivilege(op)
-	if err != nil {
-		return false, err
-	}
-	grants, err := loadGrants(tx.Get)
-	if err != nil {
-		return false, err
-	}
-	tabs := grants[user]
-	if tabs == nil {
-		return false, nil
-	}
-	return tabs[table]&int(bit) != 0, nil
+	return e.hasEffectivePrivilege(user, table, op)
 }
 
 // removeUserGrants 从权限目录移除指定用户的全部授权（DROP USER 联动清理）。
