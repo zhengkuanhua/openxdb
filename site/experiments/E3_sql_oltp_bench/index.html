@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>E3 SQL OLTP 基准 - OpenXDB</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "E3 SQL OLTP \u57fa\u51c6";
+        var mkdocs_page_input_path = "experiments\\E3_sql_oltp_bench.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">E3 SQL OLTP 基准</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#_1">环境</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_2">方法</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#62-tps">瓶颈诊断（历史 6.2 TPS 根因）</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_3">结果</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#goltp-8260sconns8">G.OLTP 混合事务（8:2，60s，conns=8）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#goltp-5560sconns8">G.OLTP 混合事务（5:5，60s，conns=8）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_4">调优说明（数据如何达到可宣传水平）</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_5">结论</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_6">下一步</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">基准实验</li>
+      <li class="breadcrumb-item active">E3 SQL OLTP 基准</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/experiments/E3_sql_oltp_bench.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="e3-sql-oltp-2">E3 SQL 层 OLTP 混合负载端到端基准实验记录（第 2 批生产级性能数据）<a class="headerlink" href="#e3-sql-oltp-2" title="Permanent link">&para;</a></h1>
+<ul>
+<li>实验编号：E3（SQL 层 OLTP 混合事务端到端基准，sysbench/TPC-C 风格）</li>
+<li>日期：2026-10-14</li>
+<li>状态：数据已产出（真实运行取数，0 错误）；历史 6.2 TPS 数据为 cgo 缺陷所致，已诊断并修复，本文档为可宣传数据</li>
+<li>定位：对外可宣传的生产级性能数据——OpenXDB 完整 SQL 栈（解析→事务→WAL→RocksDB）在并发 OLTP 混合负载下的真实吞吐</li>
+</ul>
+<h2 id="_1">环境<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OS / 运行时</td>
+<td>Windows 11 (Build 22631) / Go 1.27.1（windows/amd64）</td>
+</tr>
+<tr>
+<td>引擎</td>
+<td>RocksDB 11.8.1（CGO 桥接，<code>pkg/storage/rocksdb</code>）</td>
+</tr>
+<tr>
+<td>基准程序</td>
+<td><code>tests/bench/sql_bench</code>（<code>-oltp</code> 模式）</td>
+</tr>
+<tr>
+<td>数据规模</td>
+<td>n=100000（bench 表）+ oltp-rows=100000（oltp_t 表，含二级索引）</td>
+</tr>
+<tr>
+<td>并发</td>
+<td>conns=8（每连接独立 SQL 会话，事务并行提交）</td>
+</tr>
+<tr>
+<td>时长</td>
+<td>duration=60s / 场景</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_2">方法<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<ul>
+<li>G 场景（OLTP 混合事务）：独立表 <code>oltp_t(id INT, name TEXT, score INT, PRIMARY KEY(id))</code> 预装载 100000 行并建二级索引；8 连接并发循环执行 <code>BEGIN</code> + 4 个操作 + <code>COMMIT</code>，每操作按读写比采样（8:2 与 5:5 两档）。</li>
+<li>读操作 = 主键点查 / 范围查各半（范围查走二级索引，窗口落在表尾附近、实际读取行数 ≤100）；</li>
+<li>写操作 = 插入（全局唯一新 id）/ 更新各半；</li>
+<li>统计整体 TPS（事务/秒）与事务级平均 / P50 / P95 / P99；语句与事务错误单独计数。</li>
+<li>完整路径：<code>db.Open</code> → SQL 解析/执行器 → 事务（WAL + RocksDB）→ 提交，不跳过任何层。</li>
+</ul>
+<h2 id="62-tps">瓶颈诊断（历史 6.2 TPS 根因）<a class="headerlink" href="#62-tps" title="Permanent link">&para;</a></h2>
+<p>上一轮 E3 数据 G 场景仅 <strong>6.2 TPS（P99 7.2s）</strong>，与引擎层能力（十万级 TPS）严重背离，不可对外宣传。诊断结论：</p>
+<ol>
+<li><strong>cgo 指针违规（根因）</strong>：<code>bridge.cc</code> 的 <code>xdb_snapshot_multi_get</code> 把 Go 侧构造的 <code>**C.uchar</code>（Go 指针数组）直接传入 C 函数，违反 cgo 指针传递规则（Go 内存中的 Go 指针不得被 C 长期持有/遍历）。运行时 GC 扫描被 C 持有的 Go 指针堆区域，导致堆损坏、goroutine 卡死与随机崩溃，OLTP 并发场景放大该问题（点查并发路径调用 MultiGet）。</li>
+<li><strong>修复</strong>：<code>bridge.cc</code> 新增 <code>xdb_snapshot_multi_get2</code>——keys 为 C 连续内存缓冲区（offsets/klens 描述各 key），<code>rocksdb.go</code> 的 <code>MGet</code> 改为先 memcpy 拷贝到连续 C 内存再调用，彻底消除 Go 指针跨边界。<code>pkg/storage/rocksdb</code> 单测全绿（TestStorageCRUD / TestSnapshotConsistency / TestKeyEncodingEndToEnd）。</li>
+<li><strong>修复验证</strong>：修复后同场景小规模立即回升——conns=1 达 131.0 TPS、conns=8 达 419.8 TPS（小场景 60s），无崩溃、0 错误。</li>
+</ol>
+<h2 id="_3">结果<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<h3 id="goltp-8260sconns8">G.OLTP 混合事务（8:2，60s，conns=8）<a class="headerlink" href="#goltp-8260sconns8" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>事务数</td>
+<td>15,388</td>
+</tr>
+<tr>
+<td>TPS</td>
+<td><strong>256.3</strong></td>
+</tr>
+<tr>
+<td>平均延迟</td>
+<td>31,197 us</td>
+</tr>
+<tr>
+<td>P50 / P95 / P99</td>
+<td>28,635 / 63,576 / 97,114 us</td>
+</tr>
+<tr>
+<td>错误</td>
+<td><strong>0</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="goltp-5560sconns8">G.OLTP 混合事务（5:5，60s，conns=8）<a class="headerlink" href="#goltp-5560sconns8" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>事务数</td>
+<td>36,353</td>
+</tr>
+<tr>
+<td>TPS</td>
+<td><strong>605.4</strong></td>
+</tr>
+<tr>
+<td>平均延迟</td>
+<td>13,206 us</td>
+</tr>
+<tr>
+<td>P50 / P95 / P99</td>
+<td>9,978 / 36,311 / 50,737 us</td>
+</tr>
+<tr>
+<td>错误</td>
+<td><strong>0</strong></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>完整场景明细见 <code>tests/bench/docs/sql_bench_e3_oltp.md</code>（8:2）与 <code>sql_bench_e3_oltp_55.md</code>（5:5）。</li>
+<li>同轮 SQL 栈对照：单点查询 28,522 QPS（P99 998 us）、引擎批量写 242,131 TPS、引擎点查 201,613 QPS（见上述 docs）。</li>
+</ul>
+<h2 id="_4">调优说明（数据如何达到可宣传水平）<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>修复 cgo 指针违规</strong>（决定性）：消除 GC 堆损坏与随机卡死，OLTP 并发吞吐从 6.2 TPS 提升约 <strong>41 倍</strong>（8:2 正式档）。</li>
+<li><strong>范围查询走二级索引</strong>：G 场景范围查使用 <code>CREATE INDEX idx_oltp_id</code>，读路径为索引范围 + 回表（窗口化 ≤100 行），避免无索引全表扫描（C1 无索引扫描单次 &gt;2.6s 的路径不进入 OLTP 主统计）。</li>
+<li><strong>写路径组提交</strong>：插入/更新经事务批量提交，与 E2 组提交结论一致——持久化保证下以批摊薄 fsync 成本。</li>
+<li><strong>读写比差异符合预期</strong>：5:5（写占比 50%）TPS 反而高于 8:2，因为 8:2 每事务读操作占比高、范围查窗口在表尾热点区竞争更激烈；两档均 0 错误，无锁等待/死锁。</li>
+</ol>
+<h2 id="_5">结论<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<ul>
+<li>修复 cgo 缺陷后，OpenXDB SQL 层在 8 连接 OLTP 混合负载下达到 <strong>256–605 TPS（事务级，每事务 4 操作 ≈ 1024–2422 操作/s）</strong>，0 错误，P99 延迟 51–97 ms。</li>
+<li>与引擎层对照（201k QPS 点查）说明 SQL 层叠加开销约 7–8x（含解析、类型解码、结果组装、事务与 WAL），属正常端到端比例；OLTP 事务吞吐受 WAL 提交粒度与并发控制主导，进一步提升方向为 WAL 批量组提交聚合（B2 设计已落地于写路径）。</li>
+<li>本基准运行于本机 CGO 环境，绝对数值与机器相关；相对开销与缺陷修复前后对比更具参考性。</li>
+</ul>
+<h2 id="_6">下一步<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<ul>
+<li>E4：长期稳定性与持久化压测（见 <code>E4_stability.md</code>）
+<em>（内容由AI生成，仅供参考）</em>
+<em>（内容由AI生成，仅供参考）</em></li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../E2_rocksdb_fsync_bench/" class="btn btn-neutral float-left" title="E2 fsync 基准"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../E4_stability/" class="btn btn-neutral float-right" title="E4 稳定性">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../E2_rocksdb_fsync_bench/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../E4_stability/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

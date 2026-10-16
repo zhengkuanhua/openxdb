@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>M14 生态接入簇 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "M14 \u751f\u6001\u63a5\u5165\u7c07";
+        var mkdocs_page_input_path = "T27_m14_mysqldump_import.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">M14 生态接入簇</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#_1">背景</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_2">设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#pkgimport">解析器（pkg/import 新增包）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#sql-pkgsql">服务端 SQL 入口（pkg/sql）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_3">测试</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#pkgimportmysqldump_testgo">解析器单元测试（pkg/import/mysqldump_test.go）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#pkgsqlmysqldump_import_testgo">端到端测试（pkg/sql/mysqldump_import_test.go）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#_4">验证</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_5">边界与后续</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">M14 生态接入簇</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T27_m14_mysqldump_import.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <hr />
+<h1 id="t27-m14-13mysqldump">T27 M14 功能簇（1/3）：mysqldump 兼容导入<a class="headerlink" href="#t27-m14-13mysqldump" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v5.0-P16-M14, v0.18.0-alpha
+日期：2026-10-11
+范围：<code>pkg/import</code>（新增 mysqldump 解析器 mysqldump.go / mysqldump_test.go）、<code>pkg/sql</code>（ast.go ImportStmt.Format、parser.go parseImport MYSQLDUMP 分支、csv.go execImport 分派、新增 mysqldump_import.go 执行器与 mysqldump_import_test.go 端到端测试）
+闭环：<code>go test ./pkg/sql/ ./pkg/import/ -count=1</code> 全绿，不 push（README 勾选由 M14 整簇收尾提交统一更新）
+提交：<code>M14: mysqldump compatible import</code>（本地，未 push）</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>M14 生态接入簇的目标是打通 OpenXDB 与外部 MySQL 生态：子功能一实现 <strong>mysqldump 兼容导入</strong>——解析 <code>mysqldump</code> 导出的 SQL 文本（<code>CREATE TABLE</code> + <code>INSERT</code> 语句）并灌入 OpenXDB，实现一键迁移 MySQL 数据库。在 P1 CSV 导入（<code>IMPORT INTO t FROM 'path'</code>，T9）基础上新增独立导入通道：复用现有 parser/executor 的 DDL/DML 执行路径，不引入第三方 SQL 解析依赖，纯文本规则解析覆盖 MySQL 常见 dump 语法子集。</p>
+<h2 id="_2">设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="pkgimport">解析器（<code>pkg/import</code> 新增包）<a class="headerlink" href="#pkgimport" title="Permanent link">&para;</a></h3>
+<p><code>pkg/import/mysqldump.go</code> 提供纯文本解析器，不依赖 SQL 执行层，输出结构化结果供导入方消费：</p>
+<pre><code class="language-go">type Value struct { Null bool; Raw string }   // NULL 或规范化文本（见类型映射）
+type Column struct { Name, Type string; Primary bool }
+type Table struct { Name string; Columns []Column; Rows [][]Value }
+type Dump struct {
+    Tables     []Table   // 按出现顺序：CREATE + 后续 INSERT 累积的行
+    Drops      []string  // DROP TABLE IF EXISTS 记录（供导入方重建语义）
+    Statements []string  // 其它被跳过的语句（SET/注释等）
+    Skipped    []string  // 解析失败被跳过的语句（IgnoreErrors 模式）
+}
+type Options struct { IgnoreErrors bool }
+func Parse(r io.Reader, opts Options) (*Dump, error)
+func ParseFile(path string, opts Options) (*Dump, error)
+</code></pre>
+<p><strong>语句切分与识别</strong>：按 <code>;</code> 切分语句（跳过 <code>--</code> 行注释、<code>#</code> 注释、<code>/* ... */</code> 与 <code>/*!...*/</code> 版本化注释、空行）；识别 <code>CREATE TABLE</code> / <code>INSERT INTO</code> / <code>DROP TABLE</code> / 其余辅助语句（<code>SET</code>、<code>LOCK TABLES</code>、<code>UNLOCK TABLES</code> 等整体跳过）。</p>
+<p><strong>CREATE TABLE 解析</strong>：
+- 反引号标识符（含 <code>`a</code>b<code>`` 转义反引号）与裸标识符；
+- 列定义：名称 + 类型 + 可选</code>PRIMARY KEY<code>/</code>NOT NULL<code>/</code>AUTO_INCREMENT<code>/</code>DEFAULT ...<code>；
+- 表级</code>PRIMARY KEY (...)<code>；
+- 可忽略子句：</code>ENGINE=...<code>、</code>DEFAULT CHARSET=...<code>、</code>AUTO_INCREMENT=...<code>、</code>COMMENT=...<code>等尾部表选项；
+- 类型映射：</code>INT<code>/</code>BIGINT<code>/</code>SMALLINT<code>/</code>TINYINT<code>→</code>INT<code>；</code>VARCHAR<code>/</code>CHAR<code>/</code>TEXT<code>/</code>LONGTEXT<code>/</code>MEDIUMTEXT<code>→</code>TEXT<code>；</code>DECIMAL<code>/</code>NUMERIC<code>→</code>DECIMAL<code>；</code>DATE<code>/</code>DATETIME<code>/</code>TIMESTAMP<code>→</code>DATE<code>；</code>BLOB<code>/</code>LONGBLOB<code>/</code>MEDIUMBLOB<code>/</code>VARBINARY<code>→</code>BLOB`；未知类型在严格模式报错、宽松模式跳过该表。</p>
+<p><strong>INSERT 解析</strong>：
+- <code>INSERT INTO t VALUES (...),(...),...</code> 多值拆分与显式列名列表（<code>INSERT INTO t (c1,c2) VALUES ...</code> 按列顺序重排）；
+- <code>INSERT IGNORE</code> 前缀；
+- 值字面量：<code>NULL</code>、整数/小数（含负数）、单双引号字符串（反斜杠转义 <code>\' \n \r \t \0 \b \\</code> 还原与引号翻倍）、十六进制 <code>0x...</code> 与 <code>X'...'</code>（BLOB，统一转大写 hex 去前缀）、<code>TRUE</code>/<code>FALSE</code>；
+- 单元格解析失败时：宽松模式丢弃该行并计数，严格模式整次解析报错（返回错误）。</p>
+<h3 id="sql-pkgsql">服务端 SQL 入口（<code>pkg/sql</code>）<a class="headerlink" href="#sql-pkgsql" title="Permanent link">&para;</a></h3>
+<p>复用现有 <code>IMPORT</code> 语句家族扩展新语法：</p>
+<pre><code>IMPORT MYSQLDUMP FROM '&lt;path&gt;' [BATCH n] [IGNORE ERRORS]
+</code></pre>
+<ul>
+<li><code>ImportStmt</code> 新增 <code>Format</code> 字段（<code>""</code>=CSV，<code>"MYSQLDUMP"</code>）；<code>parseImport</code> 识别 <code>MYSQLDUMP</code> 关键字分支；<code>execImport</code> 按 Format 分派到新执行器 <code>execImportDump</code>（<code>pkg/sql/mysqldump_import.go</code>）。</li>
+<li><strong>执行语义</strong>：先按顺序处理 <code>DROP TABLE IF EXISTS</code>（重建语义：同名表旧数据清除）；<code>CREATE TABLE</code> 通过现有 <code>CreateTableStmt</code> 路径建表（已存在时报错，宽松模式跳过）；<code>INSERT</code> 行经 <code>dumpRowValues</code> 类型映射为 OpenXDB 值（<code>INT</code>→I、<code>TEXT</code>/<code>DATE</code>/<code>DECIMAL</code>/<code>BLOB</code>→S，DECIMAL 复用 <code>parseDecimal</code> 规范化固定 4 位小数，NULL 按列类型取零值）后复用 <code>insertRowOps</code> 批量写入，<code>BATCH n</code> 分批提交，主键冲突跳过计数。</li>
+<li><strong>结果</strong>：<code>Result{Columns: [tables, inserted, skipped, errors, batches], Rows: [[...]]}</code>，与 CSV 导入风格一致。</li>
+<li><strong>错误容忍</strong>：<code>IGNORE ERRORS</code> 宽松模式跳过坏行/坏表继续；严格模式任一错误整体回滚（单事务执行，含 DDL）。</li>
+</ul>
+<h2 id="_3">测试<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<h3 id="pkgimportmysqldump_testgo">解析器单元测试（<code>pkg/import/mysqldump_test.go</code>）<a class="headerlink" href="#pkgimportmysqldump_testgo" title="Permanent link">&para;</a></h3>
+<p>17 项，覆盖：反引号标识符、类型映射、可忽略子句、内联主键、多值 INSERT、显式列重排、字符串转义、特殊值（TRUE/FALSE/负数）、辅助语句跳过、DROP TABLE、真实 mysqldump 风格样本、IgnoreErrors/严格模式、未定义表 INSERT、未知类型、转义反引号、<code>X'hex'</code> 与 <code>0x</code> BLOB 字面量。</p>
+<h3 id="pkgsqlmysqldump_import_testgo">端到端测试（<code>pkg/sql/mysqldump_import_test.go</code>）<a class="headerlink" href="#pkgsqlmysqldump_import_testgo" title="Permanent link">&para;</a></h3>
+<p>8 项，覆盖：完整 dump 导入（DROP + 多表 CREATE + 多值 INSERT + SET/注释 + SELECT 验证 DECIMAL 4 位小数/DATE/BLOB hex/NULL 零值）、BATCH 分批、文件内重复主键跳过、IGNORE ERRORS 坏行跳过、严格模式回滚（表不存在）、DROP 重建语义（旧行清除）、字符串转义还原、语法分支（空 dump / 缺 FROM 报错）。</p>
+<h3 id="_4">验证<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<pre><code>go test ./pkg/sql/ ./pkg/import/ -count=1   # 全绿（sql 15.6s / import 0.4s）
+</code></pre>
+<h2 id="_5">边界与后续<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<ul>
+<li>当前兼容子集：单表 dump 常规输出（含 <code>SET NAMES</code>、<code>LOCK TABLES</code>、<code>/*!...*/</code> 等辅助语句跳过）；不支持存储过程/触发器/视图定义（解析器跳过非 CREATE TABLE/INSERT/DROP 语句）。</li>
+<li>CLI <code>openxdb import</code> 命令与 binlog 对外订阅 CDC（子功能二）、工具链收尾与 README 勾选（子功能三）在 M14 后续子功能推进。
+<em>（内容由AI生成，仅供参考）</em></li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T26_m13_slowlog/" class="btn btn-neutral float-left" title="M13 可观测簇"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T28_m15_matview/" class="btn btn-neutral float-right" title="M15 SQL 功能簇">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T26_m13_slowlog/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T28_m15_matview/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

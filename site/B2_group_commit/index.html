@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>B2 写路径组提交（batch fsync / group commit） - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "B2 \u5199\u8def\u5f84\u7ec4\u63d0\u4ea4\uff08batch fsync / group commit\uff09";
+        var mkdocs_page_input_path = "B2_group_commit.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">B2 写路径组提交（batch fsync / group commit）</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/B2_group_commit.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="b2-batch-fsync-group-commit">B2 写路径组提交（batch fsync / group commit）<a class="headerlink" href="#b2-batch-fsync-group-commit" title="Permanent link">&para;</a></h1>
+<ul>
+<li>状态：完成</li>
+<li>里程碑：M1 T6 写路径优化（B2）</li>
+<li>关联代码：<code>pkg/wal/wal.go</code>、<code>pkg/wal/wal_impl.go</code>、<code>pkg/txn/txn_impl.go</code></li>
+<li>关联测试：<code>pkg/wal/wal_test.go</code>、<code>pkg/txn/txn_test.go</code></li>
+</ul>
+<h2 id="1">1. 设计动机<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>B2 之前，WAL 的 <code>Append</code> 每写入一条记录立即 <code>fsync</code>（D 保证：返回即持久化）。
+每个事务的 Commit 都触发一次磁盘刷盘，写路径的 fsync 次数恒等于事务数：</p>
+<pre><code>事务 T1 ──fsync──&gt; T2 ──fsync──&gt; T3 ──fsync──&gt; ...
+</code></pre>
+<p>在并发提交场景下，多个事务的 WAL 记录在时间上高度聚集，
+把「每条记录各刷一次」合并为「一批记录刷一次」可显著减少 fsync 次数，
+降低磁盘 I/O 放大与提交延迟（这是 MySQL/PostgreSQL/LevelDB 等系统的成熟做法）。</p>
+<h2 id="2-pkgwalwalgo">2. 接口变更（pkg/wal/wal.go）<a class="headerlink" href="#2-pkgwalwalgo" title="Permanent link">&para;</a></h2>
+<p>在 <code>WAL</code> 接口新增两个方法：</p>
+<pre><code class="language-go">// SyncUpTo 阻塞直至 lsn 及之前所有已追加记录 fsync 落盘。
+SyncUpTo(lsn storage.LSN) error
+// SetGroupCommit 开关组提交。默认关闭（Append 每记录 fsync，行为与旧版一致）。
+SetGroupCommit(enabled bool)
+</code></pre>
+<ul>
+<li><strong>默认关闭</strong>：<code>SetGroupCommit(false)</code>（或未调用）时 <code>Append</code> 仍每记录 <code>fsync</code>，
+  存量测试与行为完全不变；<code>SyncUpTo</code> 在默认模式下为幂等空操作（Append 已更新 <code>lastSynced</code>）。</li>
+<li><strong>开启后</strong>：<code>Append</code> 只写文件缓冲、快速返回分配的 LSN，由 <code>SyncUpTo</code> 兜底刷盘，
+  任何已追加记录最终都会被刷盘（无后台定时器，保证单调推进）。</li>
+</ul>
+<h2 id="3-leader-pkgwalwal_implgo">3. Leader 组提交算法（pkg/wal/wal_impl.go）<a class="headerlink" href="#3-leader-pkgwalwal_implgo" title="Permanent link">&para;</a></h2>
+<p>组提交模式下的并发控制：</p>
+<pre><code>Append(entry):  加锁 → 顺序写文件 → 不 fsync → 返回分配 LSN     （O(1)，快速）
+SyncUpTo(lsn):  加锁
+                循环：若 lsn &lt;= lastSynced → 返回（数据已落盘）
+                若已有 leader（waiters &gt; 0）→ follower：等待 cond 广播
+                否则成为 leader：
+                  1. 记录当前已写末尾 tail（此时锁内）
+                  2. waiters=1，释放锁
+                  3. 执行一次 f.Sync()（期间 Append 可继续写入）
+                  4. 重新加锁，lastSynced = tail，waiters=0，Broadcast
+                  5. 若自身 lsn &gt; lastSynced（刷盘期间又有新 Append），回到步骤 1 再刷
+</code></pre>
+<p>要点：</p>
+<ul>
+<li><strong>一次 fsync 覆盖一批</strong>：leader 刷盘推进 <code>lastSynced</code> 到已写末尾，所有等待者
+  被唤醒后发现目标 LSN 已落盘，零额外 fsync 直接返回。</li>
+<li><strong>无后台定时器</strong>：<code>SyncUpTo</code> 自身是兜底——只要调用方持有任一 LSN 等待，
+  必然有人成为 leader 发起刷盘；不会出现"永远不刷"的窗口。</li>
+<li><strong>follower 不重复刷</strong>：<code>waiters</code> 计数 + <code>sync.Cond</code> 广播，避免惊群刷盘。</li>
+<li><strong>错误传播</strong>：leader fsync 失败会把 <code>syncErr</code> 广播给所有等待者，全部返回错误。</li>
+<li><strong>Rollback 路径</strong>：事务层写 <code>StateRollback</code> 记录后同样调用 <code>SyncUpTo</code>，
+  保证回滚审计记录落盘后才返回，崩溃恢复语义安全。</li>
+<li><strong>测试辅助（非接口语义）</strong>：<code>FsyncCount()</code> 累计 fsync 次数；
+  <code>SetFsyncDelay(d)</code> 注入人工刷盘延迟（模拟慢盘，放大合并窗口）。</li>
+</ul>
+<h2 id="4-commit-pkgtxntxn_implgo">4. 事务层 Commit 重构（pkg/txn/txn_impl.go）<a class="headerlink" href="#4-commit-pkgtxntxn_implgo" title="Permanent link">&para;</a></h2>
+<p>Commit 由原「锁内 Append + st.Write」重构为三段式流水线：</p>
+<pre><code>① 锁内：wal.Append(entry) 拿 LSN + 分配提交序号 seq     （WAL 顺序 = 锁顺序 = 提交顺序）
+② 锁外：wal.SyncUpTo(lsn)                              （并发事务在此合并 fsync）
+③ 重新加锁：按提交序号排队 st.Write(batch)，广播推进    （保持「最后提交者胜」串行语义）
+</code></pre>
+<p>设计说明：</p>
+<ul>
+<li><strong>WAL 顺序与存储应用顺序严格一致</strong>：阶段 ③ 重新加锁后不能直接按锁获取顺序
+  写存储（可能打乱 WAL 顺序），因此引入本层独立提交序号 <code>seqNext/applied</code>
+  排队，先到者先应用，<code>st.Write</code> 顺序与 WAL 顺序一致 → 崩溃恢复重放结果等价。</li>
+<li><strong>序号与 LSN 解耦</strong>：Rollback/SELECT 审计记录也消耗 LSN 但不参与应用队列，
+  若按 LSN 排队会因缺口死锁（已实测触发），故提交序号仅由 Commit 占位，
+  Recover 统计 Commit 记录数后重置 <code>seqNext/applied</code>，消除缺口。</li>
+<li><strong>fsync 失败</strong>：阶段 ② 失败则跳过自己的序号并广播，后续事务不永久等待；
+  该记录可能已部分落盘，崩溃恢复会按 State 补齐或忽略。</li>
+<li><strong>空批次</strong>：无写操作直接结束，不消耗 LSN 与序号（与旧版一致）。</li>
+<li><strong>默认模式</strong>：组提交关闭时 <code>Append</code> 已 fsync，<code>SyncUpTo</code> 幂等返回，行为与旧版一致。</li>
+</ul>
+<h2 id="5">5. 测试与结果<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<h3 id="51">5.1 新增测试<a class="headerlink" href="#51" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>验证点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestWALGroupCommitDefaultOff</code></td>
+<td>默认模式每记录 fsync，SyncUpTo 零额外 fsync</td>
+</tr>
+<tr>
+<td><code>TestWALGroupCommitMergesFsync</code></td>
+<td>100 并发 Append + 并发 SyncUpTo 合并为 ≤3 次 fsync，全部记录可重放</td>
+</tr>
+<tr>
+<td><code>TestWALGroupCommitPersistAfterSyncUpTo</code></td>
+<td>SyncUpTo 后重开文件，8 条记录完整恢复</td>
+</tr>
+<tr>
+<td><code>TestTxnConcurrentDefaultFsyncBaseline</code></td>
+<td>基线：30 事务 = 30 fsync（旧行为无回归）</td>
+</tr>
+<tr>
+<td><code>TestTxnConcurrentGroupCommit</code></td>
+<td>100 事务并发提交全部成功、数据一致、WAL 完整、fsync 不劣化</td>
+</tr>
+<tr>
+<td><code>TestTxnConcurrentGroupCommitRecovery</code></td>
+<td>组提交落盘后全新存储 + 同 WAL 恢复，30 条数据全部重建</td>
+</tr>
+</tbody>
+</table>
+<h3 id="52-fsync-windows-11-rocksdb">5.2 fsync 合并数据（Windows 11 + RocksDB 静态库环境）<a class="headerlink" href="#52-fsync-windows-11-rocksdb" title="Permanent link">&para;</a></h3>
+<pre><code>基线（逐条 fsync）：30 txns -&gt; 30 fsyncs（1.00 fsync/txn）
+WAL 层组提交：      100 concurrent appends -&gt; 1 fsync   （并发 Append+SyncUpTo，一次覆盖全部）
+事务层组提交：      100 txns -&gt; 80 fsyncs（20% 减幅，真机本地盘实测）
+</code></pre>
+<ul>
+<li>WAL 层强合并（100→1）证明 leader 机制正确：全部记录在首个 leader 刷盘前写入，
+  一次 fsync 覆盖后所有等待者零额外刷盘。</li>
+<li>事务层合并幅度（20%）受提交到达率影响：本地盘 fsync 极快（亚毫秒级），
+  事务 Append 被事务锁串行化，聚集窗口窄；在 fsync 较慢的盘（机械盘/网络盘）
+  或高突发提交负载下，合并收益会更显著（可通过 <code>SetFsyncDelay</code> 注入延迟验证）。</li>
+</ul>
+<h3 id="53">5.3 回归<a class="headerlink" href="#53" title="Permanent link">&para;</a></h3>
+<p>存量全部测试保持全绿：</p>
+<pre><code>ok  github.com/zhengkuanhua/openxdb/cmd/openxdb       [no test files]
+ok  github.com/zhengkuanhua/openxdb/pkg/db
+ok  github.com/zhengkuanhua/openxdb/pkg/server
+ok  github.com/zhengkuanhua/openxdb/pkg/sql
+ok  github.com/zhengkuanhua/openxdb/pkg/storage
+ok  github.com/zhengkuanhua/openxdb/pkg/storage/btree
+ok  github.com/zhengkuanhua/openxdb/pkg/storage/rocksdb
+ok  github.com/zhengkuanhua/openxdb/pkg/txn
+ok  github.com/zhengkuanhua/openxdb/pkg/wal
+</code></pre>
+<p>构建环境（Windows）：注入 RocksDB 静态库环境后 <code>go build ./...</code>、<code>go test ./...</code>：</p>
+<pre><code>CGO_CFLAGS   = -IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include
+CGO_CXXFLAGS = 同上
+CGO_LDFLAGS  = -LC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-build -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -static
+PATH         += C:\Users\27756\AppData\Local\OpenXDBTools\mingw64\bin
+</code></pre>
+<h2 id="6">6. 验收对照<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<ul>
+<li>[x] WAL 接口新增 <code>SyncUpTo</code> 与 <code>SetGroupCommit</code>，默认关闭兼容存量</li>
+<li>[x] WAL 实现 leader 机制合并 fsync，Append 只写不刷、SyncUpTo 兜底，无后台定时器</li>
+<li>[x] 事务层 Commit 三段式重构，保持「最后提交者胜」串行语义与 WAL 顺序，Rollback 安全同步</li>
+<li>[x] 并发组提交测试：全部成功、数据一致、崩溃恢复语义不破坏、fsync 显著减少</li>
+<li>[x] 存量测试全绿；README 勾选 B2 完成
+<em>（内容由AI生成，仅供参考）</em></li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="./img/favicon.ico" />
+    <title>OpenXDB</title>
+    <link rel="stylesheet" href="./css/theme.css" />
+    <link rel="stylesheet" href="./css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+    <!--[if lt IE 9]>
+      <script src="./js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="./." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="./search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="./.">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="./product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="./product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="./blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="./T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="./experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="./experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="./.">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="./." class="icon icon-home" aria-label="Docs"></a></li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+
+  <h1 id="search">Search Results</h1>
+
+  <form id="content_search" action="search.html">
+    <span role="status" aria-live="polite" class="ui-helper-hidden-accessible"></span>
+    <input name="q" id="mkdocs-search-query" type="text" class="search_input search-query ui-autocomplete-input" placeholder="Search the Docs" aria-label="Search the Docs" autocomplete="off" autofocus title="Type search term here">
+  </form>
+
+  <div id="mkdocs-search-results" class="search-results" data-no-results-text="No results found">
+    Searching...
+  </div>
+
+
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="./js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = ".";</script>
+    <script src="./js/theme_extra.js"></script>
+    <script src="./js/theme.js"></script>
+      <script src="./search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

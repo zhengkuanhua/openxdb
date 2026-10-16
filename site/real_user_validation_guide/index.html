@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>OpenXDB 真实用户验证指南（T38） - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "OpenXDB \u771f\u5b9e\u7528\u6237\u9a8c\u8bc1\u6307\u5357\uff08T38\uff09";
+        var mkdocs_page_input_path = "real_user_validation_guide.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">OpenXDB 真实用户验证指南（T38）</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/real_user_validation_guide.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="openxdb-t38">OpenXDB 真实用户验证指南（T38）<a class="headerlink" href="#openxdb-t38" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>适用版本：v0.27.0-alpha（2026-10-15）
+环境：Windows 11 + Go + RocksDB（CGO）单机
+目的：以真实用户动作（TCP 协议连接、真实运维命令）端到端验证 OpenXDB 商用能力面，暴露文档与兼容盲区。</p>
+</blockquote>
+<h2 id="1">1. 前置准备<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<pre><code class="language-powershell"># CGO 编译环境（RocksDB 11.8.1）
+$env:CGO_CFLAGS   = '-IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include'
+$env:CGO_CXXFLAGS = '-IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include'
+$env:CGO_LDFLAGS  = '-LC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-build -lrocksdb -lm'
+</code></pre>
+<blockquote>
+<p>注意：严禁添加 <code>-lstdc++</code> / <code>-lz</code> 等链接项，否则破坏既有编译约束。</p>
+</blockquote>
+<h2 id="2">2. 快速运行（一键）<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<pre><code class="language-powershell">powershell -ExecutionPolicy Bypass -File validation\t38\run_validation.ps1
+</code></pre>
+<p>脚本自动完成 9 个阶段，结果输出到 <code>validation/t38/results/</code>：</p>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>内容</th>
+<th>结果文件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>主节点 init/start（7788 + binlog 7789 + metrics 7790）</td>
+<td>step01~02_*.txt</td>
+</tr>
+<tr>
+<td>2</td>
+<td>执行 4 个 SQL 脚本（业务库/事务/查询分析/运维生态）</td>
+<td>step03_sql_*.txt</td>
+</tr>
+<tr>
+<td>3</td>
+<td>TLS 实例（gen-cert + 7799 纯 TLS 监听）</td>
+<td>step04~06_*.txt</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Python 驱动端到端验证（validate_real_user.py）</td>
+<td>step07_validate_real_user.txt</td>
+</tr>
+<tr>
+<td>5</td>
+<td>CLI 工具链：doctor / status / stats / metrics / preflight</td>
+<td>step08_cli_*.txt</td>
+</tr>
+<tr>
+<td>6</td>
+<td>复制从节点（replica --master 7789）数据同步</td>
+<td>step09~11_*.txt</td>
+</tr>
+<tr>
+<td>7</td>
+<td>mysqldump 兼容导入（T32）</td>
+<td>step12~14_*.txt</td>
+</tr>
+<tr>
+<td>8</td>
+<td>CDC 订阅（binlog_subscriber 消费 30 条事件）</td>
+<td>step15_cdc_subscriber.txt</td>
+</tr>
+<tr>
+<td>9</td>
+<td>汇总</td>
+<td>SUMMARY.txt / run.log</td>
+</tr>
+</tbody>
+</table>
+<p>退出码：0 = 全部 PASS；非 0 = 存在 FAIL 标记。</p>
+<h2 id="3">3. 分步运行（手动）<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<h3 id="31">3.1 建库与业务闭环<a class="headerlink" href="#31" title="Permanent link">&para;</a></h3>
+<pre><code class="language-powershell">bin\openxdb.exe init --data-dir &lt;work&gt;\master
+bin\openxdb.exe start --data-dir &lt;work&gt;\master --port 7788 --replica-port 7789 --metrics-port 7790
+</code></pre>
+<p>执行 SQL 脚本（可用 <code>validate_real_user.py</code> 中的 exec_file 逻辑，或任意驱动逐条执行）：</p>
+<pre><code class="language-powershell">python validation\t38\validate_real_user.py --port 7788 --tls-port 7799 --tls-ca &lt;work&gt;\cert.pem --backup &lt;work&gt;\t38-backup.bak
+</code></pre>
+<h3 id="32">3.2 验证场景解读<a class="headerlink" href="#32" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>业务闭环</strong>：新订单 → 视图可见 → 触发器审计 → 物化视图刷新 → 存储过程下单。</li>
+<li><strong>事务 ACID</strong>：commit 持久 / rollback 回滚 / 双连接并发互不干扰。</li>
+<li><strong>约束拦截</strong>：唯一键、外键、主键冲突均被拒绝（协议层 ERR → OperationalError）。</li>
+<li><strong>查询分析</strong>：CTE / RANK 窗口 / 子查询 / GROUP BY / REPLACE upsert / EXPLAIN / 参数化 PREPARE。</li>
+<li><strong>RBAC</strong>：授权表可读、未授权表被拒。</li>
+<li><strong>TLS</strong>：自签名证书下 Python 驱动 verify-ca 连接成功；明文连接被服务器拒绝。</li>
+<li><strong>备份恢复</strong>：BACKUP TO → 写增量 → RESTORE FROM 回滚增量；PITR：RESTORE TO LSN。</li>
+<li><strong>告警</strong>：配置 qps&gt;1 规则后 SHOW ALERT RULES / SHOW ALERT STATUS 可见。</li>
+<li><strong>性能</strong>：1000 行批量写入计时（INFO 记录 rows/s）。</li>
+</ul>
+<h3 id="33">3.3 运维与生态命令<a class="headerlink" href="#33" title="Permanent link">&para;</a></h3>
+<pre><code class="language-powershell">bin\openxdb.exe doctor --data-dir &lt;work&gt;\master --addr 127.0.0.1:7788
+bin\openxdb.exe status --addr 127.0.0.1:7788
+bin\openxdb.exe stats --addr 127.0.0.1:7788
+bin\openxdb.exe metrics --addr 127.0.0.1:7790
+bin\openxdb.exe preflight --data-dir &lt;work&gt;\master
+
+# 复制从节点（拉取主节点 binlog）
+bin\openxdb.exe init --data-dir &lt;work&gt;\slave
+bin\openxdb.exe replica --data-dir &lt;work&gt;\slave --master 127.0.0.1:7789
+
+# mysqldump 兼容导入（T32）
+bin\openxdb.exe import --data-dir &lt;work&gt;\sample_import --dump validation\t38\t38_mysqldump_sample.sql
+
+# CDC 订阅（T27）
+go build -o &lt;work&gt;\binlog_subscriber.exe examples\binlog_subscriber.go
+&lt;work&gt;\binlog_subscriber.exe --binlog &lt;work&gt;\master\binlog.log --offset &lt;work&gt;\sub.offset --limit 30
+</code></pre>
+<h2 id="4">4. 结果解读<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>step07_validate_real_user.txt</code> 中每行 <code>[PASS]/[FAIL]</code> + <code>SUMMARY passed=.. failed=..</code>；任一 FAIL 表示对应能力未达标。</li>
+<li><code>step08_cli_*.txt</code> 应包含 doctor 全项检查（binlog/checksum）、status 版本与角色、stats 实时指标、metrics 的 Prometheus 文本、preflight 升级预检。</li>
+<li><code>step10_replica_stdout.txt</code> 显示从节点连接主节点复制端口；<code>step11_doctor_slave.txt</code> 对从节点 binlog 检查通过即同步成功。</li>
+<li><code>step13_import_mysqldump.txt</code> 导入成功后可启动该目录实例执行 <code>SELECT COUNT(*) FROM legacy_customers</code> 应为 3。</li>
+<li><code>step15_cdc_subscriber.txt</code> 应包含 binlog 事件（INSERT/UPDATE 等），位点写入 <code>sub.offset</code>。</li>
+</ul>
+<h2 id="5">5. 已知约定<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<ul>
+<li>从节点（replica）不暴露 SQL 监听端口（与 T11 设计一致），一致性通过 binlog 落盘与 doctor 检查确认。</li>
+<li>备份恢复为在线事务内恢复，无需重启；PITR 回放以 binlog LSN 为锚。</li>
+<li>TLS 实例使用独立空库（TLS 验证只关注加密握手与明文拒绝，不承载业务数据）。</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

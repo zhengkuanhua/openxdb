@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T34 跨节点 DDL - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T34 \u8de8\u8282\u70b9 DDL";
+        var mkdocs_page_input_path = "T34_m20_cross_node_ddl.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">T34 跨节点 DDL</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#1">1. 背景与目标</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2">2. 现状分析</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#21-ddl">2.1 单节点 DDL 链路（源码确认）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#22">2.2 既有跨节点能力</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#23-t33">2.3 与 T33 的差距 / 设计缺口</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3">3. 总体设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#31">3.1 设计原则</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#32-pkgclusterddlgo">3.2 协议扩展（pkg/cluster/ddl.go）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#33-applypkgsqlddl_broadcastgo">3.3 节点侧 apply（pkg/sql/ddl_broadcast.go）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#34-pkgsqlddl_broadcastgo">3.4 协调者广播（pkg/sql/ddl_broadcast.go）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#35">3.5 执行顺序与一致性保证</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#36">3.6 失败/节点离线处理</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#37-m2t33">3.7 与复制链路（M2/T33）的配合</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#38">3.8 已知限制（明确不属本项范围）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4">4. 实现清单</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5">5. 测试计划</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">T34 跨节点 DDL</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T34_m20_cross_node_ddl.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t34-m20-ddlcross-node-ddl">T34 M20 跨节点 DDL（Cross-Node DDL）<a class="headerlink" href="#t34-m20-ddlcross-node-ddl" title="Permanent link">&para;</a></h1>
+<ul>
+<li>批次：M20 分布式纵深（Distributed Depth）第二项</li>
+<li>依赖：M2 复制链路（<code>pkg/replication</code>）、M4 节点拓扑/路由（<code>pkg/cluster</code>）、M5 分布式 2PC 写（<code>pkg/cluster/txn2pc.go</code>）、M8 分布式快照隔离、M9 在线 DDL（<code>pkg/sql</code> + <code>docs/T22_m9_online_ddl.md</code>）、T33 同步/半同步复制</li>
+<li>状态：已实现，测试全绿</li>
+</ul>
+<h2 id="1">1. 背景与目标<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>M9 在线 DDL（<code>execAlterTable</code> → <code>ddlCommit</code>）在<strong>单节点语义</strong>下工作：表目录 <code>m:tables</code>（全局键、无 region 前缀）只写协调者本地；<code>ALTER</code> 产生的数据行重写 ops 已能跨节点（<code>groupOps</code> → 远端 region ops 走 M5/M8 2PC），但<strong>元数据不广播</strong>，导致多节点集群中：</p>
+<ol>
+<li>远端数据节点本地 <code>m:tables</code> 缺失或滞后该表 → 该节点独立执行 <code>SHOW TABLES</code> / <code>INSERT</code> / <code>SELECT</code>（针对本地持有的 region）时出现 <code>table not exists</code> 或按<strong>旧列布局</strong>解析行数据，产生列错位/解码错误；</li>
+<li><code>ALTER ADD COLUMN</code> 后，协调者数据行已带新列，而远端节点按旧结构读行 → 跨节点查询结果不一致；</li>
+<li><code>CREATE/DROP TABLE</code> 在任意节点执行后，其他节点目录无感知，集群表视图分裂。</li>
+</ol>
+<p>T34 目标：<strong>在保持单节点 DDL 行为完全兼容（默认不触发）的前提下，为集群增加 DDL 元数据广播通道</strong>，使任意节点执行的 DDL 都能收敛到全集群表目录，并明确失败/离线处理策略与复制链路（含 T33）的配合关系。</p>
+<h2 id="2">2. 现状分析<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<h3 id="21-ddl">2.1 单节点 DDL 链路（源码确认）<a class="headerlink" href="#21-ddl" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>execCreateTable</code> / <code>execDropTable</code> / <code>execAlterTable</code> 均以 <code>loadTables(tx.Get)</code> 读目录、改内存 <code>[]*TableMeta</code>、<code>saveTables</code> 序列化、<code>tx.Put(metaKey, raw)</code> 写回，autocommit 时 <code>tx.Commit()</code>；</li>
+<li><code>execAlterTable</code> 的 <code>ADD_COLUMN</code> 走 <code>ddlCommit</code>：<code>tx.Put(metaKey)</code> 后把数据重写 ops 交给 <code>exec2pcWrite</code>（<code>groupOps</code> → 本地 <code>applyOps</code> + 远端 <code>mgr.PrepareTxn/CommitTxn</code>），2PC 提交随事务原子完成；<code>ADD_INDEX/DROP_INDEX</code> 不走 <code>ddlCommit</code>，直接本地提交；</li>
+<li><code>execDropTable</code> 用 <code>scanMerged</code>（本地扫描，因 ASSIGN REGION 约定数据保留源节点副本）删除本地行与索引键，并从 <code>m:tables</code> 移除条目、清理 <code>m:regions</code> 与权限/角色元数据；</li>
+<li>表目录只有一个全局键 <code>m:tables</code>，无 region 前缀，即<strong>目录天然是集群级状态</strong>，缺的只是传播机制。</li>
+</ul>
+<h3 id="22">2.2 既有跨节点能力<a class="headerlink" href="#22" title="Permanent link">&para;</a></h3>
+<ul>
+<li>M4 <code>pkg/cluster</code>：<code>Manager</code>（节点拓扑 <code>ListNodes/HasRemoteNodes/IsDown</code>、短连接 <code>Client.roundTrip</code>、心跳 <code>StartHeartbeat</code> + <code>OnDown</code> 回调）、<code>Server</code>（<code>handleConn</code> 按帧分发 + <code>SetRouter/SetManager/SetTSO</code> 注入式装配）；</li>
+<li>M5/M8 2PC：<code>PrepareTxn/CommitTxn/AbortTxn</code> + 协调者 <code>m:2pc:coord:&lt;txid&gt;</code> 崩溃恢复；帧 22-27；<code>REGION_PUSH</code> 帧 20/21（<code>put.go</code>）；TSO 帧 28/29；</li>
+<li>T33：<code>commitHook</code>（锁内 binlog 全量 batch，含 metaKey Put）→ 从节点 replay 自动获得目录变更；<code>commitWaitHook</code>（锁外 ACK 等待）与元数据无关，不感知 DDL；</li>
+<li>SQL 四层架构 lexer/ast/parser/executor：T34 <strong>不新增语法</strong>，只扩展 executor 提交后的行为。</li>
+</ul>
+<h3 id="23-t33">2.3 与 T33 的差距 / 设计缺口<a class="headerlink" href="#23-t33" title="Permanent link">&para;</a></h3>
+<ol>
+<li>无 DDL 元数据广播帧与节点侧 apply 逻辑；</li>
+<li>无协调者侧广播目标选择、失败记录（pending）与重放机制；</li>
+<li>未定义与 binlog 复制链路的先后/幂等关系。</li>
+</ol>
+<h2 id="3">3. 总体设计<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<h3 id="31">3.1 设计原则<a class="headerlink" href="#31" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>单机零回归</strong>：<code>mgr == nil</code> 或 <code>!HasRemoteNodes()</code> 时广播路径零触发，单节点 DDL 完全走原路径；</li>
+<li><strong>协议最小扩展</strong>：新增 1 对帧 <code>DDL_PUSH(30) / DDL_PUSH_OK(31)</code>，复用既有 <code>len(4B)+type(1B)+payload(JSON)</code> 帧格式；载荷<strong>不引用 sql 类型</strong>（<code>Meta []byte</code> 携带序列化表条目），避免 <code>cluster</code>↔<code>sql</code> 循环依赖；</li>
+<li><strong>本地提交为权威</strong>：DDL 的原子性/崩溃安全沿用 M9 语义（本地 <code>tx.Commit</code> 成功即成功）；广播是<strong>最终一致</strong>的收敛通道，不参与 DDL 事务原子性；</li>
+<li><strong>失败不阻塞</strong>：广播失败/节点离线 → 协调者记录 pending（内存 + 落盘），DDL 仍返回成功；节点恢复后重放收敛（类 semi-sync 降级语义，优先可用性）；</li>
+<li><strong>幂等收敛</strong>：表 ID 由 <code>nextTableID</code> 单调分配不复用，按 <code>TableID</code> upsert/delete 天然幂等，重复广播/与 binlog 重放并发安全；</li>
+<li><strong>只动目录不动数据</strong>：T34 只广播 <code>m:tables</code> 目录变更；数据行 ops 仍走既有 2PC（ALTER 重写）/本地（DROP 本地副本），不新增数据迁移逻辑。</li>
+</ol>
+<h3 id="32-pkgclusterddlgo">3.2 协议扩展（pkg/cluster/ddl.go）<a class="headerlink" href="#32-pkgclusterddlgo" title="Permanent link">&para;</a></h3>
+<pre><code>30 DDL_PUSH    -&gt; 31 DDL_PUSH_OK
+</code></pre>
+<pre><code class="language-go">type DDLPushReq struct {
+    DDLID   string `json:&quot;ddl_id&quot;`            // 协调者生成，审计/测试用
+    Op      string `json:&quot;op&quot;`                // &quot;create&quot; | &quot;alter&quot; | &quot;drop&quot;
+    TableID uint64 `json:&quot;table_id&quot;`
+    Name    string `json:&quot;name&quot;`
+    Meta    []byte `json:&quot;meta,omitempty&quot;`    // Op=create/alter：TableMeta 的 JSON 字节
+}
+
+type DDLPushResp struct {
+    Err  string `json:&quot;err,omitempty&quot;`
+    Done bool   `json:&quot;done&quot;`
+}
+</code></pre>
+<ul>
+<li><code>Manager.PushDDL(nodeID string, req DDLPushReq) error</code>：短连接发送并读取 <code>DDL_PUSH_OK</code>（复用 <code>ensureRemote</code> + <code>clientFor</code> 模式）；</li>
+<li><code>Server.SetDDLApply(fn func(DDLPushReq) error)</code>：注入节点侧 apply 回调（由 <code>db.Open</code> 装配 <code>sql.Executor</code> 的方法），<code>handleConn</code> 新增 <code>case msgDDLPush: s.handleDDLPush(conn, payload)</code>，apply 失败回 <code>DDLPushResp{Err}</code>。</li>
+</ul>
+<h3 id="33-applypkgsqlddl_broadcastgo">3.3 节点侧 apply（pkg/sql/ddl_broadcast.go）<a class="headerlink" href="#33-applypkgsqlddl_broadcastgo" title="Permanent link">&para;</a></h3>
+<p><code>Executor.ApplyRemoteDDL(req DDLPushReq) error</code>（导出，供 db 装配）：</p>
+<pre><code>tx := tm.Begin()                      // 独立事务（与复制 replay 通道同构）
+tabs := loadTables(tx.Get)
+idx := indexByTableID(tabs, req.TableID)
+switch req.Op:
+  &quot;drop&quot;:   idx &gt;= 0 → tabs 移除该条目
+  default:  Unmarshal(req.Meta) → TableMeta
+            idx &gt;= 0 → tabs[idx] = meta（同 ID 覆盖）
+            否则     → tabs = append(tabs, &amp;meta)
+raw := saveTables(tabs); tx.Put(metaKey, raw); tx.Commit()
+</code></pre>
+<p>要点：
+- <strong>幂等</strong>：同 ID 覆盖/删除，重复收到同一 <code>DDLID</code> 或并发交错均安全；不需要专用 dedup 键（<code>m:ddl:done</code> 省略，注释说明理由）；
+- <strong>容忍未知表</strong>：目标节点没有该表（未参与其 region）时直接追加，保证后续 ASSIGN REGION 时目录已就绪；
+- <strong>异常保护</strong>：<code>req.Meta</code> 损坏/Op 非法返回错误 → 协调者视为广播失败进入 pending。</p>
+<h3 id="34-pkgsqlddl_broadcastgo">3.4 协调者广播（pkg/sql/ddl_broadcast.go）<a class="headerlink" href="#34-pkgsqlddl_broadcastgo" title="Permanent link">&para;</a></h3>
+<p><code>Executor.broadcastDDL(op string, meta *TableMeta, dropID uint64, dropName string)</code>：</p>
+<pre><code>if e.mgr == nil || !e.mgr.HasRemoteNodes() { return }   // 单机零回归
+e.replayPendingDDL()                                    // 先收敛历史失败
+ddlID := newDDLID()
+req := DDLPushReq{DDLID: ddlID, Op: op, TableID: ..., Meta: marshal(meta) 或 nil}
+for n := range e.mgr.ListNodes():
+    if n.ID == e.selfID || e.mgr.IsDown(n.ID) { continue }
+    if err := e.mgr.PushDDL(n.ID, req); err != nil:
+        e.recordPendingDDL(req)     // 内存 + 落盘 m:ddl:pending
+</code></pre>
+<ul>
+<li><strong>广播目标</strong>：全部在线注册节点（排除自身），而非仅该表 region 归属节点——任何节点都可能被 ASSIGN 新 region 或作为查询协调者，目录全局一致是"跨节点 DDL"的语义；</li>
+<li><strong>pending 落盘</strong>：<code>m:ddl:pending</code> 键存 JSON 数组（<code>[]DDLPushReq</code>），崩溃/重启后可恢复；<code>recordPendingDDL</code> 用独立事务写；</li>
+<li><strong>重放触发</strong>：① 每次广播前先 <code>replayPendingDDL()</code>（顺序重试，成功者移出列表）；② 公开 <code>ReplayPendingDDL() error</code> 供启动/运维/测试调用（<code>db.Open</code> 后由调用方触发）；</li>
+<li><strong>并发安全</strong>：pending 列表与落盘操作在 <code>Executor.mu</code> 保护下执行（DDL 提交后短暂持锁，量小无性能影响）。</li>
+</ul>
+<h3 id="35">3.5 执行顺序与一致性保证<a class="headerlink" href="#35" title="Permanent link">&para;</a></h3>
+<pre><code>DDL 语句 →（本地事务：目录 + 本地数据 ops / 2PC 数据 ops 原子提交）→ 提交成功
+        → broadcastDDL（逐节点短连接推送，失败记录 pending）→ DDL 返回成功
+</code></pre>
+<ul>
+<li><strong>原子性</strong>：DDL 数据+目录在协调者本地原子提交（M9/M5/M8 既有保证）；</li>
+<li><strong>顺序性</strong>：目录变更以协调者提交顺序为序；pending 按记录顺序重放，保证节点按序收敛；</li>
+<li><strong>最终一致</strong>：在线节点同步推送（一次 RTT）；离线节点在其恢复后的下一次广播/重放收敛；期间该节点目录滞后，但其离线时也不提供查询服务（心跳 DOWN 语义），恢复后先重放后服务，窗口收敛；</li>
+<li><strong>崩溃恢复</strong>：协调者崩溃 → pending 落盘恢复，重启后 <code>ReplayPendingDDL</code> 补齐；节点崩溃 → 2PC 协调者恢复沿用 M8（目录提交已在本地完成，不依赖节点）。</li>
+</ul>
+<h3 id="36">3.6 失败/节点离线处理<a class="headerlink" href="#36" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>在线节点 push 失败（网络抖动/瞬时）</td>
+<td>DDL 成功，请求进 pending，下次广播前重试</td>
+</tr>
+<tr>
+<td>节点离线（心跳 DOWN / 连接拒绝）</td>
+<td>跳过（不尝试），DDL 成功；恢复后经重放收敛</td>
+</tr>
+<tr>
+<td>节点 apply 失败（存储错误/载荷损坏）</td>
+<td>回 <code>Err</code> → 进 pending 重试；若持续失败不影响 DDL 成功</td>
+</tr>
+<tr>
+<td>协调者 DDL 本地提交失败</td>
+<td>按既有 M9 语义整体失败/回滚，不产生广播</td>
+</tr>
+</tbody>
+</table>
+<p><strong>不做回滚</strong>：广播失败不触发 DDL 回滚——本地已提交且数据重写（2PC）已完成，回滚目录会造成"数据新/目录旧"更糟状态；收敛语义优于回滚。</p>
+<h3 id="37-m2t33">3.7 与复制链路（M2/T33）的配合<a class="headerlink" href="#37-m2t33" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>主从复制</strong>：<code>commitHook</code> 在事务提交锁内把**全量 batch（含 metaKey Put）**写入 binlog → 从节点 <code>ApplyBinlog</code> replay 后目录自动同步。T34 不改变该通道；</li>
+<li><strong>集群数据节点</strong>：非复制从节点的数据节点（集群拓扑）走 <code>DDL_PUSH</code> 获得目录；</li>
+<li><strong>双通道共存</strong>：某节点既是从节点又是集群数据节点时，binlog replay 与 DDL_PUSH 写同一 <code>m:tables</code>，按 TableID upsert/delete 幂等，后到者覆盖，无冲突；</li>
+<li><strong>T33 语义不变</strong>：<code>WaitAck</code> 只关心数据 LSN ACK，不感知 DDL 广播；同步/半同步模式照常作用于 binlog 通道，DDL 广播不参与 ACK 计数（它只是管理帧）；</li>
+<li><strong>时序</strong>：DDL 本地提交 → commitHook 写 binlog（同步通道）与 broadcastDDL（管理通道）<strong>并行收敛</strong>，二者独立、幂等，不要求严格先后。</li>
+</ul>
+<h3 id="38">3.8 已知限制（明确不属本项范围）<a class="headerlink" href="#38" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>DROP TABLE 的远端 region 数据行清理</strong>：既有实现只删本地副本行（<code>scanMerged</code> 本地扫描）；远端节点目录条目经广播删除后，其持有的孤儿行不再可访问（表已不存在），但物理数据仍在。彻底清理属"REGION 数据回收/迁移"后续项；</li>
+<li><strong>显式事务内的 DDL 不广播</strong>：与 M5 分布式写在显式事务内的限制一致（<code>ddlCommit</code> 对显式事务报错/降级路径），T34 仅广播 autocommit 提交成功的 DDL；文档注明，测试覆盖 autocommit 路径；</li>
+<li><strong>广播无同步确认语义</strong>：不提供"所有节点确认后才成功"的强一致 DDL（如需可后续加 <code>ALTER TABLE ... WAIT</code> 语义，超出本项）。</li>
+</ul>
+<h2 id="4">4. 实现清单<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>动作</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pkg/cluster/ddl.go</code></td>
+<td>新增</td>
+<td>帧 30/31、<code>DDLPushReq/Resp</code>、<code>Manager.PushDDL</code>、<code>Client.pushDDL</code>、<code>Server.SetDDLApply/handleDDLPush</code></td>
+</tr>
+<tr>
+<td><code>pkg/cluster/server.go</code></td>
+<td>修改</td>
+<td><code>handleConn</code> 增加 <code>msgDDLPush</code> 分支</td>
+</tr>
+<tr>
+<td><code>pkg/sql/ddl_broadcast.go</code></td>
+<td>新增</td>
+<td><code>Executor.ApplyRemoteDDL</code>（节点 apply）、<code>broadcastDDL</code>、<code>newDDLID</code>、pending 持久化/重放</td>
+</tr>
+<tr>
+<td><code>pkg/sql/executor.go</code></td>
+<td>修改</td>
+<td><code>execCreateTable/execDropTable/execAlterTable</code> 提交成功后调用 <code>broadcastDDL</code></td>
+</tr>
+<tr>
+<td><code>pkg/db/db.go</code></td>
+<td>修改</td>
+<td><code>StartCluster</code> 装配 <code>srv.SetDDLApply(d.SQL.ApplyRemoteDDL)</code>；导出集群启动后重放入口</td>
+</tr>
+<tr>
+<td><code>pkg/cluster/ddl_test.go</code></td>
+<td>新增</td>
+<td>载荷编解码、PushDDL 往返、handleDDLPush 注入回调</td>
+</tr>
+<tr>
+<td><code>pkg/sql/ddl_broadcast_test.go</code></td>
+<td>新增</td>
+<td>节点 apply 幂等/upsert/drop、单机零触发、pending 落盘与重放</td>
+</tr>
+<tr>
+<td><code>pkg/db/db_t34_ddl_test.go</code></td>
+<td>新增</td>
+<td>三节点集成：CREATE/ALTER/DROP 广播、离线 pending 恢复、跨节点读一致</td>
+</tr>
+</tbody>
+</table>
+<h2 id="5">5. 测试计划<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>单机回归</strong>：<code>mgr == nil</code> 时 CREATE/ALTER/DROP 全量既有测试零回归（广播零触发）；</li>
+<li><strong>pkg/cluster 单测</strong>：<code>DDLPushReq</code> JSON 往返（含 <code>Meta []byte</code> base64）、<code>Server.handleDDLPush</code> 正确调用注入回调并回 <code>DDLPushResp</code>；</li>
+<li><strong>pkg/sql 单测</strong>：节点 apply——新表追加、同 ID 覆盖（alter）、drop 移除、重复广播幂等、损坏载荷报错；</li>
+<li><strong>pkg/db 集成</strong>（三节点，仿 <code>db_2pc_test.go</code>）：</li>
+<li>A <code>CREATE TABLE</code> → B <code>SHOW TABLES</code> 可见；</li>
+<li>A <code>ALTER TABLE ADD COLUMN</code>（含远端 region 数据重写）→ B <code>SHOW COLUMNS</code> 含新列、B 本地 <code>INSERT</code> 新列成功、A 跨节点读回一致；</li>
+<li>B 离线（停心跳/<code>MarkDown</code>）→ A <code>ALTER</code> 成功且 pending 落盘 → B 恢复 + <code>ReplayPendingDDL</code> → B 目录同步；</li>
+<li>A <code>DROP TABLE</code> → B <code>SHOW TABLES</code> 移除；</li>
+<li><strong>全仓验证</strong>：<code>go test ./... -count=1 -p 1</code>（串行避免端口竞争）全绿。
+<em>（内容由AI生成，仅供参考）</em></li>
+</ol>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T33_m20_sync_semi_sync_replication/" class="btn btn-neutral float-left" title="T33 同步/半同步复制"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T35_m20_dist_backup_consistency/" class="btn btn-neutral float-right" title="T35 分布式备份一致性">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T33_m20_sync_semi_sync_replication/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T35_m20_dist_backup_consistency/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

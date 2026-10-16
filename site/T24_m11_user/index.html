@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>M11 认证权限簇 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "M11 \u8ba4\u8bc1\u6743\u9650\u7c07";
+        var mkdocs_page_input_path = "T24_m11_user.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">M11 认证权限簇</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#_1">背景</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_2">设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#_3">语法</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#_4">词法 / 语法层</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#executor">执行层（executor）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#_5">持久化与口令安全</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#pkgsqlm11_user_testgo">测试（pkg/sql/m11_user_test.go）</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_6">取舍说明</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#readme">README 勾选</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">M11 认证权限簇</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T24_m11_user.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t24-m11-13createdropshowalter-user">T24 M11 功能簇（1/3）：用户管理（CREATE/DROP/SHOW/ALTER USER）<a class="headerlink" href="#t24-m11-13createdropshowalter-user" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v5.0-P13-M11, v0.14.0-alpha
+日期：2026-10-11
+范围：<code>pkg/sql</code>（lexer / ast / parser / executor / user.go / sql.go + 测试 <code>m11_user_test.go</code>）
+闭环：<code>go test ./pkg/sql/ -count=1</code> 全绿，不 push（README 勾选由 M11 整簇收尾提交统一更新）
+提交：<code>M11: user management (CREATE/DROP/SHOW/ALTER USER)</code>（本地，未 push）</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>OpenXDB 此前无任何用户概念：所有连接与语句执行均无身份与口令校验，server 层无法区分操作者。M11 权限与用户管理簇分三步落地：<strong>用户管理</strong>（本子功能，建立用户实体与口令存储）→ GRANT/REVOKE 权限模型 → 连接鉴权与执行期校验。本子功能先打通用户生命周期 SQL：<code>CREATE USER</code> / <code>DROP USER</code> / <code>SHOW USERS</code> / <code>ALTER USER</code>，口令以 <strong>SHA-256 + 随机 salt</strong> 哈希落库（禁止明文），元数据参考 TableMeta 的 JSON 持久化方式写入元数据表，并预留供 server 层鉴权握手的查询接口。</p>
+<h2 id="_2">设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="_3">语法<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sql">CREATE USER '&lt;name&gt;' IDENTIFIED BY '&lt;pwd&gt;';   -- 新建用户（重复建报错）
+DROP USER [IF EXISTS] '&lt;name&gt;';               -- 删除用户（不存在报错；IF EXISTS 静默）
+SHOW USERS;                                   -- 列出全部用户（按名称排序）
+ALTER USER '&lt;name&gt;' IDENTIFIED BY '&lt;pwd&gt;';    -- 重置密码（用户不存在报错）
+</code></pre>
+<h3 id="_4">词法 / 语法层<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>lexer.go</code>：关键字表补充 <code>USER</code>、<code>IDENTIFIED</code>（<code>BY</code>/<code>IF</code>/<code>EXISTS</code>/<code>ALTER</code>/<code>DROP</code>/<code>CREATE</code> 已存在）；</li>
+<li><code>ast.go</code>：新增 <code>CreateUserStmt{Name, Password}</code> / <code>DropUserStmt{Name, IfExists}</code> / <code>AlterUserStmt{Name, Password}</code> / <code>ShowUsersStmt</code> 并实现 <code>stmt()</code>；</li>
+<li><code>parser.go</code>：</li>
+<li><code>parseCreate</code> 增加 <code>USER</code> 分支 → <code>parseCreateUser</code>（<code>IDENTIFIED BY</code> 必填，用户名/密码均须字符串字面量）；</li>
+<li><code>parseDrop</code> 增加 <code>USER</code> 分支 → <code>parseDropUser</code>（支持 <code>IF EXISTS</code>）；</li>
+<li><code>parseAlter</code> 开头识别 <code>USER</code> → <code>parseAlterUser</code>（<code>IDENTIFIED BY</code> 必填）；</li>
+<li><code>parseShow</code> 增加 <code>USERS</code> 分支：<strong>USERS 不加入关键字表</strong>（避免与合法表名 <code>users</code> 冲突），按标识符文本 <code>EqualFold</code> 匹配，<code>SHOW USERS</code> 与 <code>CREATE TABLE users</code> 可共存。</li>
+</ul>
+<h3 id="executor">执行层（executor）<a class="headerlink" href="#executor" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>isWriteStmt</code> 纳入 <code>CreateUserStmt</code> / <code>DropUserStmt</code> / <code>AlterUserStmt</code>（写语句，走事务提交）；</li>
+<li><code>execCreateUser</code>：加载用户元数据 → 重复名报 <code>user already exists</code> → <code>hashPassword</code> 生成 salt+哈希 → 追加保存；</li>
+<li><code>execDropUser</code>：不存在时报 <code>user not exists</code>（<code>IF EXISTS</code> 静默成功），否则移除保存；</li>
+<li><code>execAlterUser</code>：不存在时报 <code>user not exists</code>，否则重新哈希密码覆盖 <code>SaltHash</code>；</li>
+<li><code>execShowUsers</code>：加载全部用户，按名称排序，返回单列 <code>user</code> 结果集。</li>
+</ul>
+<h3 id="_5">持久化与口令安全<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>user.go</code>（新增）：</li>
+<li><code>UserMeta{Name string, SaltHash string}</code>；<code>usersMetaKey</code>（元数据表固定键）与 TableMeta 同用 JSON 编码存储；</li>
+<li><code>loadUsers</code> / <code>saveUsers</code> / <code>findUser</code>：读改写元数据，遵循 <code>loadTables</code>/<code>saveTables</code> 的 <code>tx.Get</code> 注入模式；</li>
+<li><code>hashPassword(pwd)</code>: 生成 16 字节随机 salt，<code>SHA-256(salt || pwd)</code> 得哈希，存储格式 <code>base64(salt):base64(hash)</code>，<strong>落库无明文口令</strong>；</li>
+<li><code>verifyPassword(pwd, saltHash)</code>: 用 <code>crypto/subtle.ConstantTimeCompare</code> 常数时间比对防时序侧信道；</li>
+<li><code>authenticateUser(name, pwd)</code>: 查用户 → 校验口令（M11 子功能三连接鉴权的内部入口）。</li>
+<li><code>sql.go</code>：Engine 增加公开预留接口 <code>AuthenticateUser(name, password) (bool, error)</code>，供 server 层后续握手与执行期权限校验调用。</li>
+</ul>
+<h2 id="pkgsqlm11_user_testgo">测试（pkg/sql/m11_user_test.go）<a class="headerlink" href="#pkgsqlm11_user_testgo" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestCreateUserAndShow</code></td>
+<td>建用户 + SHOW USERS 列出；与表名 <code>users</code> 共存（<code>setupUsers</code> 先建 users 表）</td>
+</tr>
+<tr>
+<td><code>TestCreateUserDuplicate</code></td>
+<td>重复建用户 → <code>user already exists</code></td>
+</tr>
+<tr>
+<td><code>TestDropUser</code></td>
+<td>删除成功、删除不存在报错、<code>DROP USER IF EXISTS</code> 静默、清空后 SHOW USERS 为 0 行</td>
+</tr>
+<tr>
+<td><code>TestAlterUserPassword</code></td>
+<td>ALTER 重置密码后旧密码失效新密码生效；ALTER 不存在用户报错</td>
+</tr>
+<tr>
+<td><code>TestAuthenticateUser</code></td>
+<td>正确密码通过、错误密码拒绝、不存在用户拒绝</td>
+</tr>
+<tr>
+<td><code>TestShowUsersSort</code></td>
+<td>多用户按名称排序输出（alice/bob/carol）</td>
+</tr>
+<tr>
+<td><code>TestUserParseErrors</code></td>
+<td>缺 <code>IDENTIFIED BY</code>、用户名非字符串字面量、缺密码、SHOW USERS 多余 token 均报语法错误</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_6">取舍说明<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>口令哈希</strong>：采用 SHA-256 + 每用户随机 salt（<code>crypto/sha256</code>），避免彩虹表与相同口令同哈希；未引入 bcrypt/argon2（依赖外部库、增加 CGO 面），后续如需更高强度可在 <code>hashPassword</code> 单点替换；</li>
+<li><strong>USERS 不作关键字</strong>：<code>SHOW USERS</code> 通过 <code>parseShow</code> 中标识符文本匹配实现，<code>users</code> 表名合法不冲突（测试显式覆盖）；</li>
+<li><strong>用户名/密码限定字符串字面量</strong>：语法简单明确，暂不支持 <code>IDENTIFIED WITH ...</code> 等 MySQL 变体；</li>
+<li><strong>鉴权接口只读</strong>：<code>AuthenticateUser</code> 为预留查询接口，不改动连接协议，server 层接入在 M11 子功能三进行；</li>
+<li><strong>元数据键</strong>：用户元数据独立键（<code>usersMetaKey</code>）而非复用 TableMeta 目录，避免与表名耦合，也便于 GRANT/REVOKE 子功能扩展权限字段。</li>
+</ul>
+<h2 id="readme">README 勾选<a class="headerlink" href="#readme" title="Permanent link">&para;</a></h2>
+<p>由 M11 整簇收尾提交统一执行：
+- Status 行更新为 M11 权限与用户管理簇；
+- T 表格追加 <code>T24 M11 permission &amp; user management cluster: user management + GRANT/REVOKE + connection auth</code>；
+- 文档列表追加 <code>T24_m11_user.md</code>（随本提交加入）。</p>
+<p><em>（内容由AI生成，仅供参考）</em></p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T23_m10_cte/" class="btn btn-neutral float-left" title="M10 SQL 兼容簇"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T25_m12_join/" class="btn btn-neutral float-right" title="M12 分布式 SQL 簇">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T23_m10_cte/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T25_m12_join/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

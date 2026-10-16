@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T27 m14 binlog sub - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T27 m14 binlog sub";
+        var mkdocs_page_input_path = "T27_m14_binlog_sub.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">T27 m14 binlog sub</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T27_m14_binlog_sub.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <hr />
+<h1 id="t27-m14-23binlog-cdc">T27 M14 生态接入簇（2/3）：binlog 对外订阅（CDC）<a class="headerlink" href="#t27-m14-23binlog-cdc" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v5.0-P13-M14, v0.14.0-alpha
+日期：2026-10-11
+范围：<code>pkg/replication</code>（binlog.go 尾部容忍解码 + 新增 binlog_reader.go / binlog_reader_test.go）、<code>pkg/cdc</code>（新增 cdc.go / offset.go / cdc_test.go，含 OffsetStore 重启恢复用例）、<code>pkg/sql</code>（ast.go / parser.go / executor.go SHOW BINLOG EVENTS 语法与执行器 + m14_binlog_sub.go / m14_binlog_sub_test.go）
+闭环：<code>go build ./...</code> 无输出；<code>go test ./pkg/... -count=1</code> 全绿，不 push（README 勾选由 M14 整簇收尾提交统一更新）
+提交：<code>M14: binlog subscribe CDC</code>（本地，未 push）</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>M14 生态接入簇在子功能一 mysqldump 兼容导入（94a7cbc，一次性全量灌入）基础上，新增<strong>binlog 对外订阅（CDC）</strong>：把主节点已有 binlog 暴露为可订阅的增量变更流，供外部数据管道 / 增量同步消费。与导入形成<strong>迁移闭环</strong>——先用 mysqldump 导入存量，再按 LSN 增量订阅后续变更，实现"全量导入 + 增量同步"的完整迁移方案。</p>
+<h2 id="_2">设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="pkgcdc">事件模型（<code>pkg/cdc</code> 新增）<a class="headerlink" href="#pkgcdc" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Event</code></td>
+<td>一条表/行级变更：<code>LSN</code>（binlog 位点，续读/幂等基准）、<code>CommitLSN</code>（源 WAL 提交点）、<code>SchemaVer</code>、<code>Kind</code>（PUT/DELETE）、<code>TableID</code>、<code>PK</code>、<code>IsIndex</code>（二级索引键，跟随行变更，消费方通常忽略）、<code>RawKey</code>/<code>RawValue</code></td>
+</tr>
+<tr>
+<td><code>Decode(entry)</code></td>
+<td>把一条 binlog 记录解码为事件列表；物理键 <code>r{region}</code> 前缀剥除后按行键 <code>s{tableID}{pk}</code> / 索引键 <code>i{tableID}{indexID}{idxVal}p{pk}</code> 解析；元数据键 <code>m:...</code> 与无法识别的键不产出事件，顺序保持 binlog 内 put/delete 顺序</td>
+</tr>
+<tr>
+<td><code>ChangeKind</code></td>
+<td><code>KindPut</code>（写入/更新，binlog 不区分 insert/update）/ <code>KindDelete</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="pkgreplicationbinlog_readergo-pkgcdccdcgo">订阅会话与并发读保护（<code>pkg/replication/binlog_reader.go</code> 新增 + <code>pkg/cdc/cdc.go</code>）<a class="headerlink" href="#pkgreplicationbinlog_readergo-pkgcdccdcgo" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>只读拉取器 <code>BinlogReader</code></strong>：与 <code>BinlogStore</code> 分离——只读打开（不创建不写入）、持有独立文件句柄与自身锁、尾部不完整记录（正在追加的半条）按正常结束容忍（新增 <code>decodeBinRecordOpt</code> 尾部容忍解码 + <code>ErrStopFetch</code> 扫描中止哨兵）；不持有 binlog 写路径锁，与主写 <code>Append</code> / 复制推送<strong>并发共存</strong>（binlog 为 append-only 落盘文件，落盘内容对并发读稳定可见）。</li>
+<li><strong>订阅会话 <code>Subscriber</code></strong>：<code>NewSubscriber(path)</code> 打开只读会话；<code>Fetch(from, limit)</code> 从 <code>from</code>（含）增量读取至多 <code>limit</code> 条事件（<code>limit&lt;=0</code> 一次读完当前文件），返回事件列表与<strong>下一消费位点 <code>nextLSN</code></strong>——达到 limit 时 <code>nextLSN = 最后事件 LSN + 1</code>，读到文件尾时 <code>nextLSN = 文件尾位点 + 1</code>（无新事件时保持不倒退）；<code>Close</code> 后再次 <code>Fetch</code> 返回 <code>ErrClosed</code>。单会话 <code>Fetch</code> 加锁，支持顺序拉取。</li>
+</ul>
+<h3 id="offset-pkgcdcoffsetgo">Offset 管理（<code>pkg/cdc/offset.go</code> 新增）<a class="headerlink" href="#offset-pkgcdcoffsetgo" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>OffsetStore</code> 接口：<code>Load()</code> 返回已保存消费位点（不存在为 0）、<code>Save(lsn)</code> 原子保存下一次 <code>Fetch</code> 的 from。</li>
+<li><code>FileOffsetStore</code>：单文件十进制文本 + 换行，临时文件 + 重命名原子写；适合单订阅者，多订阅者可各指 offset 文件。客户端每次 <code>Fetch</code> 后 <code>Save(nextLSN)</code>，重启后 <code>Load</code> 并从该位点续读（LSN 单调递增，重连续读不重复不遗漏）。</li>
+</ul>
+<h3 id="sql-pkgsql-show-binlog-events">SQL 入口（<code>pkg/sql</code> SHOW BINLOG EVENTS）<a class="headerlink" href="#sql-pkgsql-show-binlog-events" title="Permanent link">&para;</a></h3>
+<pre><code>SHOW BINLOG EVENTS [FROM &lt;lsn&gt;] [LIMIT &lt;n&gt;]
+</code></pre>
+<ul>
+<li>输出列：<code>lsn / commit_lsn / schema_ver / kind / table / pk / row</code>。</li>
+<li><code>kind</code>：PUT 或 DELETE；<code>table</code>：按表 ID 查表目录还原表名（未知表 ID 显示 <code>#table-&lt;id&gt;</code>，索引键显示 <code>(index)</code>）；<code>pk</code>：主键字节文本；<code>row</code>：PUT 行值按表列解码为 <code>col=val, ...</code> 摘要（元数据缺失时显示原始 JSON 字节）。</li>
+<li>执行器 <code>execShowBinlogEvents</code>：binlog 未启用（<code>binlogPath</code> 为空）时报 <code>binlog not enabled</code>；只读巡检，不改变主写路径；与复制开启状态无关，复制开启时同样可查（并发共存验证见测试）。</li>
+</ul>
+<h3 id="m14-1">与 M14-1 迁移闭环<a class="headerlink" href="#m14-1" title="Permanent link">&para;</a></h3>
+<p>导入（IMPORT MYSQLDUMP）落地存量 → <code>SHOW BINLOG EVENTS</code> / <code>Subscriber.Fetch</code> 从 LSN 0 或任意位点增量订阅后续变更 → <code>FileOffsetStore</code> 持久化位点，进程重启后续读。外部管道可按 <code>Event.TableID</code> / <code>PK</code> 还原目标行。</p>
+<h2 id="_3">测试<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>覆盖点</th>
+<th>用例（<code>pkg/replication</code> / <code>pkg/cdc</code> / <code>pkg/sql</code>）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>多表变更</td>
+<td><code>TestM14ShowBinlogEvents</code>：t1/t2 多行 PUT + DELETE，表名按表目录还原、行值列解码</td>
+</tr>
+<tr>
+<td>LSN 续读</td>
+<td><code>SHOW BINLOG EVENTS FROM &lt;lsn&gt;</code> 全量等价、越过末尾为空；<code>Fetch</code> from/limit 位点推进</td>
+</tr>
+<tr>
+<td>offset 重启恢复</td>
+<td><code>FileOffsetStore.Save/Load</code> 原子写与重启续读（cdc 测试）</td>
+</tr>
+<tr>
+<td>与复制路径共存</td>
+<td><code>StartReplication</code> 开启时 SHOW 读取 + 继续写入立即可见（SQL 端到端）；BinlogReader 尾部半条容忍扫描</td>
+</tr>
+<tr>
+<td>事件解码</td>
+<td>PUT/DELETE、行键/索引键、元数据键跳过、region 前缀剥离（cdc 测试）</td>
+</tr>
+</tbody>
+</table>
+<p>闭环验证：<code>go build ./...</code> 无输出；<code>go test ./pkg/... -count=1</code> 全绿（15 包）。</p>
+<h2 id="_4">边界与后续<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<ul>
+<li>binlog 为单文件 append-only，未做日志轮转；超大 binlog 下 <code>Fetch</code> 为顺序扫描（LSN 定位 + 逐条解码），后续可按需增加索引位点或分片。</li>
+<li>订阅为拉取模式 + 客户端持久化位点；未提供推送 / 断线重连自动恢复（由客户端按 nextLSN 重试）。</li>
+<li>二级索引键事件（<code>IsIndex</code>）默认跟随行变更输出，消费方按需忽略。
+<em>（内容由AI生成，仅供参考）</em></li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

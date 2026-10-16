@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T23 M10 功能簇（3/3）：UPSERT（ON DUPLICATE KEY UPDATE + REPLACE INTO） - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T23 M10 \u529f\u80fd\u7c07\uff083/3\uff09\uff1aUPSERT\uff08ON DUPLICATE KEY UPDATE + REPLACE INTO\uff09";
+        var mkdocs_page_input_path = "T23_m10_upsert.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">T23 M10 功能簇（3/3）：UPSERT（ON DUPLICATE KEY UPDATE + REPLACE INTO）</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T23_m10_upsert.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t23-m10-33upserton-duplicate-key-update-replace-into">T23 M10 功能簇（3/3）：UPSERT（ON DUPLICATE KEY UPDATE + REPLACE INTO）<a class="headerlink" href="#t23-m10-33upserton-duplicate-key-update-replace-into" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v5.0-P12-M10, v0.14.0-alpha
+日期：2026-10-11
+范围：<code>pkg/sql</code>（lexer / ast / parser / executor）+ 单元测试（<code>m10_upsert_test.go</code>）+ README 勾选
+闭环：<code>go build ./...</code> 与 <code>go test ./... -count=1</code> 全绿，不 push
+提交：<code>M10: upsert (ON DUPLICATE KEY UPDATE + REPLACE INTO)</code>（本地，未 push）</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>SQL 层此前 INSERT 遇主键冲突直接报 <code>duplicate primary key</code>，无法按 MySQL 语义做"冲突即更新"或"删旧插新"。M10 UPSERT 补齐两条 MySQL 兼容路径：</p>
+<ul>
+<li><strong>INSERT ... ON DUPLICATE KEY UPDATE col=expr</strong>：插入行与既有行主键/唯一键冲突时，改为更新该行指定列（affected=2，MySQL 语义）；无冲突时正常插入（affected=1）。</li>
+<li><strong>REPLACE INTO</strong>：冲突时删除所有冲突行（含唯一索引冲突、外键 CASCADE 联动删除）后插入新行，删除与插入在同一提交内原子完成（affected=删除数+1）。</li>
+<li>无唯一约束（仅隐式主键=首列）时主键不冲突即等同普通 INSERT；主键仍是参与冲突判定的唯一约束，与 MySQL 一致。</li>
+</ul>
+<h2 id="_2">设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="_3">语法<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sql">INSERT INTO t (id, name, age) VALUES (1, 'alice', 30)
+    ON DUPLICATE KEY UPDATE name='alice2', age=31;
+REPLACE INTO t (id, name, age) VALUES (1, 'bob', 26), (4, 'dave', 40);
+INSERT INTO t (id, name) VALUES (2, 'c') ON DUPLICATE KEY UPDATE name='x';
+CREATE UNIQUE INDEX ux_email ON u (email);   -- 唯一索引参与冲突判定
+</code></pre>
+<h3 id="_4">词法 / 语法层<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>lexer.go</code>：关键字表已含 <code>REPLACE</code> / <code>DUPLICATE</code> / <code>UNIQUE</code>（M10 规划时预埋），<code>ON</code> / <code>UPDATE</code> 复用既有关键字；</li>
+<li><code>ast.go</code>：</li>
+<li><code>InsertStmt</code> 新增 <code>OnDup *OnDuplicateUpdate</code> 与 <code>Replace bool</code>；</li>
+<li>新增 <code>OnDuplicateUpdate{Sets []SetItem}</code>，复用 UPDATE 的 <code>SetItem{Col, Val}</code>；</li>
+<li><code>CreateIndexStmt</code> 与 <code>IndexMeta</code> 新增 <code>Unique bool</code>（唯一索引登记，供冲突判定使用）；</li>
+<li><code>parser.go</code>：</li>
+<li><code>parseStmt</code> 分发 <code>REPLACE</code> → <code>parseInsertInto(true)</code>；</li>
+<li><code>parseCreate</code> 识别 <code>UNIQUE INDEX</code> → 走 <code>parseCreateIndex</code> 并标记 <code>Unique</code>；</li>
+<li><code>parseInsertInto</code> 支持 REPLACE 分发；INSERT 语句尾部遇 <code>ON DUPLICATE KEY UPDATE</code> 调 <code>parseSetItems</code> 填充 <code>OnDup</code>；</li>
+<li>新增公共 <code>parseSetItems</code>（<code>col=expr, col=expr</code>），<code>parseUpdate</code> 复用同一实现。</li>
+</ul>
+<h3 id="executor">执行层（executor）<a class="headerlink" href="#executor" title="Permanent link">&para;</a></h3>
+<ul>
+<li>主入口 <code>insertRowUpsertOps(tx, tabs, meta, cols, row, onDup, replace, pending)</code>：</li>
+<li><code>buildRow</code> 补默认值 → <code>checkFKOnRow</code> 外键校验 → <code>pkOf</code> 取主键 → <code>locateRow</code> + <code>getKVCluster</code> 判定磁盘行存在；</li>
+<li><code>upsertConflicts</code> 收集全部冲突行主键：磁盘主键冲突 + 磁盘各 UNIQUE 索引冲突（<code>scanMergedCluster</code> 区间扫描）+ 语句内 pending 行冲突（主键/唯一双通道），按发现顺序去重；</li>
+<li>无冲突 → 普通插入（affected=1）；有冲突 → 按 <code>ON DUP</code> / <code>REPLACE</code> / 普通 INSERT（报 <code>duplicate primary key</code> / <code>duplicate unique key</code>）三分支。</li>
+<li><code>onDupUpdateOps</code>：取目标行（主键冲突优先于唯一索引冲突），逐 SET 列求值并类型强转，写回目标行键（affected=2）；仅更新指定列，未涉及的列保留原值；SET 包含主键列时回滚报 <code>cannot modify primary key column</code>。</li>
+<li><code>replaceRowOps</code>：对每个冲突行——外键 CASCADE 联动删除（<code>collectFKDeleteOps</code>）+ 删索引项（<code>delIndexKeyOps</code>）+ 删行键；随后 <code>encodeRow</code> 新行 Put 与索引键 Put（<code>putIndexKeyOps</code> 以 <code>ignore</code> 跳过被删行的旧索引键）；删除与插入同一批 <code>kvOp</code> 原子提交。<strong>关键细节</strong>：主键冲突时跳过行键 Delete——存储层 WriteBatch 先 Put 后 Delete，同 key 的 Delete 会覆盖 Put 导致新行丢失，因此主键冲突仅用 Put 覆盖（索引项与外键联动仍正常处理）。</li>
+<li><code>upsertTargetRow</code>：定位冲突行，优先语句内 pending 行（本语句前序已计划写入的最终状态），否则磁盘行；唯一索引冲突返回冲突行（pk≠新 pk），主键冲突返回同 pk 行。</li>
+<li>pending 维护：<code>dropPending</code> / <code>replacePending</code> 保证语句内多行的主键/唯一冲突按最终状态判定（如 <code>REPLACE INTO t VALUES (1,...),(1,...)</code> 第二条以第一条为冲突目标）。</li>
+<li>接线：<code>execInsert</code> 改调 <code>insertRowUpsertOps</code> 并累加 affected；<code>execUpdate</code> 记录语句内最终行并传入 <code>putIndexKeyOps</code> 做唯一性预检（UPDATE 改值撞唯一索引 → 回滚）；<code>execCreateIndex</code> / <code>ADD_INDEX</code> 回填既有数据唯一性检查并登记 <code>idx.Unique</code>。</li>
+</ul>
+<h2 id="pkgsqlm10_upsert_testgo">测试（pkg/sql/m10_upsert_test.go）<a class="headerlink" href="#pkgsqlm10_upsert_testgo" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestUpsertOnDuplicateKeyPKConflict</code></td>
+<td>主键冲突 ON DUP 更新（affected=2）+ 无冲突插入（affected=1）</td>
+</tr>
+<tr>
+<td><code>TestUpsertOnDuplicateKeyUniqueConflict</code></td>
+<td>UNIQUE 索引冲突 ON DUP 更新冲突行</td>
+</tr>
+<tr>
+<td><code>TestUpsertNoUniqueConstraintLikeInsert</code></td>
+<td>无唯一索引（仅主键）表：主键不同 → 普通插入不触发 ON DUP</td>
+</tr>
+<tr>
+<td><code>TestUpsertReplaceIntoPK</code></td>
+<td>REPLACE 主键冲突：删旧插新 affected=2、行数不变</td>
+</tr>
+<tr>
+<td><code>TestUpsertReplaceIntoUnique</code></td>
+<td>REPLACE 唯一索引冲突：删冲突行插新行（不同主键）</td>
+</tr>
+<tr>
+<td><code>TestUpsertReplaceUniqueMultiConflicts</code></td>
+<td>一行与多条既有行唯一冲突（复合唯一）→ 全部删除后插入</td>
+</tr>
+<tr>
+<td><code>TestUpsertMultiRowsMixed</code></td>
+<td>多行混合：冲突更新 + 无冲突插入 affected 累加</td>
+</tr>
+<tr>
+<td><code>TestUpsertOnDuplicateStatementPendingConflict</code></td>
+<td>语句内重复主键：第二行更新 pending 第一行（affected=1+2）</td>
+</tr>
+<tr>
+<td><code>TestUpsertReplaceMultiRowMixed</code></td>
+<td>REPLACE 多行：冲突 + 无冲突 + 冲突 affected=5</td>
+</tr>
+<tr>
+<td><code>TestUpsertOnDuplicatePKColumnErr</code></td>
+<td>ON DUP SET 修改主键列 → 报错且回滚</td>
+</tr>
+<tr>
+<td><code>TestUpsertInsertUniqueDuplicateErr</code></td>
+<td>普通 INSERT 撞唯一索引 → 报错</td>
+</tr>
+<tr>
+<td><code>TestUpsertUniqueIndexCreateDuplicateErr</code></td>
+<td>对含重复值的列建 UNIQUE INDEX → 报错回滚</td>
+</tr>
+<tr>
+<td><code>TestUpsertUpdateUniqueConflictErr</code></td>
+<td>UPDATE 改值撞唯一索引 → 报错回滚</td>
+</tr>
+<tr>
+<td><code>TestUpsertOnDuplicateFKRestrict</code></td>
+<td>ON DUP 更新后违反外键 RESTRICT → 报错回滚</td>
+</tr>
+<tr>
+<td><code>TestUpsertReplaceFKRestrict</code></td>
+<td>REPLACE 违反外键 RESTRICT → 报错回滚</td>
+</tr>
+<tr>
+<td><code>TestUpsertReplaceFKCascade</code></td>
+<td>REPLACE 父行 → CASCADE 删除子行 + 父行替换（affected=2）</td>
+</tr>
+<tr>
+<td><code>TestUpsertReplaceNoUniqueConstraintLikeInsert</code></td>
+<td>无唯一索引表 REPLACE 不同主键 → 普通插入 affected=2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_5">取舍说明<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>唯一约束来源</strong>：本引擎建表默认首列隐式主键（所有表均有主键），因此严格"无任何唯一键"的表不存在；ON DUP / REPLACE 的"无冲突即普通插入"语义在引擎中等价于"主键/唯一索引均不冲突"；</li>
+<li><strong>affected 计数</strong>：ON DUP 更新 1 行计 2、插入计 1（MySQL 语义）；REPLACE 计 删除数+插入数 1；</li>
+<li><strong>更新范围</strong>：ON DUP 仅更新 SET 指定列，未指定列保留冲突行原值（与 MySQL 一致）；</li>
+<li><strong>原子性</strong>：REPLACE 的删旧插新在同一事务提交内完成，任一步失败整体回滚；ON DUP 更新失败同样整体回滚（如外键 RESTRICT、唯一索引撞车）；</li>
+<li><strong>语句内一致性</strong>：同语句多行重复冲突按 pending 最终状态判定，避免"第一行冲突第二行却不冲突"的歧义；</li>
+<li><strong>存储层约束</strong>：WriteBatch 先 Put 后 Delete 的同 key 语义导致 REPLACE 主键冲突必须跳过行键 Delete（见 replaceRowOps 注释），这是本实现与存储层的适配点，后续若存储层改为"操作序保持"可简化。</li>
+</ul>
+<h2 id="readme">README 勾选<a class="headerlink" href="#readme" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Status 行更新为 <code>M10 SQL compatibility cluster: CTE + window functions + UPSERT (v5.0-P12-M10), v0.14.0-alpha.</code></li>
+<li>T 表格追加 <code>+ T23 M10 SQL compatibility cluster: CTE + window functions + UPSERT</code></li>
+<li>文档列表追加 <code>T23_m10_upsert.md</code>；本子功能提交暂不修改 README，整簇闭环时统一更新 Status 与 Roadmap（README 勾选约定）。</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

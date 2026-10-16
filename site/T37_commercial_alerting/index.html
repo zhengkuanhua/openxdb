@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T37 监控告警 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T37 \u76d1\u63a7\u544a\u8b66";
+        var mkdocs_page_input_path = "T37_commercial_alerting.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">T37 监控告警</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#1">1. 背景与目标</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2-t37">2. 现状盘点（T37 前已有基础）</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3">3. 架构设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#31">3.1 分层模型</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#32-alertrule">3.2 规则模型（AlertRule）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#33">3.3 评估引擎与状态机</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#34">3.4 通知渠道</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#35">3.5 管理语句与配置</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#36">3.6 评估循环装配</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4">4. 测试方案</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5">5. 兼容性</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#6">6. 交付清单</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">T37 监控告警</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T37_commercial_alerting.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t37">T37 商用档：监控告警（告警规则与阈值配置）<a class="headerlink" href="#t37" title="Permanent link">&para;</a></h1>
+<ul>
+<li>版本：v0.26.0-alpha（T37）</li>
+<li>状态：已实现</li>
+<li>关联：M13 可观测性（Prometheus 指标 / STATUS / SHOW STATS）、T20 运维工具链（doctor/stats CLI）、日志告警体系（pkg/logx 事件告警 + SHOW ALERTS）</li>
+</ul>
+<h2 id="1">1. 背景与目标<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>v1.0 商用档第二项：监控告警。目标是在已有可观测性基础上补齐<strong>主动告警</strong>能力：</p>
+<ol>
+<li>告警规则定义与存储：以指标阈值规则表达（阈值、持续时长、严重级别），支持热更新与重启持久化。</li>
+<li>告警评估引擎：定时评估指标快照，状态机 NORMAL/ALERT/RESOLVED，持续时长防抖。</li>
+<li>告警通知渠道：复用日志告警体系的文件 + webhook 出口，规则告警与事件告警同源展示（SHOW ALERTS）。</li>
+<li>告警管理语句：SHOW ALERT RULES / SHOW ALERT STATUS / SET alert_* 配置。</li>
+<li>与 Prometheus 指标同源：评估数据源为 pkg/metrics.Registry.Snapshot()，不另造指标口径。</li>
+</ol>
+<h2 id="2-t37">2. 现状盘点（T37 前已有基础）<a class="headerlink" href="#2-t37" title="Permanent link">&para;</a></h2>
+<ul>
+<li>pkg/metrics/metrics.go：Prometheus registry，Snapshot() 输出结构化快照（SQL/KV 总量与 QPS、活跃连接、慢查询累计、存储字节、region 分片、事务提交/回滚、本地/远端访问）。M13 已有。</li>
+<li>pkg/server/status.go：STATUS / SHOW STATS 聚合快照（读 metrics 注入源 + SQL 引擎）。</li>
+<li>pkg/logx/alerts.go：事件告警管理器（AlertConfig：Enabled/File/Webhook/Keep；Alert() 固定 error 级；内存环形缓冲 + JSON 行文件 + webhook 推送；DefaultAlerts 全局实例）。SHOW ALERTS / SHOW ALERT STATUS 已存在（pkg/sql/alert.go）。</li>
+<li>pkg/sql/config.go：M16-1 配置注册表（configSpecs）+ persisted.json 持久化（SET PERSIST / LoadPersistedConfig / persistOnly 启动级键 T36 tls_*）。已存在 alert_enabled/alert_file/alert_webhook/alert_keep 四个事件告警出口配置键。</li>
+<li>cmd/openxdb/main.go：start 装配 metrics registry（SetMetrics）、注入采集源、StartBackupScheduler 调度循环模式（500ms 节拍 + 配置唤醒）。</li>
+</ul>
+<p><strong>缺口（T37 补齐）</strong>：无"指标阈值规则"型告警：无法表达"活跃连接超过 N 持续 M 秒"这类规则；无规则存储与评估循环；无规则管理语句；通知渠道虽有但仅限事件告警（固定 error 级，无严重级别区分）。</p>
+<h2 id="3">3. 架构设计<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<h3 id="31">3.1 分层模型<a class="headerlink" href="#31" title="Permanent link">&para;</a></h3>
+<pre><code>用户/SQL 客户端                    服务端
+----------------                 ---------------------
+SHOW ALERT RULES  ────────────►  Executor.execShowAlertRules
+SHOW ALERT STATUS ────────────►  Executor.execShowAlertStatus（扩展）
+SET alert_rules* / SET PERSIST ─► configSpecs（热更新/落盘）
+                                 AlertRulesEngine（pkg/sql）
+                                   │ 定时 Evaluate
+                                   ▼
+                              metrics.Registry.Snapshot()（M13 同源）
+                                   │ 越界 + 持续时长
+                                   ▼
+                              logx.DefaultAlerts.Notify（文件 + webhook + SHOW ALERTS）
+</code></pre>
+<ul>
+<li>规则模型与评估引擎位于 pkg/sql（Executor 持有，与 backupScheduler 同模式），数据源为已注入的 metrics.Registry（e.m，nil 时评估跳过，保持未装配兼容）。</li>
+<li>通知出口复用 logx.DefaultAlerts：规则告警进入与事件告警相同的环形缓冲 / 文件 / webhook，SHOW ALERTS 天然可见，无需新通道。</li>
+</ul>
+<h3 id="32-alertrule">3.2 规则模型（AlertRule）<a class="headerlink" href="#32-alertrule" title="Permanent link">&para;</a></h3>
+<pre><code class="language-json">{
+  &quot;id&quot;: &quot;conns_high&quot;,
+  &quot;metric&quot;: &quot;active_conns&quot;,
+  &quot;op&quot;: &quot;&gt;&quot;,
+  &quot;threshold&quot;: 1000,
+  &quot;duration_sec&quot;: 30,
+  &quot;severity&quot;: &quot;critical&quot;,
+  &quot;enabled&quot;: true
+}
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>取值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>id</td>
+<td>字符串</td>
+<td>规则唯一标识（同一规则集内唯一，重复报错）</td>
+</tr>
+<tr>
+<td>metric</td>
+<td>见下表</td>
+<td>取自 metrics.Snapshot 的指标名</td>
+</tr>
+<tr>
+<td>op</td>
+<td>&gt; &gt;= &lt; &lt;=</td>
+<td>比较运算符</td>
+</tr>
+<tr>
+<td>threshold</td>
+<td>非负浮点数</td>
+<td>阈值</td>
+</tr>
+<tr>
+<td>duration_sec</td>
+<td>非负整数</td>
+<td>越界需持续秒数；0 = 立即触发</td>
+</tr>
+<tr>
+<td>severity</td>
+<td>info / warn / critical</td>
+<td>严重级别</td>
+</tr>
+<tr>
+<td>enabled</td>
+<td>true/false</td>
+<td>规则开关</td>
+</tr>
+</tbody>
+</table>
+<p>支持指标（与 metrics.Snapshot 字段一一对应，小写命名）：</p>
+<table>
+<thead>
+<tr>
+<th>metric</th>
+<th>快照字段</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>sql_total</td>
+<td>SQLTotal</td>
+<td>SQL 查询累计数</td>
+</tr>
+<tr>
+<td>kv_total</td>
+<td>KVTotal</td>
+<td>KV 命令累计数</td>
+</tr>
+<tr>
+<td>sql_qps</td>
+<td>SQLQPS</td>
+<td>SQL QPS（当前秒窗）</td>
+</tr>
+<tr>
+<td>kv_qps</td>
+<td>KVQPS</td>
+<td>KV QPS（当前秒窗）</td>
+</tr>
+<tr>
+<td>active_conns</td>
+<td>ActiveConns</td>
+<td>活跃 TCP 连接数</td>
+</tr>
+<tr>
+<td>slow_query_total</td>
+<td>SlowQueryTotal</td>
+<td>慢查询累计数</td>
+</tr>
+<tr>
+<td>storage_bytes</td>
+<td>StorageBytes</td>
+<td>存储总数据量字节</td>
+</tr>
+<tr>
+<td>txn_commit</td>
+<td>TxnCommit</td>
+<td>事务提交累计数</td>
+</tr>
+<tr>
+<td>txn_rollback</td>
+<td>TxnRollback</td>
+<td>事务回滚累计数</td>
+</tr>
+<tr>
+<td>local_total</td>
+<td>LocalTotal</td>
+<td>本节点数据访问累计数</td>
+</tr>
+<tr>
+<td>remote_total</td>
+<td>RemoteTotal</td>
+<td>远端转发数据访问累计数</td>
+</tr>
+<tr>
+<td>region_total</td>
+<td>Regions.Total</td>
+<td>region 总数</td>
+</tr>
+<tr>
+<td>region_local</td>
+<td>Regions.Local</td>
+<td>本地 region 数</td>
+</tr>
+<tr>
+<td>region_remote</td>
+<td>Regions.Remote</td>
+<td>远端 region 数</td>
+</tr>
+</tbody>
+</table>
+<p>未知 metric / 非法 op / 负 threshold / 负 duration / 非法 severity / 重复 id 均返回明确报错，拒绝写入。</p>
+<h3 id="33">3.3 评估引擎与状态机<a class="headerlink" href="#33" title="Permanent link">&para;</a></h3>
+<p>AlertRulesEngine（Executor.alertRules 字段，NewExecutor 装配）持规则集与每规则状态：</p>
+<pre><code>state: NORMAL | ALERT | RESOLVED
+violatingSince: time.Time（NORMAL 下首次越界时刻；未越界为零值）
+lastValue: float64（最近一次评估值，SHOW ALERT RULES 展示）
+</code></pre>
+<p>Evaluate(snapshot, now) 对每条 enabled 规则：</p>
+<table>
+<thead>
+<tr>
+<th>当前状态</th>
+<th>本轮越界</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NORMAL</td>
+<td>否</td>
+<td>保持 NORMAL，violatingSince 清零</td>
+</tr>
+<tr>
+<td>NORMAL</td>
+<td>是</td>
+<td>记录 violatingSince=now；now- violatingSince &gt;= duration 时转 ALERT 并通知（level=severity, event=rule_triggered）</td>
+</tr>
+<tr>
+<td>ALERT</td>
+<td>是</td>
+<td>保持 ALERT（不重复通知）</td>
+</tr>
+<tr>
+<td>ALERT</td>
+<td>否</td>
+<td>转 RESOLVED 并通知（level=info, event=rule_resolved，一次性恢复通知）</td>
+</tr>
+<tr>
+<td>RESOLVED</td>
+<td>否</td>
+<td>保持 RESOLVED（不重复恢复通知）</td>
+</tr>
+<tr>
+<td>RESOLVED</td>
+<td>是</td>
+<td>回 NORMAL 并设 violatingSince=now（重新计时 duration，防抖）</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>总开关 alert_rules_enabled=off 或 e.m==nil（未装配指标）时 Evaluate 直接跳过，不产生任何通知。</li>
+<li>通知内容：<code>{"time","level","module":"alert-rules","event","msg"}</code>，msg 含规则 id/指标/阈值/当前值/严重级别/持续时长。</li>
+</ul>
+<h3 id="34">3.4 通知渠道<a class="headerlink" href="#34" title="Permanent link">&para;</a></h3>
+<ul>
+<li>复用 logx.DefaultAlerts（文件 + webhook + 内存环形缓冲）。</li>
+<li>pkg/logx 新增 <code>Notify(level, module, event, msg)</code> 方法：带严重级别的告警写入（现有 <code>Alert()</code> 保持原语义，内部转发 Notify("error", ...)）。</li>
+<li>规则触发通知 level=规则 severity；恢复通知 level=info。SHOW ALERTS 展示 time/level/module/event/msg。</li>
+</ul>
+<h3 id="35">3.5 管理语句与配置<a class="headerlink" href="#35" title="Permanent link">&para;</a></h3>
+<p>新增/扩展 SQL 语句：</p>
+<table>
+<thead>
+<tr>
+<th>语句</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SHOW ALERT RULES</td>
+<td>列出规则：id/metric/op/threshold/duration/severity/enabled/state/last_value</td>
+</tr>
+<tr>
+<td>SHOW ALERT STATUS</td>
+<td>扩展行：alert_rules_enabled / alert_eval_interval / alert_rule_count（保持原 variable/value 两列）</td>
+</tr>
+<tr>
+<td>SET alert_rules_enabled = on/off</td>
+<td>规则告警总开关（即时生效）</td>
+</tr>
+<tr>
+<td>SET alert_eval_interval = N</td>
+<td>评估周期秒（1–3600，默认 10；即时生效）</td>
+</tr>
+<tr>
+<td>SET alert_rules = '<json 数组>'</td>
+<td>全量替换规则集（即时生效；校验失败不生效）</td>
+</tr>
+<tr>
+<td>SET PERSIST alert_rules*</td>
+<td>落盘 persisted.json，重启 LoadPersistedConfig 自动恢复</td>
+</tr>
+</tbody>
+</table>
+<p>新增配置键（configSpecs 注册表，顺序排在现有 alert_* 之后）：</p>
+<table>
+<thead>
+<tr>
+<th>键</th>
+<th>默认值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>alert_rules_enabled</td>
+<td>off</td>
+<td>规则告警总开关（on/off/1/0）</td>
+</tr>
+<tr>
+<td>alert_eval_interval</td>
+<td>10</td>
+<td>评估周期秒（正整数）</td>
+</tr>
+<tr>
+<td>alert_rules</td>
+<td>""</td>
+<td>规则 JSON 数组文本（空 = 无规则）</td>
+</tr>
+</tbody>
+</table>
+<p>优先级与既有配置一致：内存 SET / SET PERSIST 立即生效 &gt; 持久化（重启合并）&gt; 默认值。SET PERSIST 写 JSON 原文本，重启 apply 时重新解析校验。</p>
+<h3 id="36">3.6 评估循环装配<a class="headerlink" href="#36" title="Permanent link">&para;</a></h3>
+<ul>
+<li>模式复制 backupScheduler：固定 500ms 节拍 + 配置唤醒，Engine.StartAlertRules() 启动、StopAlertRules() 停止（幂等）。</li>
+<li>cmd/openxdb/main.go start：metrics 装配后调用 d.SQL.StartAlertRules()；关闭流程 StopAlertRules()（与 StopBackupScheduler 相邻）。</li>
+<li>评估周期由 alert_eval_interval 控制：节拍轮询检查距上次评估 &gt;= interval 时执行 Evaluate。</li>
+<li>未配置规则 / 总开关 off / 未装配指标 时循环空转，开销可忽略。</li>
+</ul>
+<h2 id="4">4. 测试方案<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<p>新增 pkg/sql/alert_rules_test.go（不依赖外部服务）：</p>
+<ol>
+<li>规则 JSON 校验：合法规则通过；未知 metric / 非法 op / 负阈值 / 负 duration / 非法 severity / 重复 id / 损坏 JSON 均报错。</li>
+<li>状态机触发：duration=0 立即 ALERT；duration&gt;0 时先 PENDING 后 ALERT（注入假时钟推进）；通知内容含级别/指标/当前值。</li>
+<li>状态机恢复：ALERT→RESOLVED 发 info 恢复通知；RESOLVED 后保持（不重复）；RESOLVED 后再越界重新计时 duration。</li>
+<li>总开关与未装配指标：alert_rules_enabled=off 不通知；e.m=nil 不 panic。</li>
+<li>配置热更新与持久化：SET alert_rules / alert_rules_enabled / alert_eval_interval 即时生效；SET PERSIST 落盘 + 重启（重新 Open）恢复（复用 config_test 的 initEngineDir/openEngineDir 模式）。</li>
+<li>SHOW 语句集成：SHOW ALERT RULES 返回规则行与状态；SHOW ALERT STATUS 含新增行。</li>
+<li>logx.Notify：带级别写入环形缓冲与 SHOW ALERTS 展示（pkg/logx/alerts_test.go 扩展或 alert_rules 测试内验证）。</li>
+</ol>
+<p>回归约束：go test ./... -count=1 -p 1 全绿（并行端口竞争串行验证）。</p>
+<h2 id="5">5. 兼容性<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<ul>
+<li>现有 SHOW ALERTS / SHOW ALERT STATUS / alert_enabled/alert_file/alert_webhook/alert_keep 语义零变化（alert.go 原逻辑保留，仅扩展 SHOW ALERT STATUS 行）。</li>
+<li>logx.AlertManager.Alert() 签名不变（内部转发 Notify）。</li>
+<li>指标与 CLI（stats/doctor/metrics 端点）不动；未配置规则时行为与 T37 前一致。</li>
+<li>新增键全部可 SET PERSIST，旧 persisted.json 文件不受影响（新键缺省即默认值）。</li>
+</ul>
+<h2 id="6">6. 交付清单<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<ul>
+<li>设计文档：docs/T37_commercial_alerting.md</li>
+<li>代码：pkg/sql/alert_rules.go（规则模型/引擎/调度/Executor 方法/execShowAlertRules）、pkg/sql/ast.go、pkg/sql/parser.go（SHOW ALERT RULES）、pkg/sql/executor.go（字段/初始化/分发）、pkg/sql/alert.go（SHOW ALERT STATUS 扩展）、pkg/sql/config.go（3 个配置键）、pkg/sql/sql.go（Engine 装配）、pkg/logx/alerts.go（Notify）、cmd/openxdb/main.go（启动/停止装配）</li>
+<li>测试：pkg/sql/alert_rules_test.go</li>
+<li>README：Status 行 + Roadmap 勾选 T37 + 版本 v0.26.0-alpha
+<em>（内容由AI生成，仅供参考）</em></li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T36_commercial_tls/" class="btn btn-neutral float-left" title="T36 TLS 合规"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T38_commercial_real_user_validation/" class="btn btn-neutral float-right" title="T38 真实用户验证">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T36_commercial_tls/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T38_commercial_real_user_validation/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

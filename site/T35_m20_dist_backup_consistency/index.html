@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T35 分布式备份一致性 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T35 \u5206\u5e03\u5f0f\u5907\u4efd\u4e00\u81f4\u6027";
+        var mkdocs_page_input_path = "T35_m20_dist_backup_consistency.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">T35 分布式备份一致性</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#1">1. 背景与目标</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2">2. 现状分析</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#21">2.1 单机备份/恢复链路（源码确认）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#22">2.2 既有跨节点能力</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#23-t18t34">2.3 与 T18/T34 的差距 / 设计缺口</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3">3. 总体设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#31">3.1 设计原则</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#32-pkgclusterbackupgo">3.2 协议扩展（pkg/cluster/backup.go）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#33">3.3 备份产物格式扩展</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#34-pkgsqldist_backupgo">3.4 协调者流程（pkg/sql/dist_backup.go）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#35-pkgsqldist_backupgo-dbstartcluster">3.5 节点侧回调（pkg/sql/dist_backup.go，由 db.StartCluster 装配）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#36">3.6 失败/节点离线处理</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#37">3.7 一致性论证</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#38-ddl">3.8 与复制/DDL 通道的配合</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#39">3.9 已知限制（明确不属本项范围）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4">4. 实现清单</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5">5. 测试计划</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">T35 分布式备份一致性</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T35_m20_dist_backup_consistency.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t35-m20-distributed-backup-consistency">T35 M20 分布式备份一致性（Distributed Backup Consistency）<a class="headerlink" href="#t35-m20-distributed-backup-consistency" title="Permanent link">&para;</a></h1>
+<ul>
+<li>批次：M20 分布式纵深（Distributed Depth）第三项</li>
+<li>依赖：M2 复制链路、M4 节点拓扑/路由、M8 分布式事务 TSO、M8(BR) 单机备份/恢复、T33 同步/半同步复制、T34 跨节点 DDL</li>
+<li>状态：已实现，测试全绿</li>
+</ul>
+<h2 id="1">1. 背景与目标<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>M8(BR)（docs/T18_backup_restore.md）提供<strong>单机</strong> BACKUP/RESTORE：基于一致快照生成单一备份文件（magic+version+metaJSON+metaCRC+数据段+dataCRC），支持备份点 LSN 与 <code>TO LSN</code> PITR 回放。多节点集群（M4 拓扑、M8 TSO、M2/T33 复制、T34 跨节点 DDL）下，<strong>在各节点上各自执行单机 BACKUP 无法得到全局一致的恢复点</strong>：各节点备份时刻不同、LSN 互不对齐，恢复后节点间数据可能互相矛盾（A 含某提交而 B 不含，反之亦然）。</p>
+<p>T35 目标：<strong>在保持单机 BACKUP/RESTORE 行为完全兼容（默认不触发）的前提下，为集群增加分布式备份协调通道</strong>，使一次 <code>BACKUP TO</code> 在协调者组织下得到：
+1. 所有参与节点各自一致的快照文件；
+2. 一个<strong>全局一致性标记</strong>（对齐后的全局 LSN / TSO 与各节点元数据清单）；
+3. <code>RESTORE FROM</code> 能按该标记把各节点恢复到同一全局时间点（多节点恢复对齐），且单机备份文件不受影响（无 manifest 时仍走原单机路径）。</p>
+<h2 id="2">2. 现状分析<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<h3 id="21">2.1 单机备份/恢复链路（源码确认）<a class="headerlink" href="#21" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>execBackup</code>（pkg/sql/backup.go）：<code>e.st.Snapshot()</code> 一致快照 → 读 <code>m:tables</code> / <code>m:regions</code> 元数据 → <code>replication.OpenBinlog(e.binlogPath).LastLSN()</code> 取备份点 LSN → 快照扫描全部 <code>'s'</code>（数据行）/<code>'i'</code>（索引键）物理键 → 原子写文件（<code>.tmp</code> + rename）；</li>
+<li><code>execRestore</code>：<code>readBackupFile</code> 校验（magic/version/metaCRC/dataCRC）→ 幂等删旧（同名表先删行+索引）→ 写回元数据与数据行（整体事务，失败回滚）→ 内存路由重建 → PITR 回放 binlog <code>[BackupLSN+1, ToLSN]</code>；</li>
+<li>备份文件格式 version 1：<code>metaJSON</code> 为 <code>backupMeta</code>（FormatVersion/CreatedAt/BackupLSN/TablesRaw/HasRegions/RegionsRaw）。</li>
+</ul>
+<h3 id="22">2.2 既有跨节点能力<a class="headerlink" href="#22" title="Permanent link">&para;</a></h3>
+<ul>
+<li>M4 <code>pkg/cluster</code>：<code>Manager.ListNodes/GetNode/IsDown/HasRemoteNodes</code>、短连接 <code>Client.roundTrip</code>、帧协议 <code>len(4B)+type(1B)+payload(JSON)</code>；</li>
+<li>M8 TSO：<code>tso.Source</code>（<code>e.ts</code> 注入），<code>Server.SetTSO</code> + <code>tsoClient</code>；</li>
+<li>T33：复制链路 + <code>commitWaitHook</code> ACK；T34：<code>DDL_PUSH(30)/31</code> 帧 + <code>ApplyRemoteDDL</code> + <code>SetDDLApply</code> 装配模式（本项直接复用该注入模式）。</li>
+</ul>
+<h3 id="23-t18t34">2.3 与 T18/T34 的差距 / 设计缺口<a class="headerlink" href="#23-t18t34" title="Permanent link">&para;</a></h3>
+<ol>
+<li>无跨节点备份协调帧与节点侧备份回调；</li>
+<li>备份文件 meta 无节点身份/全局一致性标记（无法判断一份备份属于哪个节点、对齐到哪个全局点）；</li>
+<li>无全局 manifest（各节点备份文件清单 + 一致性标记）；</li>
+<li><code>RESTORE FROM</code> 只能恢复本节点，无"按 manifest 驱动各节点恢复"路径。</li>
+</ol>
+<h2 id="3">3. 总体设计<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<h3 id="31">3.1 设计原则<a class="headerlink" href="#31" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>单机零回归</strong>：<code>mgr == nil</code> 或 <code>!HasRemoteNodes()</code> 时 BACKUP/RESTORE 完全走 T18 原路径（不产生 manifest）；<code>RESTORE FROM &lt;path&gt;</code> 仅在 <code>&lt;path&gt;.manifest</code> 存在时才走分布式恢复；</li>
+<li><strong>协议最小扩展</strong>：新增 3 对帧 <code>BACKUP_PREPARE(40)/41</code>、<code>BACKUP_DO(42)/43</code>、<code>RESTORE_DO(44)/45</code>，载荷不引用 sql 类型，避免 <code>cluster</code>↔<code>sql</code> 循环依赖；</li>
+<li><strong>备份一致性是强一致</strong>：与 T34 的"最终一致 pending 收敛"不同，备份必须覆盖<strong>全部注册节点且全部在线</strong>——离线/失败节点直接导致整体失败（可重试），不做降级；理由：备份产物是可归档恢复点，节点缺失会造成恢复后数据分裂；</li>
+<li><strong>两阶段 LSN/TSO 对齐</strong>：PREPARE 阶段收集各节点 <code>LastLSN/TSO</code> → <code>G = max(all LSN)</code> 为全局一致性点 → DO 阶段各节点以 <code>G</code> 写入备份 meta（<code>global_lsn</code>）并二次校验（备份时刻超过 G 则 <code>retry</code> 提升 G 重新对齐，最多 3 轮）→ 恢复时各节点 <code>RESTORE ... TO LSN G</code> 补齐到同一全局点；</li>
+<li><strong>产物格式向后兼容</strong>：备份文件结构（version 1）不变，<code>backupMeta</code> 仅新增可选字段（旧 reader 忽略未知字段）；多节点场景新增独立 manifest 文件（协调者本地 <code>&lt;path&gt;.manifest</code>），单机无 manifest；</li>
+<li><strong>恢复全有或全无</strong>：manifest 节点集合必须被当前在线节点集合覆盖；任一节点恢复失败整体报错（节点侧恢复本身是事务性、可重入，重试收敛）。</li>
+</ol>
+<h3 id="32-pkgclusterbackupgo">3.2 协议扩展（pkg/cluster/backup.go）<a class="headerlink" href="#32-pkgclusterbackupgo" title="Permanent link">&para;</a></h3>
+<pre><code>40 BACKUP_PREPARE -&gt; 41 BACKUP_PREPARE_OK
+42 BACKUP_DO      -&gt; 43 BACKUP_DO_OK
+44 RESTORE_DO     -&gt; 45 RESTORE_DO_OK
+</code></pre>
+<pre><code class="language-go">type BackupPrepareReq struct {
+    BackupID string `json:&quot;backup_id&quot;`           // 协调者生成，审计/测试用
+}
+type BackupPrepareResp struct {
+    NodeID  string `json:&quot;node_id&quot;`
+    LastLSN uint64 `json:&quot;last_lsn&quot;`             // 本地 binlog 最大位点
+    TSO     uint64 `json:&quot;tso&quot;`                  // 本地当前全局时间戳（快照版本参考）
+    Err     string `json:&quot;err,omitempty&quot;`
+}
+
+type BackupDoReq struct {
+    BackupID  string `json:&quot;backup_id&quot;`
+    Path      string `json:&quot;path&quot;`               // 节点本地备份文件路径
+    GlobalLSN uint64 `json:&quot;global_lsn&quot;`         // 对齐目标（全局一致性点）
+}
+type BackupDoResp struct {
+    BackupLSN uint64 `json:&quot;backup_lsn&quot;`         // 实际备份点
+    Tables    int    `json:&quot;tables&quot;`
+    Rows      int    `json:&quot;rows&quot;`
+    Retry     bool   `json:&quot;retry,omitempty&quot;`    // 备份点超过对齐目标 → 需提升 G 重对齐
+    LastLSN   uint64 `json:&quot;last_lsn,omitempty&quot;`
+    Err       string `json:&quot;err,omitempty&quot;`
+}
+
+type RestoreDoReq struct {
+    BackupID  string `json:&quot;backup_id&quot;`
+    Path      string `json:&quot;path&quot;`
+    GlobalLSN uint64 `json:&quot;global_lsn&quot;`
+}
+type RestoreDoResp struct {
+    Tables int    `json:&quot;tables&quot;`
+    Rows   int    `json:&quot;rows&quot;`
+    LSN    uint64 `json:&quot;lsn&quot;`                   // 恢复后最终位点（= GlobalLSN）
+    Err    string `json:&quot;err,omitempty&quot;`
+}
+</code></pre>
+<ul>
+<li><code>Manager.PrepareBackup/DoBackup/DoRestore(nodeID, req)</code>：短连接发送并读取对应 OK 帧（复用 <code>ensureRemote</code> + <code>clientFor</code> 模式）；</li>
+<li><code>Server.SetBackupPrepare(fn)/SetBackupDo(fn)/SetRestoreDo(fn)</code>：注入节点侧回调（由 <code>db.StartCluster</code> 装配 <code>sql.Executor</code> 方法），<code>handleConn</code> 新增 3 个 case。</li>
+</ul>
+<h3 id="33">3.3 备份产物格式扩展<a class="headerlink" href="#33" title="Permanent link">&para;</a></h3>
+<p><strong>备份文件（保持 version 1，字段向后兼容）</strong>：</p>
+<pre><code class="language-go">type backupMeta struct {
+    FormatVersion int    `json:&quot;format_version&quot;`
+    CreatedAt     string `json:&quot;created_at&quot;`
+    BackupLSN     uint64 `json:&quot;backup_lsn&quot;`
+    TablesRaw     []byte `json:&quot;tables_raw&quot;`
+    HasRegions    bool   `json:&quot;has_regions&quot;`
+    RegionsRaw    []byte `json:&quot;regions_raw&quot;`
+    // T35 新增（单机均为零值，不影响旧 reader）
+    NodeID    string `json:&quot;node_id,omitempty&quot;`     // 产生该备份的节点
+    BackupID  string `json:&quot;backup_id,omitempty&quot;`   // 分布式备份批次 ID
+    GlobalLSN uint64 `json:&quot;global_lsn,omitempty&quot;`  // 全局一致性点（0=单机）
+    GlobalTSO uint64 `json:&quot;global_tso,omitempty&quot;`  // 全局一致性参考时间戳
+}
+</code></pre>
+<p><strong>manifest（协调者本地 <code>&lt;path&gt;.manifest</code>，JSON）</strong>：</p>
+<pre><code class="language-json">{
+  &quot;format_version&quot;: 1,
+  &quot;backup_id&quot;: &quot;bak-...&quot;,
+  &quot;created_at&quot;: &quot;2026-10-14 08:00:00&quot;,
+  &quot;global_lsn&quot;: 42,
+  &quot;global_tso&quot;: 7,
+  &quot;nodes&quot;: [
+    {&quot;node_id&quot;: &quot;node-a&quot;, &quot;addr&quot;: &quot;127.0.0.1:9001&quot;, &quot;backup_file&quot;: &quot;D:/bak/b.bak&quot;, &quot;backup_lsn&quot;: 42, &quot;tables&quot;: 2, &quot;rows&quot;: 10},
+    {&quot;node_id&quot;: &quot;node-b&quot;, &quot;addr&quot;: &quot;127.0.0.1:9002&quot;, &quot;backup_file&quot;: &quot;D:/bak/b.bak.node-node-b&quot;, &quot;backup_lsn&quot;: 40, &quot;tables&quot;: 2, &quot;rows&quot;: 10}
+  ]
+}
+</code></pre>
+<ul>
+<li>协调者本地备份文件 = <code>path</code>；远端节点文件 = <code>path + ".node-" + nodeID</code>；</li>
+<li>manifest 是<strong>一致性标记</strong>：记录全局对齐点、参与节点、各节点备份文件路径与各自备份点；恢复时据此驱动。</li>
+</ul>
+<h3 id="34-pkgsqldist_backupgo">3.4 协调者流程（pkg/sql/dist_backup.go）<a class="headerlink" href="#34-pkgsqldist_backupgo" title="Permanent link">&para;</a></h3>
+<p><code>execBackup</code> 扩展：<code>e.mgr != nil &amp;&amp; e.mgr.HasRemoteNodes()</code> 时进入 <code>distributedBackup(path)</code>：</p>
+<pre><code>1. 生成 backupID；收集节点清单（selfID + ListNodes 全部远端，排除自身）。
+2. PREPARE：本地取 (selfID, LastLSN, TSO)；远端 mgr.PrepareBackup 逐个获取。
+   - 任一节点离线（IsDown / 连接失败 / 回执 Err）→ 整体失败报错（不产生半成品）。
+3. G = max(所有 LastLSN)。
+4. DO 轮询（最多 3 轮）：
+   - 本地：backupCore(path, nodeID=selfID, backupID, G)；
+     若 meta.BackupLSN &gt; G → 提升 G 并标记 retry。
+   - 远端：mgr.DoBackup(n, {Path: path+&quot;.node-&quot;+n.ID, GlobalLSN: G})；
+     resp.Retry=true → 提升 G（=max(G, resp.LastLSN)）并标记 retry。
+   - 本轮 retry → 进入下一轮（全部节点重新 DO，原子覆盖旧文件）；
+     否则 → 成功收敛，跳出。
+5. 3 轮仍不收敛 → 整体失败（写负载过高，建议降低写入后重试）。
+6. 写 manifest（原子替换），返回 Result{path(manifest), nodes, tables, rows, lsn}。
+</code></pre>
+<p><code>execRestore</code> 扩展：先检查 <code>&lt;path&gt;.manifest</code>：
+- 存在 → <code>distributedRestore(path, manifest)</code>：</p>
+<pre><code>1. 解析校验 manifest（format_version/global_lsn/节点清单）。
+2. 校验节点覆盖：manifest 每个节点必须在线且存在于当前注册表；否则报错。
+3. 本地：restoreCore(自节点 backup_file, GlobalLSN, hasToLSN=true)（PITR 对齐）。
+4. 远端：mgr.DoRestore(n, {Path: 节点 backup_file, GlobalLSN})。
+5. 任一失败 → 整体报错（已成功节点可重入，重试收敛）。
+6. 返回 Result{tables, rows, lsn=GlobalLSN}。
+</code></pre>
+<ul>
+<li>不存在 → 原单机路径（兼容旧备份文件与单机部署）。</li>
+</ul>
+<h3 id="35-pkgsqldist_backupgo-dbstartcluster">3.5 节点侧回调（pkg/sql/dist_backup.go，由 db.StartCluster 装配）<a class="headerlink" href="#35-pkgsqldist_backupgo-dbstartcluster" title="Permanent link">&para;</a></h3>
+<pre><code class="language-go">func (e *Executor) RemoteBackupPrepare(req) (resp, error)
+    // 返回 (selfID, binlog LastLSN, tso)
+func (e *Executor) RemoteBackupDo(req) (resp, error)
+    // 先取当前 LastLSN：&gt; req.GlobalLSN → 直接 Retry（不写文件）；
+    // 否则 backupCore(req.Path, selfID, req.BackupID, req.GlobalLSN)；
+    // 备份后 BackupLSN &gt; GlobalLSN → Retry。
+func (e *Executor) RemoteRestoreDo(req) (resp, error)
+    // restoreCore(req.Path, req.GlobalLSN, true)（PITR 对齐到全局点）
+</code></pre>
+<h3 id="36">3.6 失败/节点离线处理<a class="headerlink" href="#36" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PREPARE 阶段节点离线/连接失败</td>
+<td>整体失败，报错列出失败节点；不产生 manifest（无半成品）</td>
+</tr>
+<tr>
+<td>DO 阶段节点备份失败（存储/IO）</td>
+<td>整体失败；已写出的节点文件保留，重试时原子覆盖</td>
+</tr>
+<tr>
+<td>DO 阶段节点备份点超过 G（备份期间有写入）</td>
+<td><code>retry</code> → 提升 G，全部节点重新 DO（最多 3 轮）</td>
+</tr>
+<tr>
+<td>3 轮仍不收敛</td>
+<td>整体失败，提示写负载过高</td>
+</tr>
+<tr>
+<td>RESTORE 阶段节点离线</td>
+<td>整体失败（恢复是全有或全无）；节点侧恢复事务性可重入</td>
+</tr>
+<tr>
+<td>manifest 缺失（单机/旧备份）</td>
+<td>原单机 RESTORE 路径，零回归</td>
+</tr>
+<tr>
+<td>协调者自身节点离线/崩溃</td>
+<td>协调者即备份发起方，无远端可依赖；本节点恢复后重试即可</td>
+</tr>
+</tbody>
+</table>
+<p><strong>不做部分成功恢复</strong>：分布式恢复不返回"部分节点已恢复"的成功——任一失败即报错，用户可修复后重试（幂等，重复执行安全）。</p>
+<h3 id="37">3.7 一致性论证<a class="headerlink" href="#37" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>对齐点</strong>：各节点备份文件内 <code>global_lsn = G = max(各节点 PREPARE 时 LastLSN)</code>；G 单调不减（retry 只提升）；</li>
+<li><strong>恢复收敛</strong>：节点 i 备份点 <code>backup_lsn_i ≤ G</code>（DO 校验保证），恢复执行 <code>restoreCore(path_i, G, true)</code>：先恢复备份点快照，再 PITR 回放本地 binlog <code>(backup_lsn_i, G]</code>；由于备份期间该节点无超过 G 的提交（否则 retry），回放到 G 后该节点状态 = 全局时间 G 时的本地状态；</li>
+<li><strong>全局一致性</strong>：各节点恢复到同一 G 的各自本地状态；配合复制链路（T33/M2）或分片写（M5/M8），同一事务的数据/目录在各节点同一 LSN 可见，恢复后集群状态与"在 G 时刻停服"等价；</li>
+<li><strong>TSO 辅助</strong>：<code>global_tso</code> 记录对齐时刻的全局时间戳，用于审计与未来跨快照比对（本项不做 TSO 级恢复，LSN 即权威）。</li>
+</ul>
+<h3 id="38-ddl">3.8 与复制/DDL 通道的配合<a class="headerlink" href="#38-ddl" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>复制链路（M2/T33）</strong>：数据节点间一致性由复制/分片保证；备份只读快照 + binlog，不参与复制 ACK；从节点若同时是集群数据节点，其备份文件与主节点独立生成，靠 G 对齐；</li>
+<li><strong>跨节点 DDL（T34）</strong>：备份覆盖 <code>m:tables</code> 目录原值，恢复时目录与数据一并回退到 G；T34 的 pending DDL 重放不受影响（恢复后目录可能回退到旧版本，后续 DDL 广播以协调者为准收敛）；</li>
+<li><strong>单机路径</strong>：不产生 manifest、不写全局字段、不触发任何帧——T18 全部测试语义不变。</li>
+</ul>
+<h3 id="39">3.9 已知限制（明确不属本项范围）<a class="headerlink" href="#39" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>无增量/并行备份</strong>：每节点备份为全量逻辑备份，文件随数据量线性增长；并行传输/压缩/增量属后续项；</li>
+<li><strong>不做跨节点事务级恢复</strong>：以"各节点恢复到 G 的本地状态"为准，不额外做跨节点 2PC 状态回放（备份不落 prepare 中间态，与 T18 一致）；</li>
+<li><strong>恢复不自动重建离线节点</strong>：manifest 中全部节点必须在线才能恢复；"从单一节点恢复整个集群"（节点级灾备重构）属后续项；</li>
+<li><strong>协调者即备份发起节点</strong>：无独立 backup 协调服务；协调者离线期间集群备份不可发起（备份是管理面操作，非数据面依赖）。</li>
+</ul>
+<h2 id="4">4. 实现清单<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>动作</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pkg/cluster/backup.go</code></td>
+<td>新增</td>
+<td>帧 40-45、<code>BackupPrepareReq/Resp</code>、<code>BackupDoReq/Resp</code>、<code>RestoreDoReq/Resp</code>、<code>Manager.PrepareBackup/DoBackup/DoRestore</code>、<code>Client.*</code>、<code>Server.SetBackupPrepare/SetBackupDo/SetRestoreDo/handle*</code></td>
+</tr>
+<tr>
+<td><code>pkg/cluster/server.go</code></td>
+<td>修改</td>
+<td><code>Server</code> 增加 3 个回调字段；<code>handleConn</code> 增加 3 个 case</td>
+</tr>
+<tr>
+<td><code>pkg/sql/backup.go</code></td>
+<td>修改</td>
+<td><code>backupMeta</code> 扩展字段；<code>execBackup/execRestore</code> 重构为 <code>backupCore/restoreCore</code> + 分布式分支</td>
+</tr>
+<tr>
+<td><code>pkg/sql/dist_backup.go</code></td>
+<td>新增</td>
+<td><code>distributedBackup/distributedRestore</code>、manifest 读写、<code>newBackupID</code>、节点回调 <code>RemoteBackupPrepare/RemoteBackupDo/RemoteRestoreDo</code></td>
+</tr>
+<tr>
+<td><code>pkg/sql/sql.go</code></td>
+<td>修改</td>
+<td><code>Engine</code> 透传 3 个节点回调方法</td>
+</tr>
+<tr>
+<td><code>pkg/db/db.go</code></td>
+<td>修改</td>
+<td><code>StartCluster</code> 装配 <code>srv.SetBackupPrepare/SetBackupDo/SetRestoreDo</code></td>
+</tr>
+<tr>
+<td><code>pkg/cluster/backup_test.go</code></td>
+<td>新增</td>
+<td>载荷编解码、回调往返、retry 语义、未注册节点失败</td>
+</tr>
+<tr>
+<td><code>pkg/db/db_t35_backup_test.go</code></td>
+<td>新增</td>
+<td>双节点集成：备份/恢复往返、离线失败路径、单机兼容回归</td>
+</tr>
+</tbody>
+</table>
+<h2 id="5">5. 测试计划<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>单机回归</strong>：无远端节点时 BACKUP/RESTORE 全量既有测试零回归（不生成 manifest）；</li>
+<li><strong>pkg/cluster 单测</strong>：<code>BackupDoReq</code> 等 JSON 往返、<code>Server.handleBackupDo</code> 正确调用注入回调并回 <code>BackupDoResp</code>（含 retry）、未注册节点失败；</li>
+<li><strong>pkg/db 集成</strong>（双节点，仿 db_t34_ddl_test.go）：</li>
+<li>A <code>ADD NODE B</code> → 建表/写入 → A <code>BACKUP TO path</code> → 校验 manifest 与两个节点备份文件存在 → 备份后继续写入 → <code>RESTORE FROM path</code> → A/B 数据均回到备份点且一致；</li>
+<li>B 离线（关闭 Server）→ A <code>BACKUP</code> 报错（离线失败路径）；备份成功后关闭 B → <code>RESTORE</code> 报错（恢复离线失败路径）；</li>
+<li>单机（无 ADD NODE）<code>BACKUP/RESTORE</code> 不生成 manifest（兼容回归）；</li>
+<li><strong>全仓验证</strong>：<code>go test ./... -count=1 -p 1</code>（串行避免端口竞争）全绿。
+<em>（内容由AI生成，仅供参考）</em></li>
+</ol>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T34_m20_cross_node_ddl/" class="btn btn-neutral float-left" title="T34 跨节点 DDL"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T36_commercial_tls/" class="btn btn-neutral float-right" title="T36 TLS 合规">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T34_m20_cross_node_ddl/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T36_commercial_tls/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>备份调度与远程备份（BR 方向②） - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "\u5907\u4efd\u8c03\u5ea6\u4e0e\u8fdc\u7a0b\u5907\u4efd\uff08BR \u65b9\u5411\u2461\uff09";
+        var mkdocs_page_input_path = "backup_schedule.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">备份调度与远程备份（BR 方向②）</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/backup_schedule.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="br-2">备份调度与远程备份（BR 方向②）<a class="headerlink" href="#br-2" title="Permanent link">&para;</a></h1>
+<p>本文档说明 OpenXDB 的备份调度与远程备份能力：周期自动 BACKUP、保留份数、
+状态查询，以及 HTTP 远程备份（push/pull）与恢复路径。</p>
+<h2 id="1">1. 备份调度<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<h3 id="11-set-persist">1.1 配置项（SET PERSIST 热更新，默认全部关闭）<a class="headerlink" href="#11-set-persist" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>配置键</th>
+<th>默认</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>backup_interval</code></td>
+<td><code>0</code></td>
+<td>调度周期（秒）。正整数开启周期自动 BACKUP；<code>0</code> 关闭</td>
+</tr>
+<tr>
+<td><code>backup_keep</code></td>
+<td><code>0</code></td>
+<td>保留份数。<code>N&gt;0</code> 仅保留最近 N 份调度备份；<code>0</code> 不清理</td>
+</tr>
+<tr>
+<td><code>backup_dir</code></td>
+<td>空</td>
+<td>调度备份输出目录；空=未配置（不执行调度备份）</td>
+</tr>
+<tr>
+<td><code>backup_remote_url</code></td>
+<td>空</td>
+<td>远程 HTTP PUT 上传目标；空=不上传</td>
+</tr>
+</tbody>
+</table>
+<p>配置经现有 SET PERSIST 体系即时生效并落盘，重启后保留；也可在
+<code>cmd start</code> 启动时通过命令行装配：</p>
+<pre><code>openxdb start --data-dir &lt;dir&gt; \
+  --backup-interval 3600 \
+  --backup-keep 7 \
+  --backup-dir &lt;dir&gt;/backups \
+  --backup-remote-url http://127.0.0.1:8090/backups
+</code></pre>
+<p>启动未配置调度时默认目录为 <code>&lt;data&gt;/backups</code>（<code>--backup-dir</code> 缺省值）。</p>
+<h3 id="12">1.2 状态查看<a class="headerlink" href="#12" title="Permanent link">&para;</a></h3>
+<pre><code>SHOW BACKUP STATUS;
+</code></pre>
+<p>返回调度配置（周期/保留份数/目录/远程目标）与最近执行状态
+（下次执行时间/最近结果/最近错误）。</p>
+<h3 id="13">1.3 行为<a class="headerlink" href="#13" title="Permanent link">&para;</a></h3>
+<ul>
+<li>调度器在每个周期触发一次引擎级 <code>BACKUP</code>，产物写入 <code>backup_dir</code>。</li>
+<li>每个周期触发前清理旧备份：<code>backup_keep &gt; 0</code> 时仅保留最近 N 份。</li>
+<li>备份完成后若配置了 <code>backup_remote_url</code>，自动将备份文件 HTTP PUT 上传至远程。</li>
+<li><code>db.Close</code> 会停止调度循环，避免关闭过程中误触发 BACKUP。</li>
+</ul>
+<h2 id="2-http">2. 远程备份（HTTP）<a class="headerlink" href="#2-http" title="Permanent link">&para;</a></h2>
+<p>远程备份基于现有网络栈实现为 HTTP 传输，至少支持两类目标：
+- 支持 HTTP PUT/GET 的自建端点（如 WebDAV 或自定义备份服务）。</p>
+<h3 id="21-push">2.1 push：上传本地备份到远程<a class="headerlink" href="#21-push" title="Permanent link">&para;</a></h3>
+<pre><code>openxdb backup push --file &lt;local-backup-file&gt; --url http://127.0.0.1:8090/backups/&lt;name&gt;
+</code></pre>
+<p>将本地备份文件上传至远程目标（HTTP PUT，<code>--file</code> 指定本地文件，
+<code>--url</code> 为完整远程目标 URL）。</p>
+<h3 id="22-pull">2.2 pull：从远程下载备份到本地<a class="headerlink" href="#22-pull" title="Permanent link">&para;</a></h3>
+<pre><code>openxdb backup pull --url http://127.0.0.1:8090/backups/&lt;name&gt; --out &lt;local-path&gt;
+</code></pre>
+<p>从远程目标下载备份到本地（HTTP GET，<code>--url</code> 为完整远程文件 URL，
+<code>--out</code> 为本地保存路径；先写 <code>.tmp</code> 再 rename，避免半文件被误用）。</p>
+<h2 id="3">3. 恢复路径<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<p>远程备份的恢复路径：</p>
+<ol>
+<li><code>openxdb backup pull &lt;remote-file&gt; ...</code> 将远程备份下载到本地目录；</li>
+<li>使用现有恢复命令还原：</li>
+</ol>
+<pre><code>RESTORE FROM '&lt;local-downloaded-backup&gt;';
+</code></pre>
+<p>或按仓库现有 RESTORE/PITR 流程从下载的备份文件恢复。调度产生的本地备份
+（<code>backup_dir</code> 下）也可直接 <code>RESTORE FROM '&lt;backup_dir&gt;/&lt;file&gt;'</code> 恢复。</p>
+<h2 id="4">4. 与既有能力的关系<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<ul>
+<li>复用现有 <code>BACKUP</code>/<code>RESTORE</code> 语句与引擎快照导出/物理恢复路径，调度器仅负责
+  周期性触发与保留清理。</li>
+<li><code>SHOW BACKUP STATUS</code> 与 <code>SHOW CONFIG</code> 同为只读状态查询，语法风格一致
+  （BACKUP/STATUS 按文本匹配兼容关键字表）。</li>
+<li>远程传输仅使用标准库 HTTP client，不引入外部依赖。</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

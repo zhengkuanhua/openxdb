@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T29 M16 运维增强簇（3/3）：灰度升级辅助 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T29 M16 \u8fd0\u7ef4\u589e\u5f3a\u7c07\uff083/3\uff09\uff1a\u7070\u5ea6\u5347\u7ea7\u8f85\u52a9";
+        var mkdocs_page_input_path = "T29_m16_upgrade.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">T29 M16 运维增强簇（3/3）：灰度升级辅助</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T29_m16_upgrade.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t29-m16-33">T29 M16 运维增强簇（3/3）：灰度升级辅助<a class="headerlink" href="#t29-m16-33" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v5.0-P16-M16, v0.20.0-alpha
+日期：2026-10-12
+范围：新增 <code>pkg/db/upgrade.go</code>（数据格式版本 marker 与兼容判定）、<code>cmd/openxdb/version.go</code>（version 子命令构建信息 + 数据格式版本）、<code>cmd/openxdb/preflight.go</code>（preflight 升级前健康检查，复用 <code>db.Open</code> / M16-1 持久化配置 / M16-2 优雅停机）、<code>scripts/rolling_upgrade.ps1</code>（滚动升级编排）、<code>cmd/openxdb/main.go</code>（接入 version/preflight 子命令与 usage）、测试 <code>pkg/db/upgrade_test.go</code>、<code>cmd/openxdb/preflight_test.go</code>、<code>cmd/openxdb/version_test.go</code>、<code>docs/T29_m16_upgrade.md</code>（本文档）。
+闭环：CGO 环境下 <code>go build ./...</code> + <code>go test ./... -count=1</code> 全绿（含 M16-3 新增用例），未 push
+提交：<code>M16: upgrade assist</code>（本地，未 push）</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>M16 运维增强簇按 Roadmap 依次落地三个子功能：在线配置热更新（1/3，60cd6ce）、优雅停机（2/3，2f05c83）、灰度升级辅助（3/3，本次）。灰度升级辅助在 2f05c83 之上增量开发，目标：为新版本发布提供"升级前健康检查 → 版本信息判定 → 滚动升级编排 → 升级后数据完整性验证"的完整辅助链，同时给出回滚路径（备份 + 旧版本 reopen）。核心原则：<strong>只读检查 + 复用既有能力（<code>db.Open</code> 装配、M16-1 持久化配置解析、M16-2 优雅停机），不重复造轮子、不改动已提交代码</strong>。</p>
+<h2 id="_2">设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="pkgdbupgradego">数据格式版本（pkg/db/upgrade.go）<a class="headerlink" href="#pkgdbupgradego" title="Permanent link">&para;</a></h3>
+<ul>
+<li>常量：<code>DataFormatVersion = 1</code>（当前二进制数据格式版本）、<code>DataFormatVersionFile = "data_format_version"</code>（数据目录 marker 文件名）；</li>
+<li><code>ReadDataFormatVersion(dir)</code>：读取目录 marker 数值；<strong>marker 缺失（旧版本初始化目录）视为版本 1</strong>，向后兼容；</li>
+<li><code>CheckDataFormatCompat(dir, binaryFormat)</code>：目录格式版本 &lt;= 二进制版本 → 兼容（升级路径）；目录格式版本 &gt; 二进制版本 → 返回 <code>ErrDataFormatNewer</code>（需先升级二进制，防误开未来数据）；</li>
+<li>当前版本 <code>db.Init</code> 不主动写 marker（保持旧目录兼容），版本升级工具/脚本可在升级完成后落 marker 便于后续判定。</li>
+</ul>
+<h3 id="openxdb-preflight-cmdopenxdbpreflightgo">openxdb preflight 升级前健康检查（cmd/openxdb/preflight.go）<a class="headerlink" href="#openxdb-preflight-cmdopenxdbpreflightgo" title="Permanent link">&para;</a></h3>
+<p>对指定数据目录做<strong>只读</strong>健康检查，输出人类可读清单（<code>--json</code> 输出 JSON 报告）。检查项：</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>检查项</th>
+<th>说明</th>
+<th>FAIL 示例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>data_dir</code></td>
+<td>数据目录存在、<code>openxdb.conf</code> 可读且 <code>engine</code> 匹配</td>
+<td>目录未初始化 / engine 不匹配</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>persisted_config</code></td>
+<td><code>persisted.json</code>（M16-1）JSON 可解析；不存在视为 PASS</td>
+<td>配置文件损坏</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>open_storage</code></td>
+<td>复用 <code>db.Open</code> 试开：RocksDB + WAL + <code>txn.Recover</code> + <code>LoadPersistedConfig</code> 全部走通（WAL/存储一致性即事务恢复）</td>
+<td>存储损坏 / WAL 无法恢复</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>version_compat</code></td>
+<td>目录数据格式版本 &lt;= 当前二进制版本；<code>--target-version</code> 输出目标版本提示</td>
+<td>目录为未来版本（v999）</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>退出码：<code>0</code>=PASS（全部通过）；<code>2</code>=FAIL（任一检查失败）；<code>1</code>=WARN（预留）；</li>
+<li>用法：<code>openxdb preflight --data-dir &lt;dir&gt; [--target-version &lt;ver&gt;] [--json]</code>。</li>
+</ul>
+<h3 id="openxdb-version-cmdopenxdbversiongo">openxdb version 版本信息（cmd/openxdb/version.go）<a class="headerlink" href="#openxdb-version-cmdopenxdbversiongo" title="Permanent link">&para;</a></h3>
+<p>输出发行版本、构建信息与数据文件格式版本（升级判定依据）：</p>
+<pre><code>OpenXDB v0.1.0-alpha (M2 master-slave replication)
+  build: v0.20.0-alpha
+  built at: 2026-10-12T00:00:00Z
+  commit: 2f05c83
+  data format version: 1
+</code></pre>
+<ul>
+<li>构建注入规范（<code>-ldflags</code>，未注入显示 <code>dev</code> / 空）：
+  <code>go build -ldflags "-X main.buildVersion=v0.20.0-alpha -X main.buildTime=2026-10-12T00:00:00Z -X main.buildCommit=&lt;sha&gt;"</code>;</li>
+<li>首行保留旧格式（<code>OpenXDB &lt;version&gt; (M2 master-slave replication)</code>），向后兼容依赖该行的脚本/工具；</li>
+<li><code>data format version</code> 与 preflight 的 <code>version_compat</code> 联动：目标二进制该值 &gt;= 数据目录版本即可升级。</li>
+</ul>
+<h3 id="scriptsrolling_upgradeps1">滚动升级辅助脚本（scripts/rolling_upgrade.ps1）<a class="headerlink" href="#scriptsrolling_upgradeps1" title="Permanent link">&para;</a></h3>
+<p>编排单节点滚动升级四步骤（多节点依次对每节点执行）：</p>
+<pre><code>备份(可选) → 步骤1 preflight(旧版或新版检查旧数据，全 PASS 才继续)
+          → 步骤2 SHUTDOWN GRACEFUL(TCP, 复用 M16-2，等待端口关闭/存储 flush)
+          → 步骤3 启动新版(openxdb start --data-dir --port)
+          → 步骤4 升级后复检(PING 就绪 + preflight + doctor --addr 在线检查)
+</code></pre>
+<p>用法与参数见脚本 <code>-Help</code>（<code>-DataDir</code>/<code>-NewBin</code> 必填；<code>-OldBin</code> 可选指定旧版做升级前检查；<code>-BackupDir</code> 可选备份；<code>-SkipShutdown</code> 停机已由外部完成时跳过；<code>-NoStart</code> 仅检查模式）。退出码：0=成功 1=检查失败 2=停机失败 3=启动失败。</p>
+<h3 id="m16-1-m16-2">与 M16-1 / M16-2 衔接<a class="headerlink" href="#m16-1-m16-2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>preflight <code>open_storage</code> 直接复用 <code>db.Open</code>（含 M16-1 <code>LoadPersistedConfig</code> 对持久化配置键/值合法性的统一校验），不重复实现配置解析；</li>
+<li><code>persisted_config</code> 仅做 JSON 可解析预检，键/值合法性交 <code>db.Open</code>；</li>
+<li>滚动脚本优雅停机通过 TCP 发送 <code>SHUTDOWN GRACEFUL</code>（M16-2 命令），停机语义、超时、强制路径数据完整性均由 M16-2 保证；</li>
+<li><code>shutdown_timeout</code>（M16-2）可经 <code>SET [PERSIST]</code> 热更新（M16-1）后进入停机流程。</li>
+</ul>
+<h2 id="_3">升级流程（推荐）<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<ol>
+<li>备份数据目录（或使用脚本 <code>-BackupDir</code>）；</li>
+<li>旧版执行 <code>openxdb preflight --data-dir &lt;dir&gt;</code>，全部 PASS；</li>
+<li>确认版本兼容：<code>openxdb version</code> 的数据格式版本 &gt;= 数据目录格式版本（preflight 已校验）；</li>
+<li><code>SHUTDOWN GRACEFUL</code>（或 Ctrl-C / SIGTERM）优雅停机，确认存储已关闭；</li>
+<li>启动新版二进制 <code>openxdb start --data-dir &lt;dir&gt; --port &lt;port&gt;</code>；</li>
+<li>升级后复检：<code>openxdb preflight --data-dir &lt;dir&gt;</code> + <code>openxdb doctor --data-dir &lt;dir&gt; --addr &lt;host:port&gt;</code>；抽样 <code>GET</code>/SQL 验证数据完整（测试 <code>TestPreflightUpgradeReopenDataIntact</code> 即该路径自动化覆盖）；</li>
+<li>确认无误后由运维按需落 <code>data_format_version</code> marker（v1 可省略）。</li>
+</ol>
+<h2 id="_4">限制<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<ul>
+<li>仅保证<strong>同族版本升级</strong>（数据格式版本 &lt;= 当前二进制版本）；未来格式版本目录会被 preflight 拒绝（<code>ErrDataFormatNewer</code>），不得强行打开；</li>
+<li>不提供数据目录整体迁移/跨版本格式转换；格式版本升级属于未来独立工作；</li>
+<li>滚动升级脚本为辅助编排，不含进程守护、故障自动回切；多节点场景需运维逐节点编排并配合负载摘除/恢复；</li>
+<li>preflight 为只读检查，不修改数据目录；检查后到停机之间的写入由业务侧自行收敛。</li>
+</ul>
+<h2 id="_5">回滚说明<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<p>回滚 = <strong>备份 + 旧版本 reopen</strong>：
+1. 停止新版（<code>SHUTDOWN GRACEFUL</code> / 信号停机）；
+2. 用升级前备份恢复数据目录（<code>-BackupDir</code> 备份的直接还原）；
+3. 用旧版二进制 <code>openxdb start --data-dir &lt;dir&gt;</code> 重新打开；
+4. 执行旧版 <code>openxdb preflight</code> 验证可打开、数据完整；
+5. 由于同族版本数据格式版本 &lt;= 1 未变，旧版可正常 reopen（marker 缺失视为 v1，兼容）。</p>
+<h2 id="m16-3">测试覆盖（M16-3）<a class="headerlink" href="#m16-3" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>验证点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pkg/db</code>: TestReadDataFormatVersionDefaultMarker</td>
+<td>旧目录（无 marker）默认 v1</td>
+</tr>
+<tr>
+<td><code>pkg/db</code>: TestReadDataFormatVersionMarker</td>
+<td>marker 读取与非法内容报错</td>
+</tr>
+<tr>
+<td><code>pkg/db</code>: TestCheckDataFormatCompat</td>
+<td>兼容通过 / 未来版本拒绝（ErrDataFormatNewer）</td>
+</tr>
+<tr>
+<td><code>cmd/openxdb</code>: TestPreflightPass</td>
+<td>已初始化目录全 PASS，退出码 0</td>
+</tr>
+<tr>
+<td><code>cmd/openxdb</code>: TestPreflightUpgradeReopenDataIntact</td>
+<td>升级 reopen 数据完整 + 持久化配置保留</td>
+</tr>
+<tr>
+<td><code>cmd/openxdb</code>: TestPreflightFailNotInitialized</td>
+<td>未初始化目录 FAIL（data_dir），退出码 2</td>
+</tr>
+<tr>
+<td><code>cmd/openxdb</code>: TestPreflightFailCorruptPersistedConfig</td>
+<td>损坏 persisted.json FAIL，退出码 2</td>
+</tr>
+<tr>
+<td><code>cmd/openxdb</code>: TestPreflightFailFutureDataFormat</td>
+<td>未来格式版本 FAIL（version_compat），退出码 2</td>
+</tr>
+<tr>
+<td><code>cmd/openxdb</code>: TestPreflightJSONOutput</td>
+<td>JSON 报告字段完整</td>
+</tr>
+<tr>
+<td><code>cmd/openxdb</code>: TestPreflightTextOutput</td>
+<td>人类可读输出含 RESULT/PASS</td>
+</tr>
+<tr>
+<td><code>cmd/openxdb</code>: TestVersionTextContainsDataFormat / FirstLineCompat</td>
+<td>version 含构建信息与数据格式版本、首行兼容</td>
+</tr>
+</tbody>
+</table>
+<p>共 11 个 M16-3 用例；连同 M16-1/M16-2 存量用例全绿。
+<em>（内容由AI生成，仅供参考）</em></p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

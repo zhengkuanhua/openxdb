@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>M6 高可用 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "M6 \u9ad8\u53ef\u7528";
+        var mkdocs_page_input_path = "T15_m6_ha.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">M6 高可用</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#1">1. 背景与问题</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2">2. 总体设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#21-down">2.1 故障检测（心跳超时 → down）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#22-region-assign-region">2.2 Region 自动重指派（替代手动 ASSIGN REGION）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#23-failoverquery_req-down">2.3 读 failover（QUERY_REQ 遇 down 自动换目标）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#24">2.4 主从切换（复制链路故障转移）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3">3. 关键实现</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#31-pkgclusterheartbeatgo">3.1 pkg/cluster/heartbeat.go</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#32-pkgsqlhago">3.2 pkg/sql/ha.go</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#33-pkgdbhago">3.3 pkg/db/ha.go</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4">4. 测试矩阵</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5">5. 边界语义与零触发保证</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#6">6. 文件清单</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">M6 高可用</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T15_m6_ha.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t15-m6-hafailover">T15 M6 高可用与故障转移（HA/Failover）<a class="headerlink" href="#t15-m6-hafailover" title="Permanent link">&para;</a></h1>
+<ul>
+<li>状态：已落地（v5.0-P4-M6，v0.6.0-alpha）</li>
+<li>前置：M2 复制（binlog/replicator/follower/heartbeat）、M4 集群（NodeInfo 注册表 + PING/PONG + ASSIGN REGION）、M5 2PC 写路径</li>
+<li>目标：心跳超时故障检测 → 节点 down → region 自动重指派 → 读 failover → 主从切换，全链路不向客户端报错、写路径保持可用</li>
+<li>设计取舍：单节点部署与健康集群路径零触发（M4/M5 行为不变）</li>
+</ul>
+<h2 id="1">1. 背景与问题<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>M4/M5 已提供：</p>
+<ul>
+<li>节点注册表 <code>m:nodes</code>（NodeInfo{ID, Addr, Role, State, LastSeen}），<code>ADD NODE</code> 握手注册、<code>SHOW NODES</code> 查询；</li>
+<li>心跳 PING/PONG（复用 M2 帧），超时置 <code>StateDown</code>（<code>MarkDown</code>）；</li>
+<li>region 路由表 <code>m:regions</code>（RegionInfo{RegionID, StartKey, EndKey, State, Node}），<code>ASSIGN REGION</code> 手动指派 + <code>REGION_PUSH</code> 数据推送；</li>
+<li>跨节点读：<code>QUERY_REQ/QUERY_RESP</code>（物理键区间）转发 + 合并；</li>
+<li>跨节点写：2PC 协调者/参与者（帧 22-27），崩溃恢复清理标记。</li>
+</ul>
+<p>不足：节点 down 后只是标记状态，region 仍挂在 down 节点上，跨节点读会返回 <code>ErrNodeDown</code> 类错误；复制链路 master down 后 follower 只能停在 <code>offline</code>，写路径中断。M6 补齐闭环。</p>
+<h2 id="2">2. 总体设计<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<p>M6 由三层协同实现，全部挂接在既有心跳/路由/复制机制上：</p>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>文件</th>
+<th>职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>集群心跳</td>
+<td><code>pkg/cluster/heartbeat.go</code></td>
+<td>PING 超时 → <code>MarkDown</code> → 触发 <code>OnDown(nodeID)</code> 回调</td>
+</tr>
+<tr>
+<td>集群注册表</td>
+<td><code>pkg/cluster/cluster.go</code></td>
+<td><code>IsDown</code> 查询、<code>SetOnDown</code> 装配、<code>notifyDown</code> 内部派发</td>
+</tr>
+<tr>
+<td>SQL 层 HA</td>
+<td><code>pkg/sql/ha.go</code></td>
+<td>region 自动重指派（<code>FailoverDownNode</code>）、读 failover（<code>resolveRegionOwner</code>）</td>
+</tr>
+<tr>
+<td>DB 层 HA</td>
+<td><code>pkg/db/ha.go</code></td>
+<td>复制主从切换（<code>PromoteToMaster</code> / <code>EnableAutoFailover</code> / <code>StopAutoFailover</code>）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="21-down">2.1 故障检测（心跳超时 → down）<a class="headerlink" href="#21-down" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>Manager.StartHeartbeat(interval, timeout)</code> 周期向所有注册节点发 PING；超过 timeout 未见 PONG 即 <code>MarkDown(id)</code>，将 <code>NodeInfo.State</code> 置 <code>StateDown</code> 并更新 <code>LastSeen</code>。</li>
+<li>新增 <code>SetOnDown(fn)</code> 装配回调、<code>IsDown(id)</code> 查询、<code>notifyDown(id)</code> 内部派发（带 <code>onDownMu</code> 互斥，防止并发通知重复触发）。</li>
+<li>心跳 tick 在 <code>MarkDown</code> 后调用 <code>mgr.notifyDown(n.ID)</code>；仅当节点此前为存活状态（<code>StateUp</code>）时才回调，避免重复 down 反复重指派。</li>
+<li>回调只做"通知"不做数据搬迁：SQL 层异步重指派，不阻塞心跳循环。</li>
+</ul>
+<h3 id="22-region-assign-region">2.2 Region 自动重指派（替代手动 ASSIGN REGION）<a class="headerlink" href="#22-region-assign-region" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>Engine.FailoverDownNode(nodeID)</code> 是入口代理（<code>pkg/sql/sql.go</code>），内部加 <code>failoverMu</code> 互斥 + <code>failoverDone</code> 去重（同节点只处理一次），避免并发回调重入。</li>
+<li>对路由表中所有 <code>RegionInfo.Node == nodeID</code> 的 region 执行 <code>failoverRegion</code>：</li>
+<li>选目标：<code>ListNodes()</code> 中剔除 selfID 与 down 节点，优先存活远端；无存活远端时回退到本节点（selfID）；</li>
+<li>数据追赶：在本节点与所有存活远端中，对每个候选执行 <code>scanRegionRows(rid, [start,end))</code> 收集该 region 物理键空间内的行（KV + 索引），选出行数最多的作为"最全副本"数据源；</li>
+<li>推送：若目标为远端，调用 <code>PushRegion(remote, rid, rows, regionsView, srcID)</code>（复用 M4 REGION_PUSH 帧），目标节点 <code>applyPush</code> 本地写入 + 学路由 + 落盘 <code>m:regions</code>；</li>
+<li>路由更新：本节点 <code>SetRegionNode(rid, target)</code> + <code>persistRegions()</code>，其余存活节点经下一次心跳路由同步（<code>getClusterRoutes</code>）学习新归属。</li>
+<li>行数为 0 的 region（空 region 或仅 down 节点持有数据）也照常推进路由，保证路由表始终指向存活节点。</li>
+</ul>
+<h3 id="23-failoverquery_req-down">2.3 读 failover（QUERY_REQ 遇 down 自动换目标）<a class="headerlink" href="#23-failoverquery_req-down" title="Permanent link">&para;</a></h3>
+<ul>
+<li>读路径统一收敛到 <code>resolveRegionOwner(rid)</code>（<code>pkg/sql/ha.go</code>）：</li>
+<li>先查路由归属（<code>FindRegion</code>）；</li>
+<li>若归属节点为 selfID → 本地读；</li>
+<li>若归属节点 down（<code>mgr.IsDown(owner)</code>）→ 触发 <code>FailoverDownNode(owner)</code> 完成重指派，再用重指派后的新归属继续；</li>
+<li>否则 → 转发 <code>QUERY_REQ</code> 到归属节点。</li>
+<li>点查（<code>getKVCluster</code>）与范围/全表扫描（<code>scanMergedCluster</code>）均改走 <code>resolveRegionOwner</code>，遇 down 自动 failover 到新持有者，客户端无感知。</li>
+<li>单节点部署（<code>mgr == nil</code>）与健康集群（无 down）路径与 M4/M5 完全一致（零触发）。</li>
+</ul>
+<h3 id="24">2.4 主从切换（复制链路故障转移）<a class="headerlink" href="#24" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>PromoteToMaster()</code>（<code>pkg/db/ha.go</code>）：停止 follower 拉取线程，启动本机 replicator 监听，follower 目录内的既有数据完整保留，旧 master 已复制数据不丢失，可立即继续写。</li>
+<li><code>EnableAutoFailover(onPromote func())</code>：启动后台 goroutine，每 500ms 检查 follower 状态；当 follower 进入 <code>offline</code>（旧 master 心跳/连接超时）且未提升时自动调用 <code>PromoteToMaster()</code> 并触发回调（幂等：<code>failoverMu</code> 保证只提升一次）。</li>
+<li><code>StopAutoFailover()</code>：停止 goroutine（<code>failoverStop chan</code> + WaitGroup），<code>DB.Close()</code> 中自动调用，避免泄漏。</li>
+</ul>
+<h2 id="3">3. 关键实现<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<h3 id="31-pkgclusterheartbeatgo">3.1 pkg/cluster/heartbeat.go<a class="headerlink" href="#31-pkgclusterheartbeatgo" title="Permanent link">&para;</a></h3>
+<pre><code class="language-go">if n.State != cluster.StateDown {   // 仅存活→down 时通知
+    h.mgr.MarkDown(n.ID)
+    h.mgr.notifyDown(n.ID)          // 回调 SQL 层重指派
+}
+</code></pre>
+<h3 id="32-pkgsqlhago">3.2 pkg/sql/ha.go<a class="headerlink" href="#32-pkgsqlhago" title="Permanent link">&para;</a></h3>
+<pre><code class="language-go">// FailoverDownNode 节点 down 后自动重指派其全部 region 到存活节点。
+func (e *Executor) FailoverDownNode(nodeID string) (int, error) {
+    e.failoverMu.Lock()
+    defer e.failoverMu.Unlock()
+    if e.failoverDone[nodeID] {
+        return 0, nil          // 幂等：同节点只处理一次
+    }
+    e.failoverDone[nodeID] = true
+    regions := e.router.AllRegions()
+    n := 0
+    for _, rg := range regions {
+        if rg.Node != nodeID {
+            continue
+        }
+        if err := e.failoverRegion(rg.RegionID); err != nil {
+            return n, err
+        }
+        n++
+    }
+    return n, nil
+}
+</code></pre>
+<ul>
+<li><code>failoverRegion</code> 选目标（存活远端优先、selfID 兜底）→ 全副本扫描比行数取最全 → <code>PushRegion</code> 推送 → <code>SetRegionNode</code> + <code>persistRegions</code>。</li>
+</ul>
+<h3 id="33-pkgdbhago">3.3 pkg/db/ha.go<a class="headerlink" href="#33-pkgdbhago" title="Permanent link">&para;</a></h3>
+<pre><code class="language-go">func (d *DB) PromoteToMaster() error {
+    d.failoverMu.Lock()
+    defer d.failoverMu.Unlock()
+    if d.Follower == nil {
+        return errors.New(&quot;promote: not a follower&quot;)
+    }
+    d.Follower.Stop()
+    d.Follower = nil
+    if err := d.StartReplication(&quot;:0&quot;); err != nil {
+        return err
+    }
+    return nil
+}
+</code></pre>
+<h2 id="4">4. 测试矩阵<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<p>新增 4 个故障场景测试（<code>pkg/db/db_ha_test.go</code> + <code>pkg/db/db_ha_repl_test.go</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>场景</th>
+<th>断言</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestM6DownNodeReadFailover</code></td>
+<td>双节点：B 持有中间 region 后 down</td>
+<td>A 心跳感知 <code>StateDown</code>；region 自动重指派回 A；A 上 SELECT 全量 10 行仍完整</td>
+</tr>
+<tr>
+<td><code>TestM6AutoReassignRegionAfterDown</code></td>
+<td>三节点：B down 后其 region 重指派</td>
+<td>region 归属迁移到存活远端 C；C 本地点查 id=6 命中；A 全量 SELECT 仍一致</td>
+</tr>
+<tr>
+<td><code>TestM6PromoteFollowerWriteContinues</code></td>
+<td>复制：master down 后 follower 手动升主</td>
+<td>follower <code>offline</code>；<code>PromoteToMaster</code> 后写 3 条新值；旧 10 条 + 新 3 条一致</td>
+</tr>
+<tr>
+<td><code>TestM6AutoPromoteFollowerOnMasterDown</code></td>
+<td>复制：master down 自动升主</td>
+<td>回调触发；<code>Replicator != nil</code>；写继续；旧数据完整</td>
+</tr>
+</tbody>
+</table>
+<p>辅助设施：<code>waitNodeState</code> / <code>waitRegionNode</code>（轮询节点状态与路由归属）、<code>speedupHeartbeat</code>（重启心跳为 150ms/450ms 加速故障感知）、<code>waitFollowerOffline</code>。</p>
+<p>验收命令（本机 CGO 工具链：winlibs gcc16.2.0 + go1.27.1）：</p>
+<pre><code class="language-sh">set PATH=&lt;OpenXDBTools&gt;/mingw64/bin;%PATH%
+set CGO_ENABLED=1
+set CGO_CFLAGS=-I&lt;OpenXDBTools&gt;/rocksdb-11.8.1/include
+set CGO_CXXFLAGS=-I&lt;OpenXDBTools&gt;/rocksdb-11.8.1/include
+set CGO_LDFLAGS=-L&lt;OpenXDBTools&gt;/rocksdb-build -lrocksdb
+go build ./...
+go test ./... -count=1
+</code></pre>
+<p>结果：全仓 <code>go build ./...</code> 与 <code>go test ./... -count=1</code> 全绿（含新增 4 个 M6 测试）。</p>
+<h2 id="5">5. 边界语义与零触发保证<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>零回归</strong>：<code>mgr == nil</code>（单节点）时 <code>resolveRegionOwner</code> 直接本地、<code>FailoverDownNode</code> 不被装配；健康集群无 down 节点时心跳不回调、路由不迁移，M4/M5 行为不变。</li>
+<li><strong>幂等</strong>：<code>failoverDone</code> 保证同节点只重指派一次；<code>IsDown</code> 检查避免对已 down 节点重复处理；<code>PromoteToMaster</code> 用互斥保证只提升一次。</li>
+<li><strong>并发安全</strong>：<code>onDownMu</code>（cluster）、<code>failoverMu</code>（executor/db）保护注册表与重指派互斥；心跳循环不被回调阻塞。</li>
+<li><strong>数据一致性</strong>：重指派前全副本扫描选"最全副本"推送（含索引行），目标节点 <code>applyPush</code> 原子落盘 + 学路由；读路径在新归属生效后立即指向新持有者。</li>
+<li><strong>有限降级</strong>：所有存活节点均 down 时 region 回退到本节点，保证本节点读不报错（单节点自持语义）。</li>
+</ul>
+<h2 id="6">6. 文件清单<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>变更</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pkg/cluster/cluster.go</code></td>
+<td>Manager 增加 <code>onDown</code>/<code>onDownMu</code> 字段、<code>IsDown</code>、<code>SetOnDown</code>、<code>notifyDown</code></td>
+</tr>
+<tr>
+<td><code>pkg/cluster/heartbeat.go</code></td>
+<td>tick 超时 MarkDown 后触发 <code>notifyDown</code></td>
+</tr>
+<tr>
+<td><code>pkg/sql/sql.go</code></td>
+<td><code>Engine.FailoverDownNode</code> 代理方法</td>
+</tr>
+<tr>
+<td><code>pkg/sql/executor.go</code></td>
+<td>Executor 增加 <code>failoverMu</code> / <code>failoverDone</code>（NewExecutor 初始化）</td>
+</tr>
+<tr>
+<td><code>pkg/sql/multinode.go</code></td>
+<td>点查/范围扫描改走 <code>resolveRegionOwner</code></td>
+</tr>
+<tr>
+<td><code>pkg/sql/ha.go</code></td>
+<td>新增：自动重指派 + 读 failover 核心实现</td>
+</tr>
+<tr>
+<td><code>pkg/db/db.go</code></td>
+<td>DB 增加 <code>failoverStop</code>/<code>failoverMu</code>；<code>StartCluster</code> 装配 OnDown 回调；<code>Close</code> 停止自动故障转移</td>
+</tr>
+<tr>
+<td><code>pkg/db/ha.go</code></td>
+<td>新增：<code>PromoteToMaster</code> / <code>EnableAutoFailover</code> / <code>StopAutoFailover</code> / <code>failoverLoop</code></td>
+</tr>
+<tr>
+<td><code>pkg/db/db_ha_test.go</code></td>
+<td>新增：集群故障场景测试（读 failover + 自动重指派）</td>
+</tr>
+<tr>
+<td><code>pkg/db/db_ha_repl_test.go</code></td>
+<td>新增：主从切换测试（手动提升 + 自动提升）</td>
+</tr>
+<tr>
+<td><code>pkg/storage/rocksdb/rocksdb.go</code></td>
+<td>cgo LDFLAGS 修正（消除 libstdc++ 双重链接，补 shlwapi/rpcrt4/ws2_32）</td>
+</tr>
+<tr>
+<td><code>docs/T15_m6_ha.md</code></td>
+<td>本文档</td>
+</tr>
+<tr>
+<td><code>README.md</code></td>
+<td>Status v5.0-P4-M6、Highlights、Architecture、Tests、Roadmap 勾选 M6</td>
+</tr>
+<tr>
+<td><em>（内容由AI生成，仅供参考）</em></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T14_m5_2pc/" class="btn btn-neutral float-left" title="M5 分布式写 / 2PC"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T16_m7_split_balance/" class="btn btn-neutral float-right" title="M7 分裂与负载均衡">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T14_m5_2pc/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T16_m7_split_balance/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

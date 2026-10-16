@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T24 M11 功能簇（3/3）：连接鉴权 + SQL 执行校验 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T24 M11 \u529f\u80fd\u7c07\uff083/3\uff09\uff1a\u8fde\u63a5\u9274\u6743 + SQL \u6267\u884c\u6821\u9a8c";
+        var mkdocs_page_input_path = "T24_m11_auth.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">T24 M11 功能簇（3/3）：连接鉴权 + SQL 执行校验</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T24_m11_auth.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t24-m11-33-sql">T24 M11 功能簇（3/3）：连接鉴权 + SQL 执行校验<a class="headerlink" href="#t24-m11-33-sql" title="Permanent link">&para;</a></h1>
+<h2 id="_1">设计<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<h3 id="server">连接握手协议（server 层）<a class="headerlink" href="#server" title="Permanent link">&para;</a></h3>
+<ul>
+<li>行协议新增握手命令 <code>AUTH &lt;user&gt; &lt;password&gt;</code>：</li>
+<li>成功：返回 <code>AUTH OK</code>，会话切换为对应用户；</li>
+<li>失败（用户不存在 / 密码错误）：返回 <code>ERR auth failed: invalid user or password</code>，会话保持未鉴权（允许重试）；</li>
+<li>参数缺失：返回 <code>ERR syntax: AUTH &lt;user&gt; &lt;password&gt;</code>；</li>
+<li>密码允许含空格（取剩余 token 拼接），与 <code>SET &lt;key&gt; &lt;val...&gt;</code> 一致；</li>
+<li>会话状态<strong>跨命令保持</strong>（每 TCP 连接一个 <code>session{user, authed}</code>），与 SQL 会话事务类似；</li>
+<li><code>Server.SetAuth(&amp;AuthConfig{Engine, AllowLegacy})</code> 装配鉴权；<code>Auth == nil</code> 时保持旧行为（无握手，会话默认超级用户 <code>root</code>，协议与既有 JDBC/Python 驱动完全不变）。</li>
+</ul>
+<h3 id="t19">旧客户端兼容（T19 降级策略）<a class="headerlink" href="#t19" title="Permanent link">&para;</a></h3>
+<p>T19 JDBC/Python 驱动 README 明示 <strong>no server-side auth handshake</strong>（旧协议无 <code>AUTH</code> 命令）。启用鉴权后按 <code>AllowLegacy</code> 二选一：</p>
+<table>
+<thead>
+<tr>
+<th>策略</th>
+<th>行为</th>
+<th>适用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AllowLegacy = true</code>（默认）</td>
+<td>未鉴权连接<strong>降级为 guest</strong>（user 为空串）：KV 命令（<code>PING/HELP/GET/SET/DEL/BEGIN/COMMIT/ROLLBACK/QUIT</code>）照常可用；SQL 语句照常路由，但经执行期权限校验后<strong>一律拒绝</strong>（guest 无任何授权，管理语句与无授权 DML 均返回 <code>permission denied</code>）</td>
+<td>向后兼容优先，旧客户端可继续用 KV 能力与只读元数据语句</td>
+</tr>
+<tr>
+<td><code>AllowLegacy = false</code></td>
+<td>未鉴权连接除 <code>AUTH/PING/HELP/QUIT</code> 外一律拒绝，返回 <code>ERR auth required: send AUTH &lt;user&gt; &lt;password&gt; first</code></td>
+<td>安全优先，强制握手</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>取舍：默认开启降级而非硬拒绝——牺牲 SQL 能力换取旧驱动连接不中断；若部署侧要求强制鉴权，显式 <code>SetAuth(AllowLegacy=false)</code> 即可，两策略均已测试覆盖。</p>
+</blockquote>
+<h3 id="sql-sql">SQL 执行期权限校验（SQL 层）<a class="headerlink" href="#sql-sql" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>Engine.ExecuteAs(stmt, user)</code>：以指定用户身份执行；<code>Engine.Execute(stmt)</code> 保持不变，等价于 <code>ExecuteAs(stmt, root)</code>（向后兼容既有调用方与 CLI）；</li>
+<li><code>checkPrivilege</code> 规则（<code>pkg/sql/authz.go</code>，新增）：</li>
+<li><strong>超级用户 <code>root</code></strong>：全部语句放行（内置 root 用户，初始密码由首次 <code>CREATE USER 'root' IDENTIFIED BY '...'</code> 设定，见下）；</li>
+<li><strong>管理语句</strong>（DDL：<code>CREATE TABLE/INDEX/VIEW</code>、<code>DROP TABLE/INDEX/VIEW</code>、<code>ALTER TABLE</code>；用户管理：<code>CREATE/DROP/ALTER USER</code>；授权：<code>GRANT/REVOKE</code>；运维：<code>IMPORT/EXPORT/BACKUP/RESTORE/SPLIT/BALANCE</code> 等）：仅超级用户 <code>root</code> 可执行，其余用户返回 <code>permission denied: admin statement requires superuser</code>;</li>
+<li><strong>DML</strong>（<code>SELECT/INSERT/UPDATE/DELETE</code>）：执行前经 <code>Engine.HasPrivilege(user, table, op)</code> 校验目标表权限；无授权（或用户/表不存在）返回 <code>permission denied</code>；</li>
+<li><strong>guest（空 user）</strong>：无任何授权，DML 与管理语句一律拒绝；<code>SHOW TABLES</code>、<code>EXPLAIN</code>、<code>BEGIN/COMMIT/ROLLBACK</code> 等会话/元数据语句放行；表不存在与无授权统一返回权限拒绝（不泄露表存在性）；</li>
+<li><code>checkPrivilege</code> 失败<strong>不得修改任何状态</strong>（校验先于事务开始）。</li>
+</ul>
+<h3 id="root">内置 root 与初始密码策略<a class="headerlink" href="#root" title="Permanent link">&para;</a></h3>
+<ul>
+<li>代码内定义 <code>SuperUser = "root"</code> 常量（<code>pkg/sql/authz.go</code>）；</li>
+<li><strong>不内置硬编码默认密码</strong>：<code>CREATE USER 'root' IDENTIFIED BY '...'</code> 由管理员首启时显式创建（复用 M11 子功能一的 SHA-256+salt 存储），未创建 root 前无法通过握手进入超级用户会话；</li>
+<li>未启用鉴权（<code>Auth == nil</code>）时，旧协议默认 root 会话等价于隐式管理员（维持旧行为）。</li>
+</ul>
+<h2 id="_2">实现<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="server-pkgserverservergo">server 层（pkg/server/server.go，本提交扩展）<a class="headerlink" href="#server-pkgserverservergo" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>Server.Auth *AuthConfig</code>：<code>Engine *sql.Engine</code>（校验用）+ <code>AllowLegacy bool</code>；</li>
+<li><code>SetAuth(cfg)</code>：装配鉴权配置；</li>
+<li><code>session{user, authed}</code> + <code>defaultSession()</code>：无鉴权模式返回 root/已鉴权，鉴权模式返回 guest/未鉴权；</li>
+<li><code>HandleSession(line, sess)</code>：携带会话的单条命令处理；<code>Handle(line)</code> 兼容旧调用（等价默认会话）；</li>
+<li><code>handleLocked</code> 未鉴权拦截：<code>AUTH/PING/HELP/QUIT</code> 放行；其余按 <code>AllowLegacy</code> 拒绝（<code>auth required</code>）或降级 guest 继续；</li>
+<li><code>doAuth</code>：调 <code>Engine.AuthenticateUser</code> 完成握手，成功回 <code>AUTH OK</code>；</li>
+<li><code>doSQL(line, sess)</code>：改走 <code>Engine.ExecuteAs(line, sess.user)</code>（执行期权限校验统一生效）；</li>
+<li><code>REPL</code>（旧接口）委托 <code>REPLsSession(r, w, defaultSession())</code>；<code>ServeListener</code> 每连接创建独立会话。</li>
+</ul>
+<h3 id="sql-pkgsql">SQL 层（pkg/sql/，本提交扩展）<a class="headerlink" href="#sql-pkgsql" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>authz.go</code>（新增）：<code>SuperUser</code> 常量、<code>permissionDenied</code>、<code>isAdminStmt(stmt)</code>、<code>tablePrivOp(stmt)</code>（取 <code>SelectStmt.From</code> / <code>InsertStmt.Table</code> / <code>UpdateStmt.Table</code> / <code>DeleteStmt.Table</code>）、<code>checkPrivilege(eng, stmt, user)</code>；</li>
+<li><code>executor.go</code>：<code>Execute(stmt)</code> / <code>ExecuteText(stmt, sqlText)</code> 统一委托新增 <code>ExecuteTextAs(stmt, sqlText, user)</code>，先 <code>checkPrivilege</code> 再 <code>execTimed</code>；</li>
+<li><code>sql.go</code>：<code>Execute(stmt)</code> 委托 <code>ExecuteAs(stmt, SuperUser)</code>；新增公开 <code>ExecuteAs(stmt, user)</code> → 解析 AST → <code>ExecuteTextAs(ast, stmt, user)</code>；</li>
+<li><code>sql.go</code>：<code>IsSQL</code> 关键字表补 <code>GRANT</code>/<code>REVOKE</code>（子功能二已支持，server 路由需识别）。</li>
+</ul>
+<h2 id="_3">测试<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<h3 id="sql-pkgsqlm11_authz_testgo-4">SQL 层（pkg/sql/m11_authz_test.go，新增 4 函数）<a class="headerlink" href="#sql-pkgsqlm11_authz_testgo-4" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestExecuteAsAdminOnlySuperuser</code></td>
+<td>12 类管理语句（CREATE/DROP TABLE、INDEX、VIEW、USER、ALTER、GRANT/REVOKE）普通用户拒绝、root 放行；<code>Execute</code> 默认 root 兼容</td>
+</tr>
+<tr>
+<td><code>TestExecuteAsDMLPrivilege</code></td>
+<td>无授权四类 DML 拒绝；GRANT SELECT 后仅 SELECT 放行；GRANT ALL 后四类全放行；其他表仍拒绝</td>
+</tr>
+<tr>
+<td><code>TestExecuteAsGuest</code></td>
+<td>空用户 DML/管理语句拒绝；SHOW/EXPLAIN/BEGIN 放行；表不存在与无授权统一权限拒绝</td>
+</tr>
+<tr>
+<td><code>TestExecuteAsRootPasswordRoundTrip</code></td>
+<td><code>CREATE USER root</code> → <code>AuthenticateUser(root, pw)</code> 通过 → root 全权限执行</td>
+</tr>
+</tbody>
+</table>
+<h3 id="server-pkgserverserver_auth_testgo-6">server 层（pkg/server/server_auth_test.go，新增 6 函数）<a class="headerlink" href="#server-pkgserverserver_auth_testgo-6" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestAuthHandshakeTCP</code></td>
+<td>真实 TCP 握手闭环：guest 拒绝 → 错密码 <code>auth failed</code> → AUTH OK → root 管理语句+DML 放行</td>
+</tr>
+<tr>
+<td><code>TestAuthRejectWithoutLegacy</code></td>
+<td><code>AllowLegacy=false</code>：未鉴权 KV/SQL/事务全拒（<code>auth required</code>），AUTH 后恢复</td>
+</tr>
+<tr>
+<td><code>TestAuthLegacyGuestKV</code></td>
+<td><code>AllowLegacy=true</code>：旧客户端 KV 照常、SQL 受限（降级策略）</td>
+</tr>
+<tr>
+<td><code>TestAuthAlicePrivilegedSQL</code></td>
+<td>普通用户 AUTH 后：有授权 SELECT 放行、未授权 DML/管理语句拒绝</td>
+</tr>
+<tr>
+<td><code>TestAuthSyntax</code></td>
+<td>AUTH 缺参返回 <code>ERR syntax</code></td>
+</tr>
+<tr>
+<td><code>TestAuthUnavailableWithoutConfig</code></td>
+<td><code>Auth==nil</code> 时 AUTH 返回 <code>auth unavailable</code>，旧行为不变</td>
+</tr>
+</tbody>
+</table>
+<p><code>go test ./...</code> 全绿（15 个包 ok）。</p>
+<h2 id="_4">边界说明（语义自洽）<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>校验先于事务</strong>：权限拒绝不开启事务、不改任何状态；</li>
+<li><strong>表不存在与无授权统一权限拒绝</strong>：避免向客户端泄露表是否存在（<code>SELECT * FROM ghost</code> 与无授权 <code>SELECT * FROM users</code> 同报 <code>permission denied</code>）；</li>
+<li><strong>降级 guest 可执行只读元数据</strong>：<code>SHOW TABLES</code>/<code>EXPLAIN</code>/事务控制放行，保证旧客户端连接健康检查与只读管理可用；</li>
+<li><strong>错误密码后保持未鉴权</strong>：AUTH 失败不锁会话、不切断连接，允许重试（未引入失败计数，防爆破留待后续）；</li>
+<li><strong>root 无内置密码</strong>：必须显式 <code>CREATE USER 'root'</code>，避免默认口令风险。</li>
+</ul>
+<h2 id="_5">取舍说明（兼容策略结论）<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>握手帧不做二进制改造，复用行协议 <code>AUTH</code> 命令</strong>：协议零升级，旧客户端发送任意行都能得到可读响应；若未来引入二进制协议（预编译语句），再考虑握手帧内嵌鉴权字段；</li>
+<li><strong>降级默认开启</strong>：T19 JDBC/Python 驱动（无 AUTH 能力）连上后 KV 能力可用、SQL 受限，而非直接断连——兼容优先；强制鉴权场景用 <code>AllowLegacy=false</code>；</li>
+<li><strong>guest 不映射到任何真实用户</strong>：避免"匿名用户可执行未授权 SQL"的误解；guest 唯一能力是显式放行的会话/元数据语句；</li>
+<li><strong>管理语句白名单按 AST 类型判定</strong>（<code>isAdminStmt</code> 基于 <code>stmt()</code> 分发），与解析器同步演进，不依赖文本正则；</li>
+<li><strong><code>Execute</code> 默认 root</strong>：既有 CLI/测试/驱动调用链零改动，权限语义只在显式传入 user 的 <code>ExecuteAs</code> 生效。</li>
+</ol>
+<h2 id="readme">README 勾选<a class="headerlink" href="#readme" title="Permanent link">&para;</a></h2>
+<p>由 M11 整簇收尾提交统一执行：
+- Status 行更新为 M11 权限与用户管理簇；
+- T 表格追加 <code>T24 M11 permission &amp; user management cluster: user management + GRANT/REVOKE + connection auth</code>；
+- 文档列表追加 <code>T24_m11_auth.md</code>（随本提交加入）。</p>
+<p><em>（内容由AI生成，仅供参考）</em></p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

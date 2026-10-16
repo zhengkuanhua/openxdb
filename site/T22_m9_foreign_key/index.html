@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T22 M9 功能簇（4/5）：外键约束 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T22 M9 \u529f\u80fd\u7c07\uff084/5\uff09\uff1a\u5916\u952e\u7ea6\u675f";
+        var mkdocs_page_input_path = "T22_m9_foreign_key.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">T22 M9 功能簇（4/5）：外键约束</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T22_m9_foreign_key.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t22-m9-45">T22 M9 功能簇（4/5）：外键约束<a class="headerlink" href="#t22-m9-45" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v5.0-P11-M9FK, v0.13.0-alpha
+日期：2026-10-10
+范围：<code>pkg/sql</code>（新增 <code>foreign_key.go</code> + ast / lexer / parser / executor / meta / csv）+ 单元测试（<code>m9_foreign_key_test.go</code>）+ README 勾选
+闭环：<code>go build ./...</code> 与 <code>go test ./... -count=1</code> 全绿，不 push
+提交：<code>M9: foreign key (REFERENCES / ON DELETE CASCADE, meta persistence, DROP TABLE cleanup)</code>（本地，未 push）</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>M1 建表仅支持主键与索引，缺少引用完整性：子表可写入任意孤儿行、父表行可被
+随意删除导致悬空引用。M9 外键约束为 SQL 层补上<strong>声明式引用完整性</strong>：
+<code>REFERENCES</code>（列级）与 <code>FOREIGN KEY ... REFERENCES</code>（表级）定义父子关系，
+支持 <code>ON DELETE CASCADE / RESTRICT</code>；外键定义随表元数据持久化，
+<code>DROP TABLE</code> 父表时联动清理子表外键定义，杜绝悬空引用与残留约束。</p>
+<h2 id="_2">设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="_3">语法<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sql">-- 列级（单列引用）
+CREATE TABLE child (
+  id INT PRIMARY KEY,
+  pid INT REFERENCES parent(id) [ON DELETE CASCADE|RESTRICT]
+);
+-- 表级（单列 / 多列复合引用）
+CREATE TABLE child (
+  id INT PRIMARY KEY, pid INT,
+  FOREIGN KEY (pid) REFERENCES parent (id) [ON DELETE CASCADE|RESTRICT]
+);
+</code></pre>
+<h3 id="_4">词法 / 语法层<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>lexer.go</code>：关键字表补充 <code>FOREIGN</code> / <code>REFERENCES</code> / <code>CASCADE</code> / <code>RESTRICT</code>；</li>
+<li><code>ast.go</code>：新增 <code>ForeignKey{Columns, RefTable, RefCols, OnDelete}</code>
+  （OnDelete ∈ <code>""</code> / <code>"CASCADE"</code> / <code>"RESTRICT"</code>，缺省即 RESTRICT 语义）；
+  <code>TableMeta</code> 增加 <code>ForeignKeys []ForeignKey</code> 字段；</li>
+<li><code>parser.go</code>：<code>parseCreate</code> 的列定义解析列级 <code>REFERENCES</code>（含可选的
+  <code>ON DELETE ...</code> 子句）；表级 <code>FOREIGN KEY (...)</code> 约束在列清单解析后
+  收集进 <code>ForeignKeys</code>；</li>
+<li><code>meta.go</code>：表元数据序列化 / 反序列化接入 <code>ForeignKeys</code>（随 DDL 持久化）；</li>
+<li><code>csv.go</code>：表结构导出 / 导入同步携带外键定义。</li>
+</ul>
+<h3 id="executor-foreign_keygo">执行层（executor + foreign_key.go）<a class="headerlink" href="#executor-foreign_keygo" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>execCreateTable</code> 建表校验（<code>validateForeignKeys</code>）：</li>
+<li>引用表必须存在（<code>referenced table not exists</code>）；</li>
+<li>引用列必须是父表<strong>主键</strong>（<code>must be primary key</code>）；</li>
+<li>子列与父主键类型一致（<code>column type mismatch</code>）；</li>
+<li>写入防护（<code>checkFKOnRow</code>）：<code>INSERT</code> / <code>UPDATE</code> 子表行时，逐条外键校验
+  父行存在（跨 region 读取父表，<code>fkRowMatches</code> 比对主键编码），违反即
+  <code>foreign key constraint violated</code>，事务回滚；</li>
+<li>父行更新防护（<code>fkParentReferenced</code>）：<code>UPDATE</code> 父表时<strong>基于旧行</strong>判断
+  该行是否被子表引用，被引用则拒绝（<code>ON UPDATE</code> 未支持，RESTRICT 语义）；</li>
+<li>父行删除联动（<code>collectFKDeleteOps</code>）：<code>DELETE</code> 父表行时扫描引用它的子表：</li>
+<li>RESTRICT：存在引用行则整体拒绝删除（<code>is referenced by parent</code>）；</li>
+<li>CASCADE：级联删除子表引用行，同时收集子表索引键删除 ops（2PC 原子落盘），
+    保证主表、子表、索引三方一致；</li>
+<li><code>execDropTable</code> 联动清理：<code>DROP TABLE</code> 父表时，遍历全部子表元数据移除指向
+  该父表的外键定义并持久化，<strong>子表数据保留</strong>，不再校验该约束。</li>
+</ul>
+<h2 id="pkgsqlm9_foreign_key_testgo">测试（pkg/sql/m9_foreign_key_test.go）<a class="headerlink" href="#pkgsqlm9_foreign_key_testgo" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestForeignKeyTableLevelConstraint</code></td>
+<td>表级 FOREIGN KEY：合法插入通过、孤儿插入报错</td>
+</tr>
+<tr>
+<td><code>TestForeignKeyColumnLevelReferences</code></td>
+<td>列级 REFERENCES 行为</td>
+</tr>
+<tr>
+<td><code>TestForeignKeyCreateValidation</code></td>
+<td>引用表不存在 / 非主键列 / 类型不匹配均拒绝建表</td>
+</tr>
+<tr>
+<td><code>TestForeignKeyOnDeleteRestrict</code></td>
+<td>默认 RESTRICT：被引用父行禁止删除、未引用可删</td>
+</tr>
+<tr>
+<td><code>TestForeignKeyOnDeleteCascade</code></td>
+<td>CASCADE：父行删除级联清空全部子行</td>
+</tr>
+<tr>
+<td><code>TestForeignKeyCascadeIndexCleanup</code></td>
+<td>CASCADE 后子表二级索引同步清理（索引查不到残留）</td>
+</tr>
+<tr>
+<td><code>TestForeignKeyUpdateParentProtected</code></td>
+<td>被引用父行禁止 UPDATE（RESTRICT 语义），未引用可改</td>
+</tr>
+<tr>
+<td><code>TestForeignKeyDropTableCleansRefs</code></td>
+<td>DROP 父表：子表数据保留、外键解除、不再校验</td>
+</tr>
+<tr>
+<td><code>TestForeignKeyDropParentWithSiblingRefs</code></td>
+<td>多子表指向同一父表：DROP 后全部联动清理</td>
+</tr>
+<tr>
+<td><code>TestForeignKeyShardingCrossRegion</code></td>
+<td>分片引擎下跨 region 外键校验仍生效</td>
+</tr>
+<tr>
+<td><code>TestForeignKeyOrderByScan</code></td>
+<td>外键表 ORDER BY 查询正常</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_5">取舍说明<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>ON DELETE</code> 支持 <code>CASCADE</code> / <code>RESTRICT</code> 两种动作，缺省 RESTRICT；
+  <code>ON UPDATE</code> 未实现（父表被引用行更新一律拒绝，安全优先）；</li>
+<li>外键列仅支持引用父表<strong>主键</strong>（单列 / 复合主键），不支持引用唯一索引列；</li>
+<li>DROP 父表采用<strong>引用解除</strong>而非级联删除子表（与主流 RDBMS 的
+  <code>DROP ... RESTRICT</code> 不同，避免误删业务数据；文档 / 测试明确此语义）；</li>
+<li>级联删除通过 2PC ops 与主删除同事务原子提交，分片下跨 region 同样生效。</li>
+</ul>
+<h2 id="readme">README 勾选<a class="headerlink" href="#readme" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Status 行更新为 <code>M9 foreign key: REFERENCES / FOREIGN KEY + ON DELETE CASCADE|RESTRICT, meta persistence, DROP TABLE cleanup (v5.0-P11-M9FK), v0.13.0-alpha.</code></li>
+<li>T 列表追加 <code>+ T22 M9: foreign key (REFERENCES / ON DELETE CASCADE, meta persistence, DROP TABLE cleanup)</code>
+<em>（内容由AI生成，仅供参考）</em></li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,1312 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>产品手册（中文） - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "\u4ea7\u54c1\u624b\u518c\uff08\u4e2d\u6587\uff09";
+        var mkdocs_page_input_path = "product_manual_zh.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul class="current">
+                <li class="toctree-l1 current"><a class="reference internal current" href="#">产品手册（中文）</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#_1">目录</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#1">1. 产品简介与定位</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#11">1.1 定位边界</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#12">1.2 核心能力</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#13">1.3 架构分层</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#14">1.4 键编码</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2">2. 快速开始</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#21">2.1 构建要求</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#22-windows-mingw-go">2.2 构建（Windows + MinGW + Go）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#23-repl-tcp-server">2.3 启动 REPL / TCP server</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#24">2.4 建表、插数、查询示例</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#25">2.5 运行测试</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3">3. 安装与部署</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#31-openxdbconf">3.1 配置文件 openxdb.conf</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#32">3.2 一键部署脚本</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#33">3.3 启动模式汇总</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4-sql">4. SQL 参考</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#41">4.1 数据类型</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#42-ddl">4.2 DDL</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#create-table">CREATE TABLE</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#create-index">CREATE INDEX</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#_2">视图 / 物化视图 / 触发器 / 存储过程</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#_3">用户 / 角色</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#drop-if-exists">DROP ... IF EXISTS</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#43-dml">4.3 DML</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#insert">INSERT</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#insert-into-selectt42">INSERT INTO ... SELECT（T42 新增）</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#replace-upsert">REPLACE / UPSERT</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#update-delete">UPDATE / DELETE</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#44-select">4.4 查询（SELECT 全能力）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#45">4.5 事务</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#46">4.6 数据导入导出</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#47">4.7 运维语句</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#show">SHOW 语句</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#explain">EXPLAIN</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#set-set-persist">SET / SET PERSIST</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#backup-restore">BACKUP / RESTORE</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#prepare-execute-deallocatem18">PREPARE / EXECUTE / DEALLOCATE（M18）</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#information_schema-m18">information_schema 只读视图（M18）</a>
+    </li>
+        </ul>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5">5. 客户端驱动</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#51">5.1 通用协议说明</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#52-jdbc">5.2 JDBC 驱动</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#53-python">5.3 Python 驱动</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#6">6. 数据安全</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#61-br">6.1 备份与恢复（BR）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#62-tls-t36">6.2 TLS 加密传输（T36）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#63-rbac">6.3 RBAC 与权限</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#64-t30">6.4 审计日志（T30）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#7">7. 运维与可观测</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#71-openxdb-doctor-t20">7.1 openxdb doctor 健康检查（T20）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#72-openxdb-stats-t20">7.2 openxdb stats 实时指标（T20）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#73-prometheus-m13">7.3 Prometheus 指标（M13）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#74-m13">7.4 慢查询（M13）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#75-t37">7.5 告警规则（T37）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#76-region-m7">7.6 Region 分裂与负载均衡（M7）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#77-ha-m6">7.7 HA 故障切换（M6）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#8">8. 分布式能力</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#81-m2-t33">8.1 复制（M2 + T33）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#82-m3">8.2 分片（M3）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#83-m4">8.3 多节点集群（M4）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#84-2pcm5">8.4 分布式写 / 2PC（M5）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#85-tsom8">8.5 分布式事务 / TSO（M8）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#86-ddlt34">8.6 跨节点 DDL（T34）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#87-t35">8.7 分布式备份一致性（T35）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#9">9. 性能基准</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#91-sysbench-oltp8-60spython">9.1 sysbench OLTP（8 线程 × 60s，Python 驱动自研协议）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#92-tpc-c-5-8-120s">9.2 TPC-C 小仓（5 仓 × 8 线程 × 120s）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#93">9.3 瓶颈说明</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#10">10. 已知限制与边界</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#11-faq">11. FAQ</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#q1-cgo">Q1：构建时报 cgo 链接错误怎么办？</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q2-users-show-users">Q2：表名包含关键字（如 users 与 SHOW USERS 冲突）怎么办？</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q3if-not-exists">Q3：IF NOT EXISTS 的幂等语义是什么？</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q4">Q4：如何备份与恢复？</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q5">Q5：如何搭建集群？</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q6">Q6：驱动如何连接？</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q7-mysql">Q7：为什么不能用 MySQL 客户端连接？</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q8">Q8：如何查看慢查询？</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q9-tls">Q9：如何开启 TLS？</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q10-tps">Q10：性能数据可信吗？为什么 TPS 不高？</a>
+    </li>
+        </ul>
+    </li>
+    </ul>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">产品手册（中文）</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/product_manual_zh.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="openxdb">OpenXDB 产品手册（中文版）<a class="headerlink" href="#openxdb" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v1.0.0
+更新日期：2026-10-16
+定位：单机端侧基准的关系型数据库内核。本文档所有功能与数据均来自 README.md 与 docs/ 目录下的真实设计文档，不包含任何臆造参数或数字。</p>
+</blockquote>
+<hr />
+<h2 id="_1">目录<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<ol>
+<li><a href="#1-产品简介与定位">产品简介与定位</a></li>
+<li><a href="#2-快速开始">快速开始</a></li>
+<li><a href="#3-安装与部署">安装与部署</a></li>
+<li><a href="#4-sql-参考">SQL 参考</a></li>
+<li><a href="#5-客户端驱动">客户端驱动</a></li>
+<li><a href="#6-数据安全">数据安全</a></li>
+<li><a href="#7-运维与可观测">运维与可观测</a></li>
+<li><a href="#8-分布式能力">分布式能力</a></li>
+<li><a href="#9-性能基准">性能基准</a></li>
+<li><a href="#10-已知限制与边界">已知限制与边界</a></li>
+<li><a href="#11-faq">FAQ</a></li>
+</ol>
+<hr />
+<h2 id="1">1. 产品简介与定位<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>OpenXDB 是一个<strong>从零自研</strong>的单机/分布式关系型数据库内核，使用 Go 语言编写，存储引擎基于 RocksDB（通过 cgo 薄桥接层接入）。内核完整包含 WAL（预写日志）、事务、SQL 解析与执行、复制、分片、2PC、HA（高可用）、备份恢复等能力，从教学与实验出发，逐步演进为具备分布式能力的完整内核。</p>
+<h3 id="11">1.1 定位边界<a class="headerlink" href="#11" title="Permanent link">&para;</a></h3>
+<ul>
+<li>OpenXDB 使用<strong>自研二进制 TCP 协议</strong>（<code>pkg/server</code>），<strong>不是 MySQL wire protocol</strong>，因此无法直接兼容 MySQL 生态工具（如标准 sysbench、mysqldump 之外的 binlog 工具等）。</li>
+<li>性能定位为<strong>单机端侧基准</strong>：当前内核实现了完整功能链路，性能优化仍在持续进行，实测吞吐数据见<a href="#9-性能基准">第 9 章</a>。</li>
+<li>不将 TiDB、TDSQL、MySQL 等作为对标对象，OpenXDB 是一个独立实现的内核，用于学习、实验与端侧场景。</li>
+</ul>
+<h3 id="12">1.2 核心能力<a class="headerlink" href="#12" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>能力</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>存储引擎</td>
+<td>RocksDB-backed KV 存储（cgo 桥接 <code>pkg/storage/rocksdb</code>）+ 纯 Go 内存 B+Tree（<code>pkg/storage/btree</code>，作为参考实现与比较器）</td>
+</tr>
+<tr>
+<td>WAL</td>
+<td>追加式预写日志，崩溃恢复重放（<code>pkg/wal</code>）</td>
+</tr>
+<tr>
+<td>事务</td>
+<td>本地 ACID 事务，快照隔离（snapshot isolation）；读己之写合并、墓碑、点/范围扫描（<code>pkg/txn</code>）</td>
+</tr>
+<tr>
+<td>SQL 子集</td>
+<td>DDL/DML/查询/运维语句，详见<a href="#4-sql-参考">第 4 章</a></td>
+</tr>
+<tr>
+<td>二级索引</td>
+<td>创建时回填、DML 自动维护、等值/范围/ORDER BY 查询优化</td>
+</tr>
+<tr>
+<td>复制</td>
+<td>master-follower 异步复制（M2），支持 async / semi-sync / sync 三种模式（T33）</td>
+</tr>
+<tr>
+<td>分片</td>
+<td>逻辑分片：RegionInfo 元数据 + Router 半开区间 <code>[StartKey, EndKey)</code> + region 前缀物理键（M3）</td>
+</tr>
+<tr>
+<td>多节点集群</td>
+<td>节点拓扑、集群路由表（region → 节点）、跨节点 SELECT 转发与合并（M4）</td>
+</tr>
+<tr>
+<td>分布式写 / 2PC</td>
+<td>跨节点写原子性，两阶段提交（M5）</td>
+</tr>
+<tr>
+<td>HA / 故障转移</td>
+<td>心跳故障检测、region 自动重指派、读 failover、复制链路主从切换（M6）</td>
+</tr>
+<tr>
+<td>Region 分裂与负载均衡</td>
+<td>写路径自动分裂、手动/周期负载均衡、在线迁移（M7）</td>
+</tr>
+<tr>
+<td>分布式事务 / TSO</td>
+<td>全局单调时间戳、分布式快照隔离、2PC 恢复加固（M8）</td>
+</tr>
+<tr>
+<td>备份恢复（BR）</td>
+<td>一致快照逻辑备份、幂等恢复、基于 LSN 的 PITR（时间点恢复）</td>
+</tr>
+<tr>
+<td>客户端驱动</td>
+<td>JDBC 与 Python 驱动（T19），自研协议封装</td>
+</tr>
+<tr>
+<td>运维工具链</td>
+<td><code>openxdb doctor</code> / <code>stats</code>、一键部署脚本（T20）</td>
+</tr>
+<tr>
+<td>安全</td>
+<td>TLS 加密传输（T36）、RBAC 角色权限（M11/M17）、审计日志（T30）</td>
+</tr>
+<tr>
+<td>可观测</td>
+<td>慢查询日志、Prometheus 指标、状态视图、告警规则（M13/T37）</td>
+</tr>
+<tr>
+<td>生态互操作</td>
+<td>CSV/JSON Lines/Parquet 导出（M19）、mysqldump 兼容导入（M14）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="13">1.3 架构分层<a class="headerlink" href="#13" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>包</th>
+<th>职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>协议 + CLI</td>
+<td><code>cmd/openxdb</code>、<code>pkg/server</code></td>
+<td>TCP server、REPL、二进制协议帧</td>
+</tr>
+<tr>
+<td>SQL</td>
+<td><code>pkg/sql</code></td>
+<td>递归下降解析器、执行器（project/filter/sort/aggregate）、元数据目录、二级索引层</td>
+</tr>
+<tr>
+<td>事务</td>
+<td><code>pkg/txn</code></td>
+<td>Begin/commit/rollback、快照隔离、读己之写</td>
+</tr>
+<tr>
+<td>存储</td>
+<td><code>pkg/storage</code></td>
+<td>KV 接口、键编码；RocksDB 引擎与 B+Tree 引擎</td>
+</tr>
+<tr>
+<td>WAL</td>
+<td><code>pkg/wal</code></td>
+<td>追加式日志、重放恢复</td>
+</tr>
+<tr>
+<td>复制</td>
+<td><code>pkg/replication</code>、<code>pkg/txn</code>、<code>pkg/db</code></td>
+<td>Binlog 存储、master 复制器（push + 心跳）、follower 幂等应用、commit-hook 装配</td>
+</tr>
+<tr>
+<td>分片</td>
+<td><code>pkg/sharding</code>、<code>pkg/sql</code>、<code>pkg/db</code></td>
+<td>RegionInfo 元数据、Router 键→region 映射、region 前缀物理键、跨 region 查询合并、分裂管理</td>
+</tr>
+<tr>
+<td>集群</td>
+<td><code>pkg/cluster</code>、<code>pkg/sql</code>、<code>pkg/db</code></td>
+<td>节点注册表、握手/存活、集群路由表、跨节点 SELECT 转发与合并、region 数据装载</td>
+</tr>
+<tr>
+<td>分布式写 / 2PC</td>
+<td><code>pkg/cluster</code>、<code>pkg/sql/2pc.go</code>、<code>pkg/db</code></td>
+<td>两阶段提交协调器、参与者 prepare 持久化、幂等 commit/abort、崩溃恢复</td>
+</tr>
+<tr>
+<td>HA / 故障转移</td>
+<td><code>pkg/cluster</code>、<code>pkg/sql/ha.go</code>、<code>pkg/db/ha.go</code></td>
+<td>心跳超时 → 节点 down、region 自动重指派、读 failover、复制主从切换</td>
+</tr>
+<tr>
+<td>分裂与均衡</td>
+<td><code>pkg/sql/balance.go</code>、<code>pkg/cluster</code>、<code>pkg/db</code></td>
+<td>写路径自动分裂、手动/自动负载均衡、集群未启用防护</td>
+</tr>
+<tr>
+<td>全局时间戳（TSO）</td>
+<td><code>pkg/tso</code>、<code>pkg/cluster/tso.go</code>、<code>pkg/db</code></td>
+<td>全局单调时间戳（64 位毫秒 + 逻辑位布局）、批量签发、溢出保护、事务边界 Reset</td>
+</tr>
+<tr>
+<td>快照隔离（分布式）</td>
+<td><code>pkg/cluster/txn2pc.go</code>、<code>pkg/sql/executor.go</code>、<code>pkg/db</code></td>
+<td>版本记录（m:ver）、begin_ts/commit_ts 全局过滤、跨节点版本透传</td>
+</tr>
+<tr>
+<td>备份 / 恢复</td>
+<td><code>pkg/sql/backup.go</code>、<code>pkg/sql</code>、<code>pkg/db</code></td>
+<td>一致快照逻辑备份（单文件、版本 + CRC32）、幂等恢复、binlog 重放到目标 LSN</td>
+</tr>
+<tr>
+<td>数据目录</td>
+<td><code>pkg/db</code></td>
+<td>初始化、引擎 + WAL + 事务管理器装配、崩溃恢复</td>
+</tr>
+</tbody>
+</table>
+<h3 id="14">1.4 键编码<a class="headerlink" href="#14" title="Permanent link">&para;</a></h3>
+<pre><code>物理键: r{regionID:8B}{innerKey}
+行键:   s{tableID:8B}{pk}                          (inner, M1)
+索引键: i{tableID:8B}{indexID:8B}{idxVal}p{pk}    (inner, T6)
+</code></pre>
+<p>每个存储键都带 region 前缀（<code>r</code> + 8 字节大端 regionID）；内层键保持 M1/T6 布局，保证键在 region 内连续、region 边界显式。索引值使用排序友好编码：INT 翻转符号位（<code>v ^ 0x8000000000000000</code>），TEXT 保持原始字节，字节序即值序。</p>
+<hr />
+<h2 id="2">2. 快速开始<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<h3 id="21">2.1 构建要求<a class="headerlink" href="#21" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Go 1.22+</li>
+<li>C/C++ 工具链（Windows 上使用 MinGW-w64；Linux/macOS 使用 gcc/clang）</li>
+<li>RocksDB（已在 v11.8.1 源码构建环境测试，无需第三方压缩库）</li>
+</ul>
+<h3 id="22-windows-mingw-go">2.2 构建（Windows + MinGW + Go）<a class="headerlink" href="#22-windows-mingw-go" title="Permanent link">&para;</a></h3>
+<p>使用一键构建脚本（自动检测 RocksDB 安装位置，然后 <code>go build</code> + 可选 <code>go test</code>）：</p>
+<pre><code class="language-powershell"># Windows：构建 bin\openxdb.exe，验证 go build ./...，运行 go test ./...
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -RunTests
+# 显式指定 RocksDB 源码/构建目录：
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -RocksSrcDir C:\rocksdb-src -RocksBuildDir C:\rocksdb-build -RunTests
+</code></pre>
+<pre><code class="language-sh"># Linux/macOS：
+./scripts/build.sh --test
+./scripts/build.sh --rocks-src /path/to/rocksdb-11.8.1 --rocks-build /path/to/librocksdb-dir --test
+</code></pre>
+<p>手动 cgo 配置（等价做法，适用于自定义工具链）：</p>
+<pre><code class="language-sh">export CGO_CFLAGS=-I&lt;rocksdb&gt;/include
+export CGO_CXXFLAGS=-I&lt;rocksdb&gt;/include
+export CGO_LDFLAGS=-L&lt;rocksdb-build&gt; -lrocksdb   # Windows: 追加 -lshlwapi -lrpcrt4 -lws2_32
+
+go build ./...
+</code></pre>
+<p><code>pkg/storage/rocksdb</code> 已按平台声明 <code>#cgo</code> 链接标志（Windows：<code>-lwinpthread -lshlwapi -lrpcrt4 -lws2_32</code>；Linux：<code>-lstdc++ -lpthread</code>；Darwin：<code>-lstdc++</code>），因此只需通过 <code>CGO_CFLAGS</code> / <code>CGO_LDFLAGS</code> 提供 RocksDB include/lib 目录。</p>
+<blockquote>
+<p><strong>注意</strong>：仓库 #cgo 附加标志含 <code>-static-libstdc++ -static-libgcc</code>，请勿额外追加 <code>-lstdc++</code> / <code>-lz</code> 等未声明链接参数，避免链接冲突。</p>
+</blockquote>
+<h3 id="23-repl-tcp-server">2.3 启动 REPL / TCP server<a class="headerlink" href="#23-repl-tcp-server" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sh"># 初始化数据目录
+openxdb init --data-dir ./data
+
+# 本地 REPL
+openxdb repl --data-dir ./data
+
+# TCP server（默认端口 7788）
+openxdb start --data-dir ./data [--port 7788]
+
+# 运维检查
+openxdb doctor --data-dir ./data [--addr 127.0.0.1:7788] [--json]
+openxdb stats [--addr 127.0.0.1:7788] [--interval 5] [--json]
+</code></pre>
+<h3 id="24">2.4 建表、插数、查询示例<a class="headerlink" href="#24" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sql">CREATE TABLE users (id INT, name TEXT, age INT, PRIMARY KEY (id));
+INSERT INTO users VALUES (1, 'alice', 30), (2, 'bob', 25), (3, 'carol', 35);
+CREATE INDEX idx_age ON users (age);
+SELECT name FROM users WHERE age &gt;= 25 AND age &lt; 35 ORDER BY age;
+UPDATE users SET age = 31 WHERE id = 1;
+DELETE FROM users WHERE id = 3;
+</code></pre>
+<h3 id="25">2.5 运行测试<a class="headerlink" href="#25" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sh">go test ./...
+</code></pre>
+<p>全部包通过：<code>cluster</code>（节点握手、查询转发、心跳 down、region push 路由学习、节点幂等重注册）、<code>db</code>（复制集成、M4 两节点集成、M5 2PC 集成、M6 HA 集成、M7 分裂/均衡集成、M8 分布式事务集成、BR 备份恢复集成）、<code>replication</code>、<code>server</code>、<code>sharding</code>、<code>sql</code>、<code>storage</code>、<code>storage/btree</code>、<code>storage/rocksdb</code>、<code>tso</code>、<code>txn</code>、<code>wal</code>。</p>
+<hr />
+<h2 id="3">3. 安装与部署<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<h3 id="31-openxdbconf">3.1 配置文件 openxdb.conf<a class="headerlink" href="#31-openxdbconf" title="Permanent link">&para;</a></h3>
+<p>OpenXDB 使用 INI 风格配置文件（参考 <code>docs/openxdb.conf.example</code>），核心段如下：</p>
+<pre><code class="language-ini">[server]
+data_dir = ./data
+port = 7788
+replica_port = 7789
+metrics_port = 7790
+# tls_cert = cert.pem
+# tls_key = key.pem
+
+[sql]
+query_cache = on
+slow_query_threshold = 100
+backup_dir = ./backup
+</code></pre>
+<ul>
+<li><code>[server]</code> 段：<code>data_dir</code> 数据目录、<code>port</code> 主服务端口（默认 7788）、<code>replica_port</code> 复制端口、<code>metrics_port</code> Prometheus 指标端口、<code>tls_cert</code>/<code>tls_key</code> TLS 证书与私钥路径。</li>
+<li><code>[sql]</code> 段：<code>query_cache</code> 查询缓存开关、<code>slow_query_threshold</code> 慢查询阈值（毫秒，默认 100ms）、<code>backup_dir</code> 备份目录。</li>
+</ul>
+<p>启动方式：</p>
+<pre><code class="language-sh">openxdb start --config openxdb.conf
+</code></pre>
+<blockquote>
+<p>提示：配置文件中的可热更新项（如 <code>query_cache</code>、<code>slow_query_threshold</code>、<code>slow_query_log</code>）也可通过 <code>SET</code> / <code>SET PERSIST</code> 语句运行时修改，详见<a href="#47-运维语句">第 4 章运维语句</a>。</p>
+</blockquote>
+<h3 id="32">3.2 一键部署脚本<a class="headerlink" href="#32" title="Permanent link">&para;</a></h3>
+<p>仓库提供 Windows 与 Linux/macOS 两套一键部署脚本：</p>
+<pre><code class="language-powershell"># Windows
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -DataDir C:\openxdb\data -Port 7788
+</code></pre>
+<pre><code class="language-sh"># Linux/macOS
+./scripts/deploy.sh --data-dir /var/lib/openxdb --port 7788
+</code></pre>
+<p>脚本流程：参数化初始化（<code>-DataDir</code> / <code>-Port</code> / <code>--data-dir</code> / <code>--port</code>）→ 启动服务 → <code>openxdb doctor</code> 健康自检 → 输出部署摘要。</p>
+<h3 id="33">3.3 启动模式汇总<a class="headerlink" href="#33" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>命令</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>openxdb init --data-dir &lt;dir&gt;</code></td>
+<td>初始化数据目录</td>
+</tr>
+<tr>
+<td><code>openxdb repl --data-dir &lt;dir&gt;</code></td>
+<td>本地交互式 REPL</td>
+</tr>
+<tr>
+<td><code>openxdb start --data-dir &lt;dir&gt; [--port 7788]</code></td>
+<td>启动 TCP server（默认端口 7788）</td>
+</tr>
+<tr>
+<td><code>openxdb start --cluster-addr &lt;addr&gt;</code></td>
+<td>以集群模式启动（节点 ID 由 <code>--node-id</code> 指定或自动生成）</td>
+</tr>
+<tr>
+<td><code>openxdb doctor</code></td>
+<td>健康检查（退出码 0=通过 / 1=警告 / 2=错误）</td>
+</tr>
+<tr>
+<td><code>openxdb stats</code></td>
+<td>实时指标查看</td>
+</tr>
+<tr>
+<td><code>openxdb gen-cert cert.pem key.pem</code></td>
+<td>生成自签名 TLS 证书</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-sql">4. SQL 参考<a class="headerlink" href="#4-sql" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>本章所有语法均来自 README.md 与 docs/ 下 T* 设计文档。SQL 能力清单包含 T41/T42 新增能力（IF NOT EXISTS、CREATE TABLE AS SELECT、INSERT INTO SELECT）。</p>
+</blockquote>
+<h3 id="41">4.1 数据类型<a class="headerlink" href="#41" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>INT</code></td>
+<td>整数</td>
+</tr>
+<tr>
+<td><code>TEXT</code></td>
+<td>文本</td>
+</tr>
+<tr>
+<td><code>DATE</code></td>
+<td>日期</td>
+</tr>
+<tr>
+<td><code>DECIMAL</code></td>
+<td>定点小数（内部规范化固定 4 位小数）</td>
+</tr>
+<tr>
+<td><code>BLOB</code></td>
+<td>二进制大对象</td>
+</tr>
+</tbody>
+</table>
+<h3 id="42-ddl">4.2 DDL<a class="headerlink" href="#42-ddl" title="Permanent link">&para;</a></h3>
+<h4 id="create-table">CREATE TABLE<a class="headerlink" href="#create-table" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">-- 基本建表（行内 PRIMARY KEY 与表级 PRIMARY KEY 等价）
+CREATE TABLE users (
+  id INT PRIMARY KEY,
+  name TEXT,
+  age INT
+);
+
+CREATE TABLE orders (
+  id INT,
+  user_id INT,
+  amount DECIMAL,
+  PRIMARY KEY (id)
+);
+
+-- IF NOT EXISTS：幂等建表（T41 新增）
+CREATE TABLE IF NOT EXISTS users (id INT PRIMARY KEY, name TEXT);
+
+-- CREATE TABLE AS SELECT（CTAS，T41 新增）：基于查询结果建表
+CREATE TABLE adult_users AS SELECT id, name FROM users WHERE age &gt;= 18;
+</code></pre>
+<h4 id="create-index">CREATE INDEX<a class="headerlink" href="#create-index" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">CREATE INDEX idx_age ON users (age);
+</code></pre>
+<h4 id="_2">视图 / 物化视图 / 触发器 / 存储过程<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">-- 视图
+CREATE VIEW v_adult AS SELECT id, name FROM users WHERE age &gt;= 18;
+DROP VIEW v_adult;
+
+-- 物化视图
+CREATE MATERIALIZED VIEW mv_adult AS SELECT id, name FROM users WHERE age &gt;= 18;
+REFRESH MATERIALIZED VIEW mv_adult;
+DROP MATERIALIZED VIEW mv_adult;
+
+-- 触发器
+CREATE TRIGGER trg_after_insert AFTER INSERT ON users FOR EACH ROW ...;
+DROP TRIGGER trg_after_insert;
+SHOW TRIGGERS;
+
+-- 存储过程
+CREATE PROCEDURE p_get_user(IN uid INT) ...;
+CALL p_get_user(1);
+DROP PROCEDURE p_get_user;
+SHOW PROCEDURES;
+</code></pre>
+<h4 id="_3">用户 / 角色<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">CREATE USER 'alice' IDENTIFIED BY 'pwd123';        -- 重复建报错
+DROP USER [IF EXISTS] 'alice';                     -- 不存在报错；IF EXISTS 静默
+SHOW USERS;                                        -- 按名称排序
+ALTER USER 'alice' IDENTIFIED BY 'newpwd';         -- 重置密码
+
+CREATE ROLE 'analyst';
+DROP ROLE [IF EXISTS] 'analyst';
+SHOW ROLES;
+GRANT ROLE 'analyst' TO 'alice';
+REVOKE ROLE 'analyst' FROM 'alice';
+SHOW GRANTS FOR 'alice';
+</code></pre>
+<h4 id="drop-if-exists">DROP ... IF EXISTS<a class="headerlink" href="#drop-if-exists" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS orders;
+</code></pre>
+<ul>
+<li><code>DROP TABLE IF EXISTS</code>：表不存在时幂等成功（T21 修复）。</li>
+<li><code>DROP USER IF EXISTS</code> / <code>DROP ROLE IF EXISTS</code>：幂等删除。</li>
+<li>删除用户/表/角色会级联清理相关授权记录。</li>
+</ul>
+<h3 id="43-dml">4.3 DML<a class="headerlink" href="#43-dml" title="Permanent link">&para;</a></h3>
+<h4 id="insert">INSERT<a class="headerlink" href="#insert" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">INSERT INTO users VALUES (1, 'alice', 30), (2, 'bob', 25);
+INSERT INTO users (id, name) VALUES (3, 'carol');
+</code></pre>
+<h4 id="insert-into-selectt42">INSERT INTO ... SELECT（T42 新增）<a class="headerlink" href="#insert-into-selectt42" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">-- 将查询结果插入目标表（可省略列清单；完整 SELECT 源兼容；原子事务 + 回滚）
+INSERT INTO archive_users SELECT * FROM users WHERE age &gt;= 30;
+INSERT INTO archive_users (id, name) SELECT id, name FROM users WHERE age &gt;= 30;
+</code></pre>
+<ul>
+<li>自插入采用快照语义（self-insert snapshot semantics）。</li>
+<li><code>REPLACE INTO ... SELECT</code> 同样支持。</li>
+</ul>
+<h4 id="replace-upsert">REPLACE / UPSERT<a class="headerlink" href="#replace-upsert" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">-- REPLACE：主键冲突时先删后插
+REPLACE INTO users VALUES (1, 'alice2', 31);
+
+-- INSERT ... ON DUPLICATE KEY UPDATE：冲突时更新
+INSERT INTO users VALUES (1, 'alice', 30)
+  ON DUPLICATE KEY UPDATE age = 31;
+</code></pre>
+<h4 id="update-delete">UPDATE / DELETE<a class="headerlink" href="#update-delete" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">UPDATE users SET age = 31 WHERE id = 1;
+DELETE FROM users WHERE id = 3;
+</code></pre>
+<h3 id="44-select">4.4 查询（SELECT 全能力）<a class="headerlink" href="#44-select" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sql">-- 基础查询 + WHERE
+SELECT * FROM users WHERE age &gt;= 25;
+
+-- 排序与分页（GROUP BY/聚合结果同样支持 LIMIT/OFFSET，T40）
+SELECT name FROM users ORDER BY age LIMIT 10 OFFSET 5;
+
+-- GROUP BY + 聚合（MAX/MIN/COUNT/SUM/AVG，MAX/MIN 为 T40 新增）
+SELECT age, COUNT(*), SUM(amount), AVG(amount) FROM orders GROUP BY age;
+SELECT MAX(age), MIN(age) FROM users;
+
+-- DISTINCT（T40 新增）
+SELECT DISTINCT age FROM users;
+
+-- JOIN
+SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id;
+
+-- 子查询
+SELECT name FROM users WHERE id IN (SELECT user_id FROM orders WHERE amount &gt; 100);
+
+-- CTE（M10）
+WITH adult AS (SELECT id, name FROM users WHERE age &gt;= 18)
+SELECT * FROM adult;
+
+-- 窗口函数（M10）
+SELECT name, age, ROW_NUMBER() OVER (ORDER BY age) AS rn FROM users;
+
+-- BETWEEN / IN / LIKE
+SELECT * FROM users WHERE age BETWEEN 25 AND 35;
+SELECT * FROM users WHERE name IN ('alice', 'bob');
+SELECT * FROM users WHERE name LIKE 'a%';
+
+-- CASE WHEN 与表达式（算术表达式为 T40 新增）
+SELECT name, CASE WHEN age &gt;= 18 THEN 'adult' ELSE 'minor' END AS bucket FROM users;
+SELECT id, amount * 2 AS double_amount FROM orders;
+SELECT -age AS neg_age FROM users;
+</code></pre>
+<h3 id="45">4.5 事务<a class="headerlink" href="#45" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sql">BEGIN;
+INSERT INTO users VALUES (4, 'dave', 40);
+UPDATE users SET age = 41 WHERE id = 4;
+COMMIT;
+
+-- 或回滚
+BEGIN;
+DELETE FROM users WHERE id = 4;
+ROLLBACK;
+</code></pre>
+<p>事务特性：本地 ACID + 快照隔离（snapshot isolation）；读己之写合并、墓碑、点/范围扫描。</p>
+<h3 id="46">4.6 数据导入导出<a class="headerlink" href="#46" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sql">-- CSV 导入（P1）
+IMPORT INTO users FROM '/path/users.csv';
+
+-- mysqldump 兼容导入（M14，T27）：解析 mysqldump 导出的 CREATE TABLE + INSERT
+IMPORT MYSQLDUMP FROM '/path/dump.sql' [BATCH 100] [IGNORE ERRORS];
+
+-- 导出（P1 + M19 生态导出）
+EXPORT TABLE users TO '/path/users.csv';                        -- 等价 FORMAT CSV
+EXPORT TABLE users TO '/path/users.csv' FORMAT CSV;
+EXPORT TABLE users TO '/path/users.jsonl' FORMAT JSON;          -- JSON Lines
+EXPORT TABLE users TO '/path/users.parquet' FORMAT PARQUET;     -- Parquet v1
+</code></pre>
+<ul>
+<li>CSV：面向表格工具。</li>
+<li>JSON（JSON Lines）：流式对象序列，每行一条记录，适合日志管道/数据湖摄取/ETL。</li>
+<li>Parquet：列式二进制存储，由项目内自实现最小 Parquet v1 写入器产出（单 Row Group、PLAIN/UNCOMPRESSED 编码），可被 Spark/Hive/DuckDB/Polars 直接消费。</li>
+</ul>
+<h3 id="47">4.7 运维语句<a class="headerlink" href="#47" title="Permanent link">&para;</a></h3>
+<h4 id="show">SHOW 语句<a class="headerlink" href="#show" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">SHOW TABLES;                          -- 列出全部表
+SHOW INDEX FROM users;                -- 查看表索引
+SHOW VIEWS;                           -- 列出视图
+SHOW USERS;                           -- 列出用户
+SHOW ROLES;                           -- 列出角色
+SHOW GRANTS FOR 'alice';              -- 查看用户授权
+SHOW TRIGGERS;                        -- 列出触发器
+SHOW PROCEDURES;                      -- 列出存储过程
+SHOW SLOWQUERIES;                     -- 慢查询（新→旧，列：time|user|duration_ms|rows|error|sql）
+SHOW STATS;                           -- 服务状态指标
+SHOW CONFIG;                          -- 查看当前配置
+SHOW PERSISTED CONFIG;                -- 查看持久化配置
+SHOW AUDITLOG;                        -- 审计日志
+SHOW ALERT RULES;                     -- 告警规则
+SHOW ALERT STATUS;                    -- 告警状态
+SHOW ALERTS;                          -- 告警事件
+SHOW NODES;                           -- 集群节点
+SHOW REGION ROUTES;                   -- region 路由（region/table/start/end/node/local）
+LIST REGIONS;                         -- 列出 region
+LOCATE REGION &lt;key&gt;;                  -- 定位键所在 region
+</code></pre>
+<h4 id="explain">EXPLAIN<a class="headerlink" href="#explain" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">EXPLAIN &lt;SELECT&gt;;
+</code></pre>
+<h4 id="set-set-persist">SET / SET PERSIST<a class="headerlink" href="#set-set-persist" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">SET slow_query_threshold = 100;       -- 慢查询阈值（毫秒，&lt;=0 关闭记录）
+SET slow_query_log = on;              -- 慢查询落盘开关
+SET query_cache = on;                 -- 查询缓存开关
+SET replication_mode = async;         -- 复制模式：async / semi-sync / sync
+SET replication_ack = 1;              -- 半同步 ACK 数量
+SET replication_timeout = 3000;       -- ACK 超时（毫秒）
+SET alert_rules = '...';              -- 告警规则（JSON）
+SET audit_log = on;                   -- 审计日志热开关
+SET PERSIST slow_query_threshold = 100;  -- 持久化配置（重启生效类）
+SET PERSIST tls_cert = 'cert.pem';    -- TLS 证书（重启生效）
+SET PERSIST tls_key = 'key.pem';      -- TLS 私钥（重启生效）
+SET PERSIST tls_allow_legacy = on;    -- 允许明文/ TLS 共存监听
+SET @var = 1;                         -- 用户变量
+SELECT @var;                          -- 读取用户变量
+</code></pre>
+<h4 id="backup-restore">BACKUP / RESTORE<a class="headerlink" href="#backup-restore" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">BACKUP TO '/path/backup.bk';                       -- 一致快照逻辑备份
+RESTORE FROM '/path/backup.bk';                    -- 幂等恢复（同名表 drop-then-recreate）
+RESTORE FROM '/path/backup.bk' TO LSN 12345;       -- PITR：备份点后重放 binlog 到目标 LSN
+</code></pre>
+<h4 id="prepare-execute-deallocatem18">PREPARE / EXECUTE / DEALLOCATE（M18）<a class="headerlink" href="#prepare-execute-deallocatem18" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">PREPARE stmt1 FROM 'SELECT * FROM users WHERE id = ?';
+EXECUTE stmt1 USING 1;                             -- 绑定用户变量或字面量
+EXECUTE stmt1 USING @var;
+DEALLOCATE PREPARE stmt1;
+</code></pre>
+<ul>
+<li>会话级缓存：同名重 PREPARE 覆盖；EXECUTE/DEALLOCATE 未知名报错；实参数量必须匹配占位符数量。</li>
+</ul>
+<h4 id="information_schema-m18">information_schema 只读视图（M18）<a class="headerlink" href="#information_schema-m18" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">SELECT * FROM information_schema.schemata;
+SELECT * FROM information_schema.tables;
+SELECT * FROM information_schema.columns;
+SELECT * FROM information_schema.statistics;
+</code></pre>
+<ul>
+<li>只读虚拟库：支持大小写不敏感列投影、<code>WHERE &lt;col&gt; = &lt;literal&gt;</code> 等值过滤（可 AND 组合）、ORDER BY、限定 <code>default.information_schema.tables</code> FROM；任何针对虚拟库的 CREATE/DROP/INSERT/UPDATE 都会被拒绝。</li>
+</ul>
+<hr />
+<h2 id="5">5. 客户端驱动<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<p>OpenXDB 提供 JDBC 与 Python 两套标准客户端驱动（T19），均基于自研二进制 TCP 协议（<code>pkg/server</code>），<strong>不是 MySQL wire protocol</strong>。</p>
+<h3 id="51">5.1 通用协议说明<a class="headerlink" href="#51" title="Permanent link">&para;</a></h3>
+<ul>
+<li>线协议：UTF-8 行协议，每条命令一行、以 <code>\n</code> 结尾；服务端逐行回复。</li>
+<li>回复形态：简单确认（OK/PONG/BYE）、受影响行（N rows affected）、文本表（首行表头 + 分隔线 + 数据行 + 末行 N rows）、错误（ERR <message>）。</li>
+<li>空单元格统一映射为 NULL。</li>
+<li>多行文本不支持（参数化字符串值中 <code>\n</code> / <code>\r</code> 会被驱动拒绝）。</li>
+<li>参数化：服务端协议无 prepared statement 二进制参数通道，两驱动均在客户端安全转义 <code>?</code> 占位符。</li>
+</ul>
+<h3 id="52-jdbc">5.2 JDBC 驱动<a class="headerlink" href="#52-jdbc" title="Permanent link">&para;</a></h3>
+<ul>
+<li>位置：<code>drivers/jdbc</code>，Maven 项目，Java 8+，JUnit 5。</li>
+<li>注册：静态块 <code>DriverManager.registerDriver(new OpenXDBDriver())</code> + <code>META-INF/services/java.sql.Driver</code> 自动注册。</li>
+<li>URL：<code>jdbc:openxdb://host:port</code>（默认端口 7788）；<code>user</code>/<code>password</code> 属性被接受但默认忽略（无 AUTH 握手时以 root 运行）。</li>
+<li>核心类：<code>OpenXDBDriver</code> / <code>OpenXDBConnection</code> / <code>OpenXDBStatement</code> / <code>OpenXDBPreparedStatement</code>（客户端 <code>?</code> 占位符替换）/ <code>OpenXDBResultSet</code>（只进只读）/ <code>OpenXDBProtocol</code>（socket 连接 5s 超时）。</li>
+<li>事务：<code>setAutoCommit(false)</code> 触发会话事务；执行前若未 BEGIN 自动发送 BEGIN。</li>
+<li>TLS：驱动支持 TLS 连接（<code>InsecureTLSConfig</code> 场景可关闭证书校验，生产环境使用 verify-full / verify-ca 配置）。</li>
+</ul>
+<h3 id="53-python">5.3 Python 驱动<a class="headerlink" href="#53-python" title="Permanent link">&para;</a></h3>
+<ul>
+<li>位置：<code>drivers/python</code>，PEP 249 兼容。</li>
+<li>元信息：<code>apilevel="2.0"</code>、<code>threadsafety=1</code>、<code>paramstyle="qmark"</code>、<code>__version__="0.10.0"</code>。</li>
+<li>模块级 <code>connect()</code>、<code>DEFAULT_PORT</code>；错误类 PEP 249 风格层级。</li>
+</ul>
+<pre><code class="language-python">import openxdb
+conn = openxdb.connect(&quot;127.0.0.1&quot;, 7788)
+cur = conn.cursor()
+cur.execute(&quot;SELECT id, name FROM users WHERE id &gt; ?&quot;, (1,))
+for row in cur.fetchall():
+    print(row)
+conn.close()
+</code></pre>
+<ul>
+<li><code>Connection</code>：<code>cursor()</code> / <code>ping()</code> / <code>begin()</code> / <code>commit()</code> / <code>rollback()</code> / <code>close()</code>。</li>
+<li><code>Cursor</code>：<code>execute</code> / <code>executemany</code> / <code>fetchone</code> / <code>fetchmany</code> / <code>fetchall</code> / 迭代器。</li>
+<li>TLS：驱动支持 TLS 连接参数（关闭证书校验适用于自签名证书开发场景；生产使用受信任 CA）。</li>
+</ul>
+<hr />
+<h2 id="6">6. 数据安全<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<h3 id="61-br">6.1 备份与恢复（BR）<a class="headerlink" href="#61-br" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>一致快照逻辑备份</strong>：<code>BACKUP TO &lt;path&gt;</code> 在单个一致快照上导出完整表目录、全部数据行、索引键与 region 路由元数据，并记录备份点 LSN。产出单文件（magic + version + JSON meta + 分段 CRC32 完整性校验 + 原子 tmp+rename 写入），可跨机器传输。</li>
+<li><strong>幂等恢复</strong>：<code>RESTORE FROM &lt;path&gt;</code> 先校验版本与完整性，再以 "drop-then-recreate" 语义重建同名表（清除旧数据/索引残留、覆盖目录、整个恢复运行在单事务内、可整体回滚）。</li>
+<li><strong>PITR（时间点恢复）</strong>：<code>RESTORE FROM &lt;path&gt; TO LSN &lt;n&gt;</code> 在备份点之后重放 binlog 记录直到目标 LSN（含），提供备份 + binlog 重放的 PITR 基础。</li>
+<li><strong>分布式备份一致性（T35）</strong>：协调器发起多节点一致备份：PREPARE 收集各节点 LastLSN/TSO 候选 → GlobalLSN = max(all LSN) 作为全局一致点 → DO 阶段各节点以对齐的 global_lsn 做快照（节点超过 G 重试最多 3 轮）；产物保留 v1 格式 + manifest（GlobalLSN / 节点元数据 / 一致性标记）；<code>RESTORE ... TO LSN G</code> 驱动每个节点恢复到全局备份点；单节点零触发保持旧 BACKUP/RESTORE 行为不变。</li>
+</ul>
+<h3 id="62-tls-t36">6.2 TLS 加密传输（T36）<a class="headerlink" href="#62-tls-t36" title="Permanent link">&para;</a></h3>
+<ul>
+<li>主服务监听层支持 TLS：<code>--tls-cert</code> 与 <code>--tls-key</code> 同时提供时启用加密监听，否则保持明文监听（行为兼容）。</li>
+<li>复制端口（<code>--replica-port</code>）可另配 <code>--replica-tls</code> 启用 TLS。</li>
+<li><strong>默认 TLS-only 监听</strong>，明文连接被拒绝；<code>--tls-allow-legacy</code> 或 <code>SET PERSIST tls_allow_legacy=on</code> 允许明文/TLS 共存（AutoListener）。</li>
+<li>证书管理：<code>openxdb gen-cert cert.pem key.pem</code> 生成自签名证书（开发/测试用；生产请使用受信任 CA 签发证书，勿将私钥提交仓库）；<code>SET PERSIST tls_cert/tls_key</code> 为重启生效配置。</li>
+<li>客户端校验：驱动支持 <code>verify-full</code> / <code>verify-ca</code> 配置；自签名证书开发场景可关闭校验。</li>
+</ul>
+<pre><code class="language-sh"># 生成自签名证书（openssl 方式）
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 365 -subj &quot;/CN=openxdb&quot;
+
+# 启动 TLS 服务（两个参数必须同时提供，仅提供一个会报错退出）
+openxdb start --data-dir ./data --tls-cert cert.pem --tls-key key.pem
+
+# 验证 TLS 握手
+openssl s_client -connect 127.0.0.1:7788 -CAfile cert.pem
+</code></pre>
+<h3 id="63-rbac">6.3 RBAC 与权限<a class="headerlink" href="#63-rbac" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>用户管理</strong>：<code>CREATE USER</code> / <code>DROP USER [IF EXISTS]</code> / <code>ALTER USER</code> / <code>SHOW USERS</code>；口令以 SHA-256 + 随机 salt 哈希落库（无明文），常数时间比对防时序侧信道。</li>
+<li><strong>表级权限</strong>：<code>GRANT &lt;priv[,priv...]&gt; ON &lt;table&gt; TO '&lt;user&gt;'</code> / <code>REVOKE ... FROM '&lt;user&gt;'</code>；priv ∈ {SELECT, INSERT, UPDATE, DELETE, ALL}；重复 GRANT/REVOKE 幂等。</li>
+<li><strong>数据库级与列级权限（M17）</strong>：<code>GRANT/REVOKE &lt;priv&gt; ON DATABASE &lt;db&gt; TO/FROM '&lt;user&gt;'</code>、<code>GRANT/REVOKE &lt;priv&gt; ON &lt;table&gt; (&lt;col&gt;, ...) TO/FROM ...</code>；角色目标授权。</li>
+<li><strong>角色系统（M17）</strong>：<code>CREATE ROLE</code> / <code>DROP ROLE [IF EXISTS]</code> / <code>SHOW ROLES</code>、<code>GRANT ROLE '&lt;role&gt;' TO '&lt;user&gt;'</code> / <code>REVOKE ROLE ... FROM '&lt;user&gt;'</code>、<code>SHOW GRANTS FOR '&lt;user&gt;'</code>。</li>
+<li><strong>权限聚合校验</strong>：表直接授权 ∪ 数据库授权 ∪ 角色继承，SELECT/INSERT/UPDATE/DELETE 聚合检查 + 列级检查。</li>
+<li><strong>级联清理</strong>：DROP USER / DROP TABLE / DROP ROLE 自动清理相关授权，避免悬空授权。</li>
+<li><strong>连接鉴权</strong>：server 支持可选连接鉴权（AUTH 握手）；未交换 AUTH 时以默认 root 运行；<code>AllowLegacy</code> 开启时旧客户端回退受限 guest 模式，严格模式直接拒绝。</li>
+</ul>
+<h3 id="64-t30">6.4 审计日志（T30）<a class="headerlink" href="#64-t30" title="Permanent link">&para;</a></h3>
+<ul>
+<li>审计事件覆盖：连接（connect）、鉴权（auth）、DML、DDL、权限事件。</li>
+<li>存储：环形缓冲区 + JSON Lines 持久化。</li>
+<li>查询：<code>SHOW AUDITLOG</code>；热开关：<code>SET audit_log = on/off</code>。</li>
+</ul>
+<hr />
+<h2 id="7">7. 运维与可观测<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
+<h3 id="71-openxdb-doctor-t20">7.1 openxdb doctor 健康检查（T20）<a class="headerlink" href="#71-openxdb-doctor-t20" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sh">openxdb doctor --data-dir ./data [--addr 127.0.0.1:7788] [--json]
+</code></pre>
+<p>检查项：
+- 数据目录与 WAL 完整性；
+- RocksDB 打开健康；
+- <code>m:tables</code> / <code>m:regions</code> 元数据一致性 &amp; 路由自洽；
+- binlog 可读性 &amp; LSN（只读 <code>PeekLastLSN</code>）；
+- 可选在线端口/PING 与慢查询检查。</p>
+<p>输出：人类可读或 <code>--json</code> 报告；退出码 0=通过 / 1=警告 / 2=错误。</p>
+<h3 id="72-openxdb-stats-t20">7.2 openxdb stats 实时指标（T20）<a class="headerlink" href="#72-openxdb-stats-t20" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sh">openxdb stats [--addr 127.0.0.1:7788] [--interval 5] [--json]
+</code></pre>
+<p>指标：活跃连接数（server 会话计数）、表数量、region 数量与路由分布、慢查询数量、binlog LSN（可选 <code>--interval</code> 两次采样计算增长）、表或 <code>--json</code> 输出；由 <code>SHOW STATS</code> 语句支撑。</p>
+<h3 id="73-prometheus-m13">7.3 Prometheus 指标（M13）<a class="headerlink" href="#73-prometheus-m13" title="Permanent link">&para;</a></h3>
+<ul>
+<li>指标端口：<code>metrics_port</code>（默认 7790），暴露 Prometheus 格式指标。</li>
+<li>指标来源：<code>metrics.Snapshot</code> 同一数据源（连接数、表/region 数、慢查询、LSN 等）。</li>
+</ul>
+<h3 id="74-m13">7.4 慢查询（M13）<a class="headerlink" href="#74-m13" title="Permanent link">&para;</a></h3>
+<ul>
+<li>阈值：默认 100ms；<code>SET slow_query_threshold = &lt;ms&gt;</code>（&lt;=0 关闭记录）。</li>
+<li>落盘：默认 <code>&lt;数据目录&gt;/slow.log</code>，可配置；<code>SET slow_query_log = on/off</code> 热开关。</li>
+<li>内存：保留最近 N 条（默认 64，<code>Engine.SetSlowQueryMax(n)</code> 可调），<code>SHOW SLOWQUERIES</code> 查询（新→旧）。</li>
+<li>记录字段：SQL 文本、用户、开始时间、耗时（毫秒）、结果行数（失败为 0）、错误信息（成功为空串）。</li>
+<li>低开销设计：阈值判断先于格式化，正常语句零格式化开销。</li>
+</ul>
+<h3 id="75-t37">7.5 告警规则（T37）<a class="headerlink" href="#75-t37" title="Permanent link">&para;</a></h3>
+<ul>
+<li>规则模型：<code>metric</code> / <code>op</code> / <code>threshold</code> / <code>duration_sec</code> / <code>severity</code>，以 JSON 存储。</li>
+<li>配置：<code>SET</code> / <code>SET PERSIST alert_rules*</code>。</li>
+<li>评估引擎：基于同一 <code>metrics.Snapshot</code> 数据源，NORMAL/ALERT/RESOLVED 状态机 + 持续时间去抖。</li>
+<li>通知：logx 环形缓冲区 + 可选 webhook / 文件通道。</li>
+<li>管理语句：<code>SHOW ALERT RULES</code> / <code>SHOW ALERT STATUS</code> / <code>SHOW ALERTS</code>。</li>
+<li>评估循环挂接数据库生命周期。</li>
+</ul>
+<h3 id="76-region-m7">7.6 Region 分裂与负载均衡（M7）<a class="headerlink" href="#76-region-m7" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>自动分裂</strong>：写路径（INSERT/UPDATE/DELETE）提交后累计表级写计数；水位达到阈值一半触发真实行数检查（扫描本地 region 物理键空间）；本地 region 行数超过阈值沿数据中点一分为二，同一事务内完成存量数据重路由 + 路由表替换 + 元数据落盘。</li>
+<li><strong>手动分裂</strong>：<code>SPLIT REGION</code>（按数据中点）或显式边界。</li>
+<li><strong>手动均衡</strong>：<code>BALANCE</code>（返回迁移 region 数；均衡后再 BALANCE 返回 0）。</li>
+<li><strong>自动均衡</strong>：<code>Engine.SetAutoBalance(enabled, interval)</code> 周期触发，比较本节点与最闲存活节点 region 数，把最大 region 在线迁移。</li>
+<li><strong>在线迁移</strong>：迁移期间源路由不变、读写不中断；扫描源 region 物理行 → <code>REGION_PUSH</code> 装载目标节点 → 切换本节点路由并落盘；其余存活节点经下一次心跳路由同步。</li>
+<li>单机模式执行 <code>BALANCE</code> 报 <code>cluster not enabled</code>。</li>
+</ul>
+<h3 id="77-ha-m6">7.7 HA 故障切换（M6）<a class="headerlink" href="#77-ha-m6" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>故障检测</strong>：心跳（PING/PONG，默认 2s/6s）超时 → 节点标记 down（OnDown 回调）。</li>
+<li><strong>Region 自动重指派</strong>：down 节点持有的 region 自动重指派到存活节点（最全副本数据源 + <code>REGION_PUSH</code>），替代手动 <code>ASSIGN REGION</code>。</li>
+<li><strong>读 failover</strong>：跨节点读遇 down 自动换新归属（QUERY_REQ 重路由），客户端无感知。</li>
+<li><strong>复制主从切换</strong>：follower 在旧 master down 后可自动提升（<code>PromoteToMaster</code> / <code>EnableAutoFailover</code> / <code>StopAutoFailover</code>），写路径保持可用。</li>
+</ul>
+<hr />
+<h2 id="8">8. 分布式能力<a class="headerlink" href="#8" title="Permanent link">&para;</a></h2>
+<h3 id="81-m2-t33">8.1 复制（M2 + T33）<a class="headerlink" href="#81-m2-t33" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>异步复制（async，默认）</strong>：master-follower 架构；commit-hook binlog（独立追加式文件、单调递增 LSN）；replicator push + 每槽位断点续传；follower 幂等应用；PING/PONG 心跳与 offline 检测。</li>
+<li><strong>半同步复制（semi-sync）</strong>：<code>SET replication_mode = semi-sync</code>；等待部分/全部 ACK（在事务锁外）；ACK 超时或无 slave 时降级为异步。</li>
+<li><strong>全同步复制（sync）</strong>：<code>SET replication_mode = sync</code>；等待全部 ACK，无法满足时拒绝伪同步。</li>
+<li>热切换配置：<code>SET replication_mode</code> / <code>SET replication_ack</code> / <code>SET replication_timeout</code>。</li>
+</ul>
+<h3 id="82-m3">8.2 分片（M3）<a class="headerlink" href="#82-m3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>RegionInfo 元数据持久化 <code>m:regions</code>；Router 半开区间 <code>[StartKey, EndKey)</code> 边界语义。</li>
+<li>Region 前缀物理键（<code>r</code> + regionID:8B + 内层键）。</li>
+<li>跨 region 点查/范围/全表查询：区间展开 + 合并。</li>
+<li>管理：<code>SPLIT</code> / <code>LIST REGIONS</code> / <code>LOCATE REGION</code>；默认单 region 形态保持未分片行为不变。</li>
+</ul>
+<h3 id="83-m4">8.3 多节点集群（M4）<a class="headerlink" href="#83-m4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>节点拓扑：<code>NodeInfo</code>（NodeID/Addr/Role master|follower/State active|down + 最近存活时间），节点注册表落盘 <code>m:nodes</code>，Open 时自动恢复。</li>
+<li>管理入口：<code>ADD NODE '&lt;addr&gt;'</code> / <code>SHOW NODES</code>；<code>openxdb start --cluster-addr &lt;addr&gt;</code> 集群模式启动。</li>
+<li>集群路由表：region → 节点；<code>ASSIGN REGION &lt;id&gt; TO NODE '&lt;nodeID&gt;'</code> 更新归属并推送数据；<code>SHOW REGION ROUTES</code> 一表查看。</li>
+<li>跨节点读：非本地 region 经 TCP 转发到归属节点执行、取回结果合并排序；Local 语义（Node 为空或等于 selfID）单节点部署零回归。</li>
+</ul>
+<h3 id="84-2pcm5">8.4 分布式写 / 2PC（M5）<a class="headerlink" href="#84-2pcm5" title="Permanent link">&para;</a></h3>
+<ul>
+<li>跨节点写原子性：autocommit INSERT/UPDATE/DELETE（含 CSV IMPORT）同时触达本地与远端 region 时以两阶段提交执行。</li>
+<li>流程：协调器本地应用 → PREPARE 远端参与者（操作持久化 <code>m:2pc:*</code> 供崩溃恢复）→ 本地提交 → 幂等 COMMIT 全部参与者。</li>
+<li>失败语义：任一 PREPARE 失败或本地提交失败即整体 ABORT；错误码 <code>TXN_PREPARE_FAILED</code> / <code>TXN_COMMIT_ABORTED</code> / <code>TXN_COMMIT_UNCERTAIN</code>。</li>
+<li>协议帧 22-27 扩展 M4 帧；单节点部署永不进入 2PC 路径（零回归）。</li>
+</ul>
+<h3 id="85-tsom8">8.5 分布式事务 / TSO（M8）<a class="headerlink" href="#85-tsom8" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>全局时间戳（TSO）</strong>：64 位物理毫秒 + 24 位逻辑布局；严格单调（时钟回退安全）；批量签发（GetBatch 分配连续区间，远端客户端缓存批次摊销 RTT）；事务边界 Reset 丢弃未消费缓存，保证新快照读取权威序列头。</li>
+<li><strong>分布式快照隔离</strong>：版本记录 <code>m:ver:&lt;key&gt;:&lt;commit_ts&gt;</code>（键优先，每键范围连续）；begin_ts/commit_ts 全局可比过滤 + 跨节点版本透传。</li>
+<li><strong>2PC 恢复加固</strong>：协调器持久化 CoordRecord（<code>m:2pc:coord:&lt;txid&gt;</code>），重启后决定 commit/abort（RecoverCoordinated2PC）并幂等驱动参与者完成（<code>TXN_COMMIT_UNCERTAIN</code> 完成）。</li>
+</ul>
+<h3 id="86-ddlt34">8.6 跨节点 DDL（T34）<a class="headerlink" href="#86-ddlt34" title="Permanent link">&para;</a></h3>
+<ul>
+<li>DDL 元数据经集群 DDL_PUSH 帧广播到所有在线节点；各节点按 TableID 幂等应用。</li>
+<li>离线/应用失败节点记录 pending，在下次广播前或 <code>ReplayPendingDDL</code> 时重放。</li>
+<li>单节点零触发兼容；与 T33 复制链路协同工作。</li>
+</ul>
+<h3 id="87-t35">8.7 分布式备份一致性（T35）<a class="headerlink" href="#87-t35" title="Permanent link">&para;</a></h3>
+<p>见<a href="#61-备份与恢复br">第 6 章 6.1</a>。</p>
+<hr />
+<h2 id="9">9. 性能基准<a class="headerlink" href="#9" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>来源：E5 标准基准对齐实验（<code>docs/experiments/E5_standard_bench_alignment.md</code>）。由于 OpenXDB 使用自研协议（非 MySQL wire protocol），标准 sysbench/TPC-C 官方工具无法直接接入，采用 <strong>Python PEP 249 驱动等价</strong>方案实测。性能定位为<strong>单机端侧基准</strong>。</p>
+</blockquote>
+<h3 id="91-sysbench-oltp8-60spython">9.1 sysbench OLTP（8 线程 × 60s，Python 驱动自研协议）<a class="headerlink" href="#91-sysbench-oltp8-60spython" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>负载</th>
+<th>TPS</th>
+<th>QPS</th>
+<th>errs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>read（只读）</td>
+<td>1.73</td>
+<td>24.27</td>
+<td>0</td>
+</tr>
+<tr>
+<td>write（只写）</td>
+<td>0.93</td>
+<td>3.73</td>
+<td>0</td>
+</tr>
+<tr>
+<td>read_write（读写混合）</td>
+<td>1.32</td>
+<td>23.70</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<h3 id="92-tpc-c-5-8-120s">9.2 TPC-C 小仓（5 仓 × 8 线程 × 120s）<a class="headerlink" href="#92-tpc-c-5-8-120s" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>值</th>
+<th>errs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tpmC</td>
+<td>13.50</td>
+<td>0</td>
+</tr>
+<tr>
+<td>TPM</td>
+<td>32.50</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<h3 id="93">9.3 瓶颈说明<a class="headerlink" href="#93" title="Permanent link">&para;</a></h3>
+<ul>
+<li>当前吞吐瓶颈：<strong>全局会话锁串行</strong> + <strong>逐语句往返</strong>（每条语句经驱动与服务器逐条交互）。</li>
+<li>E5 实验同时修复了共享会话并发 bug，并完成算术表达式 / DISTINCT / DECIMAL 精度等绕过工作。</li>
+<li>历史基准参考：E3 SQL OLTP 端到端 256.3 TPS（8:2）/ 605.4 TPS（5:5）；E4 稳定性 6 分钟混合负载 307–385 TPS 无退化、重启后 COUNT(*) == 150466；E2 fsync 引擎基准 sync write 747k TPS seq / 198k rand（batch=1000），group-commit 批量相对逐键 fsync 提升 181x。以上为实验记录，非对外承诺。</li>
+</ul>
+<hr />
+<h2 id="10">10. 已知限制与边界<a class="headerlink" href="#10" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>详细清单见 KNOWN_LIMITATIONS.md（待建）。以下为概要：</p>
+</blockquote>
+<ol>
+<li><strong>SQL 子集</strong>：OpenXDB 实现的是 SQL 子集，并非完整 SQL 标准。不支持 <code>HAVING</code> 子句；DDL/DML/查询能力以<a href="#4-sql-参考">第 4 章</a>为准。</li>
+<li><strong>非 MySQL wire protocol</strong>：使用自研二进制 TCP 协议，无法直接兼容 MySQL 生态工具（标准 sysbench、官方 mysqldump 客户端等）。</li>
+<li><strong>全局会话锁性能边界</strong>：当前会话层串行化全局锁是主要吞吐瓶颈（见<a href="#9-性能基准">第 9 章</a>），高并发写入场景吞吐受限。</li>
+<li><strong>行协议限制</strong>：不支持单元格内换行（多行文本参数会被驱动拒绝）；空单元格同时表示 NULL 与空字符串。</li>
+<li><strong>类型与精度</strong>：DECIMAL 内部规范化为固定 4 位小数；JSON 导出中 DECIMAL 经 <code>strconv.ParseFloat</code> 近似（或保留字符串）。</li>
+<li><strong>鉴权与兼容模式</strong>：无 AUTH 握手时连接以默认 root 运行；旧客户端在 <code>AllowLegacy</code> 开启时回退受限 guest 模式，严格模式拒绝。</li>
+<li><strong>存储过程/触发器为受限子集</strong>：仅覆盖设计文档所定义的语法与语义，不支持完整 SQL/PL 能力。</li>
+<li><strong>单机部署下分布式语句受限</strong>：<code>BALANCE</code> 等集群语句在单机模式明确报 <code>cluster not enabled</code>；跨节点写仅集群模式生效。</li>
+<li><strong>分布式能力边界</strong>：跨节点写依赖 2PC 协议帧；复制模式选择（async/semi-sync/sync）通过热配置切换，全同步模式在无法满足 ACK 时拒绝伪同步。</li>
+<li><strong>导入兼容性</strong>：mysqldump 导入为文本规则解析，覆盖常见 dump 语法子集；未知类型在严格模式报错、宽松模式跳过该表；单元格解析失败在宽松模式丢弃该行。</li>
+</ol>
+<hr />
+<h2 id="11-faq">11. FAQ<a class="headerlink" href="#11-faq" title="Permanent link">&para;</a></h2>
+<h3 id="q1-cgo">Q1：构建时报 cgo 链接错误怎么办？<a class="headerlink" href="#q1-cgo" title="Permanent link">&para;</a></h3>
+<p>检查 CGO 环境变量是否正确指向 RocksDB 目录：<code>CGO_CFLAGS</code> / <code>CGO_CXXFLAGS</code> 指向 <code>&lt;rocksdb&gt;/include</code>，<code>CGO_LDFLAGS</code> 指向 <code>&lt;rocksdb-build&gt; -lrocksdb</code>。Windows 上需追加 <code>-lshlwapi -lrpcrt4 -lws2_32</code>（仓库 #cgo 已包含）。推荐直接使用 <code>scripts/build.ps1</code> / <code>scripts/build.sh</code> 一键构建。不要额外追加 <code>-lstdc++</code> / <code>-lz</code> 等未声明参数。</p>
+<h3 id="q2-users-show-users">Q2：表名包含关键字（如 <code>users</code> 与 <code>SHOW USERS</code> 冲突）怎么办？<a class="headerlink" href="#q2-users-show-users" title="Permanent link">&para;</a></h3>
+<p><code>SHOW USERS</code> 按标识符文本匹配实现，<code>USERS</code> 未加入关键字表，因此 <code>CREATE TABLE users</code> 与 <code>SHOW USERS</code> 可以共存，无需特殊处理。若遇到其他关键字冲突，请参考设计文档中的解析规则。</p>
+<h3 id="q3if-not-exists">Q3：IF NOT EXISTS 的幂等语义是什么？<a class="headerlink" href="#q3if-not-exists" title="Permanent link">&para;</a></h3>
+<p><code>CREATE TABLE IF NOT EXISTS</code> / <code>DROP TABLE IF EXISTS</code> / <code>DROP USER IF EXISTS</code> / <code>DROP ROLE IF EXISTS</code> 在对象不存在时静默成功、不报错；对象存在时按正常语义执行（建表报错或删除成功）。</p>
+<h3 id="q4">Q4：如何备份与恢复？<a class="headerlink" href="#q4" title="Permanent link">&para;</a></h3>
+<p><code>BACKUP TO '&lt;path&gt;'</code> 产出单文件一致快照备份；<code>RESTORE FROM '&lt;path&gt;'</code> 幂等恢复（同名表 drop-then-recreate）；需要时间点恢复时用 <code>RESTORE FROM '&lt;path&gt;' TO LSN &lt;n&gt;</code> 重放 binlog 到目标 LSN。分布式集群使用 T35 协调器发起多节点一致备份。</p>
+<h3 id="q5">Q5：如何搭建集群？<a class="headerlink" href="#q5" title="Permanent link">&para;</a></h3>
+<p>每个节点用 <code>openxdb init --data-dir &lt;dir&gt;</code> 初始化，再用 <code>openxdb start --cluster-addr &lt;addr&gt;</code> 集群模式启动；节点间通过 <code>ADD NODE '&lt;addr&gt;'</code> 注册，<code>ASSIGN REGION &lt;id&gt; TO NODE '&lt;nodeID&gt;'</code> 指派 region 归属，<code>SHOW NODES</code> / <code>SHOW REGION ROUTES</code> 查看状态。</p>
+<h3 id="q6">Q6：驱动如何连接？<a class="headerlink" href="#q6" title="Permanent link">&para;</a></h3>
+<p>JDBC：<code>jdbc:openxdb://host:7788</code>；Python：<code>openxdb.connect("host", 7788)</code>。两驱动均基于自研协议，参数化使用 <code>?</code> 占位符（客户端侧安全转义）。TLS 场景在 JDBC 配置证书校验模式、Python 传入 TLS 连接参数。</p>
+<h3 id="q7-mysql">Q7：为什么不能用 MySQL 客户端连接？<a class="headerlink" href="#q7-mysql" title="Permanent link">&para;</a></h3>
+<p>OpenXDB 使用自研二进制 TCP 协议（<code>pkg/server</code>），不是 MySQL wire protocol，因此 MySQL 官方客户端无法直接连接。请使用内置 REPL（<code>openxdb repl</code>）或 JDBC / Python 驱动。</p>
+<h3 id="q8">Q8：如何查看慢查询？<a class="headerlink" href="#q8" title="Permanent link">&para;</a></h3>
+<p><code>SET slow_query_threshold = &lt;ms&gt;</code> 设置阈值（默认 100ms），执行语句后 <code>SHOW SLOWQUERIES</code> 查看最近记录；<code>SET slow_query_log = on</code> 开启落盘（默认 <code>&lt;数据目录&gt;/slow.log</code>）。</p>
+<h3 id="q9-tls">Q9：如何开启 TLS？<a class="headerlink" href="#q9-tls" title="Permanent link">&para;</a></h3>
+<p>生成证书后以 <code>openxdb start --data-dir ./data --tls-cert cert.pem --tls-key key.pem</code> 启动（两参数必须同时提供）；默认 TLS-only 拒绝明文；<code>SET PERSIST tls_allow_legacy=on</code> 允许明文/TLS 共存。复制端口用 <code>--replica-tls</code> 启用。</p>
+<h3 id="q10-tps">Q10：性能数据可信吗？为什么 TPS 不高？<a class="headerlink" href="#q10-tps" title="Permanent link">&para;</a></h3>
+<p>所有性能数据来自 E5 标准基准对齐实验（<code>docs/experiments/E5_standard_bench_alignment.md</code>）真实实测（8 线程 × 60s / 120s，0 错误）。当前吞吐瓶颈为全局会话锁串行 + 逐语句往返；项目定位为单机端侧基准，功能完整性优先，性能优化持续进行中。</p>
+<hr />
+<p><em>本文档由 OpenXDB 项目 README.md 与 docs/ 目录设计文档整理而成，v1.0.0。</em></p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href=".." class="btn btn-neutral float-left" title="首页"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../product_manual_en/" class="btn btn-neutral float-right" title="Product Manual (English)">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href=".." style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../product_manual_en/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

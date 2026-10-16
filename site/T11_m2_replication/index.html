@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>M2 复制 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "M2 \u590d\u5236";
+        var mkdocs_page_input_path = "T11_m2_replication.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">M2 复制</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#1">1. 目标与范围</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2">2. 架构总览</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3">3. 位点语义</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4">4. 协议消息格式</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5">5. 一致性模型（异步复制）</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#6">6. 幂等应用规则</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#7">7. 心跳与故障处理</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#8">8. 接口与接线</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#9">9. 启动示例</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#10">10. 设计取舍与后续</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#11">11. 测试</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">M2 复制</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T11_m2_replication.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t11-m2-binlog-replicator-follower">T11: M2 复制落地（Binlog / Replicator / Follower / 心跳）<a class="headerlink" href="#t11-m2-binlog-replicator-follower" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>里程碑：M2（多节点）第一阶段 —— 从单机到主从复制的第一步落地。
+关联：T7 M2/M3 接口预留 → 本实现；README Roadmap M2 勾选。</p>
+</blockquote>
+<h2 id="1">1. 目标与范围<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>在单机事务（WAL 先行 + 提交串行化）之上增加主从复制：</p>
+<ol>
+<li><strong>Binlog 生成与落盘</strong>：事务 Commit 时把写批次（Puts/Deletes）以 BinlogEntry 记录落盘；</li>
+<li><strong>Replicator（主端）</strong>：监听复制端口、握手（版本/角色/起始位点）、按位点流式推送、断线续传、多 slave；</li>
+<li><strong>Follower（从端）</strong>：连接主节点、握手携带续传位点、接收 binlog 幂等应用、已应用位点可查询；</li>
+<li><strong>心跳</strong>：PING/PONG 双向心跳，超时判离线；</li>
+<li><strong>集成</strong>：pkg/db 装配复制组件并挂接事务提交；cmd/openxdb 提供 <code>--replica-port</code> 与 <code>replica</code> 子命令；</li>
+<li>不破坏单机事务语义；全仓测试不回归。</li>
+</ol>
+<h2 id="2">2. 架构总览<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<pre><code>                       ┌────────────────────────────┐
+                       │  Master (主节点)           │
+                       │                            │
+   txn.Commit ──hook──▶│  binlog.log  (BinlogStore) │
+                       │       │  Append(异步推送)   │
+                       │       ▼                    │
+                       │  MasterReplicator          │
+                       │   acceptLoop / pushLoop /  │
+                       │   heartbeatLoop            │
+                       └───────┬─────────┬──────────┘
+                      TCP :0（随机）      │
+                       ┌───────┴─────────▼──────────┐
+                       │  Follower (从节点)          │
+                       │  Start: 握手(from=applied+1)│
+                       │  loop: 收 BINLOG → 幂等应用 │
+                       │        → ACK; 收 PING → PONG│
+                       │  本地 storage 应用          │
+                       └────────────────────────────┘
+</code></pre>
+<ul>
+<li><strong>Binlog 与 WAL 相互独立</strong>：WAL 负责单机崩溃恢复（txn 层）；Binlog 负责跨节点复制（复制层）。
+  二者位点语义不同但均单调递增。</li>
+<li><strong>事务提交路径不变</strong>：Commit 仍走「WAL Append → SyncUpTo → 按序号串行应用存储」。
+  复制通过 <strong>commit hook</strong> 在存储应用成功后同步追加 Binlog（锁内串行，保证 Binlog 顺序 = 提交顺序）。</li>
+</ul>
+<h2 id="3">3. 位点语义<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>定义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Binlog LSN</td>
+<td>BinlogStore.Append 自动分配，从 1 开始严格递增、文件内唯一；<strong>复制位点 = Binlog LSN</strong></td>
+</tr>
+<tr>
+<td>CommitLSN</td>
+<td>源事务在 WAL 中的 LSN（关联审计用，不参与复制续传）</td>
+</tr>
+<tr>
+<td>AppliedLSN（从端）</td>
+<td>已成功应用到本地存储的最大 Binlog LSN；续传起始位点 = AppliedLSN + 1</td>
+</tr>
+<tr>
+<td>LastAck（主端）</td>
+<td>各 slave 已确认（ACK 帧携带）的最大位点；断线时保留供重连续传观测</td>
+</tr>
+</tbody>
+</table>
+<p>幂等标识：BinlogEntry.LSN 即幂等标识 —— 从端按「LSN &lt;= applied 跳过；LSN == applied+1 应用；
+LSN &gt; applied+1 报 ErrGap」规则保证同一记录只应用一次。</p>
+<h2 id="4">4. 协议消息格式<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<p>二进制帧：<code>[len:4B BE][type:1B][payload:lenB]</code>，首帧 magic 校验（"OPENXDBRPL"）。
+当前协议版本 <code>protoVersion = 1</code>。</p>
+<table>
+<thead>
+<tr>
+<th>type</th>
+<th>名称</th>
+<th>payload</th>
+<th>方向</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>HELLO</td>
+<td><code>role:1B, fromLSN:8B BE</code></td>
+<td>slave→master</td>
+<td>握手：角色（1=slave）+ 请求起始位点</td>
+</tr>
+<tr>
+<td>2</td>
+<td>HELLO_OK</td>
+<td><code>protoVersion:4B BE, lastLSN:8B BE</code></td>
+<td>master→slave</td>
+<td>握手应答：主端版本与当前最大位点</td>
+</tr>
+<tr>
+<td>3</td>
+<td>BINLOG</td>
+<td><code>lsn:8B, commitLsn:8B, schemaVer:4B, state:1B, nPuts:4B, nDel:4B, body</code></td>
+<td>master→slave</td>
+<td>复制条目（body 为 Put 键值对 + Delete 键列表）</td>
+</tr>
+<tr>
+<td>4</td>
+<td>ACK</td>
+<td><code>lsn:8B BE</code></td>
+<td>slave→master</td>
+<td>从端确认已应用位点</td>
+</tr>
+<tr>
+<td>5</td>
+<td>PING</td>
+<td><code>ts:8B BE</code>（毫秒时间戳）</td>
+<td>master→slave</td>
+<td>心跳探测</td>
+</tr>
+<tr>
+<td>6</td>
+<td>PONG</td>
+<td><code>ts:8B BE</code>（回显）</td>
+<td>slave→master</td>
+<td>心跳应答</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>主端每 <code>HeartbeatInterval</code> 向在线 slave 发 PING；从端收到立即回 PONG。</li>
+<li>空闲时主端也按 <code>HeartbeatInterval</code> 发送 PING，使从端读超时成为「失联」判定依据。</li>
+</ul>
+<h2 id="5">5. 一致性模型（异步复制）<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>本地提交 = 同步</strong>：主节点事务提交语义完全不变（WAL fsync 后返回成功）。</li>
+<li><strong>复制推送 = 异步</strong>：commit hook 在提交路径内同步落 Binlog（保证 Binlog 完整），
+  推送由 Replicator 后台 goroutine 按位点增量下发；主节点不等待 slave ACK。</li>
+<li><strong>结果</strong>：主从可能短暂不一致（异步窗口），从端数据最终收敛到主端已提交集合；
+  <strong>不支持读扩展的一致性保证</strong>（follower 读可能滞后），文档不承诺「强一致读」。</li>
+<li><strong>取舍</strong>：同步复制（等 ACK 才返回提交成功）会放大提交延迟并引入可用性耦合
+  （slave 故障阻塞主节点写入），本阶段不做；后续 M2 阶段可加同步模式开关。</li>
+</ul>
+<h2 id="6">6. 幂等应用规则<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<p>从端 <code>ApplyBinlog(e)</code>：</p>
+<ol>
+<li><code>e.LSN &lt;= applied</code>：已应用过（重连重复推送），跳过，返回 nil —— <strong>幂等</strong>；</li>
+<li><code>e.LSN == applied+1</code>：正常顺序，<code>storage.Write(e.Batch)</code> 后推进 applied；</li>
+<li><code>e.LSN &gt; applied+1</code>：流缺口（丢失），返回 <code>ErrGap</code> 并置 offline，等待重连续传。</li>
+</ol>
+<p>主端 pushLoop 永远从「slave 请求的起始位点」顺序读取 BinlogStore，天然保证无缺口。</p>
+<h2 id="7">7. 心跳与故障处理<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>从端无响应超时（主端）</td>
+<td>heartbeatLoop 检测 <code>now-lastRecv &gt; HeartbeatTimeout</code>，标记 offline 并断开连接</td>
+</tr>
+<tr>
+<td>主端失联（从端读超时）</td>
+<td>Follower.ReadTimeout 内未收到任何帧 → Start 返回错误，State=offline</td>
+</tr>
+<tr>
+<td>从端断线</td>
+<td>主端保留其 lastAck；重连握手携带 from=applied+1 续传</td>
+</tr>
+<tr>
+<td>从端重连</td>
+<td>同一 Follower 实例内存位点续传；重启后 applied=0 全量补（本阶段不持久化 applied，见取舍）</td>
+</tr>
+<tr>
+<td>主端 Close</td>
+<td>关闭监听、全部 slave 连接与 binlog 文件</td>
+</tr>
+</tbody>
+</table>
+<p>超时参数：MasterReplicator.HeartbeatInterval（默认 2s）、HeartbeatTimeout（默认 5s）；
+Follower.ReadTimeout（默认 10s）。测试中可调小以快速验证。</p>
+<h2 id="8">8. 接口与接线<a class="headerlink" href="#8" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>pkg/replication</code>：<code>BinlogStore</code>（OpenBinlog/Append/ReadFrom/LastLSN/Close）、
+  <code>MasterReplicator</code>（NewMaster/Serve/Append/Pull/Ack/LastLSN/SlaveStatus/Close）、
+  <code>Follower</code>（NewFollower/ApplyBinlog/AppliedLSN/Status/Start/Stop）、
+  <code>BinlogEntry{ LSN, CommitLSN, Batch, SchemaVer }</code>、<code>SlaveStatus{ NodeID, Remote, Online, LastAck, LastSeen }</code>。</li>
+<li><code>pkg/txn</code>：<code>TxnManager.SetCommitHook(func(lsn, seq, batch) error)</code> + <code>HookErr()</code>；
+  Commit 在存储应用成功后、返回前调用 hook（锁内，串行）。</li>
+<li><code>pkg/db</code>：<code>DB.StartReplication(addr)</code> / <code>DB.StartFollower(masterAddr)</code> / <code>DB.ReplicationStatus()</code>
+  / <code>DB.Close()</code> 关闭复制组件；<code>BinlogFile = "binlog.log"</code>。</li>
+<li><code>cmd/openxdb</code>：<code>start --replica-port &lt;port&gt;</code> 启动复制端口；<code>replica --data-dir &lt;dir&gt; --master &lt;addr&gt;</code> 启动从端。</li>
+</ul>
+<h2 id="9">9. 启动示例<a class="headerlink" href="#9" title="Permanent link">&para;</a></h2>
+<pre><code class="language-sh"># 主节点（数据目录 master/data，TCP 7788，复制端口 7790）
+openxdb init --data-dir ./master
+openxdb start --data-dir ./master --port 7788 --replica-port 7790
+
+# 从节点（数据目录 slave/data，连接主节点复制端口）
+openxdb init --data-dir ./slave
+openxdb replica --data-dir ./slave --master 127.0.0.1:7790
+</code></pre>
+<h2 id="10">10. 设计取舍与后续<a class="headerlink" href="#10" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Binlog 独立文件而非复用 WAL</strong>：职责分离（恢复 vs 复制）；WAL 含 Rollback 审计记录与
+  事务结构，复制不需要。代价是双写一份磁盘 I/O（可接受，本阶段正确性优先）。</li>
+<li><strong>Binlog 顺序 = 提交顺序</strong>：hook 在 txn 锁内调用，保证 Binlog LSN 顺序与 WAL/存储应用顺序一致，
+  崩溃后从端与主端数据等价。</li>
+<li><strong>Follower 不持久化 applied 位点</strong>：重启后从 0 全量补拉（Binlog 全量重放，幂等安全）。
+  持久化 applied 留待后续（可在 data dir 落一个小位点文件）。</li>
+<li><strong>异步复制窗口</strong>：见 §5。读扩展需在 SQL 层标记「允许读滞后」，后续阶段实现。</li>
+<li><strong>不处理从端写冲突</strong>：本阶段约定从端仅通过复制写入；直接写从端会造成分叉，后续版本拒绝或标记。</li>
+</ul>
+<h2 id="11">11. 测试<a class="headerlink" href="#11" title="Permanent link">&para;</a></h2>
+<p>见 <code>pkg/replication/replication_test.go</code>（binlog 落盘/回读/重开/损坏检测、幂等与跳号、
+主从全链路、断线重连续传、主端心跳离线、从端心跳超时）与
+<code>pkg/db/db_replication_test.go</code>（提交后 binlog 落盘、主从真实链路一致性、幂等应用）。
+所有端口使用 <code>:0</code> 随机端口，超时参数调小，CI 不卡死。
+<em>（内容由AI生成，仅供参考）</em></p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T10_p2_ops_expr/" class="btn btn-neutral float-left" title="P2 运维语句与表达式"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T12_m3_sharding/" class="btn btn-neutral float-right" title="M3 分片">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T10_p2_ops_expr/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T12_m3_sharding/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

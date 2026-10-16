@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T18 备份恢复 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T18 \u5907\u4efd\u6062\u590d";
+        var mkdocs_page_input_path = "T18_backup_restore.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">T18 备份恢复</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#1">1. 目标与范围</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2">2. 语法</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3">3. 备份设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#31">3.1 一致快照</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#32">3.2 备份内容</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#33-version-1">3.3 备份文件格式（version 1）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4">4. 恢复设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#41">4.1 校验流程</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#42-drop">4.2 幂等语义（先 DROP 再建）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5-pitr">5. 时间点恢复（PITR）基础</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#6">6. 测试清单</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#7">7. 语法与执行接线</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#8">8. 限制与后续</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">T18 备份恢复</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T18_backup_restore.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t18-backup-restore-pitr">T18 备份与恢复（BACKUP / RESTORE + PITR 基础）<a class="headerlink" href="#t18-backup-restore-pitr" title="Permanent link">&para;</a></h1>
+<p>实现于 M8 分布式事务增强之后（BR 功能簇）。在 openxdb 内核上新增逻辑备份（<code>BACKUP TO</code>）、恢复（<code>RESTORE FROM</code>）与基于 binlog LSN 的时间点恢复基础链路（<code>RESTORE FROM ... TO LSN &lt;n&gt;</code>）。单节点语义保持零回归：既有建表/写入/查询路径不变。</p>
+<h2 id="1">1. 目标与范围<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>备份</strong>：基于一致快照生成<strong>单一文件</strong>的完整逻辑备份，便于传输与归档；内容覆盖全部表元数据、全部数据行、region 路由与分片元数据、备份点 LSN。</li>
+<li><strong>恢复</strong>：校验备份文件版本与完整性后，按备份记录顺序重建表结构、导入数据行、重建索引与 region 路由；已存在的同名表采用"先 DROP 再建"的幂等语义。</li>
+<li><strong>时间点恢复基础</strong>：<code>RESTORE FROM &lt;path&gt; TO LSN &lt;n&gt;</code> 在恢复备份点之后，将 binlog 中备份点之后、<code>&lt;= TO LSN</code> 的记录按 LSN 升序回放，实现"备份 + binlog 回放"的 PITR 基础链路（时间点语义以 LSN 为锚）。</li>
+<li><strong>不备份</strong>：2PC 未决中间态（<code>m:2pc:*</code>）、未提交事务数据（快照天然仅含已提交数据）。</li>
+</ul>
+<h2 id="2">2. 语法<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<pre><code class="language-sql">BACKUP TO '&lt;path&gt;'                 -- 生成完整逻辑备份快照文件
+RESTORE FROM '&lt;path&gt;'              -- 校验并恢复备份快照
+RESTORE FROM '&lt;path&gt;' TO LSN &lt;n&gt;   -- 恢复备份点后回放 binlog 到指定 LSN（含）
+</code></pre>
+<p>实现位置：<code>pkg/sql</code>（lexer/ast/parser 新增 <code>BACKUP</code>/<code>RESTORE</code>/<code>LSN</code> 关键字与语句类型；<code>pkg/sql/backup.go</code> 实现执行逻辑）。</p>
+<h2 id="3">3. 备份设计<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<h3 id="31">3.1 一致快照<a class="headerlink" href="#31" title="Permanent link">&para;</a></h3>
+<p><code>execBackup</code> 调用引擎级 <code>storage.Snapshot()</code> 获取<strong>一致性快照</strong>，元数据与数据行全部在该快照上读取，与并发写入隔离：</p>
+<ul>
+<li>表目录 <code>m:tables</code>、region 路由 <code>m:regions</code> 通过 <code>snap.Get</code> 读取；</li>
+<li>全部物理键通过 <code>snap.Scan</code> 读取；</li>
+<li>备份点 LSN 通过打开 binlog 读取 <code>LastLSN()</code>，作为 TO LSN 回放的起点。</li>
+</ul>
+<p>因此备份期间并发提交的事务不会进入备份（快照固定于创建时刻），也不会产生半提交行；备份结果是"某一位点之后不会再变化"的一致视图。</p>
+<h3 id="32">3.2 备份内容<a class="headerlink" href="#32" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>内容</th>
+<th>来源</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>表元数据（DDL 记录）</td>
+<td><code>m:tables</code> 原值</td>
+<td>CREATE TABLE / CREATE INDEX 等价记录，恢复时重建表结构与索引</td>
+</tr>
+<tr>
+<td>数据行（INSERT 等价记录）</td>
+<td>快照扫描 innerKey 前缀 <code>'s'</code> 的物理键</td>
+<td>含 region 前缀，恢复后键空间一致</td>
+</tr>
+<tr>
+<td>索引键</td>
+<td>快照扫描 innerKey 前缀 <code>'i'</code> 的物理键</td>
+<td>恢复后二级索引立即可用</td>
+</tr>
+<tr>
+<td>region 路由 / 分片元数据</td>
+<td><code>m:regions</code> 原值</td>
+<td>router/region 表；无显式分片时为无（HasRegions=false）</td>
+</tr>
+<tr>
+<td>备份点 LSN</td>
+<td>binlog <code>LastLSN()</code></td>
+<td>PITR 回放起点；binlog 未启用时为 0</td>
+</tr>
+</tbody>
+</table>
+<h3 id="33-version-1">3.3 备份文件格式（version 1）<a class="headerlink" href="#33-version-1" title="Permanent link">&para;</a></h3>
+<pre><code>┌─────────────┬──────────────────────────────┬──────────────────────────────┐
+│ 头部         │ magic &quot;OPENXDBBAK&quot;(10B)      │ version(2B BE)=1             │
+│             │ metaLen(4B BE)               │                              │
+├─────────────┼──────────────────────────────┼──────────────────────────────┤
+│ meta 段      │ metaJSON (backupMeta)        │ metaCRC(4B BE, crc32)        │
+├─────────────┼──────────────────────────────┼──────────────────────────────┤
+│ 数据段       │ 循环记录：klen(4B BE) vlen(4B BE) key value                │
+│             │ 以 klen=0 vlen=0 结束标记     │                              │
+├─────────────┼──────────────────────────────┼──────────────────────────────┤
+│ 尾部         │ dataCRC(4B BE, crc32(数据段全部字节含结束标记))             │
+└─────────────┴──────────────────────────────┴──────────────────────────────┘
+</code></pre>
+<ul>
+<li><strong>版本</strong>：<code>backupVersion = 1</code>，<code>backupMeta.FormatVersion</code> 与头部 version 双重校验；</li>
+<li><strong>校验</strong>：meta 段 crc32 校验、数据段 crc32 校验；任一不匹配即报 <code>backup ... checksum mismatch (file corrupted)</code>；</li>
+<li><strong>原子写入</strong>：先写 <code>&lt;path&gt;.tmp</code>，<code>fsync</code> 后原子 <code>rename</code> 覆盖旧备份，避免写入中途崩溃产生半文件。</li>
+</ul>
+<p><code>backupMeta</code> 字段：<code>format_version</code> / <code>created_at</code> / <code>backup_lsn</code> / <code>tables_raw</code> / <code>has_regions</code> / <code>regions_raw</code>。</p>
+<h2 id="4">4. 恢复设计<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<h3 id="41">4.1 校验流程<a class="headerlink" href="#41" title="Permanent link">&para;</a></h3>
+<ol>
+<li>打开文件，校验 magic 与 version；</li>
+<li>读取 meta 段并校验 metaCRC，解析 <code>backupMeta</code>，校验 <code>FormatVersion</code>；</li>
+<li>按 <code>klen/vlen</code> 循环读取数据段直至结束标记，全程累计字节并校验尾部 dataCRC；</li>
+<li>任一步失败即返回明确错误（bad magic / unsupported version / checksum mismatch / corrupt record），不触碰任何数据。</li>
+</ol>
+<h3 id="42-drop">4.2 幂等语义（先 DROP 再建）<a class="headerlink" href="#42-drop" title="Permanent link">&para;</a></h3>
+<p><code>RESTORE</code> 对<strong>目标库中与备份同名的表</strong>采用"先 DROP 再建"语义：</p>
+<ul>
+<li>读取当前表目录，对每个备份表，若目标库存在同名表，则删除其<strong>数据行物理键</strong>与<strong>索引物理键</strong>（备份包含的键除外，由后续 Put 覆盖，避免同批 WriteBatch 中 Delete 后于 Put 应用导致同键丢失）；</li>
+<li>写回备份表目录 <code>m:tables</code>（覆盖旧目录，旧表的多余列/多余索引随目录覆盖而消失）；</li>
+<li>写回全部备份数据行与索引键；</li>
+<li>写回 region 路由 <code>m:regions</code>（备份无路由时清除目标路由；单节点读路径回退隐式 region）；</li>
+<li>内存 Router 重建：有备份路由则 <code>SetRegions(seq, regions)</code>，否则 <code>SetRegions(0, nil)</code>。</li>
+</ul>
+<p>整体恢复在一个事务中执行，任一步失败整体回滚，不留下半恢复状态。</p>
+<h2 id="5-pitr">5. 时间点恢复（PITR）基础<a class="headerlink" href="#5-pitr" title="Permanent link">&para;</a></h2>
+<p><code>RESTORE FROM &lt;path&gt; TO LSN &lt;n&gt;</code>：</p>
+<ol>
+<li>校验 <code>TO LSN &gt;= 备份点 LSN</code>，早于备份点直接报错；</li>
+<li>恢复备份快照（第 4 节全流程）；</li>
+<li>若 <code>TO LSN &gt; 备份点 LSN</code>：打开 binlog，从 <code>BackupLSN+1</code> 起按 LSN 升序读取记录，回放所有 <code>LSN &lt;= TO LSN</code> 的记录（引擎级物理写），读到 <code>&gt; TO LSN</code> 即停止；</li>
+<li>返回结果 <code>lsn</code> 列为最终回放位点（未回放时为备份点 LSN）。</li>
+</ol>
+<p>实现说明：</p>
+<ul>
+<li>回放以 binlog 记录中的 <code>storage.WriteBatch</code> 为最小单位，直接落到引擎级 Storage（不经过 SQL 事务），保持与崩溃恢复重放路径一致；</li>
+<li>范围限定为<strong>数据变更回放</strong>：备份点之后同表的 INSERT/UPDATE/DELETE 记录可精确回放；DDL（建/删表）记录不在本版回放范围内（见 §8 限制）；</li>
+<li><code>TO LSN</code> 精确到 binlog 记录粒度：回放到恰好包含 <code>LSN = TO LSN</code> 的记录。</li>
+</ul>
+<h2 id="6">6. 测试清单<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<p>位于 <code>pkg/db/db_br_test.go</code>（5 个用例，本机 CGO 工具链全绿）：</p>
+<table>
+<thead>
+<tr>
+<th>用例</th>
+<th>覆盖点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestBRBackupRestoreRoundTrip</code></td>
+<td>备份后写新数据再恢复，恢复后数据回到备份点；含显式 region 分片与二级索引全等</td>
+</tr>
+<tr>
+<td><code>TestBRBackupIntegrityTamper</code></td>
+<td>篡改备份文件（meta/数据段）后恢复报校验错误</td>
+</tr>
+<tr>
+<td><code>TestBRRestoreIdempotent</code></td>
+<td>同名表已存在（不同结构/数据/多余索引）时恢复：旧行清除、旧索引元数据被备份目录覆盖、可重新建同名索引、无残留</td>
+</tr>
+<tr>
+<td><code>TestBRPITRToLSN</code></td>
+<td>备份点 + 若干条 binlog 记录：回放到备份点=快照、备份点+1 条、备份点+2 条均精确对应；TO LSN 早于备份点报错</td>
+</tr>
+<tr>
+<td><code>TestBRConcurrentBackupConsistency</code></td>
+<td>写入 goroutine 持续提交期间备份，恢复后行集 = 备份点快照行集（无半提交行、首尾主键连续）</td>
+</tr>
+</tbody>
+</table>
+<p>验收：<code>go build ./...</code> 与 <code>go test ./... -count=1</code> 全绿（含既有 M2–M8 全部回归）。</p>
+<h2 id="7">7. 语法与执行接线<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>lexer.go</code>：keywords 新增 <code>BACKUP</code> / <code>RESTORE</code> / <code>LSN</code>；</li>
+<li><code>ast.go</code>：新增 <code>BackupStmt{Path}</code>、<code>RestoreStmt{Path, ToLSN, HasToLSN}</code>；</li>
+<li><code>parser.go</code>：<code>parseStmt</code> 新增分支与 <code>parseBackup</code> / <code>parseRestore</code>（<code>BACKUP TO '&lt;path&gt;'</code>；<code>RESTORE FROM '&lt;path&gt;' [TO LSN &lt;n&gt;]</code>）；</li>
+<li><code>executor.go</code>：<code>Executor</code> 新增 <code>st storage.Storage</code> / <code>binlogPath string</code> 字段与 <code>SetBackupEnv</code> 注入；<code>execStmt</code> 新增两个分支；</li>
+<li><code>sql.go</code>：<code>Engine.SetBackupEnv</code> 透传；<code>IsSQL</code> 关键字表补充；</li>
+<li><code>db.go</code>：<code>Open</code> 装配时注入引擎存储与 binlog 路径（<code>eng.SetBackupEnv(st, filepath.Join(dir, BinlogFile))</code>）。</li>
+</ul>
+<h2 id="8">8. 限制与后续<a class="headerlink" href="#8" title="Permanent link">&para;</a></h2>
+<ul>
+<li>PITR 回放限定为数据变更（binlog 中的物理批次）；DDL 记录的精确回放、按时间戳（而非 LSN）的恢复界面留待后续；</li>
+<li>备份文件为单机格式：跨节点恢复（把备份恢复到另一拓扑的集群）需要额外的节点/路由映射逻辑，当前不做；</li>
+<li>备份为逻辑快照（物理键记录），未压缩；超大库可后续引入压缩段与增量备份；</li>
+<li>恢复期间节点不接受写入（整体事务 + 引擎级回放），操作类语句在 REPL/单连接下串行执行。</li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T17_m8_dist_txn/" class="btn btn-neutral float-left" title="M8 分布式事务"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T19_client_drivers/" class="btn btn-neutral float-right" title="T19 客户端驱动">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T17_m8_dist_txn/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T19_client_drivers/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>M8 分布式事务 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "M8 \u5206\u5e03\u5f0f\u4e8b\u52a1";
+        var mkdocs_page_input_path = "T17_m8_dist_txn.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">M8 分布式事务</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#1">1. 背景与问题</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2">2. 总体设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#21-tso-pkgtsotsogo">2.1 TSO 时间戳布局与批量发放（pkg/tso/tso.go）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#22-pkgclustertsogo">2.2 网络组件与中心化部署（pkg/cluster/tso.go）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#23-pkgclustertxn2pcgo-sql">2.3 版本记录与分布式快照隔离（pkg/cluster/txn2pc.go + SQL 层）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#24-2pc">2.4 2PC 恢复强化（协调者持久化决策）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3-sql">3. SQL / 接口</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4">4. 测试</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5">5. 验收</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">M8 分布式事务</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T17_m8_dist_txn.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t17-m8-tso-2pc">T17 M8 分布式事务增强（TSO 全局时间戳 + 分布式快照隔离 + 2PC 恢复强化）<a class="headerlink" href="#t17-m8-tso-2pc" title="Permanent link">&para;</a></h1>
+<ul>
+<li>状态：已落地（v5.0-P6-M8，v0.8.0-alpha）</li>
+<li>前置：M3 分片、M4 集群、M5 2PC 写路径、M6 高可用/故障转移、M7 自动分裂与负载均衡</li>
+<li>目标：为多节点集群提供<strong>全局可比</strong>的事务时间戳（TSO），使跨节点读取按全局版本过滤（分布式快照隔离），并强化 2PC 恢复——协调者崩溃后依据持久化记录可靠决策 commit/abort，而非仅靠参与者自清理。</li>
+</ul>
+<h2 id="1">1. 背景与问题<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>M5 已提供两阶段提交写路径：协调者分配事务号、参与者 prepare/commit、崩溃后清理 prepared 标记。但存在三个缺口：
+1. <strong>时间戳不可全局比较</strong>：各节点独立维护本地单调计数，跨节点事务的 begin_ts / commit_ts 来自不同序列，无法判断先后；
+2. <strong>快照隔离仅限单节点</strong>：版本过滤（<code>commit_ts &gt; begin_ts</code> 不可见）只对本节点事务号有效，B 节点读到 A 节点提交的数据时无法按全局版本过滤，早开始事务可能读到后提交的跨节点写入；
+3. <strong>2PC 恢复能力弱</strong>：协调者崩溃后未决事务只能依赖参与者 prepared 标记自清理，无法区分"应提交"与"应回滚"，存在数据不一致风险。</p>
+<p>M8 补齐三个闭环：TSO 全局时间戳组件、基于全局版本的分布式快照隔离、协调者持久化驱动的 2PC 恢复。</p>
+<h2 id="2">2. 总体设计<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>子功能</th>
+<th>位置</th>
+<th>关键实现</th>
+<th>依赖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>全局时间戳发号</td>
+<td><code>pkg/tso/tso.go</code>（本地）、<code>pkg/cluster/tso.go</code>（远程）</td>
+<td>64 位布局 + 批量发放 + Reset</td>
+<td>无（单机可退化）</td>
+</tr>
+<tr>
+<td>版本记录（全局可见性依据）</td>
+<td><code>pkg/cluster/txn2pc.go</code></td>
+<td><code>m:ver:&lt;key&gt;:&lt;commit_ts&gt;</code> 键格式 + begin_ts 过滤</td>
+<td>M5 2PC</td>
+</tr>
+<tr>
+<td>分布式快照隔离</td>
+<td><code>pkg/sql/executor.go</code>、<code>pkg/db</code></td>
+<td>事务边界取全局号、跨节点读透传 begin_ts</td>
+<td>上述</td>
+</tr>
+<tr>
+<td>2PC 恢复强化</td>
+<td><code>pkg/cluster/txn2pc.go</code>、<code>pkg/sql/2pc.go</code></td>
+<td>CoordRecord 持久化 + <code>RecoverCoordinated2PC</code></td>
+<td>M5 2PC</td>
+</tr>
+</tbody>
+</table>
+<h3 id="21-tso-pkgtsotsogo">2.1 TSO 时间戳布局与批量发放（<code>pkg/tso/tso.go</code>）<a class="headerlink" href="#21-tso-pkgtsotsogo" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>64 位布局</strong>：高 40 位物理毫秒 + 低 24 位逻辑序号（<code>logicalBits=24</code>）。同一毫秒内连续发号由低 24 位序号推进，跨毫秒自然进位；</li>
+<li><strong>严格单调</strong>：<code>allocLocked</code> 以 <code>start = max(nowTS(), last+1)</code> 取起点——同毫秒续发或系统时钟回拨时，自动续在最后一个已发号之后（<code>last+1</code> 兜底），任何观察者都拿到严格递增序列；</li>
+<li><strong>批量发放</strong>：<code>GetBatch(n)</code> 一次分配 n 个连续号 <code>[start, start+n)</code>，调用方（远程客户端）缓存整批逐号消费，把"每事务一次 RTT"摊薄为"每批一次 RTT"；<code>GetBatch</code> 同时把单发路径补充批大小对齐为 n（<code>batchSize=n</code>），批量与单发序列严格衔接、批次边界无洞；</li>
+<li><strong>溢出保护</strong>：批量跨物理毫秒边界时，<code>end</code> 的高 40 位自然推进一格、低 24 位仍连续，编码合法、区间完整无洞（<code>end-start+1 == n</code>）。构造 <code>last = nowTS()+1</code>（低位=1）后 <code>GetBatch(2^24)</code> 恰好跨一格，由单测 <code>TestTSOBatchOverflowProtection</code> 验证；</li>
+<li><strong>Source 抽象</strong>：<code>Get() / GetBatch(n) / Reset()</code> 三方法接口。本地 <code>*TSO</code> 与远程 <code>tsoClient</code> 均实现，上层 SQL 引擎只依赖接口，单机退化（本地发号）与中心化部署切换无需改业务代码；</li>
+<li><strong>Reset（事务边界刷新）</strong>：<code>Reset()</code> 丢弃未消费缓存批次。事务边界（BEGIN/COMMIT/ROLLBACK 成功路径）由 executor 调用，使下次取号从权威序列当前位置重新拉批，保证新事务 begin_ts 紧贴全局最新提交位置。<blockquote>
+<p>踩坑记录：TSO 批量缓存曾使远端节点新事务持续消费预取时刻的旧号，begin_ts 落后于其它节点已发放的 commit_ts，跨节点 SELECT 漏读已提交数据（got 3 而非 6/7 行）。事务边界 Reset 后解决。</p>
+</blockquote>
+</li>
+</ul>
+<h3 id="22-pkgclustertsogo">2.2 网络组件与中心化部署（<code>pkg/cluster/tso.go</code>）<a class="headerlink" href="#22-pkgclustertsogo" title="Permanent link">&para;</a></h3>
+<ul>
+<li>帧类型：M4 节点链路之后追加 <code>TSO_REQ(28) / TSO_RESP(29)</code>；<code>TsoReq{Batch}</code> 请求一批，<code>TsoResp{Start, Count, Err}</code> 回执连续区间；</li>
+<li>服务端：<code>handleTso</code> 用本节点本地发号器 <code>GetBatch(req.Batch)</code> 批量响应；</li>
+<li>客户端：<code>tsoClient</code> 实现 <code>tso.Source</code>，缓存批次内逐号消费，耗尽时向远端批量拉号（每批一次 RTT）；<code>GetBatch(n)</code> 缓存充足时直接消费，否则丢弃残余缓存重新拉批；远端不可达返回 <code>(0,0)</code> 并带错误；</li>
+<li>中心化：<code>db.SetTSONode(nodeID, batch)</code> 把节点 TSO 客户端指向指定节点，该节点成为全局单调发号者；未配置/单机模式退化为本地发号（零回归）。</li>
+</ul>
+<h3 id="23-pkgclustertxn2pcgo-sql">2.3 版本记录与分布式快照隔离（<code>pkg/cluster/txn2pc.go</code> + SQL 层）<a class="headerlink" href="#23-pkgclustertxn2pcgo-sql" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>版本记录键格式</strong>：<code>m:ver:&lt;物理行键&gt;:&lt;commit_ts 8B 大端&gt;</code>——键在前、时间戳在后，保证同一物理行键的版本记录前缀分段连续，扫描区间不串扰其它键；<blockquote>
+<p>踩坑记录：早期版本曾采用 <code>m:ver:&lt;commit_ts&gt;:&lt;key&gt;</code>（时间戳在前），导致 key4 的版本区间误命中 key6 的记录（跨键串扰），改为键在前后消除。</p>
+</blockquote>
+</li>
+<li><strong>写入登记</strong>：2PC 提交路径（协调者/参与者）为事务内每个物理写操作登记一条版本记录（<code>verKey(commitTS, key)</code>），主键与二级索引一并登记；版本记录<strong>永久保留</strong>（提交数据的可见性依据），恢复清理不动它；</li>
+<li><strong>读取可见性</strong>：<code>VersionVisible(scanFn, key, beginTS)</code>：</li>
+<li><code>beginTS == 0</code>（无快照约束）恒可见；</li>
+<li>该键无版本记录（历史数据/未登记路径）可见；</li>
+<li>存在最大 <code>commit_ts &gt; begin_ts</code> 的版本记录 → 不可见（后提交的写入对早快照隐藏）；</li>
+<li>全部版本 <code>commit_ts &lt;= begin_ts</code> → 可见。</li>
+<li><strong>事务取号</strong>：executor 在事务边界（BEGIN）与快照查询时通过 <code>Source.Get()</code> 取全局号作为 begin_ts；commit 路径经 2PC 取 commit_ts（<code>CommitTS</code>）；</li>
+<li><strong>跨节点透传</strong>：远端 region 读取把本地快照 begin_ts 透传给目标节点，目标节点按同一全局序列过滤，实现跨节点快照一致。</li>
+</ul>
+<h3 id="24-2pc">2.4 2PC 恢复强化（协调者持久化决策）<a class="headerlink" href="#24-2pc" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>协调者持久化</strong>：prepare 阶段落盘 <code>m:2pc:coord:&lt;txid&gt;</code> 的 <code>CoordRecord</code>（含 begin_ts、commit_ts、参与者列表、本地 ops、状态），之后才向参与者发 PREPARE；</li>
+<li><strong>参与者状态机</strong>：<code>m:2pc:p:&lt;txid&gt;</code>（prepared）→ <code>m:2pc:c:&lt;txid&gt;</code>（committed）/ <code>m:2pc:a:&lt;txid&gt;</code>（aborted）；参与者在 prepare 成功后才可能收到数据写入请求，数据在 commit 阶段才真正落盘；</li>
+<li><strong>决策规则</strong>：<code>RecoverCoordinated2PC</code> 启动时扫描 coord 记录：</li>
+<li>状态已进入 committing/committed → 决策 <strong>commit</strong>，驱动参与者幂等补交（参与者 COMMIT 失败场景，客户端收到 <code>TXN_COMMIT_UNCERTAIN</code>：本地已提交、参与者未提交，重启后补交对齐）；</li>
+<li>状态为 preparing → 决策 <strong>abort</strong>，驱动参与者清理并落 aborted 标记（数据从未写入）；</li>
+<li>完成决策后清除 coord 记录，幂等可重放；</li>
+<li><strong>启动清理</strong>：扫描 <code>m:2pc:*</code> 全部清理运行期幂等标记；prepared 未决事务回滚（数据从未写入）；committed/aborted 为运行期幂等标记，重启后不再需要；<code>m:ver:*</code> 版本记录不在清理范围。</li>
+<li><strong>2PC 超时</strong>：5 秒。</li>
+</ul>
+<h2 id="3-sql">3. SQL / 接口<a class="headerlink" href="#3-sql" title="Permanent link">&para;</a></h2>
+<ul>
+<li>TSO：<code>tso.Source</code>（<code>Get/GetBatch/Reset</code>）、<code>tso.New()/NewWithBatch(batch)</code>、<code>cluster.NewTSOClient(mgr, nodeID, batch)</code>、<code>db.SetTSONode(nodeID, batch)</code>、<code>TSO.GetBatch(n)/Reset()</code>；</li>
+<li>2PC：<code>PrepareReq{BeginTS}</code>、<code>CommitReq{CommitTS}</code>（M5 消息扩展携带全局版本号）、<code>cluster.CoordRecord</code> / <code>cluster.CoordKey(txid)</code> / <code>cluster.MarshalCoord</code>、<code>RecoverCoordinated2PC</code>；</li>
+<li>版本：<code>cluster.VersionKey(commitTS, key)</code>（导出，供 sql 协调者提交路径登记版本）。</li>
+</ul>
+<h2 id="4">4. 测试<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<p><code>pkg/tso/tso_test.go</code>：
+- <code>TestTSOMonotonicGet</code>：连续单发 5000 次严格递增；
+- <code>TestTSOBatchContiguousMonotonic</code>：多次 GetBatch 区间连续、批次间严格递增、批量后单发续接；
+- <code>TestTSOGetBatchConsumesFromCache</code>：<code>GetBatch(10)</code> 后 <code>Get</code> 从缓存逐号消费（剩余 9），返回号与批量区间严格衔接；
+- <code>TestTSOClockFallback</code>：时钟回拨（last 拨到未来）仍续发严格递增号；
+- <code>TestTSOBatchOverflowProtection</code>：<code>GetBatch(2^24)</code> 跨物理毫秒边界，区间完整（end-start+1==n）且高 40 位推进一格。</p>
+<p><code>pkg/db/db_m8_test.go</code>：
+- <code>TestM8SingleNodeZeroRegression</code>：装配本地 TSO 后单机 DML/显式事务零回归；
+- <code>TestM8CrossNodeSnapshotConsistency</code>：B 显式事务 T2 先开（快照早于 A 跨 region INSERT 6 提交）→ T2 内读不到 6、只能读到 1..5；T2 提交后新快照读到 6，A/B 两侧一致，且 A/B 均有 <code>m:ver:*</code> 版本记录落盘；
+- <code>TestM8ConcurrentTxnIsolation</code>：T2 快照晚于 T1（INSERT 6）提交 → 看到 6；T3（INSERT 7）晚于 T2 快照 → T2 看不到 7；T2 提交后新快照看到 7，A/B 一致；
+- <code>TestM8CoordinatorCrashRecoveryCommit</code>：参与者 COMMIT 注入失败 → 返回 <code>TXN_COMMIT_UNCERTAIN</code>；重启协调者后 <code>RecoverCoordinated2PC</code> 决策 commit、驱动参与者补交，两端一致、coord 记录清除、再次重启幂等；
+- <code>TestM8CoordinatorCrashRecoveryAbort</code>：手工持久化 preparing CoordRecord + 参与者已真实 prepare → 重启后决策 abort，参与者 prepared 清理、aborted 标记落盘、数据无残留、coord 删除。</p>
+<h2 id="5">5. 验收<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>go build ./...</code> 全绿；<code>go test ./... -count=1</code> 全包通过（含新增 <code>pkg/tso</code> 包；本机 CGO 工具链：go1.27.1 + winlibs gcc，CGO_CFLAGS/CGO_CXXFLAGS 指向 RocksDB include，CGO_LDFLAGS 指向 <code>rocksdb-build -lrocksdb</code>，仓库 #cgo 附加 <code>-static-libstdc++ -static-libgcc -lwinpthread -lshlwapi -lrpcrt4 -lws2_32</code>）。
+<em>（内容由AI生成，仅供参考）</em></li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T16_m7_split_balance/" class="btn btn-neutral float-left" title="M7 分裂与负载均衡"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T18_backup_restore/" class="btn btn-neutral float-right" title="T18 备份恢复">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T16_m7_split_balance/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T18_backup_restore/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>ACID 笔记 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "ACID \u7b14\u8bb0";
+        var mkdocs_page_input_path = "T4_acid_notes.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">ACID 笔记</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#1">1. 事务层架构</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#11">1.1 关键类型与接口（真实引用）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2-snapshot-isolation">2. 快照隔离（Snapshot Isolation）</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3-read-your-writes">3. read-your-writes（读写自见）</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4-tombstone">4. Tombstone 标记（删除）</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5-acid-c">5. 主键唯一性（ACID-C）</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#6-begin-commit-rollback">6. 会话事务流程（BEGIN / COMMIT / ROLLBACK）</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#61">6.1 语句路由</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#62-executor">6.2 Executor 会话事务状态</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#63">6.3 事务状态错误</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#7-wal">7. 提交 / 回滚路径与 WAL、存储原子写的关系</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#71-committxnimplcommit">7.1 Commit（txnImpl.Commit）完整路径</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#72-rollbacktxnimplrollback">7.2 Rollback（txnImpl.Rollback）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#73-txnmanagerrecover">7.3 崩溃恢复（txnManager.Recover）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#74-b2">7.4 组提交（B2）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#8-m2-commit-hook-binlog">8. M2 commit hook 衔接（Binlog 顺序 = 提交顺序）</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#9">9. 验证</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">ACID 笔记</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T4_acid_notes.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t4-acid">T4 单机事务 ACID 收尾笔记<a class="headerlink" href="#t4-acid" title="Permanent link">&para;</a></h1>
+<ul>
+<li>关联实现：<code>pkg/txn</code>（txn.go / txn_impl.go）、<code>pkg/wal</code>、<code>pkg/storage</code>、<code>pkg/sql</code>（会话级显式事务）、<code>pkg/server</code></li>
+<li>前置文档：<code>T3_txn_impl.md</code>（M1 T3 事务层初版）、<code>T8_p0_sql_enhancements.md</code>（P0 会话事务透传）、<code>T11_m2_replication.md</code>（M2 commit hook 衔接）、<code>T12_m3_sharding.md</code>（M3 分片路由）</li>
+<li>状态：与当前代码实现对齐（M3 落地后复核）</li>
+</ul>
+<h2 id="1">1. 事务层架构<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>事务层位于 <code>pkg/txn</code>，向上服务 SQL Executor 与协议层，向下依赖 <code>pkg/wal</code>（写前日志）与 <code>pkg/storage</code>（KV 引擎抽象）。核心语义：<strong>快照隔离读 + 提交串行化写</strong>（WAL 先行 + 存储原子写 + 崩溃恢复重放）。</p>
+<h3 id="11">1.1 关键类型与接口（真实引用）<a class="headerlink" href="#11" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>类型 / 接口</th>
+<th>位置</th>
+<th>职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>txn.Txn</code></td>
+<td><code>pkg/txn/txn.go</code></td>
+<td>单事务句柄：<code>ID() / Get / Scan / Put / Delete / Commit / Rollback</code></td>
+</tr>
+<tr>
+<td><code>txn.TxnManager</code></td>
+<td><code>pkg/txn/txn.go</code></td>
+<td>事务管理器：<code>Begin() / Recover() / SetCommitHook() / HookErr() / Close()</code></td>
+</tr>
+<tr>
+<td><code>txn.TxnState</code></td>
+<td><code>pkg/txn/txn.go</code></td>
+<td><code>TxnActive=1 / TxnCommitted=2 / TxnRolledBack=3</code></td>
+</tr>
+<tr>
+<td><code>txnManager</code></td>
+<td><code>pkg/txn/txn_impl.go</code></td>
+<td>管理器实现：<code>mu / st / wal / nextID / seqNext / applied / applyCond / commitHook / hookErr</code></td>
+</tr>
+<tr>
+<td><code>txnImpl</code></td>
+<td><code>pkg/txn/txn_impl.go</code></td>
+<td>事务实现：<code>id / mgr / batch / ops / snap / state</code>；<code>ops</code> 为 <code>opEntry{isDelete, key, value}</code> 缓冲</td>
+</tr>
+<tr>
+<td><code>storage.Storage</code></td>
+<td><code>pkg/storage/storage.go</code></td>
+<td>KV 抽象：<code>Get / Scan / Write(batch) / Snapshot / Close</code></td>
+</tr>
+<tr>
+<td><code>storage.WriteBatch</code></td>
+<td><code>pkg/storage/storage.go</code></td>
+<td>原子写批次：<code>Puts []KVPair</code> + <code>Deletes [][]byte</code></td>
+</tr>
+<tr>
+<td><code>storage.Snapshot</code></td>
+<td><code>pkg/storage/storage.go</code></td>
+<td>一致性快照：<code>Get / Scan(r, limit) / Release</code></td>
+</tr>
+<tr>
+<td><code>storage.KeyRange</code></td>
+<td><code>pkg/storage/storage.go</code></td>
+<td><code>[Start, End)</code> 半开区间</td>
+</tr>
+<tr>
+<td><code>wal.WAL</code></td>
+<td><code>pkg/wal/wal.go</code></td>
+<td>顺序日志：<code>Append / SyncUpTo / SetGroupCommit / Replay / Truncate / LastLSN / Close</code></td>
+</tr>
+<tr>
+<td><code>wal.WalEntry</code></td>
+<td><code>pkg/wal/wal.go</code></td>
+<td><code>LSN / TxnID / Batch *storage.WriteBatch / State</code>；<code>StatePrepare=1 / StateCommit=2 / StateRollback=3</code></td>
+</tr>
+</tbody>
+</table>
+<p>存储引擎（RocksDB / B+Tree）都实现同一 <code>storage.Storage</code> 接口，事务层不感知引擎差异；<code>WriteBatch</code> 的 Puts/Deletes 直接映射到引擎的原子写原语。</p>
+<h2 id="2-snapshot-isolation">2. 快照隔离（Snapshot Isolation）<a class="headerlink" href="#2-snapshot-isolation" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>Begin()</code>（<code>txnManager.Begin</code>）在获取事务 ID 时调用 <code>m.st.Snapshot()</code> 取得<strong>一致性快照</strong> <code>storage.Snapshot</code>，存入 <code>txnImpl.snap</code>。此后事务内所有未在本事务缓冲中修改的读，都以该快照为准（<code>txn.go</code> 中 <code>Get</code> 注释：<em>否则走 BEGIN 时刻快照（隔离读）</em>）。</li>
+<li>读不阻塞、无读锁；写不直接落存储，先进内存缓冲（<code>txnImpl.batch</code> + <code>ops</code>）。</li>
+<li>写写并发采用<strong>提交串行化</strong>：每个事务在 <code>Commit</code> 时领取单调递增序号 <code>seq = m.seqNext++</code>，通过 <code>applyCond</code> 等待 <code>seq == m.applied+1</code> 后按序号顺序应用存储（详见 §6），保证提交顺序全局一致。</li>
+<li>快照在 <code>finish()</code>（提交/回滚）时 <code>snap.Release()</code> 释放。</li>
+</ul>
+<h2 id="3-read-your-writes">3. read-your-writes（读写自见）<a class="headerlink" href="#3-read-your-writes" title="Permanent link">&para;</a></h2>
+<p>事务内对自身未提交写入立即可见，合并策略位于 <code>txnImpl</code>：</p>
+<ul>
+<li><strong><code>Get(key)</code></strong>：逆序遍历 <code>t.ops</code>（最新写优先）：命中 <code>opEntry</code> 且非删除 → 返回缓冲值；命中且 <code>isDelete=true</code> → 返回 <code>storage.ErrNotFound</code>（tombstone 可见）；全部未命中 → 回退 <code>t.snap.Get(key)</code>。</li>
+<li><strong><code>Scan(r, limit)</code></strong>：先取 <code>base = t.snap.Scan(r, 0)</code>；用 <code>dirtyContains</code> 标记快照中被本事务写过的键并从 <code>merged</code> 移除；随后逆序应用 <code>ops</code>（Put 覆盖 / Delete 移除）；最后按键升序输出，支持 <code>limit</code> 截断。</li>
+<li><strong>SQL 层会话</strong>：<code>BEGIN</code> 后所有语句经 <code>getTx()</code> 复用同一 <code>curTx</code>（见 §5），天然满足 read-your-writes；autocommit 模式下单语句内部（如 INSERT 后同事务内检查）也走同一事务句柄。</li>
+</ul>
+<h2 id="4-tombstone">4. Tombstone 标记（删除）<a class="headerlink" href="#4-tombstone" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>Delete(key)</code>：追加 <code>batch.Deletes</code> 并记录 <code>opEntry{isDelete: true}</code>，不立即触碰存储。</li>
+<li>读路径：<code>Get</code> 命中 isDelete → <code>ErrNotFound</code>（对自身表现为"已删除"）；<code>Scan</code> 从合并结果 <code>delete(merged, ks)</code>。</li>
+<li>提交后：<code>m.st.Write(t.batch)</code> 将 Puts/Deletes 作为同一 <code>WriteBatch</code> 原子应用到存储引擎（RocksDB Delete / B+Tree 删除），tombstone 仅存在于引擎层的删除操作，不引入版本链。</li>
+<li>隔离性：事务内删除对其他未提交事务不可见（快照隔离）；已提交删除对其他事务的后续读不可见。</li>
+</ul>
+<h2 id="5-acid-c">5. 主键唯一性（ACID-C）<a class="headerlink" href="#5-acid-c" title="Permanent link">&para;</a></h2>
+<p>行键编码见 <code>pkg/sql/meta.go</code>：<code>EncodeTableKey(tableID, pk) = 's' + tableID:8B + pk</code>（M3 后物理键外层加 region 前缀 <code>r{regionID:8B}</code>，内层不变）。</p>
+<p>唯一性约束在 SQL 层 <code>pkg/sql/executor.go::insertRow</code> 实现：</p>
+<ol>
+<li><code>buildRow</code> 类型强制 → <code>pkOf</code> 提取主键字节（INT 定长 Big Endian / TEXT 原字节）；</li>
+<li><code>locateRow(meta, pk)</code> 按 region 路由定位（M3），<code>rowKeyAt(meta, rid, pk)</code> 构造物理键；</li>
+<li><code>tx.Get(key)</code> 探测：</li>
+<li>命中（<code>err == nil</code>）→ 主键已存在：<code>dupSkip=false</code>（普通 INSERT）返回 <code>&amp;SQLError{Msg: "duplicate primary key: " + meta.Name}</code>；<code>dupSkip=true</code>（CSV 导入）返回 <code>(false, nil)</code> 跳过该行；</li>
+<li>非 <code>storage.ErrNotFound</code> 的其他错误向上传播；</li>
+<li><code>ErrNotFound</code> → 继续写入：<code>tx.Put(key, raw)</code> 并维护二级索引（<code>putIndexKeys</code>）。</li>
+</ol>
+<p>检测与写入在同一事务内完成（探测走 read-your-writes + 快照），并发插入的唯一性由提交串行化与 WAL 顺序保证，无"检查后写入"的竞态窗口（单机内核按提交序号串行应用）。</p>
+<p>CSV 导入语义（<code>pkg/sql/csv.go</code>）：主键重复行跳过（不覆盖、不报错）；任一行的列数/类型非法则整体报错回滚（原子导入）。</p>
+<h2 id="6-begin-commit-rollback">6. 会话事务流程（BEGIN / COMMIT / ROLLBACK）<a class="headerlink" href="#6-begin-commit-rollback" title="Permanent link">&para;</a></h2>
+<h3 id="61">6.1 语句路由<a class="headerlink" href="#61" title="Permanent link">&para;</a></h3>
+<ul>
+<li>协议层 <code>pkg/server</code> 将 <code>BEGIN / COMMIT / ROLLBACK</code> 识别为 SQL 关键字路由到引擎（T8：<code>sql.IsSQL</code> 关键字列表含 BEGIN/COMMIT/ROLLBACK；server 原生支持显式事务命令）。</li>
+<li>SQL AST：<code>BeginStmt / CommitStmt / RollbackStmt</code>（<code>pkg/sql/ast.go</code>）；<code>Executor.Execute</code> 分别转发到 <code>beginTx() / commitTx() / rollbackTx()</code>。</li>
+</ul>
+<h3 id="62-executor">6.2 Executor 会话事务状态<a class="headerlink" href="#62-executor" title="Permanent link">&para;</a></h3>
+<p><code>pkg/sql/executor.go</code>：</p>
+<table>
+<thead>
+<tr>
+<th>成员 / 函数</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mu / curTx / inTx</code></td>
+<td>会话事务句柄与开启标志</td>
+</tr>
+<tr>
+<td><code>beginTx()</code></td>
+<td><code>inTx</code> 已开 → <code>"transaction already started"</code>；否则 <code>e.tm.Begin()</code> 存入 <code>curTx</code>、置 <code>inTx=true</code></td>
+</tr>
+<tr>
+<td><code>commitTx()</code></td>
+<td>未开 → <code>"no active transaction"</code>；否则取 <code>curTx</code>、清状态、<code>tx.Commit()</code></td>
+</tr>
+<tr>
+<td><code>rollbackTx()</code></td>
+<td>未开 → <code>"no active transaction"</code>；否则取 <code>curTx</code>、清状态、<code>tx.Rollback()</code></td>
+</tr>
+<tr>
+<td><code>getTx()</code></td>
+<td>显式事务内返回 <code>curTx</code>（复用）；否则 <code>e.tm.Begin()</code> 新建临时事务</td>
+</tr>
+<tr>
+<td><code>autocommit()</code></td>
+<td><code>!e.inTx</code>：仅在非显式事务时为 true</td>
+</tr>
+</tbody>
+</table>
+<p>所有 DDL/DML 统一模式：<code>tx := e.getTx()</code> + <code>auto := e.autocommit()</code>；<code>auto</code> 时 <code>defer tx.Rollback()</code>（失败兜底）且语句成功末尾显式 <code>tx.Commit()</code>；显式事务内不自动提交，由用户的 <code>COMMIT / ROLLBACK</code> 决定。<code>BEGIN</code> 后 DDL（建表/删表/建索引）同样在事务内执行，受 ROLLBACK 保护。</p>
+<h3 id="63">6.3 事务状态错误<a class="headerlink" href="#63" title="Permanent link">&para;</a></h3>
+<p>已结束事务上的读写/提交/回滚由 txn 层拦截：<code>txn.ErrTxnClosed</code>（"txn: transaction already finished"）。</p>
+<h2 id="7-wal">7. 提交 / 回滚路径与 WAL、存储原子写的关系<a class="headerlink" href="#7-wal" title="Permanent link">&para;</a></h2>
+<h3 id="71-committxnimplcommit">7.1 Commit（<code>txnImpl.Commit</code>）完整路径<a class="headerlink" href="#71-committxnimplcommit" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>空事务短路</strong>：<code>batch</code> 无 Puts/Deletes → 直接 <code>finish(TxnCommitted)</code>，不落 WAL。</li>
+<li><strong>WAL 先行</strong>：<code>wal.Append(&amp;wal.WalEntry{TxnID, Batch, State: StateCommit})</code>，分配 <code>LSN</code>；默认 Append 即 fsync（组提交开启时仅写缓冲）。</li>
+<li><strong>领取提交序号</strong>：<code>seq = m.seqNext++</code>（全局单调）。</li>
+<li><strong>持久化屏障</strong>：<code>wal.SyncUpTo(lsn)</code> 阻塞至该 LSN 落盘（leader 机制合并 fsync；组提交下多个事务共享一次刷盘）。</li>
+<li><strong>提交串行化</strong>：<code>for seq != m.applied+1 { m.applyCond.Wait() }</code>——按序号顺序等待，保证存储应用顺序与提交顺序一致。</li>
+<li><strong>存储原子写</strong>：<code>m.st.Write(t.batch)</code>——一个 <code>WriteBatch</code>（Puts + Deletes）原子应用到引擎，<code>applied++</code> 并广播。</li>
+<li><strong>commit hook</strong>：<code>m.commitHook(lsn, seq, batch)</code>（M2 挂接点，见 §8），hook 错误仅记 <code>hookErr</code>。</li>
+<li><strong>收尾</strong>：<code>finish(TxnCommitted)</code>（释放快照）。</li>
+</ol>
+<blockquote>
+<p><strong>ACID 落点</strong>：
+- <strong>原子性</strong>：WAL 记录包含事务全部写；存储端 <code>WriteBatch</code> 单次原子应用；任一步失败（WAL Append / SyncUpTo / st.Write）都返回错误且不标记提交成功。
+- <strong>持久性</strong>：<code>SyncUpTo(lsn)</code> 保证提交点在 WAL 已 fsync 之后；崩溃后 <code>Recover</code> 重放已 Commit 记录。
+- <strong>一致性</strong>：唯一性检查 + 索引维护与行写入同一事务；提交串行化保证并发事务顺序确定。
+- <strong>隔离性</strong>：§2 快照隔离。</p>
+</blockquote>
+<h3 id="72-rollbacktxnimplrollback">7.2 Rollback（<code>txnImpl.Rollback</code>）<a class="headerlink" href="#72-rollbacktxnimplrollback" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>wal.Append(&amp;WalEntry{TxnID, Batch, State: StateRollback})</code> + <code>SyncUpTo(en.LSN)</code>（尽力落盘），随后 <code>finish(TxnRolledBack)</code>。</li>
+<li><strong>不应用存储</strong>：回滚事务的写从不进入引擎；WAL 中的 Rollback 记录在 <code>Recover</code> 中被跳过（只应用 <code>StateCommit</code>），因此崩溃后回滚事务不产生任何效果（已落盘的"回滚"记录仅作审计/完整性标记，不重放）。</li>
+</ul>
+<h3 id="73-txnmanagerrecover">7.3 崩溃恢复（<code>txnManager.Recover</code>）<a class="headerlink" href="#73-txnmanagerrecover" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>wal.Replay(func(e *WalEntry))</code> 从文件头顺序重放；<strong>仅对 <code>State == wal.StateCommit</code> 的记录</strong>执行 <code>m.st.Write(e.Batch)</code>（幂等，可重复调用）；<code>StatePrepare</code> 为未来两阶段提交预留，<code>StateRollback</code> 不应用。</li>
+<li>恢复成功后 <code>m.seqNext = m.applied = commits</code>，后续新事务序号从恢复点继续，保证提交顺序与 WAL LSN 单调衔接。</li>
+<li>WAL 文件格式（<code>pkg/wal/wal.go</code> 常量）：<code>magic(9B)+version(2B)</code> 头；每条记录 <code>crc(4B)|len(4B)|lsn(8B)|txn(8B)|state(1B)|nputs(4B)|ndeletes(4B)|body</code>；crc 覆盖 len 到记录结尾；损坏时报 <code>wal.ErrCorrupt</code> 中止重放。</li>
+</ul>
+<h3 id="74-b2">7.4 组提交（B2）<a class="headerlink" href="#74-b2" title="Permanent link">&para;</a></h3>
+<p><code>wal.SetGroupCommit(enabled)</code>：开启后 <code>Append</code> 只写不刷，由 <code>SyncUpTo</code> 合并 fsync（首个等待者一次刷盘覆盖全部 pending 记录后广播），无后台定时器。事务提交路径不受影响（<code>Commit</code> 始终经 <code>SyncUpTo</code> 落盘后才应用存储）。</p>
+<h2 id="8-m2-commit-hook-binlog">8. M2 commit hook 衔接（Binlog 顺序 = 提交顺序）<a class="headerlink" href="#8-m2-commit-hook-binlog" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>TxnManager.SetCommitHook(hook func(lsn storage.LSN, seq uint64, batch *storage.WriteBatch) error)</code> 注册复制回调；<code>Commit</code> 在<strong>存储应用成功后、同一提交串行化锁内</strong>按 <code>seq</code> 递增顺序调用 <code>hook(lsn, seq, batch)</code>。</li>
+<li><code>seq</code> 全局单调（<code>m.seqNext++</code>），因此 <strong>hook 调用顺序 = binlog 追加顺序 = 事务提交顺序</strong>；<code>lsn</code> 为 WAL LSN，幂等恢复时 binlog 可从任一提交点衔接。</li>
+<li>hook 返回错误仅写入 <code>m.hookErr</code>（<code>HookErr()</code> 可查），<strong>不影响事务提交成功语义</strong>——复制推送为异步，主库不因备库失败阻塞提交（详见 T11）。</li>
+</ul>
+<h2 id="9">9. 验证<a class="headerlink" href="#9" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>pkg/txn/txn_test.go</code>：快照隔离、read-your-writes、tombstone、提交/回滚、恢复重放等用例。</li>
+<li><code>pkg/wal/wal_test.go</code>：追加、崩溃恢复、损坏检测、组提交。</li>
+<li><code>pkg/sql</code>：含会话事务（BEGIN/COMMIT/ROLLBACK）与主键唯一性约束集成用例；T8 记录了 9 例二级索引与事务透传覆盖。</li>
+<li>全仓 <code>go test ./... -count=1</code> 绿色（M3 落地后复核）。
+<em>（内容由AI生成，仅供参考）</em></li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T6_index_layer/" class="btn btn-neutral float-left" title="索引层"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../W4_adr_engine_selection/" class="btn btn-neutral float-right" title="引擎选型 ADR">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T6_index_layer/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../W4_adr_engine_selection/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

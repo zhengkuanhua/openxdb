@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T25 M12 功能簇（2/3）：跨节点 ORDER BY / LIMIT 分页 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T25 M12 \u529f\u80fd\u7c07\uff082/3\uff09\uff1a\u8de8\u8282\u70b9 ORDER BY / LIMIT \u5206\u9875";
+        var mkdocs_page_input_path = "T25_m12_order_limit.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">T25 M12 功能簇（2/3）：跨节点 ORDER BY / LIMIT 分页</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T25_m12_order_limit.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t25-m12-23-order-by-limit">T25 M12 功能簇（2/3）：跨节点 ORDER BY / LIMIT 分页<a class="headerlink" href="#t25-m12-23-order-by-limit" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v5.0-P13-M12, v0.14.0-alpha
+日期：2026-10-11
+范围：<code>pkg/sql</code>（orderlimit.go / executor.go + 测试 <code>m12_orderlimit_test.go</code>）、<code>pkg/db</code>（跨节点集成测试 <code>db_m12_orderlimit_test.go</code>）
+闭环：<code>go test ./pkg/sharding/ ./pkg/sql/ ./pkg/server/ -count=1</code> 全绿，不 push（README 勾选由 M12 整簇收尾提交统一更新）
+提交：<code>M12: distributed order by/limit</code>（本地，未 push）</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>OpenXDB 已具备单机 SQL 排序分页（<code>finishSelect</code>/<code>finishRel</code> 对单 region 全量结果排序 + LIMIT）与分布式扫描合并（<code>scanMergedCluster</code> 跨 region / 跨节点按内层物理键序合并）。但跨分片 SELECT 带 <code>ORDER BY</code> 时，数据分散在多个 region（可归属不同节点）：若直接全量拉回 coordinator 排序，跨节点传输随表增长放大；若不拉全量，又须保证 LIMIT/OFFSET 结果与单机语义一致。本子功能补齐<strong>分布式 SQL 路由与归并层</strong>：各分片本地排序后按需取窗口行（LIMIT 场景下推 top-N，OFFSET 场景返回 top-(offset+limit) 足量行），coordinator 归并排序后应用 LIMIT/OFFSET；无 ORDER BY 仅 LIMIT/OFFSET 时各分片按键序取足量再截断；单分区 / 无远端节点时退化为既有本地路径，行为与单机一致。</p>
+<h2 id="_2">设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="_3">执行模型<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<pre><code>跨分片 SELECT 带 ORDER BY（无 WHERE）：
+  每个 region（分片）本地排序 → 取 top-(offset+limit) 窗口行
+    ├─ 本地 region：scanMergedVisible 扫描 → decode → sort.SliceStable(compareVal) → 截窗
+    └─ 远端 region：cluster.ScanSortedRemote(携带 SortSpec{ColIndex,Kind,Desc,Scale,Limit})
+                   由归属节点在 server.scanRange 本地排序 + 截窗后返回窗口行
+  coordinator：统一 decode → sort.SliceStable(compareVal) 归并（与单机同序）
+    → finishSelect(ordered=true) 应用 OFFSET/LIMIT 与投影
+无 ORDER BY 仅 LIMIT/OFFSET（无 WHERE）：
+  每个 region 按键序（内层物理键）取足量 offset+limit 行
+    ├─ 本地：scanMergedVisible → 取前 n 行
+    └─ 远端：cluster.ScanRemote(limit=n) 取前 n 行
+  coordinator：按内层物理键序合并（innerLess，与 scanMergedCluster 同序）→ 截断 offset+limit
+    → finishSelect(ordered=false) 应用 OFFSET/LIMIT
+</code></pre>
+<h3 id="_4">路由判定<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>canDistributedOrder</code>：集群启用（mgr != nil 且有远端节点）+ ORDER BY 裸列（无别名 Ref）+ 无聚合/窗口/限定列 + 有分页（LIMIT/OFFSET &gt; 0）+ <strong>无 WHERE</strong> + 表 rowRanges 覆盖的 region 中存在<strong>远端归属</strong>（<code>hasRemoteRegion</code>），否则退化为既有全量路径；</li>
+<li><code>canDistributedTop</code>：集群启用 + 无 ORDER BY + 有分页 + 无 WHERE + 存在远端 region；</li>
+<li><strong>无 WHERE 是窗口截断正确性前提</strong>：窗口截断（每分片只取 offset+limit 行）必须发生在 WHERE 过滤之后，带 WHERE 时无法安全下推，走既有全量扫描 + coordinator 过滤排序（正确性优先）。</li>
+</ul>
+<h3 id="_5">排序一致性<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li>分片端按列类型比较（cluster.SortSpec 的 Kind），coordinator 端用 <code>compareVal</code>：INT/DECIMAL 均为数值比较（DECIMAL 同为 scale=4 定点整数），TEXT/DATE/BLOB 按字符串/字节序，两端等价；</li>
+<li>coordinator 使用稳定排序，与单机 <code>finishSelect</code> 排序序一致，保证分片/单机结果 DeepEqual 一致。</li>
+</ul>
+<h3 id="offset">单机侧补齐（OFFSET 语义）<a class="headerlink" href="#offset" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>finishSelect</code> / <code>finishRel</code>：排序后先应用 OFFSET 截断，再应用 LIMIT（此前仅处理 LIMIT）；</li>
+<li><code>EXPLAIN SELECT ... OFFSET n</code>：输出 <code>offset</code> 行。</li>
+</ul>
+<h3 id="_6">代码落点<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>pkg/sql/orderlimit.go</code>（新增）：<code>canDistributedOrder</code> / <code>canDistributedTop</code> / <code>hasRemoteRegion</code> / <code>execDistributedOrder</code> / <code>scanMergedClusterTop</code> / <code>innerLess</code>；</li>
+<li><code>pkg/sql/executor.go</code>：<code>execSelect</code> 在无 JOIN 路径 <code>rows==nil</code> 时先判分布式排序分页捷径；<code>execSelectRel</code> 单物理表 + 无 JOIN/子查询/GROUP BY 时同样接入；<code>finishSelect</code>/<code>finishRel</code>/<code>explainSelect</code> 增加 OFFSET 处理；</li>
+<li><code>pkg/cluster</code>：<code>QueryReq.Sort *SortSpec</code> + <code>Client.ScanSortedRemote</code> + <code>Manager.ScanSortedRemote</code>（前序背景已有，本子功能复用）。</li>
+</ul>
+<h2 id="_7">测试<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h2>
+<h3 id="pkgsqlm12_orderlimit_testgo">pkg/sql/m12_orderlimit_test.go（单引擎：退化路径 + 单机语义一致）<a class="headerlink" href="#pkgsqlm12_orderlimit_testgo" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestM12OrderLimitShardedAsc</code></td>
+<td>拆 3 region 后 ORDER BY 升序 + LIMIT（退化本地路径）结果正确</td>
+</tr>
+<tr>
+<td><code>TestM12OrderLimitShardedDesc</code></td>
+<td>降序 top-N</td>
+</tr>
+<tr>
+<td><code>TestM12OrderLimitOffset</code></td>
+<td>LIMIT+OFFSET 先排序再跳偏移；偏移超出返回空集</td>
+</tr>
+<tr>
+<td><code>TestM12OrderLimitNoOrderBy</code></td>
+<td>无 ORDER BY 仅 LIMIT/OFFSET：内层物理键序截断</td>
+</tr>
+<tr>
+<td><code>TestM12OrderLimitTypeSort</code></td>
+<td>TEXT 字典序（u1&lt;u10&lt;u2）、DECIMAL、DATE 列排序</td>
+</tr>
+<tr>
+<td><code>TestM12OrderLimitWhereFallback</code></td>
+<td>带 WHERE 走全量兜底，排序分页结果正确</td>
+</tr>
+<tr>
+<td><code>TestM12OrderLimitSinglePartitionDegrade</code></td>
+<td>未分片表 ORDER BY/LIMIT 与单机一致</td>
+</tr>
+<tr>
+<td><code>TestM12OrderLimitExplainOffset</code></td>
+<td>EXPLAIN 输出 offset 行</td>
+</tr>
+<tr>
+<td><code>TestM12OrderLimitAliasFallback</code></td>
+<td>别名投影不误走分布式捷径，结果正确</td>
+</tr>
+</tbody>
+</table>
+<h3 id="pkgdbdb_m12_orderlimit_testgo">pkg/db/db_m12_orderlimit_test.go（双节点真分布式）<a class="headerlink" href="#pkgdbdb_m12_orderlimit_testgo" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestM12OrderLimitCrossNodeTopN</code></td>
+<td>中间 region 指派给 B（远端）后 ORDER BY 升序 LIMIT 3/5/10，各分片窗口下推 + 归并正确</td>
+</tr>
+<tr>
+<td><code>TestM12OrderLimitCrossNodeDesc</code></td>
+<td>跨节点降序 top-N</td>
+</tr>
+<tr>
+<td><code>TestM12OrderLimitCrossNodeOffset</code></td>
+<td>ORDER BY + OFFSET（窗口取足量，协调端跳偏移）；含 DESC + OFFSET、偏移逼近行数</td>
+</tr>
+<tr>
+<td><code>TestM12OrderLimitCrossNodeNoOrderBy</code></td>
+<td>无 ORDER BY 仅 LIMIT/OFFSET 跨节点取足量截断</td>
+</tr>
+<tr>
+<td><code>TestM12OrderLimitCrossNodeText</code></td>
+<td>跨节点 TEXT 列排序下推一致性</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_8">取舍说明<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>LIMIT 下推 top-N、OFFSET 取足量</strong>：OFFSET 场景每分片必须返回 top-(offset+limit) 而非仅 top-limit，否则合并后偏移错误；本实现统一窗口 fetchN = offset+limit，单次 RPC 即可满足；</li>
+<li><strong>无 ORDER BY 语义</strong>：结果序 = 内层物理键序（region 键序合并），与单机全表扫描一致；文档明确此语义——无 ORDER BY 时不承诺用户可感知的全局顺序，仅保证取足量截断后结果正确且与单机一致；</li>
+<li><strong>无 WHERE 才下推</strong>：下推窗口与 WHERE 过滤存在顺序冲突，宁可全量兜底也不冒险；后续可在分片端下推过滤后再截窗优化；</li>
+<li><strong>退化路径零回归</strong>：单分区 / 未分片 / 无远端节点时 canDistributed* 恒假，行为与 M1-M8 既有本地执行完全一致；引擎层测试显式覆盖；</li>
+<li><strong>两端排序等价</strong>：分片端（server.scanRange + SortSpec）与 coordinator（compareVal）比较规则同构，避免跨类型排序偏差；未用浮动字节序技巧，正确性优先。</li>
+</ul>
+<h2 id="readme">README 勾选<a class="headerlink" href="#readme" title="Permanent link">&para;</a></h2>
+<p>由 M12 整簇收尾提交统一执行：
+- Status 行更新为 M12 分布式 SQL 纵深簇；
+- T 表格追加 <code>T25 M12 distributed SQL cluster: distributed join + cross-node ORDER BY/paging + distributed subquery</code>；
+- 文档列表追加 <code>T25_m12_order_limit.md</code>（随本提交加入）。</p>
+<p><em>（内容由AI生成，仅供参考）</em>
+<em>（内容由AI生成，仅供参考）</em></p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

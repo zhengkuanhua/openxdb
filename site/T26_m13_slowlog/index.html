@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>M13 可观测簇 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "M13 \u53ef\u89c2\u6d4b\u7c07";
+        var mkdocs_page_input_path = "T26_m13_slowlog.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">M13 可观测簇</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#_1">背景</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_2">设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#_3">执行链路（统一计时挂回主路径）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#slowqueryrecord">记录结构（SlowQueryRecord）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#n">内存保留（最近 N 条，可查询）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#_4">落盘（线程安全、低开销）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#_5">配置（即时生效）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#server-set">server 协议兼容（SET 路由）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_6">测试</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#pkgsqlslowlog_internal_testgo">pkg/sql/slowlog_internal_test.go（白盒）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#pkgsqlsql_testgo">pkg/sql/sql_test.go（黑盒 / 行协议语义）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#pkgserverserver_slowlog_testgo">pkg/server/server_slowlog_test.go（行协议）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_7">取舍说明</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">M13 可观测簇</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T26_m13_slowlog.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t26-m13-13">T26 M13 功能簇（1/3）：慢查询日志<a class="headerlink" href="#t26-m13-13" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v5.0-P15-M13, v0.16.0-alpha
+日期：2026-10-11
+范围：<code>pkg/sql</code>（slowlog.go / executor.go / sql.go / ast.go + 测试 <code>slowlog_internal_test.go</code> / <code>sql_test.go</code>）、<code>pkg/server</code>（server.go + 测试 <code>server_slowlog_test.go</code>）、<code>cmd/openxdb</code>（main.go 启动装配）
+闭环：<code>go test ./pkg/server/ ./pkg/sql/ -count=1</code> 全绿，不 push（README 勾选由 M13 整簇收尾提交统一更新）
+提交：<code>M13: slow query log</code>（本地，未 push）</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>M13 可观测性簇子功能一：慢查询日志。此前 P2 已埋下慢查询基础设施（<code>execTimed</code> / <code>SlowQueryRecord</code> / <code>SHOW SLOWQUERIES</code>），但存在两处致命脱节：<code>Execute</code> 分发未接入计时包装（记录永远为空）、未透传原始 SQL 文本（记录无语句）。本子功能补齐 M13 完整规格：engine/server 层记录执行耗时超过阈值的 SQL（含用户、开始时间、耗时、SQL 文本、结果行数/错误信息），阈值可配置（默认 100ms，支持运行时 <code>SET</code> 与配置项），日志可落盘（默认 <code>data/slow.log</code> 可配置）并在内存保留最近 N 条（<code>SHOW SLOWQUERIES</code> 查询），写入线程安全、低开销（阈值判断先于格式化），配置变更即时生效。</p>
+<h2 id="_2">设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="_3">执行链路（统一计时挂回主路径）<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>Engine.Execute(stmt)</code> → <code>ExecuteTextAs(stmt, sqlText, user)</code>：解析文本在 Engine 层保留，透传原始 SQL 供记录展示；</li>
+<li><code>ExecuteTextAs</code> 统一走 <code>execTimed(user, sqlText, fn)</code> 计时包装，<code>fn</code> 内为原 <code>execStmt</code> 语句分发（SELECT/DML/DDL/运维语句全部覆盖，含查询缓存读写与失效逻辑）；</li>
+<li><code>execTimed</code>：先取开始时间戳，执行结束取结束时间戳，<strong>仅当 <code>slowThreshold &gt; 0 &amp;&amp; ms &gt;= slowThreshold</code> 才构造 <code>SlowQueryRecord</code> 并记录</strong>——正常语句零格式化开销（只多两次时间读取）；</li>
+<li>执行失败同样记录：<code>Err</code> 字段承载错误信息，<code>Rows=0</code>；DML 记录影响行数（<code>AffectedRows</code>），SELECT 记录返回行数。</li>
+</ul>
+<h3 id="slowqueryrecord">记录结构（<code>SlowQueryRecord</code>）<a class="headerlink" href="#slowqueryrecord" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SQL</code></td>
+<td>原始 SQL 文本（Engine 透传，多行转义为 <code>\n</code>/<code>\r</code>）</td>
+</tr>
+<tr>
+<td><code>User</code></td>
+<td>执行用户（root / AUTH 会话用户；guest 为空串）</td>
+</tr>
+<tr>
+<td><code>StartAt</code></td>
+<td>开始时间 <code>YYYY-MM-DD HH:MM:SS</code></td>
+</tr>
+<tr>
+<td><code>Duration</code></td>
+<td>耗时（毫秒）</td>
+</tr>
+<tr>
+<td><code>Rows</code></td>
+<td>结果行数（SELECT 返回行数 / DML 影响行数；失败为 0）</td>
+</tr>
+<tr>
+<td><code>Err</code></td>
+<td>错误信息（成功为空串；慢且失败同样记录）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="n">内存保留（最近 N 条，可查询）<a class="headerlink" href="#n" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>slowQueries</code> 环形裁剪：追加前若 <code>len &gt;= slowQueryMax</code>（默认 64）丢弃最旧一条；<code>SetSlowQueryMax(n)</code> 运行时调整并即时裁剪；</li>
+<li><code>SlowQueries()</code> 加锁返回副本，供 <code>SHOW SLOWQUERIES</code> 与协议层安全并发读取；</li>
+<li>查询入口 <code>SHOW SLOWQUERIES</code>（新→旧），列：<code>time | user | duration_ms | rows | error | sql</code>。</li>
+</ul>
+<h3 id="_4">落盘（线程安全、低开销）<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>SlowLog</code>：互斥锁串行化追加写，<code>Configure(path, enabled)</code> 即时生效（空路径或 <code>enabled=false</code> 关闭）；</li>
+<li>落盘仅慢查询触发后执行（低频），以追加模式打开文件写一行后关闭（避免长句柄）；写入失败静默忽略，不阻塞 SQL 执行；</li>
+<li>默认装配：<code>cmd openxdb start</code> 将落盘路径设为 <code>&lt;data目录&gt;/slow.log</code> 并开启（<code>SetSlowLog(slowLogPath, true)</code>），启动打印路径与阈值；</li>
+<li>内存记录与落盘解耦：<code>SET slow_query_log = off</code> 停止落盘，内存记录仍可查。</li>
+</ul>
+<h3 id="_5">配置（即时生效）<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>配置</th>
+<th>方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>阈值（毫秒，&lt;=0 关闭记录）</td>
+<td><code>SET slow_query_threshold = &lt;ms&gt;</code>；<code>Engine.SetSlowThreshold(ms)</code>；默认 100ms</td>
+</tr>
+<tr>
+<td>落盘开关</td>
+<td><code>SET slow_query_log = on/off</code>；<code>Engine.SetSlowLog(path, enabled)</code></td>
+</tr>
+<tr>
+<td>落盘路径</td>
+<td><code>Engine.SetSlowLog(path, true)</code>（启动默认 <code>data/slow.log</code>）</td>
+</tr>
+<tr>
+<td>内存保留条数</td>
+<td><code>Engine.SetSlowQueryMax(n)</code>（默认 64）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="server-set">server 协议兼容（SET 路由）<a class="headerlink" href="#server-set" title="Permanent link">&para;</a></h3>
+<p><code>SET</code> 行在 server 层优先路由 SQL 引擎：<code>isSQLSetAssign</code> 判定 <code>SET &lt;name&gt; = &lt;value&gt;</code> / <code>SET &lt;name&gt;=&lt;value&gt;</code> 形式走 <code>doSQL</code>（即 SQL 变量赋值），其余 <code>SET &lt;key&gt; &lt;value...&gt;</code> 保持 KV 语义（向后兼容既有驱动）。</p>
+<h2 id="_6">测试<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<h3 id="pkgsqlslowlog_internal_testgo">pkg/sql/slowlog_internal_test.go（白盒）<a class="headerlink" href="#pkgsqlslowlog_internal_testgo" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestM13SlowThresholdDefault</code></td>
+<td>默认阈值 100ms、内存上限 64</td>
+</tr>
+<tr>
+<td><code>TestM13ExecTimedErr</code></td>
+<td>慢且失败语句同样记录：Err 字段 + 落盘 <code>err=</code></td>
+</tr>
+<tr>
+<td><code>TestM13SlowQueryMax</code></td>
+<td>内存保留条数上限即时生效（环形裁剪）</td>
+</tr>
+<tr>
+<td><code>TestM13SlowLogFormat</code></td>
+<td>落盘行格式化：单行、换行转义、字段齐全</td>
+</tr>
+<tr>
+<td><code>TestM13SlowLogConfigure</code></td>
+<td>默认关闭；空路径不开启；开启后追加、关闭后不再追加</td>
+</tr>
+<tr>
+<td><code>TestM13ExecTimedLowOverhead</code></td>
+<td>未超阈值不产生记录（阈值判断先于格式化）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="pkgsqlsql_testgo">pkg/sql/sql_test.go（黑盒 / 行协议语义）<a class="headerlink" href="#pkgsqlsql_testgo" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestM13SlowQueryPublic</code></td>
+<td><code>SET slow_query_threshold</code> 即时生效、按用户执行记录 user/rows、落盘内容、阈值置 0 停止记录</td>
+</tr>
+<tr>
+<td><code>TestM13SlowQuerySetError</code></td>
+<td>SET 非法阈值/非法 log 值报错且不改配置</td>
+</tr>
+<tr>
+<td><code>TestP2SlowQueries</code>（扩展）</td>
+<td>SHOW SLOWQUERIES 列由 3 列扩展为 6 列（time/user/duration_ms/rows/error/sql）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="pkgserverserver_slowlog_testgo">pkg/server/server_slowlog_test.go（行协议）<a class="headerlink" href="#pkgserverserver_slowlog_testgo" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestM13ServerSlowQueryView</code></td>
+<td>经 server 行协议：SET 阈值即时生效、SHOW SLOWQUERIES 查看内存记录、slow.log 落盘内容</td>
+</tr>
+<tr>
+<td><code>TestM13ServerSlowQueryDisable</code></td>
+<td><code>SET slow_query_log = off</code> 停止落盘（内存仍可查）</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_7">取舍说明<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>统一计时 wrapper（踩坑规避）</strong>：P2 教训是计时方法与分发入口脱节（<code>execTimed</code> 未接入 <code>Execute</code>）导致记录为空、<code>Execute</code> 未透传原文导致无语句。本实现将 <code>execStmt</code> 提取为纯分发，<code>ExecuteTextAs</code> 统一包 <code>execTimed</code> 并保留原文，SELECT 等所有语句真正进入计时；</li>
+<li><strong>阈值判断先于格式化</strong>：<code>execTimed</code> 只在 <code>ms &gt;= threshold</code> 后构造记录与落盘行，正常语句路径零格式化/零文件操作，热路径仅增加两次时间读取；</li>
+<li><strong>落盘低频重复打开</strong>：慢查询天然低频，每次追加打开/关闭文件避免长句柄与跨语句文件状态，代价（系统调用）可忽略；写入失败静默忽略，慢查询记录不阻塞 SQL 执行；</li>
+<li><strong>内存与落盘解耦</strong>：<code>slow_query_log = off</code> 只停落盘，内存最近 N 条仍可 <code>SHOW SLOWQUERIES</code> 查询，符合运维可观测预期；</li>
+<li><strong>SET 语义兼容</strong>：server 层按 token 形态区分 SQL 变量赋值与 KV <code>SET</code>，不破坏 T19 驱动既有 <code>SET &lt;key&gt; &lt;value&gt;</code> 用法；</li>
+<li><strong>锁粒度</strong>：内存记录锁（<code>e.mu</code>）与落盘锁（<code>SlowLog.mu</code>）分离，落盘在内存锁外执行，慢查询低频下互不阻塞热路径。</li>
+</ul>
+<p><em>（内容由AI生成，仅供参考）</em></p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T25_m12_join/" class="btn btn-neutral float-left" title="M12 分布式 SQL 簇"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T27_m14_mysqldump_import/" class="btn btn-neutral float-right" title="M14 生态接入簇">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T25_m12_join/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T27_m14_mysqldump_import/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

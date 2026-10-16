@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T33 同步/半同步复制 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T33 \u540c\u6b65/\u534a\u540c\u6b65\u590d\u5236";
+        var mkdocs_page_input_path = "T33_m20_sync_semi_sync_replication.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">T33 同步/半同步复制</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#1">1. 背景与目标</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2-m2">2. 现状分析（M2）</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#21">2.1 复制链路</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#22-t33">2.2 与 T33 的差距</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3">3. 总体设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#31">3.1 设计原则</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#32">3.2 复制模式</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#33">3.3 协议扩展</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#34-ack-masterreplicator">3.4 主端 ACK 聚合等待器（MasterReplicator 扩展）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#35-pkgtxn">3.5 事务提交路径改造（pkg/txn）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#36-db-pkgdb">3.6 DB 层接线（pkg/db）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#37-sql-pkgsql-cmd">3.7 SQL / 配置切换（pkg/sql + cmd）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#38">3.8 副本故障处理</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4">4. 文件改动清单</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5">5. 测试计划</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#6">6. 版本与文档</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">T33 同步/半同步复制</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T33_m20_sync_semi_sync_replication.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t33-m20-sync-semi-sync-replication">T33 M20 同步/半同步复制（Sync / Semi-Sync Replication）<a class="headerlink" href="#t33-m20-sync-semi-sync-replication" title="Permanent link">&para;</a></h1>
+<ul>
+<li>批次：M20 分布式纵深（Distributed Depth）第一项</li>
+<li>依赖：M2 异步复制（T11，<code>pkg/replication</code>）、M16 在线配置热更新（<code>pkg/sql/config.go</code>）</li>
+<li>状态：已实现，测试全绿</li>
+</ul>
+<h2 id="1">1. 背景与目标<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>M2 实现了 master-follower 异步复制：主节点在事务提交应用存储后通过 commit hook 将 binlog 落盘并异步推送，从节点幂等应用后回 ACK。异步模型下客户端拿到提交成功时，副本可能尚未收到数据，存在"主故障丢数据"窗口（RPO&gt;0）。</p>
+<p>T33 目标：在保持 M2 异步复制完全兼容（默认行为不变）的前提下，为主节点增加<strong>同步复制</strong>与<strong>半同步复制</strong>两种强一致/准强一致模式：</p>
+<ul>
+<li><strong>同步复制（sync）</strong>：主节点在向客户端返回提交成功<strong>之前</strong>，等待<strong>所有在线</strong>副本确认该位点已落盘应用；任一在线副本超时未确认或没有在线副本时，提交返回超时错误（不静默降级），保证已确认事务不丢。</li>
+<li><strong>半同步复制（semi-sync）</strong>：主节点等待<strong>至少 N 个</strong>在线副本 ACK 后才向客户端返回成功；ACK 超时或在线副本不足时<strong>降级为异步</strong>继续（记录降级状态，保证可用性），类似 MySQL semi-sync 的 <code>rpl_semi_sync_master_timeout</code> 语义。</li>
+</ul>
+<h2 id="2-m2">2. 现状分析（M2）<a class="headerlink" href="#2-m2" title="Permanent link">&para;</a></h2>
+<h3 id="21">2.1 复制链路<a class="headerlink" href="#21" title="Permanent link">&para;</a></h3>
+<pre><code>客户端 ──COMMIT──&gt; txnManager ──(锁内)──&gt; storage.Write ──&gt; commitHook ──&gt; MasterReplicator.Append
+                                                    │                              │
+                                                    │                 binlogStore.Append（fsync 落盘）
+                                                    │                              │
+                                                    └── 返回 nil（提交成功）      pushLoop ──&gt; Follower ──&gt; ApplyBinlog ──&gt; ACK
+</code></pre>
+<p>关键事实（源码确认）：</p>
+<ul>
+<li><code>txn_impl.go</code> Commit 阶段 3 在 <code>m.mu</code> 锁内依次：写存储 → <code>applied++</code> → 调用 <code>commitHook(lsn, seq, batch)</code> → <code>t.finish</code> → 解锁 → 返回 nil。<strong>commitHook 在锁内执行</strong>，错误仅记录 <code>HookErr</code>，不影响提交成功语义。</li>
+<li><code>BinlogStore.Append</code> 写入即 <code>fsync</code>，binlog 落盘保证（RPO=0 at master）。</li>
+<li><code>Follower.ApplyBinlog</code> 成功应用后立即回 ACK（ACK 帧语义 = "该 LSN 已应用落盘"）。</li>
+<li><code>MasterReplicator.readLoop</code> 收到 ACK 后更新 <code>sc.info.lastAck</code>；<code>SlaveStatus</code> 暴露 <code>LastAck</code>。</li>
+<li>协议帧：<code>len(4B)+type(1B)+payload</code>；HELLO/HELLO_OK/BINLOG/ACK/PING/PONG；<code>protoVersion=1</code>。</li>
+<li>主节点维护 <code>clients</code>（在线连接）与 <code>known</code>（全部历史从节点）；<code>heartbeatLoop</code> 超时剔除离线连接（online=false）。</li>
+</ul>
+<h3 id="22-t33">2.2 与 T33 的差距<a class="headerlink" href="#22-t33" title="Permanent link">&para;</a></h3>
+<ol>
+<li><code>commitHook</code> 在锁内执行且不等待 ACK：同步等待会阻塞整个事务管理器锁，不可接受；且 hook 错误不回传 Commit 调用者。</li>
+<li><code>MasterReplicator</code> 无复制模式、无 ACK 聚合等待、无超时降级状态。</li>
+<li>无运行时切换配置入口（SQL / 命令行 / 配置文件）。</li>
+</ol>
+<h2 id="3">3. 总体设计<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<h3 id="31">3.1 设计原则<a class="headerlink" href="#31" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>协议最小扩展、向后兼容</strong>：同步/半同步完全复用 M2 的 BINLOG/ACK 帧（ACK 即"已应用落盘"确认，语义天然满足要求），不新增帧类型；仅 HELLO_OK 追加 1 字节复制模式（旧从节点按旧长度解析，兼容）。</li>
+<li><strong>等待点移出事务锁</strong>：新增"提交后置确认钩子"（<code>SetCommitWaitHook</code>）在 <code>m.mu</code> 解锁后、Commit 返回前调用，可安全阻塞等待 ACK；binlog 顺序仍由锁内 commitHook 串行保证。</li>
+<li><strong>默认异步零开销</strong>：<code>ModeAsync</code> 下 WaitAck 立即返回，M2 行为完全不变。</li>
+<li><strong>模式切换热生效</strong>：通过 db API / <code>SET replication_mode</code> / 配置文件 / 命令行参数多入口，均可运行时切换（<code>SET PERSIST</code> 可持久化）。</li>
+</ol>
+<h3 id="32">3.2 复制模式<a class="headerlink" href="#32" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>常量</th>
+<th>提交语义</th>
+<th>ACK 不足/超时</th>
+<th>无在线副本</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>异步</td>
+<td><code>ModeAsync</code></td>
+<td>不等待，立即成功（M2 原样）</td>
+<td>—</td>
+<td>正常提交</td>
+</tr>
+<tr>
+<td>半同步</td>
+<td><code>ModeSemiSync</code></td>
+<td>等待 ≥min(N, 在线) 个 ACK</td>
+<td>降级异步，提交成功</td>
+<td>降级异步</td>
+</tr>
+<tr>
+<td>同步</td>
+<td><code>ModeSync</code></td>
+<td>等待全部在线 ACK</td>
+<td>返回 <code>ErrAckTimeout</code>（提交报错）</td>
+<td>返回 <code>ErrNoSlave</code></td>
+</tr>
+</tbody>
+</table>
+<p>参数：</p>
+<ul>
+<li><code>N</code>（半同步最少确认副本数，默认 1，≥1 生效）</li>
+<li><code>timeout</code>（ACK 等待超时，默认 10s，与 <code>HeartbeatTimeout</code> 一致；≤0 用默认值）</li>
+</ul>
+<h3 id="33">3.3 协议扩展<a class="headerlink" href="#33" title="Permanent link">&para;</a></h3>
+<p>保持 <code>protoVersion=1</code>，不新增帧类型。仅 <code>HELLO_OK</code> payload 由 <code>version(2B)+lastLSN(8B)</code> 扩展为 <code>version(2B)+lastLSN(8B)+mode(1B)</code>（共 11B）：</p>
+<ul>
+<li><code>decodeHelloOK</code> 兼容旧长度 10B（视为 <code>ModeAsync</code>），新长度 11B 读取 mode。</li>
+<li>从节点 <code>Follower</code> 已确认 <code>lastLSN</code> 语义不变，ACK 行为不变，无需协议感知模式。</li>
+<li>好处：从节点/运维工具可感知主端当前模式，便于诊断；协议向后兼容。</li>
+</ul>
+<blockquote>
+<p>备注：不引入新帧的原因——"同步"只需主端聚合等待既有 ACK，ACK 帧已表达"已应用"；引入专用帧只会增加握手版本分裂风险，无信息增益。</p>
+</blockquote>
+<h3 id="34-ack-masterreplicator">3.4 主端 ACK 聚合等待器（MasterReplicator 扩展）<a class="headerlink" href="#34-ack-masterreplicator" title="Permanent link">&para;</a></h3>
+<p>新增字段（<code>MasterReplicator</code>）：</p>
+<pre><code class="language-go">mode       ReplMode        // 复制模式（默认 ModeAsync）
+semiAckN   int             // 半同步最少 ACK 数（默认 1）
+ackTimeout time.Duration   // ACK 等待超时（默认 10s）
+degraded   bool            // 半同步降级标志
+degLSN     storage.LSN     // 触发降级的位点
+degAt      time.Time       // 降级时间
+</code></pre>
+<p>新增方法：</p>
+<ul>
+<li><code>SetReplicationMode(mode ReplMode, ackN int, timeout time.Duration) error</code>：校验参数并热切换；async 忽略 ackN/timeout；返回 <code>ErrInvalidMode</code> / <code>ErrBadAckN</code> / <code>ErrBadTimeout</code>。</li>
+<li><code>ReplicationMode() ReplMode</code>、<code>SyncStatus() SyncStatus</code>（模式/N/超时/降级标志/降级位点/降级时间/最近等待耗时/当前是否在等待）。</li>
+<li><code>WaitAck(ctx context.Context, lsn storage.LSN) error</code>：核心等待器。</li>
+</ul>
+<p><code>WaitAck</code> 算法：</p>
+<pre><code>1. mode==ModeAsync → 立即返回 nil（M2 零开销）。
+2. 快照在线副本：online = {c in clients | info.online &amp;&amp; lastAck &lt; lsn}（只统计未达标的，减少扫描）。
+   need = online 总数
+   - ModeSync:  need = len(online)（全部在线都要达标）；need==0 → ErrNoSlave
+   - ModeSemiSync: need = min(semiAckN, len(online))；need==0 → 立即降级返回 nil
+3. 轮询（10ms 间隔）直到 need==0 / ctx 取消 / deadline 到达：
+   - readLoop 已把 ACK 写入 sc.info.lastAck（加锁读取）
+   - semi-sync 超时 → 置降级标志（degraded=true, degLSN=lsn, degAt=now），返回 nil
+   - sync 超时 → 返回 ErrAckTimeout
+4. 等待期间新增在线副本不改变 need（已按快照计算），避免等待期间新连接导致提交无限阻塞。
+</code></pre>
+<p>实现要点：</p>
+<ul>
+<li>轮询加锁读取 <code>clients</code>/<code>info.lastAck</code>，与 <code>readLoop</code> 的写天然互斥。</li>
+<li><code>ctx</code> 用于外部取消（DB 关闭时中断等待，避免 Close 阻塞）。</li>
+<li>降级只记状态不记入历史队列；<code>SyncStatus</code> 每次读取返回当前视图；半同步从降级中恢复（后续提交 ACK 达标）时 <code>degraded=false</code>（新提交成功即视为恢复，旧降级事件在 <code>DegradedCount</code> 累计）。</li>
+</ul>
+<h3 id="35-pkgtxn">3.5 事务提交路径改造（pkg/txn）<a class="headerlink" href="#35-pkgtxn" title="Permanent link">&para;</a></h3>
+<p>新增可选钩子（不影响 M2）：</p>
+<pre><code class="language-go">// TxnManager 新增
+SetCommitWaitHook(hook func(lsn storage.LSN, seq uint64) error)
+</code></pre>
+<p><code>Commit</code> 流程改动（<code>txn_impl.go</code> 阶段 3 末尾）：</p>
+<pre><code>m.mu.Unlock()                      // 解锁（原有）
+if m.commitWaitHook != nil {       // 新增：锁外、Commit 返回前
+    if herr := m.commitWaitHook(lsn, seq); herr != nil {
+        return herr                // sync 超时 → 提交返回错误
+    }
+}
+return nil
+</code></pre>
+<ul>
+<li><code>commitHook</code>（锁内）保持原样：Append binlog 落盘 + 唤醒推送，保证 binlog 顺序 = 提交顺序。</li>
+<li><code>commitWaitHook</code>（锁外）执行 <code>WaitAck</code>：可阻塞最长 timeout，不阻塞其他事务提交。</li>
+<li>语义说明：sync 超时返回错误时，本地事务<strong>已提交</strong>（WAL+存储+binlog 均已落盘），但客户端收到失败——这是分布式系统的"提交不确定"窗口（与 2PC 的 COMMIT_UNCERTAIN 同构）。客户端重试幂等（同 key 写入按 binlog LSN 幂等应用）。文档明确此语义。</li>
+<li>semi-sync 降级返回 nil：提交成功，仅记录降级事件。</li>
+</ul>
+<h3 id="36-db-pkgdb">3.6 DB 层接线（pkg/db）<a class="headerlink" href="#36-db-pkgdb" title="Permanent link">&para;</a></h3>
+<p><code>StartReplicationTLS</code> 在原有 commitHook 基础上追加：</p>
+<pre><code class="language-go">d.Txn.SetCommitHook(func(lsn, seq, batch) error { return r.Append(...) }) // M2 原样（锁内）
+d.Txn.SetCommitWaitHook(func(lsn, seq) error {                            // T33 新增（锁外）
+    return r.WaitAck(context.Background(), lsn)
+})
+</code></pre>
+<p>新增 API：</p>
+<ul>
+<li><code>SetReplicationMode(mode replication.ReplMode, ackN int, timeout time.Duration) error</code>：透传 <code>r.SetReplicationMode</code>。</li>
+<li><code>ReplicationSyncStatus() replication.SyncStatus</code>：透传 <code>r.SyncStatus</code>。</li>
+<li>未启用复制时调用 SetReplicationMode 返回明确错误（<code>ErrReplicationNotStarted</code>）。</li>
+</ul>
+<h3 id="37-sql-pkgsql-cmd">3.7 SQL / 配置切换（pkg/sql + cmd）<a class="headerlink" href="#37-sql-pkgsql-cmd" title="Permanent link">&para;</a></h3>
+<p>复用 M16 配置注册表（<code>configSpecs</code>）新增三个热更新键：</p>
+<table>
+<thead>
+<tr>
+<th>键</th>
+<th>值语义</th>
+<th>默认</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>replication_mode</code></td>
+<td><code>async</code> / <code>semi-sync</code> / <code>sync</code></td>
+<td><code>async</code></td>
+</tr>
+<tr>
+<td><code>replication_ack</code></td>
+<td>半同步最少确认副本数（正整数）</td>
+<td><code>1</code></td>
+</tr>
+<tr>
+<td><code>replication_timeout</code></td>
+<td>ACK 超时毫秒（正整数，≤0 用默认）</td>
+<td><code>10000</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><code>SET replication_mode = 'sync'</code> 立即热切换；<code>SET PERSIST replication_mode = 'sync'</code> 落盘持久化（重启生效）。</li>
+<li><code>SHOW CONFIG</code> 自动展示；<code>SHOW REPLICATION STATUS</code> 保持原有输出（新增模式列由 db 层 ReplicationStatus 增强可选）。</li>
+<li><code>sql.Executor</code> 通过接口 <code>ReplicationModeSetter { SetMode(mode string, ackN int, timeoutMs int64) error }</code> 转发，由 <code>db.Open</code> 注入（避免包循环）。</li>
+<li>cmd/openxdb：<code>--replication-mode</code> / <code>--replication-ack</code> / <code>--replication-timeout</code> 命令行参数 + <code>[server]</code> 配置段 <code>replication_mode</code> / <code>replication_ack</code> / <code>replication_timeout</code>，优先级 持久化 &lt; 配置文件 &lt; 命令行（与现有参数一致）。</li>
+</ul>
+<h3 id="38">3.8 副本故障处理<a class="headerlink" href="#38" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>sync</th>
+<th>semi-sync</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>副本离线（heartbeat 超时剔除）</td>
+<td>后续提交等待全部<strong>在线</strong>副本；离线副本不参与计数 → 若还有在线副本，提交成功（旧副本回连后从 lastAck 续推补齐）</td>
+<td>在线数 &lt; N → 立即降级异步</td>
+</tr>
+<tr>
+<td>无在线副本</td>
+<td>提交返回 <code>ErrNoSlave</code>（拒绝伪同步）</td>
+<td>立即降级异步，提交成功</td>
+</tr>
+<tr>
+<td>副本慢（ACK 迟到）</td>
+<td>超时 → <code>ErrAckTimeout</code>，事务报错（本地已提交，重试幂等）</td>
+<td>超时 → 降级异步，提交成功</td>
+</tr>
+<tr>
+<td>副本重连</td>
+<td><code>pushLoop(from=lastAck)</code> 续推；后续提交的 ACK 等待恢复</td>
+<td>同左，降级状态在下一次 ACK 达标时自动恢复</td>
+</tr>
+<tr>
+<td>主节点崩溃</td>
+<td>已提交事务 WAL+binlog 均落盘；恢复后从节点按 lastAck 续推，不丢已确认事务</td>
+<td>同左</td>
+</tr>
+</tbody>
+</table>
+<h2 id="4">4. 文件改动清单<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>改动</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pkg/replication/master.go</code></td>
+<td>MasterReplicator 增加模式/降级字段；新增 SetReplicationMode/ReplicationMode/SyncStatus/WaitAck</td>
+</tr>
+<tr>
+<td><code>pkg/replication/protocol.go</code></td>
+<td>HELLO_OK 编解码兼容扩展 mode 字节</td>
+</tr>
+<tr>
+<td><code>pkg/replication/sync.go</code>（新）</td>
+<td>ReplMode 类型、SyncStatus、错误定义</td>
+</tr>
+<tr>
+<td><code>pkg/replication/sync_test.go</code>（新）</td>
+<td>主端等待器单测（fake slave）</td>
+</tr>
+<tr>
+<td><code>pkg/txn/txn.go</code> / <code>txn_impl.go</code></td>
+<td>TxnManager 接口 + Commit 锁外提交后置确认钩子</td>
+</tr>
+<tr>
+<td><code>pkg/db/db.go</code></td>
+<td>StartReplicationTLS 接线 commitWaitHook；SetReplicationMode/ReplicationSyncStatus</td>
+</tr>
+<tr>
+<td><code>pkg/db/db_sync_repl_test.go</code>（新）</td>
+<td>主从集成测试（sync 提交等待、semi-sync 降级、sync 超时报错）</td>
+</tr>
+<tr>
+<td><code>pkg/sql/config.go</code> / <code>sql.go</code> / <code>executor.go</code></td>
+<td>注册 replication_mode/replication_ack/replication_timeout 配置键与转发</td>
+</tr>
+<tr>
+<td><code>cmd/openxdb/main.go</code></td>
+<td>--replication-mode/--replication-ack/--replication-timeout 参数与 [server] 配置段</td>
+</tr>
+<tr>
+<td><code>README.md</code></td>
+<td>Status/Roadmap 更新（T33 勾选 + v0.22.0-alpha）</td>
+</tr>
+</tbody>
+</table>
+<h2 id="5">5. 测试计划<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<ul>
+<li>单元（<code>pkg/replication/sync_test.go</code>，fake slave 协议客户端）：</li>
+<li>async 模式 WaitAck 立即返回（M2 兼容）；</li>
+<li>sync 模式：1/2 个 slave ACK 后返回；无 slave → <code>ErrNoSlave</code>；slave 不 ACK 超时 → <code>ErrAckTimeout</code>；</li>
+<li>semi-sync 模式：N=1 时 1 个 ACK 即返回；无 slave/超时 → 降级返回 nil 且 SyncStatus 可见；</li>
+<li>HELLO_OK 长度兼容（10B 旧帧可解，11B 新帧带 mode）。</li>
+<li>集成（<code>pkg/db/db_sync_repl_test.go</code>，真实主从 DB + 随机端口）：</li>
+<li>sync：主提交 INSERT 后从库可查且提交成功（提交返回前副本已应用）；</li>
+<li>sync 无副本：INSERT 返回超时错误；</li>
+<li>semi-sync：N=1 + 1 从库 → 提交成功且从库可查；无从库 + 短超时 → 降级提交成功，<code>SyncStatus.Degraded=true</code>；</li>
+<li>模式热切换：提交中切换 async→sync→async 行为正确；</li>
+<li>回归：async 模式提交与 M2 完全一致（不等待）。</li>
+<li>全仓：<code>go test ./... -count=1 -p 1</code>（串行避免端口竞争）。</li>
+</ul>
+<h2 id="6">6. 版本与文档<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<ul>
+<li>README Status：推进至 <strong>v0.22.0-alpha</strong>（M20 第一批 T33 同步/半同步复制）。</li>
+<li>Roadmap：勾选 T33，链接本文档。
+<em>（内容由AI生成，仅供参考）</em></li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T32_m19_ecosystem_export/" class="btn btn-neutral float-left" title="M19 生态导出"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T34_m20_cross_node_ddl/" class="btn btn-neutral float-right" title="T34 跨节点 DDL">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T32_m19_ecosystem_export/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T34_m20_cross_node_ddl/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

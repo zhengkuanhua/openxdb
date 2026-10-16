@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T41 DDL 兼容簇 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T41 DDL \u517c\u5bb9\u7c07";
+        var mkdocs_page_input_path = "T41_ddl_compat_cluster.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">T41 DDL 兼容簇</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#create-if-not-exists">第一节：CREATE 系列 IF NOT EXISTS</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#11">1.1 现状</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#12">1.2 设计</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#13">1.3 测试方案</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#create-table-as-selectctas">第二节：CREATE TABLE AS SELECT（CTAS）</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#21">2.1 现状</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#22">2.2 设计</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#23">2.3 测试方案</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_1">关联改动文件</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">T41 DDL 兼容簇</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T41_ddl_compat_cluster.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t41-ddl-create-if-not-exists-create-table-as-selectctas">T41 DDL 兼容补齐：CREATE 系列 IF NOT EXISTS + CREATE TABLE AS SELECT（CTAS）<a class="headerlink" href="#t41-ddl-create-if-not-exists-create-table-as-selectctas" title="Permanent link">&para;</a></h1>
+<ul>
+<li>版本：v0.29.0-alpha</li>
+<li>范围：pkg/sql（parser / ast / executor / matview / rbac / trigger / procedure）</li>
+<li>目标：补齐两类 DDL 语法缺口——① CREATE 系列统一支持 <code>IF NOT EXISTS</code>；② 支持 <code>CREATE TABLE [IF NOT EXISTS] &lt;name&gt; AS SELECT ...</code>（CTAS）。</li>
+</ul>
+<hr />
+<h2 id="create-if-not-exists">第一节：CREATE 系列 IF NOT EXISTS<a class="headerlink" href="#create-if-not-exists" title="Permanent link">&para;</a></h2>
+<h3 id="11">1.1 现状<a class="headerlink" href="#11" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>DROP</code> 系列（TABLE / USER / VIEW / MATERIALIZED VIEW / TRIGGER / PROCEDURE / ROLE）自 T21 起已支持 <code>IF EXISTS</code>：对象不存在时静默成功。</li>
+<li><code>CREATE</code> 系列（TABLE / VIEW / MATERIALIZED VIEW / INDEX / USER / ROLE / TRIGGER / PROCEDURE）<strong>均不支持</strong> <code>IF NOT EXISTS</code>：</li>
+<li>解析层：<code>parseCreate</code> 分发各子函数后直接解析对象名，遇到 <code>IF NOT EXISTS</code> 会报 unexpected token。</li>
+<li>执行层：各 <code>execCreate*</code> 在对象已存在时一律返回 <code>xxx already exists</code> 错误，无静默跳过路径。</li>
+<li>lexer 关键字：<code>IF</code>、<code>EXISTS</code>、<code>AS</code> 均已登记（lexer.go keywords 表）；<code>NOT</code> 未登记为关键字，但按既有约定（列级 <code>NOT NULL</code> 同此处理）可按 token 文本匹配接受。</li>
+</ul>
+<h3 id="12">1.2 设计<a class="headerlink" href="#12" title="Permanent link">&para;</a></h3>
+<p><strong>语法</strong>（与 DROP 系列 <code>IF EXISTS</code> 对称）：</p>
+<pre><code>CREATE TABLE             [IF NOT EXISTS] &lt;name&gt; (...)
+CREATE VIEW              [IF NOT EXISTS] &lt;name&gt; AS &lt;SELECT&gt;
+CREATE MATERIALIZED VIEW [IF NOT EXISTS] &lt;name&gt; AS &lt;SELECT&gt;
+CREATE INDEX             [IF NOT EXISTS] &lt;name&gt; ON &lt;table&gt; (&lt;col&gt;)
+CREATE UNIQUE INDEX      [IF NOT EXISTS] &lt;name&gt; ON &lt;table&gt; (&lt;col&gt;)
+CREATE USER              [IF NOT EXISTS] '&lt;name&gt;' IDENTIFIED BY '&lt;pwd&gt;'
+CREATE ROLE              [IF NOT EXISTS] '&lt;role&gt;'
+CREATE TRIGGER           [IF NOT EXISTS] &lt;name&gt; BEFORE|AFTER &lt;event&gt; ON &lt;table&gt; ...
+CREATE PROCEDURE         [IF NOT EXISTS] &lt;name&gt; [(...)] BEGIN ... END
+</code></pre>
+<p><strong>AST</strong>：各 CREATE 系列 Stmt 结构体新增 <code>IfNotExists bool</code> 字段（CreateTableStmt / CreateViewStmt / CreateMatViewStmt / CreateIndexStmt / CreateUserStmt / CreateRoleStmt / CreateTriggerStmt / CreateProcedureStmt）。</p>
+<p><strong>解析</strong>：新增统一 helper <code>parseIfNotExists() (bool, error)</code>，模式与 <code>DROP ... IF EXISTS</code> 一致，仅中间多一个 <code>NOT</code>：</p>
+<pre><code>IF → NOT（按文本匹配） → EXISTS → 置 true
+</code></pre>
+<p>各 <code>parseCreate*</code> 在消费对象类型关键字之后、解析对象名之前调用该 helper。</p>
+<p><strong>执行语义</strong>：对象<strong>已存在时静默跳过</strong>（返回空 Result，不覆盖、不报错）；不存在时走正常创建。边界：
+- <code>CREATE TABLE IF NOT EXISTS</code>：同名表存在 → 跳过（不覆盖）。
+- <code>CREATE VIEW IF NOT EXISTS</code>：同名视图存在 → 跳过；同名<strong>表</strong>存在 → 仍报命名冲突（与 MySQL 语义一致：名字被非视图对象占用不算"视图已存在"）。
+- <code>CREATE MATERIALIZED VIEW IF NOT EXISTS</code>：同名物化视图存在 → 跳过；同名表/视图存在 → 仍报冲突。
+- INDEX / USER / ROLE / TRIGGER / PROCEDURE：对应对象存在 → 跳过。
+- 前置校验（如引用表不存在、外键校验等）先于存在性检查执行，<code>IF NOT EXISTS</code> 仅豁免"对象已存在"错误。</p>
+<h3 id="13">1.3 测试方案<a class="headerlink" href="#13" title="Permanent link">&para;</a></h3>
+<ul>
+<li>CREATE TABLE：不存在创建成功；已存在第二次执行静默成功（不报错、不覆盖原表，原数据仍在）；与 DROP TABLE IF EXISTS 组成幂等脚本（重复执行 CREATE IF NOT EXISTS + DROP IF EXISTS 均不报错）。</li>
+<li>CREATE VIEW：不存在创建成功；已存在跳过；同名表冲突仍报错。</li>
+<li>CREATE INDEX / USER / ROLE：已存在跳过。</li>
+<li>parser AST：<code>CREATE TABLE IF NOT EXISTS t(id INT)</code> 解析后 <code>IfNotExists == true</code>；不带 IF 时 <code>false</code>。</li>
+</ul>
+<hr />
+<h2 id="create-table-as-selectctas">第二节：CREATE TABLE AS SELECT（CTAS）<a class="headerlink" href="#create-table-as-selectctas" title="Permanent link">&para;</a></h2>
+<h3 id="21">2.1 现状<a class="headerlink" href="#21" title="Permanent link">&para;</a></h3>
+<ul>
+<li>解析层：<code>parseCreate</code> 的 TABLE 分支在对象名后直接 <code>expect(tokLParen)</code>，遇到 <code>AS SELECT</code> 报 unexpected token；无任何 CTAS 分支。</li>
+<li>执行层：无 SELECT 结果建表的执行路径。</li>
+<li>可复用基建（M15 物化视图已验证）：</li>
+<li><code>execCreateMatView</code>：单事务内 <code>execSelect</code> → <code>matViewColumnNames</code> 列名归一化 → <code>inferMatViewSchema</code> 类型推断 → 注册表元数据 → <code>writeMatViewRows</code> 落盘行的完整闭环。</li>
+<li><code>inferMatViewColType</code>：单列类型推断（全 INT→INT；INT/DECIMAL→DECIMAL；全 DATE→DATE；全 BLOB→BLOB；其余→TEXT；混合不支持的组合报错）。</li>
+<li><code>normalizeMatViewValue</code> / <code>coerceValue</code>：值归一化为目标列类型。</li>
+</ul>
+<h3 id="22">2.2 设计<a class="headerlink" href="#22" title="Permanent link">&para;</a></h3>
+<p><strong>语法</strong>：</p>
+<pre><code>CREATE TABLE [IF NOT EXISTS] &lt;name&gt; AS &lt;SELECT&gt;
+</code></pre>
+<ul>
+<li><code>&lt;SELECT&gt;</code> 复用 <code>parseSelect</code>，天然兼容 <code>SELECT *</code>、表达式投影（T40 算术表达式）、聚合（MAX/MIN/COUNT/SUM/AVG）、<code>DISTINCT</code>、<code>GROUP BY</code>、<code>WHERE</code>、<code>ORDER BY</code>、<code>LIMIT</code>、别名列。</li>
+<li>与 <code>IF NOT EXISTS</code> 组合：<code>CREATE TABLE IF NOT EXISTS t AS SELECT ...</code>，表已存在 → 静默跳过（不执行 SELECT、不建表）。</li>
+</ul>
+<p><strong>执行流程</strong>（<code>execCreateTableAsSelect</code>，参照 <code>execCreateMatView</code> 的单事务模式）：</p>
+<ol>
+<li>存在性检查：<code>information_schema</code> 拒绝；同名表存在时按 <code>IfNotExists</code> 跳过或报错。</li>
+<li>事务包装：非显式会话事务时 <code>beginTx</code> 包一层，保证"建表 + 插数 + 元数据持久化"原子；失败回滚不残留表。</li>
+<li><code>execSelect</code> 执行 SELECT 取结果集（列名 + 行）。</li>
+<li><code>matViewColumnNames</code> 归一化列名（去限定前缀；重名保留完整限定名；空列名报错）。</li>
+<li><code>inferMatViewSchema</code> 由结果值推断列类型（空结果集 → 全部 TEXT，但列定义仍按 SELECT 投影列生成，建表成功）。</li>
+<li>构造 <code>TableMeta</code>：列定义 = 推断结果；无显式主键按项目惯例 <code>PK = 首列</code>（与普通 <code>CREATE TABLE</code> 一致）。</li>
+<li><code>saveTables</code> 注册表元数据（同事务 Put）。</li>
+<li><code>writeCTASRows</code> 逐行编码写入（<code>encodeRow</code> + <code>pkBytes(首列)</code> + <code>locateRow</code> + <code>rowKeyAt</code> + <code>tx.Put</code>），与 <code>writeMatViewRows</code> 同机制但不附加隐藏主键列。</li>
+<li>事务提交（非显式事务）后 <code>broadcastDDL(DDLOpCreate)</code> 广播集群元数据变更（与普通 <code>CREATE TABLE</code> 一致；显式事务中由用户 COMMIT 后不广播，与现有 DDL 行为对齐）。</li>
+</ol>
+<p><strong>类型推断规则</strong>（与物化视图一致）：</p>
+<table>
+<thead>
+<tr>
+<th>结果值组合</th>
+<th>推断列类型</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>全 INT</td>
+<td>INT</td>
+</tr>
+<tr>
+<td>INT/DECIMAL 混合或全 DECIMAL</td>
+<td>DECIMAL</td>
+</tr>
+<tr>
+<td>全 DATE</td>
+<td>DATE</td>
+</tr>
+<tr>
+<td>全 BLOB</td>
+<td>BLOB</td>
+</tr>
+<tr>
+<td>其余（含 TEXT、混合标量）</td>
+<td>TEXT（字符串化）</td>
+</tr>
+<tr>
+<td>DATE+INT、DECIMAL+TEXT 等不可混合组合</td>
+<td>报错（不建表，事务回滚）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>失败回滚</strong>：SELECT 引用不存在的表、类型推断失败、写行失败（编码/路由错误）时整个事务回滚，目标表不残留。</p>
+<h3 id="23">2.3 测试方案<a class="headerlink" href="#23" title="Permanent link">&para;</a></h3>
+<ul>
+<li>基础投影：<code>CREATE TABLE t2 AS SELECT id, name FROM t1</code>，数据与列类型正确。</li>
+<li><code>SELECT *</code>：全列复制。</li>
+<li>表达式投影：<code>SELECT id, price * qty AS total</code>（T40 算术表达式），total 推断 DECIMAL。</li>
+<li>聚合 + GROUP BY：<code>SELECT age, COUNT(*) AS c FROM t GROUP BY age</code>，c 推断 INT。</li>
+<li>WHERE 过滤：仅满足条件的行进入新表。</li>
+<li>空结果：<code>SELECT ... WHERE 1=0</code> 建表成功、0 行、列定义存在。</li>
+<li>IF NOT EXISTS 组合：目标表已存在时跳过（原表数据不变）。</li>
+<li>类型推断断言：INT 列 → INT；字符串列 → TEXT；含小数列 → DECIMAL。</li>
+<li>失败回滚：<code>CREATE TABLE t AS SELECT * FROM no_such_table</code> 报错且 <code>t</code> 不存在。</li>
+<li>parser AST：<code>CREATE TABLE t AS SELECT id FROM u</code> 解析后 <code>Select != nil</code>、<code>Columns</code> 为空。</li>
+</ul>
+<hr />
+<h2 id="_1">关联改动文件<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>改动</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pkg/sql/ast.go</code></td>
+<td>CREATE 系列 Stmt 加 <code>IfNotExists</code>；CreateTableStmt 加 <code>Select</code></td>
+</tr>
+<tr>
+<td><code>pkg/sql/parser.go</code></td>
+<td>新增 <code>parseIfNotExists</code>；各 <code>parseCreate*</code> 接入；TABLE 分支加 CTAS 解析</td>
+</tr>
+<tr>
+<td><code>pkg/sql/executor.go</code></td>
+<td><code>execCreateTable</code> 加 IfNotExists 跳过与 CTAS 分发；新增 <code>execCreateTableAsSelect</code>、<code>writeCTASRows</code>；<code>execCreateUser</code>/<code>execCreateIndex</code>/<code>execCreateView</code> 加 IfNotExists</td>
+</tr>
+<tr>
+<td><code>pkg/sql/matview.go</code></td>
+<td><code>execCreateMatView</code> 加 IfNotExists 跳过</td>
+</tr>
+<tr>
+<td><code>pkg/sql/rbac.go</code></td>
+<td><code>execCreateRole</code> 加 IfNotExists 跳过</td>
+</tr>
+<tr>
+<td><code>pkg/sql/trigger.go</code></td>
+<td><code>execCreateTrigger</code> 加 IfNotExists 跳过</td>
+</tr>
+<tr>
+<td><code>pkg/sql/procedure.go</code></td>
+<td><code>execCreateProcedure</code> 加 IfNotExists 跳过</td>
+</tr>
+<tr>
+<td><code>pkg/sql/t41_ddl_test.go</code></td>
+<td>新增 T41 单元与集成测试</td>
+</tr>
+<tr>
+<td><code>README.md</code></td>
+<td>Status 追加 T41 描述；Roadmap 加条目；版本 v0.29.0-alpha</td>
+</tr>
+<tr>
+<td><em>（内容由AI生成，仅供参考）</em></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T40_sql_capability_cluster/" class="btn btn-neutral float-left" title="T40 SQL 能力簇"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T42_insert_select/" class="btn btn-neutral float-right" title="T42 INSERT INTO SELECT">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T40_sql_capability_cluster/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T42_insert_select/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

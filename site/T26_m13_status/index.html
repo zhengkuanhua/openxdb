@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T26 M13 功能簇（3/3）：监控状态查询（aggregated health/status view） - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T26 M13 \u529f\u80fd\u7c07\uff083/3\uff09\uff1a\u76d1\u63a7\u72b6\u6001\u67e5\u8be2\uff08aggregated health/status view\uff09";
+        var mkdocs_page_input_path = "T26_m13_status.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">T26 M13 功能簇（3/3）：监控状态查询（aggregated health/status view）</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T26_m13_status.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t26-m13-33aggregated-healthstatus-view">T26 M13 功能簇（3/3）：监控状态查询（aggregated health/status view）<a class="headerlink" href="#t26-m13-33aggregated-healthstatus-view" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v5.0-P13-M13, v0.14.0-alpha
+日期：2026-10-11
+范围：<code>pkg/server</code>（status.go / server.go STATUS 命令 + 测试 <code>server_status_test.go</code>）、<code>pkg/metrics</code>（metrics.go Snapshot 快照 + 测试 <code>metrics_test.go</code> 增补）、<code>pkg/sql</code>（sql.go ClusterNodes/ClusterSelfNode 转发）、<code>cmd/openxdb</code>（status.go CLI + main.go 注册与装配）
+闭环：<code>go test ./pkg/server/ ./pkg/metrics/ -count=1</code> 全绿，不 push；README 勾选由 M13 整簇收尾提交统一更新
+提交：<code>M13: status view</code>（本地，未 push）</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>M13 可观测性簇至此收尾：子功能一慢查询日志（ed955f8，<code>execTimed</code> 统一计时 + <code>SlowQueryRecord</code> + <code>recordSlow</code>）、子功能二 metrics 导出（1ac9e92，<code>pkg/metrics</code> Registry + METRICS 命令 + <code>/metrics</code> HTTP + <code>openxdb metrics</code> CLI）已完成。运维侧已有 T20 doctor 健康检查（<code>pkg/server/doctor</code>）与 <code>SHOW STATS</code> 运行指标，但缺少一个<strong>统一入口</strong>：把节点/region/存储/慢查询/事务/连接/metrics 要点聚合成一张健康/状态快照，同时服务端命令与 CLI 双入口可查，供人工排障与脚本拉取。</p>
+<p>本子功能在复用 M13 子功能二注册表（<code>metrics.Snapshot</code> 与 <code>Render</code> 同源）与子功能一慢查询记录（<code>SlowQueries</code>）基础上，新增 <strong>STATUS 聚合快照</strong>：只读、不阻塞、单项降级不整体失败。</p>
+<h2 id="_2">设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="statusreport">聚合快照模型（<code>statusReport</code>）<a class="headerlink" href="#statusreport" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>内容</th>
+<th>来源</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>server</code> / <code>status</code> / <code>time</code></td>
+<td>服务名 / 整体状态（<code>ok</code> | <code>degraded</code>）/ 快照时间</td>
+<td>固定 + <code>time.Now()</code></td>
+</tr>
+<tr>
+<td><code>nodes</code></td>
+<td>节点存活/角色（ID、Addr、Role、State）</td>
+<td><code>SQL.ClusterNodes()</code>；空注册表回退 <code>ClusterSelfNode()</code> 单机兜底</td>
+</tr>
+<tr>
+<td><code>regions</code></td>
+<td>region 分布：总数 / 各状态 / 本地 / 远端</td>
+<td><code>SQL.MetricsRegionStats()</code>（与 SHOW STATS、metrics 同口径）；SQL 不可用回退 metrics 注入源</td>
+</tr>
+<tr>
+<td><code>storage_bytes</code></td>
+<td>存储总数据量字节</td>
+<td>metrics 注册表 <code>StorageBytes</code>（<code>dirSize</code> 5 秒缓存源）</td>
+</tr>
+<tr>
+<td><code>slow_queries</code></td>
+<td>慢查询摘要：<code>enabled</code> / <code>threshold_ms</code> / <code>recent_count</code> / 最近 ≤5 条明细</td>
+<td><code>SQL.SlowQueryThreshold()</code> + <code>SQL.SlowQueries()</code>；累计数回退 <code>SlowQueryTotal</code></td>
+</tr>
+<tr>
+<td><code>txn_commit_total</code> / <code>txn_rollback_total</code></td>
+<td>事务提交/回滚累计</td>
+<td>metrics 注册表计数器</td>
+</tr>
+<tr>
+<td><code>active_connections</code></td>
+<td>活跃 TCP 连接数</td>
+<td>metrics 注入源 <code>ActiveConns</code></td>
+</tr>
+<tr>
+<td><code>qps</code></td>
+<td>当前秒窗 SQL/KV QPS</td>
+<td>metrics 注册表 <code>SQLQPS</code> / <code>KVQPS</code></td>
+</tr>
+<tr>
+<td><code>warnings</code></td>
+<td>降级警告列表</td>
+<td>各数据源采集失败/未装配时追加</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_3">双入口<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>服务端命令</strong>：<code>STATUS</code> 输出人类可读表格（<code>key | value</code> 行式 + <code>nodes:</code>/<code>regions:</code>/<code>slow_queries:</code> 分节）；<code>STATUS JSON</code> 输出 <code>json.MarshalIndent</code> 结构化快照（字段与上表 json tag 对齐）。<code>handleLocked</code> 已加 <code>STATUS</code> 分支，HELP 文本同步追加。</li>
+<li><strong>CLI</strong>：<code>openxdb status [--addr &lt;host:port&gt;] [--json]</code>，默认 <code>127.0.0.1:7788</code>，向服务端发起 <code>STATUS</code> / <code>STATUS JSON</code> 并打印；连接失败或服务端拒绝（<code>ERR</code> 前缀）退出码 2，成功退出码 0。<code>main.go</code> 已注册子命令并补充 usage。</li>
+</ul>
+<h3 id="_4">只读与降级语义<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>只读不阻塞</strong>：全部数据源为内存原子读 / 轻量注入源调用（<code>ClusterNodes</code>、<code>MetricsRegionStats</code>、<code>SlowQueries</code> 均为内存副本），不发起网络请求、不加锁等待，不阻塞正常请求。</li>
+<li><strong>单项降级不整体失败</strong>：任一数据源未装配或采集失败，仅记入 <code>Warnings</code> 并将整体 <code>status</code> 置为 <code>degraded</code>，其余数据照常输出；SQL 引擎整体缺失时节点/慢查询省略、region 回退 metrics 源；metrics 注册表缺失时计数归零并警告。<code>STATUS JSON</code> 即使降级也始终可解析。</li>
+</ul>
+<h3 id="cmdstart-metrics">装配（cmdStart，与 METRICS 共享注册表）<a class="headerlink" href="#cmdstart-metrics" title="Permanent link">&para;</a></h3>
+<p><code>metrics.New()</code> 注入连接数/慢查询阈值/存储大小/region 分布采集源 → <code>s.SetMetrics(m)</code> + <code>d.SQL.SetMetrics(m)</code> → 可选 <code>--metrics-port</code> 启动 <code>/metrics</code> HTTP。STATUS 与 METRICS、HTTP 三个入口共用同一注册表，口径一致。</p>
+<h2 id="_5">测试<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<h3 id="pkgserverserver_status_testgo">pkg/server/server_status_test.go（协议层）<a class="headerlink" href="#pkgserverserver_status_testgo" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestM13StatusCommandText</code></td>
+<td>STATUS 文本快照：ok 状态、连接数、存储、事务、regions/slow_queries 分节、单机回退节点行（DATA/UP）</td>
+</tr>
+<tr>
+<td><code>TestM13StatusCommandJSON</code></td>
+<td>STATUS JSON 可解析且字段正确：server/status/connections/storage/nodes/regions（regions 与 SQL 源口径逐字段一致）</td>
+</tr>
+<tr>
+<td><code>TestM13StatusCommandDegraded</code></td>
+<td>未装配 metrics 时 STATUS 不整体失败：<code>degraded</code> 状态 + metrics registry 警告 + 计数归零，JSON 仍可解析</td>
+</tr>
+<tr>
+<td><code>TestM13StatusSlowSummary</code></td>
+<td>慢查询摘要：threshold 启用、最近条数与明细（SELECT 原文 + 耗时）出现在文本快照</td>
+</tr>
+</tbody>
+</table>
+<h3 id="pkgmetricsmetrics_testgo">pkg/metrics/metrics_test.go（快照层增补）<a class="headerlink" href="#pkgmetricsmetrics_testgo" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestM13MetricsSnapshot</code></td>
+<td>Snapshot 与 Render 同源：计数器直读 + 注入源实时值（连接/阈值/存储/region 分布）</td>
+</tr>
+<tr>
+<td><code>TestM13MetricsSnapshotNilSources</code></td>
+<td>未装配注入源输出 0（STATUS 降级路径），计数器仍正常读取</td>
+</tr>
+</tbody>
+</table>
+<p>闭环命令：<code>go test ./pkg/server/ ./pkg/metrics/ -count=1</code> 全绿；<code>go build ./...</code> 通过（CGO：PATH 前置 mingw64/bin，CGO_LDFLAGS 仅 <code>-lrocksdb -lshlwapi</code>，严禁 <code>-lstdc++</code>）。</p>
+<h2 id="_6">取舍说明<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>SQL 优先、metrics 兜底</strong>：region 分布优先走 SQL 路由表（与 SHOW STATS 口径一致），仅 SQL 不可用时回退 metrics 注入源，保证数字来源单一可信；</li>
+<li><strong>普通表单 region 隐式不落盘</strong>：<code>MetricsRegionStats</code> 仅统计显式路由表 region，单机普通表 Total 可为 0，测试断言与 SQL 源逐字段一致而非臆断最小数；</li>
+<li><strong>慢查询明细限 5 条</strong>：快照保持轻量，完整记录仍走 <code>SHOW SLOWQUERIES</code> / slow.log，避免 STATUS 输出膨胀；</li>
+<li><strong>降级置 degraded 而非报错</strong>：排障场景"有数据看"优于"全失败"，Warnings 保留失败原因供脚本与人工判断；</li>
+<li><strong>CLI 默认 127.0.0.1:7788</strong>：与 <code>openxdb stats</code> / <code>openxdb metrics</code> 默认地址一致，<code>--addr</code> 支持远端拉取。</li>
+</ul>
+<h2 id="readme">README 勾选<a class="headerlink" href="#readme" title="Permanent link">&para;</a></h2>
+<p>由 M13 整簇收尾提交统一执行：
+- Status 行更新为 M13 可观测性簇（慢查询日志 + metrics 导出 + 监控状态查询）；
+- T 表格追加 <code>T26 M13 observability cluster: slow query log + metrics export + status view</code>；
+- 文档列表追加 <code>T26_m13_status.md</code>（随本提交加入）。</p>
+<p><em>（内容由AI生成，仅供参考）</em></p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

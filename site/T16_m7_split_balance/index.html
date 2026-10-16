@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>M7 分裂与负载均衡 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "M7 \u5206\u88c2\u4e0e\u8d1f\u8f7d\u5747\u8861";
+        var mkdocs_page_input_path = "T16_m7_split_balance.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">M7 分裂与负载均衡</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#1">1. 背景与问题</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2">2. 总体设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#21">2.1 自动分裂（写路径检测）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#22">2.2 负载均衡（均衡调度）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#23">2.3 在线迁移（读写不中断）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#24">2.4 集群启用判据（单机报错修复）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3-sql">3. SQL / 接口</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4">4. 测试</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5">5. 验收</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">M7 分裂与负载均衡</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T16_m7_split_balance.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t16-m7-region-split-balance">T16 M7 Region 自动分裂与负载均衡（Split &amp; Balance）<a class="headerlink" href="#t16-m7-region-split-balance" title="Permanent link">&para;</a></h1>
+<ul>
+<li>状态：已落地（v5.0-P5-M7，v0.7.0-alpha）</li>
+<li>前置：M3 分片、M4 集群、M5 2PC 写路径、M6 高可用/故障转移</li>
+<li>目标：写路径自动检测 region 规模超阈值并沿数据中点分裂；按节点 region 数/数据量负载均衡（手动 BALANCE 或周期自动触发）；迁移期间读写不中断（在线迁移，REGION_PUSH 装载目标）；单机模式 BALANCE 明确报 "cluster not enabled"（M4/M5/M6 行为零回归）</li>
+<li>设计取舍：全部挂接在既有 sharding Router / 集群路由 / 2PC / M6 心跳机制之上；单节点部署自动分裂仍生效（本地 region 可分裂），但 BALANCE/迁移只在集群启用时执行</li>
+</ul>
+<h2 id="1">1. 背景与问题<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>M3 已提供 RegionInfo 元数据、Router（<code>[StartKey, EndKey)</code> 半开边界）、region 前缀物理键与手动 SPLIT REGION；M4/M5 提供节点注册表、集群路由表（region→node）、跨节点读写与 2PC；M6 提供 down 检测与 region 重指派。不足：region 只能手动分裂，规模增长后单个 region 无限膨胀（单 region 数据倾斜）；多节点下 region 分布不均时没有自动调度；且单机模式执行 <code>BALANCE</code> 时因 <code>db.Open</code> 默认创建 cluster.Manager 导致 <code>e.mgr == nil</code> 判断失效、静默返回 nil 而非报错。M7 补齐这三个闭环。</p>
+<h2 id="2">2. 总体设计<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<p>M7 全部落在 <code>pkg/sql/balance.go</code>（约 518 行，含 <code>pkg/sql/sql.go</code> 引擎代理），复用 M3 Router 边界语义与 M4 REGION_PUSH 装载协议：</p>
+<table>
+<thead>
+<tr>
+<th>子功能</th>
+<th>入口</th>
+<th>关键函数</th>
+<th>集群依赖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>自动分裂</td>
+<td>写路径提交后</td>
+<td><code>maybeAutoSplit</code> / <code>checkAutoSplit</code> / <code>countRegionRows</code> / <code>splitRegion</code></td>
+<td>无（单节点即可用）</td>
+</tr>
+<tr>
+<td>手动分裂</td>
+<td><code>SPLIT REGION</code> 语句</td>
+<td><code>execSplitRegion</code> / <code>splitRegionByID</code></td>
+<td>无</td>
+</tr>
+<tr>
+<td>手动均衡</td>
+<td><code>BALANCE</code> 语句</td>
+<td><code>execBalance</code> / <code>balanceOnce</code></td>
+<td>需 <code>HasRemoteNodes</code></td>
+</tr>
+<tr>
+<td>自动均衡</td>
+<td>周期 goroutine</td>
+<td><code>balanceLoop</code> / <code>setAutoBalance</code> / <code>stopAutoBalance</code></td>
+<td>需 <code>HasRemoteNodes</code></td>
+</tr>
+<tr>
+<td>在线迁移</td>
+<td>均衡调度内部</td>
+<td><code>migrateRegion</code> / <code>regionCountOnNode</code> / <code>localRegionLoad</code></td>
+<td>需 <code>HasRemoteNodes</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="21">2.1 自动分裂（写路径检测）<a class="headerlink" href="#21" title="Permanent link">&para;</a></h3>
+<ul>
+<li>写路径（execInsert/execUpdate/execDelete）提交后累计表级写计数；水位达到阈值一半时触发 <code>checkAutoSplit</code> 做<strong>真实行数检查</strong>（<code>countRegionRows</code> 扫描本地 region 物理键空间），避免只按写计数误判。</li>
+<li>本地 region 行数超过阈值则沿<strong>数据中点</strong>一分为二：<code>splitRegion</code> 以 <code>innerOf</code> 提取含 <code>s</code> 前缀的内层键，取中点作为新 region 边界（<code>StartKey</code> 含 / <code>EndKey</code> 排他，与 <code>EncodeRegionKey</code>/<code>EncodeTableKey</code> 语义一致，即 <code>'s'+tableID:8B+pk</code>）。</li>
+<li>分裂在同一事务内完成「存量数据重路由 + 路由表替换 + 元数据落盘」，路由与副本同步更新；与 M3 手动 <code>SplitTable</code> 兼容——<code>SPLIT REGION</code> 语句按数据中点分裂，显式边界仍走 <code>SplitTable</code>。</li>
+<li>配置接口：<code>Engine.SetAutoSplit(enabled bool, rowThreshold int64)</code>；主动触发：<code>Engine.SplitRegionNow(regionID uint64)</code>。</li>
+</ul>
+<h3 id="22">2.2 负载均衡（均衡调度）<a class="headerlink" href="#22" title="Permanent link">&para;</a></h3>
+<ul>
+<li>手动：<code>BALANCE</code> 语句 → <code>execBalance</code> → <code>balanceOnce</code>；自动：<code>Engine.SetAutoBalance(enabled, interval)</code> 启动 <code>balanceLoop</code> 周期 goroutine，<code>StopAutoBalance()</code> 停止（<code>balanceStop</code> channel）。</li>
+<li>调度策略：统计本节点本地 region 行数负载（<code>localRegionLoad</code> / <code>regionCountOnNode</code>），当本节点 region 数<strong>显著多于最闲存活节点</strong>时，把最大 region 在线迁移过去；down 节点不计入候选（复用 M6 <code>IsDown</code>）。</li>
+<li><code>BALANCE</code> 返回受影响行数（迁移的 region 数）：均衡后再次 BALANCE 返回 0。</li>
+</ul>
+<h3 id="23">2.3 在线迁移（读写不中断）<a class="headerlink" href="#23" title="Permanent link">&para;</a></h3>
+<ul>
+<li>迁移过程源节点<strong>路由不变</strong>、读写不中断（存量流量继续打向源节点，2PC/转发照常工作）；</li>
+<li>步骤：扫描源 region 物理行（含 KV + 索引）→ <code>REGION_PUSH</code> 装载目标节点（数据与权威路由视图原子落盘，目标节点 <code>applyPush</code> 本地写入 + 学路由 + 落盘 <code>m:regions</code>）→ 迁移完成才切换本节点路由归属并落盘；其余存活节点经下一次心跳路由同步学习新归属（M4 <code>getClusterRoutes</code> 机制）。</li>
+<li>迁移期间对目标节点而言数据已在本地，切换后源节点转发/本地读均指向新 owner，无窗口期错误。</li>
+</ul>
+<h3 id="24">2.4 集群启用判据（单机报错修复）<a class="headerlink" href="#24" title="Permanent link">&para;</a></h3>
+<ul>
+<li>缺陷根因：<code>db.Open</code> 默认创建 <code>cluster.Manager</code> 并注入 executor（<code>Engine.SetCluster</code>），单机模式 <code>e.mgr != nil</code>，原 <code>if e.mgr == nil</code> 判断失效，<code>Execute("BALANCE")</code> 走不到报错分支直接返回 nil。</li>
+<li>修正：集群启用判据统一改为 <strong><code>e.mgr == nil || !e.mgr.HasRemoteNodes()</code></strong>（<code>HasRemoteNodes()</code> 返回是否存在非本节点注册节点）：</li>
+<li><code>execBalance</code>：单机 → <code>&amp;SQLError{Msg: "cluster not enabled"}</code>；集群 → 正常调度；</li>
+<li><code>migrateRegion</code>：同判据兜底（单机/无远端绝不迁移）；</li>
+<li><code>balanceLoop</code>：单机同样不启动迁移（周期循环无候选自然跳过）。</li>
+<li>单机模式自动分裂不受影响（无集群依赖）；M4/M5/M6 行为零回归（<code>TestM7BalanceClusterDisabled</code> 验证）。</li>
+</ul>
+<h2 id="3-sql">3. SQL / 接口<a class="headerlink" href="#3-sql" title="Permanent link">&para;</a></h2>
+<ul>
+<li>语句：<code>BALANCE</code>、<code>SPLIT REGION</code>（lexer 含 BALANCE/SPLIT 关键字；parser <code>parseStmt</code> 分派 <code>case "BALANCE"</code> / <code>case "SPLIT"</code> → <code>parseSplitRegion</code>；ast 定义 <code>BalanceStmt</code> / <code>SplitRegionStmt</code>）。</li>
+<li>引擎接口（<code>pkg/sql/sql.go</code>）：<code>SetAutoSplit</code>、<code>SetAutoBalance</code>、<code>StopAutoBalance</code>、<code>SplitRegionNow</code>、<code>BalanceNow</code>、<code>ExecutorRouter</code>（复用 M3）。</li>
+</ul>
+<h2 id="4">4. 测试<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<p><code>pkg/sql/balance_test.go</code>：
+- <code>TestM7AutoSplitTriggersOnWriteThreshold</code>：写计数水位 → 真实行数检查 → 数据中点分裂，边界断言使用 <code>m7TKey</code>（<code>'s'+tableID(1)+8B pk</code>）验证 StartKey/EndKey 落盘格式与 EncodeTableKey 一致
+- <code>TestM7SplitRegionManualStmtBoundary</code>：手动 SPLIT REGION 按数据中点分裂，<code>[4,6)/[6,8)</code> 边界正确
+- <code>TestM7SplitRegionNowFunc</code>：<code>SplitRegionNow(regionID)</code> 主动触发
+- <code>TestM7SplitKeepsSecondaryIndexConsistent</code>：分裂后索引一致
+- <code>TestM7BalanceClusterDisabled</code>：单机 <code>BALANCE</code> 报 <code>cluster not enabled</code>（本次缺陷修复的回归测试）</p>
+<p><code>pkg/db/db_m7_test.go</code>：
+- <code>TestM7ManualBalanceMigratesHotRegion</code>：4 region 拓扑（A 3 / B 1），手动 BALANCE 迁移最大 region 到 B，路由切换、A/B 读写一致、迁移后点查/写可用、二次 BALANCE 返回 0
+- <code>TestM7AutoBalanceTriggersMigration</code>：150ms 周期自动触发迁移
+- <code>TestM7BalanceSkipsDownNode</code>：B down 后 BALANCE 不迁移（无存活候选），数据经 M6 failover 保持完整</p>
+<h2 id="5">5. 验收<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>go build ./...</code> 全绿；<code>go test ./... -count=1</code> 全包通过（本机 CGO 工具链：go1.27.1 + winlibs gcc16.2.0，CGO_CFLAGS/CGO_CXXFLAGS 指向 RocksDB include，CGO_LDFLAGS 指向 <code>rocksdb-build -lrocksdb</code>，仓库 #cgo 附加 <code>-static-libstdc++ -static-libgcc -lwinpthread -lshlwapi -lrpcrt4 -lws2_32</code>）。
+<em>（内容由AI生成，仅供参考）</em></li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T15_m6_ha/" class="btn btn-neutral float-left" title="M6 高可用"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T17_m8_dist_txn/" class="btn btn-neutral float-right" title="M8 分布式事务">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T15_m6_ha/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T17_m8_dist_txn/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

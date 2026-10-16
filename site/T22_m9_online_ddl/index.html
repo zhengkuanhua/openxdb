@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>M9 SQL 功能簇 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "M9 SQL \u529f\u80fd\u7c07";
+        var mkdocs_page_input_path = "T22_m9_online_ddl.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">M9 SQL 功能簇</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#_1">背景</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_2">设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#_3">语法</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#_4">词法 / 语法层</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#executor">执行层（executor）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#pkgsqlm9_ddl_testgo">测试（pkg/sql/m9_ddl_test.go）</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_5">取舍说明</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#readme">README 勾选</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">M9 SQL 功能簇</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T22_m9_online_ddl.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t22-m9-15-ddlalter-table">T22 M9 功能簇（1/5）：在线 DDL（ALTER TABLE）<a class="headerlink" href="#t22-m9-15-ddlalter-table" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v5.0-P11-M9DDL, v0.13.0-alpha
+日期：2026-10-10
+范围：<code>pkg/sql</code>（lexer / ast / parser / executor）+ 单元测试（<code>m9_ddl_test.go</code>）+ README 勾选
+闭环：<code>go build ./...</code> 与 <code>go test ./... -count=1</code> 全绿，不 push
+提交：<code>M9: online DDL (ALTER TABLE)</code>（本地，未 push）</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>M1–M8 已支持建表 / 删表 / 建索引 / 删索引 / DML / 分布式写与备份恢复，但表结构
+一旦创建便不可变：新增列、改名、增删索引都只能 <code>DROP TABLE</code> 后重建，数据全部丢失。
+M9 在线 DDL 为目标表提供<strong>在线结构变更</strong>能力：<code>ALTER TABLE</code> 六种常用动作，
+对已有数据行正确迁移，DDL 以事务方式执行并保证崩溃安全（WAL 落盘），
+元数据（SHOW TABLES / SHOW INDEX）与数据始终一致。</p>
+<h2 id="_2">设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="_3">语法<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sql">ALTER TABLE t ADD COLUMN c TYPE       -- 新增列（已有行回填默认值）
+ALTER TABLE t DROP COLUMN c           -- 删除列（同步移除引用该列的索引）
+ALTER TABLE t RENAME COLUMN c TO c2   -- 列改名（同步更新主键 / 索引列引用）
+ALTER TABLE t RENAME TO t2            -- 表改名
+ALTER TABLE t ADD INDEX i (c)         -- 建索引（已有行全量回填索引键）
+ALTER TABLE t DROP INDEX i            -- 删索引（删除索引键 + 元数据）
+</code></pre>
+<p>不支持动作（如 <code>MODIFY COLUMN</code>、多动作组合）返回明确语法错误。</p>
+<h3 id="_4">词法 / 语法层<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>lexer.go</code> 关键字表新增 <code>ALTER</code> / <code>COLUMN</code> / <code>RENAME</code>（<code>INDEX</code> / <code>TO</code> / <code>ADD</code> / <code>DROP</code> 已有）；</li>
+<li><code>ast.go</code> 新增 <code>AlterTableStmt{Table, Action, Column, Col, NewName, Name}</code>，
+  Action 取值 <code>ADD_COLUMN / DROP_COLUMN / RENAME_COLUMN / RENAME_TABLE / ADD_INDEX / DROP_INDEX</code>；</li>
+<li><code>parser.go</code> <code>parseStmt</code> 新增 <code>ALTER</code> 分支，<code>parseAlter</code> 按动作分流解析。</li>
+</ul>
+<h3 id="executor">执行层（executor）<a class="headerlink" href="#executor" title="Permanent link">&para;</a></h3>
+<p><code>execAlterTable</code> 统一骨架：<code>getTx()</code> 取事务 → <code>loadTables</code> 取表目录 →
+按动作执行 → <code>ddlCommit</code> 提交；autocommit 时 <code>defer tx.Rollback()</code> 兜底。</p>
+<p><strong>数据行迁移</strong>（ADD/DROP COLUMN）：
+- 全表 <code>scanMerged(rowRanges(meta))</code> 展开所有 region；
+- 用<strong>旧列布局</strong> <code>decodeRow</code>、按<strong>新列布局</strong> <code>encodeRow</code>，重写行键值；
+- 新增列回填默认值（<code>zeroValue</code>：INT=0 / TEXT='' / DATE=1970-01-01 /
+  DECIMAL=0.0000 / BLOB=''）；删除列直接从行值中移除。</p>
+<p><strong>索引联动</strong>：
+- <code>DROP COLUMN</code> 先扫描并删除引用该列的索引键，再从元数据移除索引，
+  避免索引键悬空（脏索引）；
+- <code>ADD INDEX</code> 建索引元数据后全表回填索引键（复用 <code>putIndexKeys</code>，
+  pk 取行键内层主键）；<code>RENAME COLUMN</code> 同步改写主键列名与索引列名。</p>
+<p><strong>事务与崩溃安全</strong>：
+- 元数据键 <code>metaKey</code> 是全局键（不含 region 前缀），直接 <code>tx.Put</code> 写入事务缓冲；
+- 数据重写 ops 走既有 2PC 路径 <code>exec2pcWrite</code>（单机零触发 = applyOps + Commit），
+  行键含 region 前缀可正常分组；空 ops（仅改名）直接 <code>tx.Commit()</code>；
+- 元数据与数据同事务提交，Commit 经 WAL 落盘：崩溃后 WAL 重放恢复一致状态，
+  不会出现"目录有新列但数据未回填"或反之；
+- 显式事务（BEGIN…COMMIT）内 DDL 加入会话事务，由用户 COMMIT / ROLLBACK
+  决定生效（分布式写仍按 M5 约定：显式事务内远端写报错）。</p>
+<p><strong>约束</strong>：
+- <code>ADD COLUMN</code> 列重名报错；<code>DROP COLUMN</code> 不存在列 / 主键列报错；
+- <code>RENAME COLUMN</code> 旧列不存在 / 新列重名报错；<code>RENAME TABLE</code> 目标重名报错；
+- <code>ADD INDEX</code> 索引重名 / 列不存在报错；<code>DROP INDEX</code> 索引不存在报错。</p>
+<h2 id="pkgsqlm9_ddl_testgo">测试（pkg/sql/m9_ddl_test.go）<a class="headerlink" href="#pkgsqlm9_ddl_testgo" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestAlterAddColumnBackfill</code></td>
+<td>3 行已有数据回填 0，新行按新列写入</td>
+</tr>
+<tr>
+<td><code>TestAlterAddColumnTypeDefaults</code></td>
+<td>TEXT/DATE/DECIMAL/BLOB 默认值；重复加列报错</td>
+</tr>
+<tr>
+<td><code>TestAlterDropColumn</code></td>
+<td>删列 + 索引同步移除；删主键 / 不存在列报错</td>
+</tr>
+<tr>
+<td><code>TestAlterRenameColumn</code></td>
+<td>列改名后查询；索引列引用同步；重名报错</td>
+</tr>
+<tr>
+<td><code>TestAlterRenamePrimaryKeyColumn</code></td>
+<td>主键列改名后按新主键点查</td>
+</tr>
+<tr>
+<td><code>TestAlterRenameTable</code></td>
+<td>表改名后查询 / SHOW TABLES 一致；旧表名不可用</td>
+</tr>
+<tr>
+<td><code>TestAlterAddDropIndex</code></td>
+<td>ADD INDEX 回填可见；DROP INDEX 清理；非法列 / 索引报错</td>
+</tr>
+<tr>
+<td><code>TestAlterDDLTransactionRollback</code></td>
+<td>显式事务内 DDL 回滚后元数据不变</td>
+</tr>
+<tr>
+<td><code>TestAlterParseLevel</code></td>
+<td>六种动作语法解析 + 非法动作报错</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_5">取舍说明<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<ul>
+<li>不实现 <code>MODIFY COLUMN</code> 类型变更（类型兼容矩阵复杂，后续版本按需扩展）；</li>
+<li>不实现一条 ALTER 内多动作组合（当前一次一个动作，保持单事务原子性简单可证）；</li>
+<li><code>RENAME TABLE</code> 不搬移物理键（表 ID 不变），仅改目录中显示名，行 / 索引键无需重写。</li>
+</ul>
+<h2 id="readme">README 勾选<a class="headerlink" href="#readme" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Status 行更新为 <code>M9 online DDL: ALTER TABLE ADD/DROP/RENAME COLUMN + RENAME TABLE + ADD/DROP INDEX (transactional, crash-safe) (v5.0-P11-M9DDL), v0.13.0-alpha.</code></li>
+<li>T 列表追加 <code>+ T22 M9: online DDL (ALTER TABLE ADD/DROP/RENAME COLUMN + RENAME TABLE + ADD/DROP INDEX)</code></li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T21_sql_parser_fixes/" class="btn btn-neutral float-left" title="T21 SQL 解析修复"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T23_m10_cte/" class="btn btn-neutral float-right" title="M10 SQL 兼容簇">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T21_sql_parser_fixes/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T23_m10_cte/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

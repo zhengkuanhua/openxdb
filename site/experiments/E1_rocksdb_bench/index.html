@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>E1 存储基准 - OpenXDB</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "E1 \u5b58\u50a8\u57fa\u51c6";
+        var mkdocs_page_input_path = "experiments\\E1_rocksdb_bench.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul class="current">
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">E1 存储基准</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#_1">环境</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_2">方法</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_3">结果</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_4">初步结论</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#e1bbtree">E1b：B+Tree 对照基准（内存实现）</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#_5">环境</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#_6">方法</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#_7">结果</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#e1a-vs-e1b">E1a vs E1b 对照</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#_8">初步结论</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_9">下一步</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">基准实验</li>
+      <li class="breadcrumb-item active">E1 存储基准</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/experiments/E1_rocksdb_bench.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="e1-m0-lite">E1 存储引擎基准实验记录（M0-lite）<a class="headerlink" href="#e1-m0-lite" title="Permanent link">&para;</a></h1>
+<ul>
+<li>实验编号：E1a（RocksDB 写读基准初版）+ E1b（B+Tree 对照）</li>
+<li>日期：2026-10-07（E1a）；E1b 复测 2026-10-09</li>
+<li>状态：E1a / E1b 数据均已产出（E1b 已按 2026-10-09 复测结果更新），引擎定夺见 W4 ADR</li>
+</ul>
+<h2 id="_1">环境<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OS</td>
+<td>Windows 11 (Build 22631)</td>
+</tr>
+<tr>
+<td>编译器</td>
+<td>MinGW-w64 GCC 16.2.0（winlibs x86_64-posix-seh-ucrt，静态链接）</td>
+</tr>
+<tr>
+<td>RocksDB</td>
+<td>v11.8.1 源码编译（Release / PORTABLE=1 / 无第三方压缩库）</td>
+</tr>
+<tr>
+<td>基准程序</td>
+<td><code>tests/bench/rocksdb/e1_bench.cpp</code>（C++20）</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_2">方法<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<ul>
+<li>数据规模：1,000,000 个 key（16 字节十六进制 key + 固定 value）</li>
+<li>单线程；顺序写/随机写按 1000 条一批组提交（RocksDB WriteBatch）</li>
+<li>随机读记录逐条延迟，取 P99</li>
+<li>本次未开启 fsync（纯引擎吞吐）；WAL 场景的同步写由后续 fsync 版补充</li>
+</ul>
+<h2 id="_3">结果<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>数量</th>
+<th>耗时</th>
+<th>吞吐</th>
+<th>P99 延迟</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>顺序写</td>
+<td>1,000,000</td>
+<td>1,040 ms</td>
+<td>961,538 TPS</td>
+<td>-</td>
+</tr>
+<tr>
+<td>随机写</td>
+<td>1,000,000</td>
+<td>5,362 ms</td>
+<td>186,498 TPS</td>
+<td>-</td>
+</tr>
+<tr>
+<td>随机读</td>
+<td>1,000,000</td>
+<td>14,084 ms</td>
+<td>71,003 QPS</td>
+<td>60 us</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>数据目录：<code>tests/bench/e1_data_1m/</code>（91 MB）</li>
+<li>小规模验证（200k）：顺序写 108 万 TPS / 随机写 22 万 TPS / 随机读 18 万 QPS / P99 20us</li>
+</ul>
+<h2 id="_4">初步结论<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<ol>
+<li>RocksDB 顺序写吞吐接近百万 TPS，随机写约 18.6 万 TPS，均达单机存储引擎预期水平。</li>
+<li>随机读 P99 60 us，冷/热数据混合下点查延迟可控。</li>
+<li>待 B+Tree 对照（E1b）产出后，结合维护成本、持久化能力与文档既定标准（演进式开源、Go 主体）做引擎定夺。</li>
+</ol>
+<h2 id="e1bbtree">E1b：B+Tree 对照基准（内存实现）<a class="headerlink" href="#e1bbtree" title="Permanent link">&para;</a></h2>
+<h3 id="_5">环境<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>运行时</td>
+<td>Go 1.27.1（windows/amd64）</td>
+</tr>
+<tr>
+<td>实现</td>
+<td><code>pkg/storage/btree</code>（纯 Go B+Tree，变体 B，order=16，KV 适配 Storage 接口）</td>
+</tr>
+<tr>
+<td>基准程序</td>
+<td><code>tests/bench/e1_btree_bench.go</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="_6">方法<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li>与 E1a 同口径：1,000,000 个 key；顺序写/随机写按 1000 条一批提交（WriteBatch 聚合）；随机读记录逐条延迟取 P99。</li>
+<li>随机序列：Go 实现线性同余生成器（种子 42 / 7），与 C++ mt19937_64 数值序列不完全一致，分布同为均匀随机，口径可比。</li>
+<li>纯内存结构，无 fsync / 持久化开销，天然代表"无落盘成本"的引擎上限。</li>
+<li>2026-10-09 使用本机 Go 1.27.1 工具链复测（<code>go run ./tests/bench/e1_btree_bench.go</code>），下表为复测结果（首次实验数据见 git 历史）。</li>
+</ul>
+<h3 id="_7">结果<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>数量</th>
+<th>耗时</th>
+<th>吞吐</th>
+<th>P99 延迟</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>顺序写</td>
+<td>1,000,000</td>
+<td>725 ms</td>
+<td>1,379,310 TPS</td>
+<td>-</td>
+</tr>
+<tr>
+<td>随机写</td>
+<td>1,000,000</td>
+<td>2,178 ms</td>
+<td>459,137 TPS</td>
+<td>-</td>
+</tr>
+<tr>
+<td>随机读</td>
+<td>1,000,000</td>
+<td>1,643 ms</td>
+<td>608,643 QPS</td>
+<td>0 us</td>
+</tr>
+</tbody>
+</table>
+<h3 id="e1a-vs-e1b">E1a vs E1b 对照<a class="headerlink" href="#e1a-vs-e1b" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>RocksDB（E1a）</th>
+<th>B+Tree（E1b）</th>
+<th>倍率</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>顺序写</td>
+<td>961,538 TPS</td>
+<td>1,379,310 TPS</td>
+<td>1.43x</td>
+</tr>
+<tr>
+<td>随机写</td>
+<td>186,498 TPS</td>
+<td>459,137 TPS</td>
+<td>2.46x</td>
+</tr>
+<tr>
+<td>随机读</td>
+<td>71,003 QPS（P99 60 us）</td>
+<td>608,643 QPS（P99 0 us）</td>
+<td>8.57x</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_8">初步结论<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h3>
+<ol>
+<li>内存 B+Tree 在三项指标上全面优于未开 fsync 的 RocksDB：随机读提升近 9 倍（P99 降至亚微秒），随机写约 2.2 倍，顺序写约 1.1 倍。</li>
+<li>但 B+Tree 为纯内存结构：无持久化、无崩溃恢复、无 WAL 复用；RocksDB 自带 SST 落盘、MANIFEST 恢复与成熟稳定性。</li>
+<li>吞吐不能单独决定引擎选型，需综合持久化/恢复/维护成本，结论见 W4 ADR《为什么 OpenXDB 选 RocksDB》。</li>
+</ol>
+<h2 id="_9">下一步<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h2>
+<ul>
+<li>W4：输出 ADR 决策记录 + 首发博文《为什么 OpenXDB 选 RocksDB》</li>
+<li>B2：写路径组提交优化（当前 WAL/Txn 每记录 fsync）
+<em>（内容由AI生成，仅供参考）</em></li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../../T42_insert_select/" class="btn btn-neutral float-left" title="T42 INSERT INTO SELECT"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../E2_rocksdb_fsync_bench/" class="btn btn-neutral float-right" title="E2 fsync 基准">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../../T42_insert_select/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../E2_rocksdb_fsync_bench/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

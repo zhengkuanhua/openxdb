@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T30 M17-2：细粒度权限与角色体系（RBAC） - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T30 M17-2\uff1a\u7ec6\u7c92\u5ea6\u6743\u9650\u4e0e\u89d2\u8272\u4f53\u7cfb\uff08RBAC\uff09";
+        var mkdocs_page_input_path = "T30_m17_rbac.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">T30 M17-2：细粒度权限与角色体系（RBAC）</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T30_m17_rbac.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t30-m17-2rbac">T30 M17-2：细粒度权限与角色体系（RBAC）<a class="headerlink" href="#t30-m17-2rbac" title="Permanent link">&para;</a></h1>
+<h2 id="_1">概述<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>M17 安全增强里程碑的第二个子功能：在 M11 表级 GRANT 基础上扩展</p>
+<ol>
+<li><strong>库级权限</strong>：<code>GRANT &lt;priv&gt; ON DATABASE &lt;name|*&gt; TO ...</code>
+   （OpenXDB 单库模型：<code>*</code> 或任意具名库的授权对该库全部表生效）</li>
+<li><strong>列级权限</strong>：<code>GRANT &lt;priv&gt; ON &lt;table&gt; (col, ...) TO ...</code></li>
+<li><strong>角色体系</strong>：<code>CREATE ROLE / DROP ROLE / SHOW ROLES</code> +
+   <code>GRANT &lt;priv&gt; ... TO ROLE '&lt;role&gt;'</code> +
+   <code>GRANT ROLE '&lt;role&gt;' TO '&lt;user&gt;'</code> / <code>REVOKE ROLE '&lt;role&gt;' FROM '&lt;user&gt;'</code></li>
+</ol>
+<p>并接入连接认证与 DML 执行时的权限校验（authz.go 统一聚合直授 + 角色授权）。</p>
+<h2 id="_2">数据模型（元数据键）<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>键</th>
+<th>结构</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>m:grants</code></td>
+<td>user → table → mask</td>
+<td>M11 表级直授（兼容，不动）</td>
+</tr>
+<tr>
+<td><code>m:colgrants</code></td>
+<td>user → table → col → mask</td>
+<td>列级直授（新）</td>
+</tr>
+<tr>
+<td><code>m:dbgrants</code></td>
+<td>user → db → mask</td>
+<td>库级直授（新；db=<code>*</code> 或具名）</td>
+</tr>
+<tr>
+<td><code>m:roles</code></td>
+<td>role → RoleMeta</td>
+<td>角色定义与角色内授权（新）</td>
+</tr>
+<tr>
+<td><code>m:userroles</code></td>
+<td>user → []role</td>
+<td>用户被授予的角色（新）</td>
+</tr>
+</tbody>
+</table>
+<p>RoleMeta：</p>
+<pre><code class="language-json">{&quot;name&quot;:&quot;analyst&quot;,&quot;grants&quot;:{&quot;t1&quot;:15},&quot;col_grants&quot;:{&quot;t1&quot;:{&quot;salary&quot;:4}},&quot;db_grants&quot;:{&quot;*&quot;:1}}
+</code></pre>
+<p>权限位沿用 M11：SELECT=1 / INSERT=2 / UPDATE=4 / DELETE=8 / ALL=15。</p>
+<h2 id="sql">SQL 语法扩展<a class="headerlink" href="#sql" title="Permanent link">&para;</a></h2>
+<pre><code class="language-sql">-- 列级 / 库级授权与回收
+GRANT  SELECT (col1, col2) ON t TO 'u';
+GRANT  SELECT ON t (col1, col2) TO 'u';        -- 两种写法等价
+GRANT  SELECT ON DATABASE * TO 'u';
+GRANT  ALL   ON DATABASE sales TO 'u';
+REVOKE UPDATE (col1) ON t FROM 'u';
+REVOKE SELECT ON DATABASE * FROM 'u';
+
+-- 角色管理
+CREATE ROLE 'analyst';
+DROP ROLE [IF EXISTS] 'analyst';
+SHOW ROLES;
+
+-- 角色内授权（角色名用 ROLE 关键字区分用户）
+GRANT SELECT, UPDATE ON t TO ROLE 'analyst';
+GRANT SELECT (col1) ON t TO ROLE 'analyst';
+GRANT SELECT ON DATABASE * TO ROLE 'analyst';
+REVOKE SELECT ON t FROM ROLE 'analyst';
+
+-- 角色授予用户（幂等：重复授予静默成功）
+GRANT ROLE 'analyst' TO 'alice';
+REVOKE ROLE 'analyst' FROM 'alice';
+</code></pre>
+<p>解析器扩展：<code>GRANT ROLE '&lt;r&gt;' TO '&lt;u&gt;'</code> 与
+<code>GRANT &lt;priv&gt; ON ... TO ROLE '&lt;r&gt;'</code> 两条路径；
+<code>DATABASE</code> / <code>ROLE</code> 加入 lexer 关键字表。</p>
+<h2 id="effectiveprivilege">权限判定：effectivePrivilege（聚合直授 + 角色）<a class="headerlink" href="#effectiveprivilege" title="Permanent link">&para;</a></h2>
+<p>校验顺序（任一命中即通过，M17 与 M11 行为向后兼容）：</p>
+<ol>
+<li><code>root</code> 超级用户全放行（不变）</li>
+<li>直授表级：<code>grants[user][table] &amp; bit</code></li>
+<li>直授库级：<code>dbgrants[user]</code> 非空且任一条目命中 bit（单库模型，<code>*</code>/具名等价）</li>
+<li>角色聚合：遍历 <code>userroles[user]</code> 中的每个角色，重复 2/3（角色的表级/库级）</li>
+<li>列级直授/角色列级：见下</li>
+</ol>
+<h3 id="v1">列级校验规则（V1 务实边界，文档声明）<a class="headerlink" href="#v1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>SELECT：所需列 = SELECT 列表中显式裸列名（<code>Ref=="" &amp;&amp; Agg=="" &amp;&amp;
+  Case==nil &amp;&amp; Window==nil</code> 的 <code>Col</code>）。若列表含 <code>*</code> / 聚合 / 表达式列，
+  所需列无法完整确定 → 必须表级权限（列级不兜底）</li>
+<li>INSERT：所需列 = 显式 <code>Columns</code>（空 = 全列 → 需表级）；<code>ON DUPLICATE KEY
+  UPDATE</code> 的赋值列并入所需列</li>
+<li>UPDATE：所需列 = <code>SET</code> 赋值列 + WHERE 条件列</li>
+<li>DELETE：不支持列级，仅表级</li>
+<li>命中规则：所需列非空且全部在（直授 ∪ 角色）列级授权中有对应权限位</li>
+<li>WHERE/ORDER BY/GROUP BY 引用的列也计入所需列（<code>tablePrivOp</code> 提取）</li>
+</ul>
+<h2 id="drop">级联清理（DROP 联动）<a class="headerlink" href="#drop" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>清理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DROP USER</td>
+<td>该用户表级/列级/库级直授（现有）+ 该用户角色关系（m:userroles 中移除）+ 角色内不清理（角色独立存在）</td>
+</tr>
+<tr>
+<td>DROP TABLE</td>
+<td>该表所有用户/角色的表级、列级授权（现有 removeTableGrants 扩展）</td>
+</tr>
+<tr>
+<td>DROP ROLE</td>
+<td>m:roles 删除该角色 + 所有用户的 userroles 中移除该角色；不触碰其他角色</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_3">执行期接入<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>authz.go isAdminStmt</code>：角色语句（CREATE/DROP ROLE、GRANT/REVOKE ROLE、
+  SHOW ROLES）与 <code>SHOW AUDITLOG</code> 归入 admin 语句（仅 root）</li>
+<li><code>checkPrivilege</code>：DML 前先做库级/列级/角色聚合判定；权限不足返回
+  <code>permission denied</code>（M11 同款文案）</li>
+<li>审计：GRANT/REVOKE/角色语句经 PRIVILEGE 事件审计（T30_m17_audit.md）</li>
+</ul>
+<h2 id="_4">测试要点<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<ul>
+<li>库级：<code>ON DATABASE *</code> 授权后新表自动可访问；REVOKE 后失效</li>
+<li>列级：SELECT 显式列命中放行、未授权列拒绝；<code>SELECT *</code> 需表级；
+  UPDATE 未授权列拒绝；INSERT 显式列命中放行</li>
+<li>角色：CREATE ROLE → GRANT ROLE TO user → 用户获得角色权限；
+  角色 REVOKE 权限/解除用户角色关系后失效；DROP ROLE 级联</li>
+<li>权限聚合：直授 + 角色并存取并集；重复 GRANT ROLE 幂等</li>
+<li>DROP USER/TABLE 级联清理不残留孤儿授权</li>
+<li>M11 既有表级授权行为零回归（go test ./... 全绿）</li>
+</ul>
+<h2 id="_5">兼容性<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>m:grants</code> 结构与序列化格式不变，旧数据可直接读取</li>
+<li>无鉴权模式（Auth==nil）默认 root，全部新语法仅 root 可执行（admin）</li>
+<li>库级/列级/角色全部为增量能力，未使用时不进入校验路径（短路）</li>
+</ul>
+<h2 id="2026-10-13">实现状态（2026-10-13 闭环）<a class="headerlink" href="#2026-10-13" title="Permanent link">&para;</a></h2>
+<p>已实现并接线：</p>
+<ol>
+<li><strong>executor 分发</strong>：<code>executor.go</code> stmt 分发 switch 新增
+   <code>case *CreateRoleStmt / *DropRoleStmt / *ShowRolesStmt / *ShowGrantsStmt</code>，
+   分别调用 <code>execCreateRole/execDropRole/execShowRoles/execShowGrants</code>
+   （<code>pkg/sql/rbac.go</code>），<code>CREATE ROLE / DROP ROLE [IF EXISTS] / SHOW ROLES /
+   SHOW GRANTS FOR '&lt;user&gt;'</code> 可执行。</li>
+<li><strong>解析器</strong>：<code>parseCreate</code> 新增 ROLE 分支（接线 <code>parseCreateRole</code>）；
+   <code>parseGrant/parseRevoke</code> 的 DATABASE 分支补齐 <code>TO/FROM ROLE '&lt;role&gt;'</code> 支持
+   （库级授权可授予角色，与表级/列级对称）。</li>
+<li><strong>权限聚合校验（修复聚合短路）</strong>：<code>effectiveTableMaskTx</code> 原先在表级直授
+   存在时提前返回（忽略库级/角色来源），已改为三路并集
+   <code>tableMask | dbMask | roleMask</code>——用户直授只覆盖部分操作时，角色/库级
+   授予的其余权限仍生效；<code>hasPrivilege</code>（grant.go）复用
+   <code>hasEffectivePrivilege</code> 完成聚合；<code>checkPrivilege</code>（authz.go）先表级聚合、
+   未过时逐列 <code>checkColumnPrivilege</code> 校验。</li>
+<li><strong>级联清理</strong>：<code>DROP USER</code> 清理表级（m:grants）+ 库级（m:dbgrants）+
+   列级（m:colgrants）+ 用户-角色映射（m:userroles），角色目录保留；
+   <code>DROP TABLE</code> 清理列级 + 角色内表授权（<code>removeRoleTableGrants</code>，角色保留）；
+   <code>DROP ROLE</code> 清理角色目录 + 全部用户映射。</li>
+<li><strong>测试</strong>：新增 <code>pkg/sql/m17_rbac_test.go</code>（7 个测试函数，execTimed
+   合成执行风格，沿用 m11 辅助函数）：</li>
+<li><code>TestM17RoleLifecycleShowDrop</code>：CREATE/DROP ROLE、SHOW ROLES、
+     SHOW GRANTS 输出与 DROP ROLE 级联</li>
+<li><code>TestM17GrantRevokeDatabase</code>：库级授权/回收与拒绝</li>
+<li><code>TestM17GrantRevokeColumn</code>：列级授权/回收与拒绝（全列 INSERT 语义）</li>
+<li><code>TestM17RoleInheritanceAggregation</code>：角色表级/库级继承、直授+角色
+     并集、REVOKE 表级/解除角色后拒绝</li>
+<li><code>TestM17DropUserCleansRbac</code>：DROP USER 后重建同名用户无残留权限</li>
+<li><code>TestM17DropTableCleansRbac</code>：DROP TABLE 后列级/角色表授权清理</li>
+<li><code>TestM17DropRoleInvalidatesPrivileges</code>：DROP ROLE 后用户权限失效</li>
+<li><strong>全量验证</strong>：<code>go test ./...</code> 全仓全绿，测试总数 <strong>544</strong>（含 M17 RBAC
+   新增用例；基线 509）。</li>
+</ol>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

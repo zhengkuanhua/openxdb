@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T42 INSERT INTO SELECT - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T42 INSERT INTO SELECT";
+        var mkdocs_page_input_path = "T42_insert_select.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">T42 INSERT INTO SELECT</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#_1">第一节：现状</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_2">第二节：设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#21">2.1 语法</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#22-ast">2.2 AST</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#23">2.3 解析</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#24">2.4 执行</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#25">2.5 兼容与边界</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_3">第三节：测试方案</a>
+    </li>
+    </ul>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">T42 INSERT INTO SELECT</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T42_insert_select.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t42-insert-into-select">T42 INSERT INTO ... SELECT 语法支持<a class="headerlink" href="#t42-insert-into-select" title="Permanent link">&para;</a></h1>
+<ul>
+<li>版本：v0.30.0-alpha</li>
+<li>范围：pkg/sql（parser / ast / executor）</li>
+<li>目标：补齐 <code>INSERT [INTO] &lt;table&gt; [(cols)] SELECT ...</code> 与 <code>REPLACE INTO ... SELECT</code> 语法：解析层识别 SELECT 源，执行层在同一事务内先执行 SELECT 取快照、再逐行灌入目标表，复用 VALUES 路径全部单行写入语义（类型 coerced / 主键冲突 / UPSERT / 索引 / 外键 / 触发器 / 自动分裂 / 2PC）。</li>
+</ul>
+<hr />
+<h2 id="_1">第一节：现状<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<ul>
+<li>解析层：<code>parseInsertInto</code>（parser.go L1661 起）仅支持 <code>INSERT [INTO] &lt;name&gt; [(col,...)] VALUES (...)</code> 与 <code>REPLACE INTO</code>、<code>ON DUPLICATE KEY UPDATE</code> 子句；在可选列清单之后直接 <code>expectKeyword("VALUES")</code>，遇到 <code>SELECT</code> 关键字报 <code>expected keyword VALUES</code>，<strong>无 SELECT 源分支</strong>。</li>
+<li>AST：<code>InsertStmt</code>（ast.go L227）仅含 <code>Table / Columns / Rows / OnDup / Replace</code>，<strong>无 Select 字段</strong>。</li>
+<li>执行层：<code>execInsert</code>（executor.go L1575）仅遍历 <code>s.Rows</code> 逐行 <code>insertRowUpsertOps</code>，<strong>无 SELECT 结果灌入路径</strong>。</li>
+<li>可复用基建（T41 CTAS 已验证）：</li>
+<li><code>execSelect</code>：完整 SELECT 能力（SELECT * / 表达式投影 / 聚合 / DISTINCT / 别名 / WHERE / GROUP BY / ORDER BY / LIMIT / JOIN / 子查询 / CTE / 视图），返回 <code>*Result{Rows: [][]Value}</code>。</li>
+<li><code>insertRowUpsertOps</code>：单行写入的完整语义（buildRow 列数/类型校验 → coerceRow → 外键检查 → 主键定位 → 主键/唯一索引冲突判定 → 普通插入 / ON DUPLICATE 更新 / REPLACE 删旧插新 → 索引键 Put），供 VALUES 与 SELECT 两路径共用。</li>
+<li><code>buildRow</code>：列清单长度与值长度不匹配时报 <code>column count mismatch</code>，省略列清单时按目标表全列校验。</li>
+</ul>
+<h2 id="_2">第二节：设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="21">2.1 语法<a class="headerlink" href="#21" title="Permanent link">&para;</a></h3>
+<pre><code>INSERT [INTO] &lt;table&gt; [(col, ...)] SELECT &lt;select_statement&gt;
+INSERT [INTO] &lt;table&gt; [(col, ...)] SELECT ... [ON DUPLICATE KEY UPDATE col=val, ...]
+REPLACE [INTO] &lt;table&gt; [(col, ...)] SELECT ...
+</code></pre>
+<ul>
+<li>列清单可省略（按目标表全列顺序）；列清单与 SELECT 结果列数不匹配时报错（复用 <code>buildRow</code> 的 <code>column count mismatch</code>）。</li>
+<li><code>REPLACE INTO ... SELECT</code> 支持（与 REPLACE INTO ... VALUES 语义一致：冲突删旧插新，无 ON DUPLICATE 子句）。</li>
+<li><code>INSERT INTO t SELECT ... ON DUPLICATE KEY UPDATE</code> 支持（MySQL 兼容；冲突行更新而非报错）。</li>
+</ul>
+<h3 id="22-ast">2.2 AST<a class="headerlink" href="#22-ast" title="Permanent link">&para;</a></h3>
+<p><code>InsertStmt</code> 新增字段：</p>
+<pre><code class="language-go">Select *SelectStmt // T42：INSERT INTO ... SELECT 源（非空时忽略 Rows，按 SELECT 结果逐行灌入）
+</code></pre>
+<h3 id="23">2.3 解析<a class="headerlink" href="#23" title="Permanent link">&para;</a></h3>
+<p><code>parseInsertInto</code> 在可选列清单解析之后改为双分支：</p>
+<ul>
+<li>当前 token 为关键字 <code>SELECT</code> → 调用 <code>parseSelect()</code> 解析完整 SELECT 语句（兼容 CTE / DISTINCT / 表达式 / 聚合 / JOIN / WHERE / GROUP BY / ORDER BY / LIMIT 等全部既有 SELECT 能力），类型断言为 <code>*SelectStmt</code> 存入 <code>stmt.Select</code>；</li>
+<li>否则 → 原有 <code>VALUES</code> 分支不变。</li>
+</ul>
+<p>两分支汇合后统一处理 <code>ON DUPLICATE KEY UPDATE</code>（仅非 REPLACE；SELECT 源同样适用）。REPLACE 分支同样识别 SELECT 关键字。</p>
+<h3 id="24">2.4 执行<a class="headerlink" href="#24" title="Permanent link">&para;</a></h3>
+<p><code>execInsert</code> 增加 SELECT 源灌入路径，事务语义与 VALUES 路径对齐：</p>
+<ol>
+<li><strong>同一事务原子</strong>：SELECT 源且 autocommit 时，先 <code>beginTx(sess)</code> 将会话提升为显式事务，<code>getTx</code> 返回同一 <code>curTx</code>，<code>execSelect</code> 复用它（autocommit=false 不再 defer Rollback）；写入与读取同事务，提交仍走 <code>exec2pcWrite</code>（分布式写 / TSO 版本记录路径不变）。显式 <code>BEGIN</code> 事务内无需提升（<code>sess.inTx</code> 已为 true）。提升后无论成败 <code>defer</code> 复位会话事务状态（<code>sess.inTx/curTx/curBeginTS/curTxID</code> 清空 + TSO 缓存 Reset），避免提交后残留导致后续语句误入已结束事务。</li>
+<li><strong>SELECT 快照先于写入</strong>：先 <code>execSelect</code> 取完整结果集 <code>res.Rows</code>，再逐行写入——目标表与源表相同（<code>INSERT INTO t SELECT * FROM t</code> 自插入）时天然满足快照语义（先读后写，不读取自己新写入的行）。</li>
+<li><strong>逐行灌入复用 VALUES 语义</strong>：每行调用 <code>insertRowUpsertOps(sess, tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &amp;pending)</code>，与 VALUES 路径完全一致（类型 coerced、主键/唯一索引冲突、ON DUPLICATE 更新、REPLACE 删旧插新、索引维护、外键检查、pending 语句内重复判定）；部分行失败返回错误 → 整个语句回滚（autocommit 时 defer Rollback / 2PC 未提交；显式事务内 applyOps 失败即返回）。</li>
+<li><strong>触发器 / 自动分裂</strong>：BEFORE/AFTER INSERT 触发器与 <code>maybeAutoSplit</code> 沿用 execInsert 原有统一逻辑，与 VALUES 路径一致。</li>
+</ol>
+<h3 id="25">2.5 兼容与边界<a class="headerlink" href="#25" title="Permanent link">&para;</a></h3>
+<ul>
+<li>SELECT 源能力与 T40/T41 对齐：<code>SELECT *</code>、表达式投影、聚合（COUNT/SUM/AVG/MAX/MIN）、DISTINCT、别名、WHERE（含 BETWEEN/IN/子查询/表达式）、GROUP BY、ORDER BY、LIMIT/OFFSET、JOIN、FROM 子查询、CTE、视图、<code>SELECT @var</code> 常量投影均可作为 INSERT 源。</li>
+<li>列数不匹配：列清单长度 != SELECT 输出列数 → <code>column count mismatch</code>（buildRow 统一报错）。</li>
+<li>类型不匹配：<code>coerceRow</code> 在单行写入时按列类型强制，无法强制时报类型错误。</li>
+<li>主键冲突：普通 INSERT 报 <code>duplicate primary key</code>；<code>ON DUPLICATE KEY UPDATE</code> 更新冲突行；<code>REPLACE INTO</code> 删旧插新。</li>
+<li>information_schema 写拒绝：<code>INSERT INTO information_schema.x SELECT ...</code> 与 VALUES 一致在 execInsert 入口拒绝。</li>
+</ul>
+<h2 id="_3">第三节：测试方案<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<p>落 <code>pkg/sql/t42_insert_select_test.go</code>（package sql_test），复用既有 helper（newEngine / mustExec / mustRows / mustErr）：</p>
+<ol>
+<li>基础全列：<code>INSERT INTO dst SELECT * FROM src</code>，行数与值全等校验。</li>
+<li>指定列：<code>INSERT INTO dst (a, b) SELECT x, y FROM src</code> 列映射正确。</li>
+<li>WHERE 过滤：仅灌入满足条件的行。</li>
+<li>表达式投影：<code>SELECT id*10, val+1</code> 计算后灌入。</li>
+<li>聚合：<code>INSERT INTO dst SELECT grp, SUM(val) FROM src GROUP BY grp</code>。</li>
+<li>DISTINCT：去重后灌入。</li>
+<li>空结果：<code>SELECT ... WHERE 1=0</code> 不写任何行，AffectedRows=0。</li>
+<li>列数不匹配报错：<code>INSERT INTO dst (a, b, c) SELECT x, y FROM src</code> → column count mismatch。</li>
+<li>类型不匹配报错：目标 INT 列灌入无法强制的值。</li>
+<li>主键冲突报错：普通 INSERT 灌入与已有行冲突的主键。</li>
+<li>REPLACE INTO ... SELECT：冲突删旧插新（affected = 删数+1）。</li>
+<li>ON DUPLICATE KEY UPDATE + SELECT：冲突更新。</li>
+<li>自插入：<code>INSERT INTO t SELECT * FROM t</code> 快照语义（行数翻倍且不递归）。</li>
+<li>失败回滚：第 N 行主键冲突导致整条语句回滚，前 N-1 行不可见。</li>
+<li>显式事务内：<code>BEGIN; INSERT INTO dst SELECT ...; COMMIT</code> 生效；回滚后不可见。</li>
+<li>parser AST 校验：<code>INSERT INTO t SELECT ...</code> 解析后 <code>InsertStmt.Select != nil</code>、Rows 为空；VALUES 语句 <code>Select == nil</code>。</li>
+</ol>
+<p>实际落盘测试（pkg/sql/t42_insert_select_test.go 18 个功能 + t42_insert_select_internal_test.go 4 个 parser AST = 22 个 TestT42*）在以上基础上补充：省略列清单不匹配（全列数校验报错）、省略列清单 OK、LIMIT/OFFSET 源、AffectedRows 计数、显式事务 read-your-writes（事务内立即可见、回滚后不可见、提交后生效）。
+<em>（内容由AI生成，仅供参考）</em></p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T41_ddl_compat_cluster/" class="btn btn-neutral float-left" title="T41 DDL 兼容簇"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../experiments/E1_rocksdb_bench/" class="btn btn-neutral float-right" title="E1 存储基准">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T41_ddl_compat_cluster/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../experiments/E1_rocksdb_bench/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

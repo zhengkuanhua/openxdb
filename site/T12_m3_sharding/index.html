@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>M3 分片 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "M3 \u5206\u7247";
+        var mkdocs_page_input_path = "T12_m3_sharding.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">M3 分片</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#1">1. 分片架构</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2-regioninfo">2. 键空间划分与 RegionInfo 元数据</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#21">2.1 物理键编码</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#22-regioninfo">2.2 RegionInfo 字段</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#23">2.3 落盘格式</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#24-split">2.4 SPLIT 划分规则</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3-router">3. Router 路由与边界语义</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#31-region">3.1 隐式单 region（零回归保障）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#32-locate">3.2 Locate 定位</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#33">3.3 并发安全</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4-region">4. 跨 Region 查询执行路径</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#41">4.1 区间展开</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#42">4.2 各路径注入（全部物理键访问点）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#43">4.3 索引一致性</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5-m2-binlog">5. 与 M2 binlog 复制的关系</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#6-region">6. 默认单 region 兼容说明</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#7">7. 分片管理入口</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#8">8. 设计取舍</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#9">9. 测试覆盖</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#10">10. 验收结果</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">M3 分片</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T12_m3_sharding.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t12-m3-sharding">T12 — M3 分片落地（Sharding）<a class="headerlink" href="#t12-m3-sharding" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>状态：已完成（M3，v3.0-P3-M3）。
+范围：单机内核上的逻辑分片第一步落地——Region 元数据、Router 路由、跨 Region 查询与 DML/DDL 全路径注入。
+目标：<strong>分片不破坏既有单机 SQL/事务语义</strong>（默认单 region 整表形态零回归），并提供可测试的分片管理入口。</p>
+</blockquote>
+<h2 id="1">1. 分片架构<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>M3 采用「逻辑分片」形态：存储层键空间保持单一 RocksDB 实例，SQL 层通过 <strong>region 前缀</strong>把物理键按表键空间切分为多个逻辑分区。每个分区称为一个 Region，由 <code>RegionInfo</code> 描述；<code>Router</code> 负责键 → region 的路由；所有物理键访问路径（插入/点查/范围/全表/索引/UPDATE/DELETE/建删索引/建删表/迁移）统一走带 region 前缀的键编码，跨 region 扫描时按 region 展开后合并。</p>
+<pre><code>┌──────────────────────────────────────────────────────────┐
+│ SQL 层 (pkg/sql)                                          │
+│  Executor ──router──► Router (pkg/sharding)               │
+│    │  rowKeyAt / indexKeyAt / rowRanges / indexRanges     │
+│    │  scanMerged（跨 region 合并排序）                      │
+│    ▼                                                      │
+│  物理键 = EncodeRegionKey(regionID, innerKey)             │
+│    = 'r' + regionID(8B 大端) + innerKey                    │
+│    ▼                                                      │
+│ Txn / Storage (RocksDB 单实例)                            │
+└──────────────────────────────────────────────────────────┘
+</code></pre>
+<ul>
+<li>分片元数据（region 列表 + ID 水位）以全局键 <code>m:regions</code>（<strong>不带</strong> region 前缀）与表目录 <code>m:tables</code> 同层落盘，经同一事务/WAL 通道原子持久化。</li>
+<li><code>pkg/db</code> 在 <code>Open</code> 时读取 <code>m:regions</code> 并注入 <code>Engine.LoadSharding</code>，进程内 Router 与落盘状态保持一致。</li>
+<li>单机模式下所有 Region <code>Local=true</code>（归属本节点）；<code>State</code> 目前恒为 <code>ACTIVE</code>，<code>LEAVING</code> 为迁移中预留。</li>
+</ul>
+<h2 id="2-regioninfo">2. 键空间划分与 RegionInfo 元数据<a class="headerlink" href="#2-regioninfo" title="Permanent link">&para;</a></h2>
+<h3 id="21">2.1 物理键编码<a class="headerlink" href="#21" title="Permanent link">&para;</a></h3>
+<pre><code>物理键 = 'r' + regionID(8B 大端) + innerKey
+innerKey = M1 内层键：
+  行键   s{tableID:8B}{pk}
+  索引键 i{tableID:8B}{indexID:8B}{idxVal}p{pk}
+</code></pre>
+<ul>
+<li>前缀长度 <code>RegionKeyPrefixLen = 9</code>（1 字节 'r' + 8 字节 regionID），<code>DecodeRegionKey</code> 可无损剥离。</li>
+<li><strong>同一 region 内键序与 innerKey 字节序完全一致</strong>（region 前缀固定，不改变相对顺序）；跨 region 以 regionID 前缀隔离，regionID 单调分配，物理上按 region 聚集。</li>
+<li>区域边界定义在 <strong>innerKey 层级</strong>（<code>StartKey</code>/<code>EndKey</code> 落盘为完整内层行键，如 <code>s{tid}{boundary}</code>），拼上 region 前缀即为物理区间。</li>
+</ul>
+<h3 id="22-regioninfo">2.2 RegionInfo 字段<a class="headerlink" href="#22-regioninfo" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>语义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>RegionID</code></td>
+<td><code>storage.ID</code>(uint64)</td>
+<td>Region 唯一 ID；显式 region 由全局 <code>seq</code> 水位递增分配</td>
+</tr>
+<tr>
+<td><code>TableID</code></td>
+<td><code>storage.ID</code></td>
+<td>所属表 ID</td>
+</tr>
+<tr>
+<td><code>StartKey</code></td>
+<td><code>[]byte</code></td>
+<td>区间下界（<strong>含</strong>），内层行键；<code>nil</code> = 表起始（-inf）</td>
+</tr>
+<tr>
+<td><code>EndKey</code></td>
+<td><code>[]byte</code></td>
+<td>区间上界（<strong>不含</strong>），内层行键；<code>nil</code> = 表结束（+inf）</td>
+</tr>
+<tr>
+<td><code>State</code></td>
+<td><code>RegionState</code></td>
+<td><code>ACTIVE</code>（当前）/ <code>LEAVING</code>（迁移预留）</td>
+</tr>
+<tr>
+<td><code>Local</code></td>
+<td><code>bool</code></td>
+<td>归属本节点（单机恒 <code>true</code>）</td>
+</tr>
+<tr>
+<td><code>Explicit</code></td>
+<td><code>bool</code></td>
+<td>是否显式分片；隐式单 region 为 <code>false</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="23">2.3 落盘格式<a class="headerlink" href="#23" title="Permanent link">&para;</a></h3>
+<p><code>m:regions</code> 载荷为 JSON：</p>
+<pre><code class="language-json">{
+  &quot;seq&quot;: 3,
+  &quot;regions&quot;: [
+    {&quot;region_id&quot;: 1, &quot;table_id&quot;: 1, &quot;start_key&quot;: null, &quot;end_key&quot;: &quot;s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004&quot;, &quot;state&quot;: &quot;ACTIVE&quot;, &quot;local&quot;: true, &quot;explicit&quot;: true},
+    {&quot;region_id&quot;: 2, &quot;table_id&quot;: 1, &quot;start_key&quot;: &quot;s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004&quot;, &quot;end_key&quot;: &quot;s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\b&quot;, &quot;state&quot;: &quot;ACTIVE&quot;, &quot;local&quot;: true, &quot;explicit&quot;: true},
+    {&quot;region_id&quot;: 3, &quot;table_id&quot;: 1, &quot;start_key&quot;: &quot;s\u0000\u0000\u0000\u0000\u0000\u0000\u0000\b&quot;, &quot;end_key&quot;: null, &quot;state&quot;: &quot;ACTIVE&quot;, &quot;local&quot;: true, &quot;explicit&quot;: true}
+  ]
+}
+</code></pre>
+<ul>
+<li><code>seq</code> 为显式 region ID 分配水位，<code>SplitTable</code> 推进，<code>ReplaceRegions</code> 保证单调。</li>
+<li>表目录（<code>m:tables</code>）与分片目录（<code>m:regions</code>）分离，DROP TABLE 时通过 <code>Router.RemoveTable</code> 同步清理。</li>
+</ul>
+<h3 id="24-split">2.4 SPLIT 划分规则<a class="headerlink" href="#24-split" title="Permanent link">&para;</a></h3>
+<p><code>Engine.SplitTable(name, boundaries)</code> 按主键字节边界把表键空间切分为 <code>len(boundaries)+1</code> 个显式 region：</p>
+<ul>
+<li><code>boundaries</code> 必须<strong>严格升序</strong>，为不含首尾的主键字节边界（INT 主键即 8B 大端值）。</li>
+<li>边界语义：每个 region 区间 <code>[StartKey, EndKey)</code>——<strong>StartKey 含、EndKey 排他</strong>；首个 region <code>StartKey=nil</code>（表起始），末个 region <code>EndKey=nil</code>（表结束）→ 区间连续、无空洞、无重叠。</li>
+<li>划分后每个 region 覆盖一整段连续 innerKey 空间，物理键 <code>r{rid}{start} ~ r{rid}{end}</code> 同样连续。</li>
+<li><code>SplitTable</code> 在<strong>单事务</strong>内完成：构造新 region 列表 → 存量数据（行 + 全部索引键）按新边界重路由迁移（写新键、删旧键）→ 替换 Router 视图 → 落盘 <code>m:regions</code> → 提交。中途失败整体回滚，无半迁移状态。</li>
+<li>迁移用<strong>临时 Router</strong> 定位新归属，不污染主路由；已在新 region 的键自动跳过（<code>bytes.Equal(newKey, kv.Key)</code>），幂等安全。</li>
+</ul>
+<h2 id="3-router">3. Router 路由与边界语义<a class="headerlink" href="#3-router" title="Permanent link">&para;</a></h2>
+<h3 id="31-region">3.1 隐式单 region（零回归保障）<a class="headerlink" href="#31-region" title="Permanent link">&para;</a></h3>
+<p>表未显式分片时，<code>Router.RegionsOf</code> 返回隐式整表单 region：</p>
+<ul>
+<li><code>RegionID = tableID | 1&lt;&lt;63</code>（高位置 1，与显式 region 低位自增 ID 隔离，永不冲突）；</li>
+<li><code>StartKey=nil</code>、<code>EndKey=nil</code>，覆盖整表键空间；</li>
+<li><code>Explicit=false</code>。</li>
+</ul>
+<p>因此<strong>所有表、所有访问路径始终带 region 前缀</strong>，未启用分片的 SQL 行为与 M1 完全一致——只是物理键多了一截固定前缀，索引/事务/复制不受影响（零回归）。</p>
+<h3 id="32-locate">3.2 Locate 定位<a class="headerlink" href="#32-locate" title="Permanent link">&para;</a></h3>
+<p><code>Router.Locate(tableID, innerKey)</code>（innerKey 为完整内层键，如 <code>s{tid}{pk}</code>）：</p>
+<ol>
+<li>无显式 region → 返回隐式 region ID；</li>
+<li>有显式 region → 按 <code>StartKey</code> 升序二分（<code>sort.Search</code> 找第一个 <code>StartKey &gt; key</code> 的 region），候选为前一 region；</li>
+<li>若 <code>key &lt; 最小 StartKey</code>（i==0）或 <code>key &gt;= 候选 region 的 EndKey</code>（显式划分出现空洞时触发）→ 返回 <code>ErrRegionNotFound</code>。</li>
+</ol>
+<p>边界语义汇总：</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>key</code> 位于某 region 的 <code>[StartKey, EndKey)</code></td>
+<td>返回该 region</td>
+</tr>
+<tr>
+<td><code>key</code> 小于首个 region 的 StartKey</td>
+<td><code>ErrRegionNotFound</code>（正常划分不会出现）</td>
+</tr>
+<tr>
+<td><code>key</code> 大于等于某 region EndKey 且无后续 region 承接</td>
+<td><code>ErrRegionNotFound</code>（划分空洞）</td>
+</tr>
+<tr>
+<td>表未分片</td>
+<td>隐式整表单 region，恒命中</td>
+</tr>
+</tbody>
+</table>
+<h3 id="33">3.3 并发安全<a class="headerlink" href="#33" title="Permanent link">&para;</a></h3>
+<p>Router 内部 <code>sync.RWMutex</code> 保护 region 表与 seq 水位；<code>SetRegions</code>（Open 加载）、<code>ReplaceRegions</code>（SplitTable）、<code>RemoveTable</code>（DropTable）为写操作，<code>RegionsOf</code>/<code>Locate</code>/<code>Dump</code> 为读操作。</p>
+<h2 id="4-region">4. 跨 Region 查询执行路径<a class="headerlink" href="#4-region" title="Permanent link">&para;</a></h2>
+<h3 id="41">4.1 区间展开<a class="headerlink" href="#41" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>辅助函数</th>
+<th>语义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rowRanges(meta)</code></td>
+<td>表全部行物理区间：每 region 展开为 <code>[r{rid}s{tid}(StartKey), r{rid}s{tid+1}(EndKey))</code>；<code>StartKey</code>/<code>EndKey</code> 落盘已是内层行键，<strong>直接拼接 region 前缀，禁止二次编码</strong>（历史踩坑：双重编码会扫描空集）</td>
+</tr>
+<tr>
+<td><code>indexRanges(meta, idxID, startInner, endInner)</code></td>
+<td>给定索引扫描的内层完整边界 <code>[startInner, endInner)</code> 按 regions 展开；对每个 region 均扫描 <code>[r{rid}{startInner}, r{rid}{endInner})</code></td>
+</tr>
+<tr>
+<td><code>indexTableRanges(meta, idxID)</code></td>
+<td>整索引区间 <code>[i{tid}{idxID}, i{tid}{idxID+1})</code> 按 regions 展开（建索引回填 / 删索引 / 迁移用）</td>
+</tr>
+<tr>
+<td><code>scanMerged(tx, ranges)</code></td>
+<td>对多个物理区间分别 <code>tx.Scan</code>，结果按 <strong>innerKey 升序稳定合并</strong>（region 前缀不参与比较）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="42">4.2 各路径注入（全部物理键访问点）<a class="headerlink" href="#42" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>路径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>INSERT</code></td>
+<td>主键唯一性检查与写入用 <code>locateRow</code> + <code>rowKeyAt</code>（点路由）；索引键用 <code>indexKeyAt</code> 同 region 前缀</td>
+</tr>
+<tr>
+<td><code>SELECT</code> 点查（PK 等值）</td>
+<td><code>locateRow</code> + <code>rowKeyAt</code> 单点 Get</td>
+</tr>
+<tr>
+<td><code>SELECT</code> 全表 / 范围</td>
+<td><code>rowRanges</code> 展开 + <code>scanMerged</code> 合并，行级过滤后统一排序/聚合/投影</td>
+</tr>
+<tr>
+<td><code>SELECT</code> 索引路径</td>
+<td><code>indexRanges</code> 展开扫描索引键 → 回表 <code>rowKeyAt</code>（索引键与行键同 region 前缀，回表键路由一致）</td>
+</tr>
+<tr>
+<td><code>UPDATE</code> / <code>DELETE</code></td>
+<td><code>rowRanges</code> 展开 + <code>scanMerged</code> 跨 region 扫描；按 <code>ridOf(kv.Key)</code> 在原 region 写回/删除，索引键维护同样按原 region 前缀（键不跨 region 迁移）</td>
+</tr>
+<tr>
+<td><code>CREATE INDEX</code> 回填</td>
+<td><code>rowRanges</code> 展开扫全表，<code>indexKeyAt</code> 按行所在 region 写索引键</td>
+</tr>
+<tr>
+<td><code>DROP INDEX</code></td>
+<td><code>indexRanges</code>（单索引区间）展开删除</td>
+</tr>
+<tr>
+<td><code>DROP TABLE</code></td>
+<td>行区间 + 索引整表区间按 regions 展开删除</td>
+</tr>
+<tr>
+<td><code>SplitTable</code> 迁移</td>
+<td><code>remapTable</code> 用临时 Router 对行 + 全部索引键重路由</td>
+</tr>
+</tbody>
+</table>
+<h3 id="43">4.3 索引一致性<a class="headerlink" href="#43" title="Permanent link">&para;</a></h3>
+<p>二级索引键（T6）与行键<strong>归属同一 region</strong>（写入时按行的 PK 路由），因此：</p>
+<ul>
+<li>索引区间展开覆盖的每个 region 内，索引键与对应行键前缀一致 → 回表无需跨 region；</li>
+<li>跨 region 索引扫描时按 region 分片扫描、合并排序，结果序与单 region 索引序一致（<code>ordered</code> 优化在合并后仍成立，因为合并按 innerKey 序）；</li>
+<li>UPDATE 改索引列时先删旧索引键（按原 region）、再写新索引键（按原 region 前缀；索引键前缀只依赖 tid/idxID/idxVal/pk 与 rid，rid 不因 UPDATE 改变）。</li>
+</ul>
+<h2 id="5-m2-binlog">5. 与 M2 binlog 复制的关系<a class="headerlink" href="#5-m2-binlog" title="Permanent link">&para;</a></h2>
+<ul>
+<li>M2 binlog 记录的是<strong>写入的物理键</strong>（已含 region 前缀）+ 值/删除标记；从端按位点幂等重放，因此<strong>复制对分片键编码透明</strong>——分片表与未分片表的复制路径完全一致。</li>
+<li>分片元数据 <code>m:regions</code>（不带 region 前缀的全局键）通过同一事务/WAL/binlog 通道落盘与重放，从端重放后 Router 状态与主端一致。</li>
+<li>取舍：binlog 不感知 region 语义（不记录"哪个 region 被修改"），只重放物理键写入。单机逻辑分片下该取舍成立；未来多节点物理分片需扩展 binlog 携带 region 迁移事件（State=LEAVING 等），属后续 M4 范围。</li>
+</ul>
+<h2 id="6-region">6. 默认单 region 兼容说明<a class="headerlink" href="#6-region" title="Permanent link">&para;</a></h2>
+<ul>
+<li>未调用 <code>SplitTable</code> 的表 = 隐式整表单 region（<code>RegionID</code> 高位置 1 的合成 ID），所有存取路径照常带前缀。</li>
+<li>新建表、DROP TABLE、索引、事务、复制在分片引入前后行为完全一致（已由全仓既有测试 + 分片回归用例验证）。</li>
+<li><code>ListRegions</code> 对未分片表返回 1 个 <code>Explicit=false</code> 的隐式 region，便于协议层/管理端统一展示。</li>
+</ul>
+<h2 id="7">7. 分片管理入口<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
+<p>SQL 层（<code>Engine</code>）暴露三个管理方法，供 CLI / 协议层 / 测试使用：</p>
+<pre><code class="language-go">// 按主键边界切分表为 len(boundaries)+1 个显式 region（事务内迁移）
+func (e *Engine) SplitTable(name string, boundaries [][]byte) error
+// 查看表分片列表（显式划分或隐式单 region）
+func (e *Engine) ListRegions(name string) ([]sharding.RegionInfo, error)
+// 按主键字节定位所属 region（未命中返回 sharding.ErrRegionNotFound）
+func (e *Engine) LocateRegion(name string, pk []byte) (storage.ID, error)
+</code></pre>
+<p><code>pkg/db</code> 打开数据目录时自动加载落盘分片元数据（<code>Engine.LoadSharding</code>）。</p>
+<h2 id="8">8. 设计取舍<a class="headerlink" href="#8" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>逻辑分片先行</strong>：M3 在单机内核上实现 region 前缀 + 路由 + 跨 region 查询，物理存储仍单实例；换取最小侵入、可完整测试的闭环，为多节点物理分片留接口。</li>
+<li><strong>regionID 作为物理前缀而非表 ID</strong>：保证同一 region 内键序连续且整 region 物理聚集（便于未来按 region 搬迁/扫描）；隐式 region 用高位 ID 避免与显式 ID 冲突。</li>
+<li><strong>边界落在 innerKey 层级</strong>：<code>StartKey</code>/<code>EndKey</code> 存内层行键（含 <code>s{tid}</code> 前缀），拼前缀即为物理区间，避免两层编码歧义（历史踩坑：对已完整内层键再编码导致双重前缀、扫描空集）。</li>
+<li><strong>SplitTable 事务内迁移</strong>：迁移 + 元数据落盘同事务，失败整体回滚；迁移用临时 Router，幂等（已在新 region 的键跳过）。</li>
+<li><strong>索引键与行键同 region</strong>：回表零跨区、索引扫描可按 region 分片，语义最简。</li>
+<li><strong>binlog 不感知 region</strong>：复制透明于分片键编码；region 迁移事件留给后续里程碑。</li>
+<li><strong>行级过滤不做 region 级裁剪</strong>：单机合并扫描成本可忽略；未来可下推谓词到 region 层优化。</li>
+</ol>
+<h2 id="9">9. 测试覆盖<a class="headerlink" href="#9" title="Permanent link">&para;</a></h2>
+<p><code>pkg/sql/sharding_test.go</code>（12 个用例）+ <code>pkg/sharding/sharding_test.go</code>：</p>
+<table>
+<thead>
+<tr>
+<th>用例</th>
+<th>覆盖点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestShardingRouter*</code>（pkg/sharding）</td>
+<td>隐式单 region、Locate 边界含/排他、二分定位、空洞/未命中报错、排序</td>
+</tr>
+<tr>
+<td><code>TestSplitTableListRegions</code></td>
+<td>划分后 region 列表、边界字段、ID 水位</td>
+</tr>
+<tr>
+<td><code>TestSplitTableFullSelectConsistency</code></td>
+<td>3 region 建表后 <code>SELECT *</code> 全量正确（跨 region 合并）</td>
+</tr>
+<tr>
+<td><code>TestSplitTablePointAndRange</code></td>
+<td>跨 region 点查 / 范围查、边界点归属</td>
+</tr>
+<tr>
+<td><code>TestSplitTableLocateRegion</code></td>
+<td>管理入口定位正确性</td>
+</tr>
+<tr>
+<td><code>TestSplitTableWithIndex</code></td>
+<td>分片 + 二级索引：建索引回填、索引查询、UPDATE 索引维护</td>
+</tr>
+<tr>
+<td><code>TestSplitTableDMLRegression</code></td>
+<td>跨 region UPDATE/DELETE（含 <code>WHERE id IN (...)</code>）、边界重插、重复主键、计数</td>
+</tr>
+<tr>
+<td><code>TestSplitTableDropTable</code></td>
+<td>分片表 DROP 后物理键与元数据清理</td>
+</tr>
+<tr>
+<td><code>TestSplitTableBoundaryValidation</code></td>
+<td>非法边界（非升序）拒绝</td>
+</tr>
+<tr>
+<td><code>TestSplitTableEmptyTable</code></td>
+<td>空表划分与迁移</td>
+</tr>
+<tr>
+<td><code>TestSplitTableOrderingMerge</code></td>
+<td>跨 region 合并后的排序正确性（ORDER BY）</td>
+</tr>
+</tbody>
+</table>
+<h2 id="10">10. 验收结果<a class="headerlink" href="#10" title="Permanent link">&para;</a></h2>
+<pre><code class="language-sh">go build ./...
+go test ./... -count=1
+</code></pre>
+<p>本机真实工具链（mingw64 + rocksdb-11.8.1 静态库）全仓构建通过、全仓测试全绿（含 12 个分片用例与既有全部回归）。
+<em>（内容由AI生成，仅供参考）</em></p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T11_m2_replication/" class="btn btn-neutral float-left" title="M2 复制"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T13_m4_multinode/" class="btn btn-neutral float-right" title="M4 多节点集群">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T11_m2_replication/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T13_m4_multinode/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

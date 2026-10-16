@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>E5 标准基准对齐 - OpenXDB</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "E5 \u6807\u51c6\u57fa\u51c6\u5bf9\u9f50";
+        var mkdocs_page_input_path = "experiments\\E5_standard_bench_alignment.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">E5 标准基准对齐</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#_1">背景与目标</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_2">工具选型依据</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#_3">与标准工具的口径差异（如实声明）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_4">环境</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_5">方法</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#1-sysbench-oltp-bench_oltppy">1. sysbench OLTP 等价模型（bench_oltp.py）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#2-tpc-c-bench_tpccpy">2. TPC-C 小仓等价模型（bench_tpcc.py）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#3-sql-t38">3. SQL 兼容限制规避（基于 T38 已知盲区）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_6">结果</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#sysbench-oltp8-60s10000">sysbench OLTP（8 连接，60s，10,000 行）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#tpc-c-8-120s5-10s">TPC-C 小仓（8 连接，120s，5 仓，预热 10s）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#_7">发现并修复的问题</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_8">复现方式</a>
+    </li>
+    </ul>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">基准实验</li>
+      <li class="breadcrumb-item active">E5 标准基准对齐</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/experiments/E5_standard_bench_alignment.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="e5-sysbench-oltp-tpc-c">E5 标准基准对齐实验（sysbench OLTP / TPC-C 小仓）<a class="headerlink" href="#e5-sysbench-oltp-tpc-c" title="Permanent link">&para;</a></h1>
+<ul>
+<li>实验编号：E5（标准行业口径基准对齐）</li>
+<li>日期：2026-10-15</li>
+<li>状态：方案 + 脚本 + 本机实测数据（见下方结果）</li>
+<li>定位：单机端侧基准。OpenXDB 为从零自研的单机关系型数据库内核（Go + RocksDB），本实验对齐 sysbench OLTP 与 TPC-C 小仓的<strong>行业测试口径</strong>，供对外宣传使用。<strong>边界声明：单机端侧基准，禁止对标 TiDB/TDSQL 等分布式产品。</strong></li>
+</ul>
+<h2 id="_1">背景与目标<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>OpenXDB 自研二进制协议（非 MySQL wire protocol），标准 sysbench（<code>sysbench</code>、<code>tpcc</code>、<code>docker</code>）工具无法直连本机。本实验的目标：</p>
+<ol>
+<li>评估标准工具可用性；不可用则用 Python PEP 249 驱动（<code>drivers/python/openxdb</code>）按 sysbench OLTP 标准模型与 TPC-C 小仓模型实现<strong>等价压测脚本</strong>；</li>
+<li>本机实测并记录核心指标（TPS / QPS / tpmC、延迟分位 P50/P95/P99、错误数）；</li>
+<li>结果对齐行业口径，更新 README。</li>
+</ol>
+<h2 id="_2">工具选型依据<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>结论</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>标准 sysbench（C/Lua）</td>
+<td>不可用</td>
+<td>本机未安装 sysbench / tpcc / docker；OpenXDB 自研协议无法被标准工具直连</td>
+</tr>
+<tr>
+<td>标准 TPC-C 套件（如 tpcc-mysql / BenchmarkSQL）</td>
+<td>不可用</td>
+<td>同上，依赖 MySQL wire protocol</td>
+</tr>
+<tr>
+<td><strong>Python 驱动等价压测脚本（选定）</strong></td>
+<td>采用</td>
+<td>PEP 249 驱动 <code>openxdb.connect(host, port)</code> 直连自研 TCP 协议；按标准事务模板 1:1 等价实现，README/本文件明确标注与标准工具的差异</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_3">与标准工具的口径差异（如实声明）<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>sysbench OLTP</strong>：事务模板、操作比例、表结构（<code>sbtest(id, k, c, pad)</code> + <code>k</code> 索引）、随机分布（均匀随机 id）均按 <code>oltp_common.lua</code> 默认参数实现；差异点为自研协议下无"线程内 prepare"（OpenXDB 服务端 PREPARE 已支持但为控制变量统一走即时执行）、无 <code>AUTO_INCREMENT</code>（id 由客户端生成）。</li>
+<li><strong>TPC-C 小仓</strong>：按 TPC-C 标准 5 类事务（NewOrder 45% / Payment 43% / OrderStatus 4% / Delivery 4% / StockLevel 4%）与表模型（warehouse/district/customer/order/order_line/item/stock/new_order）实现；5 仓，数据按标准比例缩放（每仓 district=10、customer=300、order=300，order_line 每单 5-15 行，item=10000 全局、stock 每仓 10000），主键简化为单列自增（OpenXDB 复合主键待确认，文档见 SQL 兼容限制）。tpmC 口径 = NewOrder 事务数 / 分钟。</li>
+<li><strong>明确不宣传</strong>：不做 TPC-C 全量合规认证（未实现随机化事务的完整仓储维度、无终态校验），仅对齐<strong>事务模型与核心指标口径</strong>，作为单机端侧基准参考。</li>
+</ul>
+<h2 id="_4">环境<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OS / 运行时</td>
+<td>Windows 11 (Build 22631) / Go 1.27.1（windows/amd64）/ Python 3.11.8</td>
+</tr>
+<tr>
+<td>引擎</td>
+<td>RocksDB 11.8.1（CGO 桥接，<code>CGO_LDFLAGS=-L...rocksdb-build -lrocksdb -lm</code>，严禁 <code>-lstdc++</code> / <code>-lz</code> 等）</td>
+</tr>
+<tr>
+<td>被测版本</td>
+<td>OpenXDB v0.27.0-alpha（go build ./... 最新二进制，<code>bin/openxdb.exe</code>）</td>
+</tr>
+<tr>
+<td>连接方式</td>
+<td>Python PEP 249 驱动 <code>drivers/python/openxdb</code>，<code>connect('127.0.0.1', port)</code></td>
+</tr>
+<tr>
+<td>压测脚本</td>
+<td><code>tests/bench/e5/bench_oltp.py</code>（sysbench OLTP 模型）、<code>tests/bench/e5/bench_tpcc.py</code>（TPC-C 小仓模型）、<code>tests/bench/e5/run_e5.ps1</code>（编排）</td>
+</tr>
+<tr>
+<td>数据目录</td>
+<td><code>tests/bench/e5_data/</code>（初始化为独立实例，端口 7797）</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_5">方法<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<h3 id="1-sysbench-oltp-bench_oltppy">1. sysbench OLTP 等价模型（bench_oltp.py）<a class="headerlink" href="#1-sysbench-oltp-bench_oltppy" title="Permanent link">&para;</a></h3>
+<ul>
+<li>表：<code>sbtest(id INT PRIMARY KEY, k INT, c TEXT, pad TEXT)</code>，<code>CREATE INDEX k_1 ON sbtest(k)</code>；预装载 10,000 行。</li>
+<li>事务模板（对齐 <code>oltp_common.lua</code> 默认比例）：</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>次数/事务（read_write）</th>
+<th>次数（read_only）</th>
+<th>次数（write_only）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>point_selects（<code>SELECT c FROM sbtest WHERE id=?</code>）</td>
+<td>10</td>
+<td>10</td>
+<td>-</td>
+</tr>
+<tr>
+<td>simple_ranges（<code>WHERE id BETWEEN ? AND ?</code>）</td>
+<td>1</td>
+<td>1</td>
+<td>-</td>
+</tr>
+<tr>
+<td>sum_ranges（<code>SELECT SUM(k) AS s ... BETWEEN</code>）</td>
+<td>1</td>
+<td>1</td>
+<td>-</td>
+</tr>
+<tr>
+<td>order_ranges（<code>... BETWEEN ... ORDER BY k</code>）</td>
+<td>1</td>
+<td>1</td>
+<td>-</td>
+</tr>
+<tr>
+<td>distinct_ranges（<code>SELECT DISTINCT k ... ORDER BY k</code>）</td>
+<td>1</td>
+<td>1</td>
+<td>-</td>
+</tr>
+<tr>
+<td>index_updates（<code>UPDATE sbtest SET k=k+1 WHERE id=?</code>）</td>
+<td>1</td>
+<td>-</td>
+<td>1</td>
+</tr>
+<tr>
+<td>non_index_updates（<code>UPDATE sbtest SET c=? WHERE id=?</code>）</td>
+<td>1</td>
+<td>-</td>
+<td>1</td>
+</tr>
+<tr>
+<td>deletes（<code>DELETE FROM sbtest WHERE id=?</code>）</td>
+<td>1</td>
+<td>-</td>
+<td>1</td>
+</tr>
+<tr>
+<td>inserts（<code>INSERT INTO sbtest VALUES (?,?,?,?)</code>）</td>
+<td>1</td>
+<td>-</td>
+<td>1</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>每事务整体包在 <code>BEGIN</code> / <code>COMMIT</code> 中（与 sysbench <code>--db-ps-mode</code> 一致的事务边界）；删除后插入新行保持表规模稳定。</li>
+<li>指标：TPS（事务/秒）、QPS（操作/秒）、事务延迟 P50/P95/P99、错误数。并发 8 连接 × 60s。</li>
+</ul>
+<h3 id="2-tpc-c-bench_tpccpy">2. TPC-C 小仓等价模型（bench_tpcc.py）<a class="headerlink" href="#2-tpc-c-bench_tpccpy" title="Permanent link">&para;</a></h3>
+<ul>
+<li>表模型与 5 类标准事务实现见脚本注释与上文口径差异；5 仓缩放，混合比例 NewOrder 45% / Payment 43% / OrderStatus 4% / Delivery 4% / StockLevel 4%。</li>
+<li>指标：tpmC（NewOrder/分钟）、总事务 TPM、事务延迟 P50/P95/P99、错误数。并发 8 连接 × 120s（预热 10s）。</li>
+</ul>
+<h3 id="3-sql-t38">3. SQL 兼容限制规避（基于 T38 已知盲区）<a class="headerlink" href="#3-sql-t38" title="Permanent link">&para;</a></h3>
+<ul>
+<li>聚合别名必须 <code>AS</code>（<code>SUM(k) AS s</code>，禁止裸别名）；GROUP BY 后 ORDER BY 别名 / LIMIT 被忽略，本实验事务 SQL 规避 GROUP BY+ORDER BY 别名组合；</li>
+<li>禁止 REPLACE INTO / PREPARE / CTE / NOT IN 子查询——事务 SQL 未使用；</li>
+<li>脚本内含 capability probe（DISTINCT / 聚合 AS / IN 子查询 / 复合主键），结果写入运行日志，保证脚本所用语法均被引擎支持。</li>
+</ul>
+<h2 id="_6">结果<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<p>（本机实测，见下方章节；原始输出：<code>tests/bench/tmp_e5_*.txt</code>，中间产物）</p>
+<h3 id="sysbench-oltp8-60s10000">sysbench OLTP（8 连接，60s，10,000 行）<a class="headerlink" href="#sysbench-oltp8-60s10000" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>TPS</th>
+<th>QPS</th>
+<th>P50(us)</th>
+<th>P95(us)</th>
+<th>P99(us)</th>
+<th>错误数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>read（只读）</td>
+<td>1.73</td>
+<td>24.27</td>
+<td>4,862,521</td>
+<td>5,504,719</td>
+<td>5,686,704</td>
+<td>0</td>
+</tr>
+<tr>
+<td>write（只写）</td>
+<td>0.93</td>
+<td>3.73</td>
+<td>9,611,821</td>
+<td>11,474,585</td>
+<td>12,383,647</td>
+<td>0</td>
+</tr>
+<tr>
+<td>read_write（读写）</td>
+<td>1.32</td>
+<td>23.70</td>
+<td>6,225,055</td>
+<td>7,633,208</td>
+<td>9,180,549</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>说明：指标为 Python PEP 249 驱动经自研 TCP 协议逐语句往返 + 引擎事务执行的真实端侧数据；事务内每条语句单独网络往返，且本机单实例 8 并发共享全局会话锁，因此吞吐量级为个位数 TPS。这是 OpenXDB v0.27.0-alpha 在单机端侧的真实表现，禁止与分布式数据库做同量级对标。</p>
+</blockquote>
+<h3 id="tpc-c-8-120s5-10s">TPC-C 小仓（8 连接，120s，5 仓，预热 10s）<a class="headerlink" href="#tpc-c-8-120s5-10s" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tpmC（NewOrder/分钟）</td>
+<td>13.50</td>
+</tr>
+<tr>
+<td>总事务 TPM</td>
+<td>32.50</td>
+</tr>
+<tr>
+<td>P50 / P95 / P99 (us)</td>
+<td>1,387,045 / 55,802,975 / 70,369,693</td>
+</tr>
+<tr>
+<td>错误数</td>
+<td>0</td>
+</tr>
+<tr>
+<td>事务构成</td>
+<td>NEW_ORDER 27、PAYMENT 28、ORDER_STATUS 4、DELIVERY 3、STOCK_LEVEL 3</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_7">发现并修复的问题<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h3>
+<p>（运行日志 + 实测过程修复记录）</p>
+<ol>
+<li><strong>并发事务状态共享缺陷</strong>：首个版本每连接共用全局 SQL 会话，2 线程验证出现串扰；已修复为每连接独立 SQL 会话（<code>connSession</code> 使用独立会话）后 errs=0。</li>
+<li><strong>算术表达式不支持</strong>：引擎不支持 <code>k+1</code> / <code>d_next_o_id+1</code> 等表达式（报 <code>unexpected character '+'</code>），OLTP <code>index_update</code> 改为 <code>SET k=?</code> 随机值等价实现；TPC-C 的 <code>d_next_o_id</code>、<code>s_ytd</code>、<code>w_ytd</code>、<code>c_balance</code> 等累加全部改为客户端读-改-写等价实现。</li>
+<li><strong>DISTINCT 不支持</strong>：capability probe 报错，TPC-C 订单状态事务的 distinct 探针改 GROUP BY 等价。</li>
+<li><strong>DECIMAL 精度溢出</strong>：浮点累加产生 <code>702.0699999999999</code> 等超长小数报 <code>DECIMAL too many fractional digits</code>，所有 DECIMAL 写入值统一先 <code>f'{x:.2f}'</code> 格式化再传入。</li>
+<li><strong>主键计数越界</strong>：NEW_ORDER 计数器初值与 prepare 装载主键冲突（orders 15000 行 / order_line 上限 225000 行），已按实际装载量调整初始值；每轮正式基准前重新 prepare 保证库表干净。</li>
+</ol>
+<h2 id="_8">复现方式<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h2>
+<pre><code class="language-powershell"># 1. 编译最新二进制（先设 CGO 环境）
+# CGO_CFLAGS/CGO_CXXFLAGS=-IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include
+# CGO_LDFLAGS=-LC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-build -lrocksdb -lm
+go build ./...
+
+# 2. 一键编排：init + start + prepare + 跑基准 + 停止
+powershell -ExecutionPolicy Bypass -File tests/bench/e5/run_e5.ps1
+</code></pre>
+<p><em>（内容由AI生成，仅供参考）</em></p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../E4_stability/" class="btn btn-neutral float-left" title="E4 稳定性"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../E4_stability/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T23 M10 功能簇（2/3）：窗口函数（OVER 子句） - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T23 M10 \u529f\u80fd\u7c07\uff082/3\uff09\uff1a\u7a97\u53e3\u51fd\u6570\uff08OVER \u5b50\u53e5\uff09";
+        var mkdocs_page_input_path = "T23_m10_window.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">T23 M10 功能簇（2/3）：窗口函数（OVER 子句）</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T23_m10_window.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t23-m10-23over">T23 M10 功能簇（2/3）：窗口函数（OVER 子句）<a class="headerlink" href="#t23-m10-23over" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v5.0-P11-M10WIN, v0.13.0-alpha
+日期：2026-10-11
+范围：<code>pkg/sql</code>（lexer / ast / parser / executor）+ 单元测试（<code>m10_window_test.go</code>）+ README 勾选
+闭环：<code>go build ./...</code> 与 <code>go test ./... -count=1</code> 全绿，不 push
+提交：<code>M10: window functions (OVER)</code>（本地，未 push）</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>SQL 层此前只有普通列、CASE 与全局聚合（COUNT/SUM/AVG 整表一值）。M10 窗口函数引入 <strong>OVER 子句</strong>：在保留每行明细的同时，按 PARTITION BY 分区、窗口内 ORDER BY 排序，逐行计算排名（ROW_NUMBER/RANK/DENSE_RANK）与累计聚合（SUM/AVG/COUNT）。窗口函数仅允许出现在 SELECT 列表（WHERE/GROUP BY/ORDER BY 中出现即解析层报错），避免破坏查询阶段语义。</p>
+<h2 id="_2">设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="_3">语法<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sql">SELECT ROW_NUMBER()   OVER (PARTITION BY col1, col2 ORDER BY col ASC|DESC) ...
+SELECT RANK()         OVER (ORDER BY col) ...
+SELECT DENSE_RANK()   OVER () ...
+SELECT SUM(col)       OVER (PARTITION BY col1 ORDER BY col2) ...
+SELECT AVG(col)       OVER (...) ...
+SELECT COUNT(*)       OVER (...) ...
+</code></pre>
+<h3 id="_4">词法 / 语法层<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>lexer.go</code>：关键字表已含 <code>OVER</code> / <code>PARTITION</code>（M10 规划时预埋）；</li>
+<li><code>ast.go</code>：<code>SelectColumn</code> 新增 <code>Window *WindowSpec</code> 字段，<code>Agg</code> 允许值扩展 <code>ROW_NUMBER</code> / <code>RANK</code> / <code>DENSE_RANK</code>（复用既有 <code>WindowSpec{PartitionBy []string; OrderBy *OrderBy}</code>）；</li>
+<li><code>parser.go</code>：</li>
+<li>排名函数 <code>ROW_NUMBER()</code> / <code>RANK()</code> / <code>DENSE_RANK()</code> 无参解析后<strong>必须</strong>跟随 <code>OVER</code>，否则报 <code>window function %s() requires OVER clause</code>；</li>
+<li><code>COUNT(*)</code> 与 <code>SUM(arg)</code> / <code>AVG(arg)</code> 解析后若遇 <code>OVER</code> 关键字则调用 <code>parseWindowSpec</code> 填充 <code>sc.Window</code>（可选 OVER，缺省为普通聚合）；</li>
+<li>新增 <code>parseWindowSpec(sc)</code>：解析 <code>OVER ( PARTITION BY col,... [ORDER BY col ASC|DESC] )</code>，PARTITION BY 支持多列，ORDER BY 单列（复用 <code>parseOrderBy</code> 单列能力）；</li>
+<li>非法位置拦截：<code>parseColumnRef</code> 在 SELECT 列表之外（WHERE / GROUP BY / ORDER BY 等）检测到 <code>函数名(</code> 时返回 <code>function %s() only allowed in SELECT list</code>。</li>
+</ul>
+<h3 id="executor">执行层（executor）<a class="headerlink" href="#executor" title="Permanent link">&para;</a></h3>
+<ul>
+<li>窗口计算核心 <code>computeWindowCol(rows, getter, col)</code>：</li>
+<li><strong>分区</strong>：按 <code>WindowSpec.PartitionBy</code> 各列取值拼键分组，无 PARTITION 时全结果集一组；</li>
+<li><strong>组内排序</strong>：按窗口 <code>OrderBy</code> 键稳定排序（支持 DESC），无 ORDER BY 保持输入行序；</li>
+<li><strong>逐行求值</strong>：按 <code>Agg</code> 分发——<ul>
+<li><code>ROW_NUMBER</code>：组内序号 1..n；</li>
+<li><code>RANK</code>：排序键相同时并列同号，后续跳号（gap）；</li>
+<li><code>DENSE_RANK</code>：排序键并列同号但连续编号（无 gap）；</li>
+<li><code>SUM/AVG/COUNT</code>：默认框架 <code>ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW</code>，按窗口序逐行累计；SUM/AVG 支持 INT/DECIMAL，对 TEXT 等非数值列报 <code>window aggregate on non-numeric column</code>；</li>
+</ul>
+</li>
+<li><code>computeWindows</code> 按 SELECT 列表顺序批量计算全部窗口列，产出 <code>winVals[i][j]</code>。</li>
+<li>投影接入两条路径：</li>
+<li>单表路径 <code>finishSelect</code>：检测 <code>hasWindow</code>——与全局聚合混用报 <code>window function cannot be mixed with aggregate</code>，否则 <code>finishSelectWindow</code> 先投影普通列、再按行回填窗口值；</li>
+<li>关系路径 <code>finishRel</code>：收集窗口列后调用 <code>computeWindows</code>（getter 用 <code>relValue</code> 取限定名 <code>alias.col</code>），随后统一输出行。</li>
+<li>聚合检测修正：<code>execSelectRel</code> 的 <code>hasAgg</code> 检测<strong>排除</strong>窗口列（窗口列不再误入全局聚合分支）；<code>GROUP BY</code> 与窗口函数混用报 <code>window function not supported with GROUP BY</code>。</li>
+</ul>
+<h2 id="pkgsqlm10_window_testgo">测试（pkg/sql/m10_window_test.go）<a class="headerlink" href="#pkgsqlm10_window_testgo" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestWindowRowNumber</code></td>
+<td>ROW_NUMBER 窗口序 1..n</td>
+</tr>
+<tr>
+<td><code>TestWindowRankDenseRank</code></td>
+<td>RANK 带 gap 与 DENSE_RANK 连续编号并列值</td>
+</tr>
+<tr>
+<td><code>TestWindowPartitionSingle</code></td>
+<td>单列 PARTITION BY + 窗口内 DESC 编号</td>
+</tr>
+<tr>
+<td><code>TestWindowPartitionMulti</code></td>
+<td>多列 PARTITION BY 联合分区</td>
+</tr>
+<tr>
+<td><code>TestWindowAggRunning</code></td>
+<td>SUM/AVG/COUNT 逐行累计（整数除法 AVG）</td>
+</tr>
+<tr>
+<td><code>TestWindowNoPartition</code></td>
+<td>无 PARTITION / 无 ORDER BY：全组 RANK=1、SUM 按行序累计</td>
+</tr>
+<tr>
+<td><code>TestWindowOrderDesc</code></td>
+<td>窗口内 ORDER BY DESC</td>
+</tr>
+<tr>
+<td><code>TestWindowAliasAndPlainCol</code></td>
+<td>窗口列别名 + 与普通列混合</td>
+</tr>
+<tr>
+<td><code>TestWindowWithJoin</code></td>
+<td>JOIN 后窗口函数（rel 路径 finishRel）</td>
+</tr>
+<tr>
+<td><code>TestWindowWithCTE</code></td>
+<td>CTE 与窗口函数结合</td>
+</tr>
+<tr>
+<td><code>TestWindowEmpty</code></td>
+<td>空表窗口查询返回空</td>
+</tr>
+<tr>
+<td><code>TestWindowMissingOver</code></td>
+<td>ROW_NUMBER/RANK/DENSE_RANK 缺 OVER 报错</td>
+</tr>
+<tr>
+<td><code>TestWindowIllegalPosition</code></td>
+<td>WHERE / GROUP BY / ORDER BY 中窗口函数报错</td>
+</tr>
+<tr>
+<td><code>TestWindowMixedAggregate</code></td>
+<td>与 GROUP BY 混用、与全局聚合混用报错</td>
+</tr>
+<tr>
+<td><code>TestWindowNonNumericAgg</code></td>
+<td>对 TEXT 列 SUM 报错</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_5">取舍说明<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<ul>
+<li>排名函数（ROW_NUMBER/RANK/DENSE_RANK）<strong>强制</strong>要求 OVER；聚合函数（SUM/AVG/COUNT）OVER 可选——缺省即普通全局聚合，保持向后兼容；</li>
+<li>窗口默认框架固定为 <code>ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW</code>（逐行累计），暂不支持显式 <code>ROWS/RANGE</code> 框架与 <code>PRECEDING/FOLLOWING</code>，后续可扩展；</li>
+<li>窗口 ORDER BY 当前支持单列；多列窗口排序列为后续扩展点；</li>
+<li>窗口函数限定 SELECT 列表（解析层拦截），与 GROUP BY 混用明确拒绝（窗口作用于分组后结果集的语义留待后续实现）；</li>
+<li>PARTITION BY / ORDER BY 支持限定列名（<code>alias.col</code>），JOIN 场景可正确取值。</li>
+</ul>
+<h2 id="readme">README 勾选<a class="headerlink" href="#readme" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Status 行更新为 <code>M10 SQL compatibility cluster: CTE + window functions + UPSERT (v5.0-P12-M10), v0.14.0-alpha.</code></li>
+<li>T 表格追加 <code>+ T23 M10 SQL compatibility cluster: CTE + window functions + UPSERT</code></li>
+<li>文档列表追加 <code>T23_m10_cte.md</code> / <code>T23_m10_window.md</code> / <code>T23_m10_upsert.md</code>（三子功能文档随各自提交依次加入，本子功能提交暂不修改 README）</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

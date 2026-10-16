@@ -1,0 +1,1312 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Product Manual (English) - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Product Manual (English)";
+        var mkdocs_page_input_path = "product_manual_en.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul class="current">
+                <li class="toctree-l1 current"><a class="reference internal current" href="#">Product Manual (English)</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#table-of-contents">Table of Contents</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#1-product-overview-positioning">1. Product Overview &amp; Positioning</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#11-positioning-boundaries">1.1 Positioning Boundaries</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#12-core-capabilities">1.2 Core Capabilities</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#13-architecture-layers">1.3 Architecture Layers</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#14-key-encoding">1.4 Key Encoding</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2-quick-start">2. Quick Start</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#21-build-requirements">2.1 Build Requirements</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#22-build-windows-mingw-go">2.2 Build (Windows + MinGW + Go)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#23-start-repl-tcp-server">2.3 Start REPL / TCP Server</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#24-create-table-insert-query-example">2.4 Create Table, Insert, Query Example</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#25-run-tests">2.5 Run Tests</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3-installation-deployment">3. Installation &amp; Deployment</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#31-configuration-file-openxdbconf">3.1 Configuration File openxdb.conf</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#32-one-click-deploy-scripts">3.2 One-Click Deploy Scripts</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#33-startup-modes">3.3 Startup Modes</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4-sql-reference">4. SQL Reference</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#41-data-types">4.1 Data Types</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#42-ddl">4.2 DDL</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#create-table">CREATE TABLE</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#create-index">CREATE INDEX</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#views-materialized-views-triggers-stored-procedures">Views / Materialized Views / Triggers / Stored Procedures</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#users-roles">Users / Roles</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#drop-if-exists">DROP ... IF EXISTS</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#43-dml">4.3 DML</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#insert">INSERT</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#insert-into-select-t42">INSERT INTO ... SELECT (T42)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#replace-upsert">REPLACE / UPSERT</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#update-delete">UPDATE / DELETE</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#44-query-full-select-capabilities">4.4 Query (Full SELECT Capabilities)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#45-transactions">4.5 Transactions</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#46-data-import-export">4.6 Data Import / Export</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#47-ops-statements">4.7 Ops Statements</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#show-statements">SHOW Statements</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#explain">EXPLAIN</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#set-set-persist">SET / SET PERSIST</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#backup-restore">BACKUP / RESTORE</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#prepare-execute-deallocate-m18">PREPARE / EXECUTE / DEALLOCATE (M18)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#information_schema-read-only-views-m18">information_schema Read-Only Views (M18)</a>
+    </li>
+        </ul>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5-client-drivers">5. Client Drivers</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#51-protocol-notes">5.1 Protocol Notes</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#52-jdbc-driver">5.2 JDBC Driver</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#53-python-driver">5.3 Python Driver</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#6-data-security">6. Data Security</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#61-backup-restore-br">6.1 Backup &amp; Restore (BR)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#62-tls-transport-encryption-t36">6.2 TLS Transport Encryption (T36)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#63-rbac-privileges">6.3 RBAC &amp; Privileges</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#64-audit-log-t30">6.4 Audit Log (T30)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#7-operations-observability">7. Operations &amp; Observability</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#71-openxdb-doctor-health-check-t20">7.1 openxdb doctor Health Check (T20)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#72-openxdb-stats-live-metrics-t20">7.2 openxdb stats Live Metrics (T20)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#73-prometheus-metrics-m13">7.3 Prometheus Metrics (M13)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#74-slow-queries-m13">7.4 Slow Queries (M13)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#75-alert-rules-t37">7.5 Alert Rules (T37)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#76-region-split-load-balancing-m7">7.6 Region Split &amp; Load Balancing (M7)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#77-ha-failover-m6">7.7 HA Failover (M6)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#8-distributed-capabilities">8. Distributed Capabilities</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#81-replication-m2-t33">8.1 Replication (M2 + T33)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#82-sharding-m3">8.2 Sharding (M3)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#83-multi-node-cluster-m4">8.3 Multi-Node Cluster (M4)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#84-distributed-write-2pc-m5">8.4 Distributed Write / 2PC (M5)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#85-distributed-transactions-tso-m8">8.5 Distributed Transactions / TSO (M8)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#86-cross-node-ddl-t34">8.6 Cross-Node DDL (T34)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#87-distributed-backup-consistency-t35">8.7 Distributed Backup Consistency (T35)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#9-performance-benchmark">9. Performance Benchmark</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#91-sysbench-oltp-8-threads-60s-python-driver-self-developed-protocol">9.1 sysbench OLTP (8 threads × 60s, Python driver, self-developed protocol)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#92-tpc-c-small-warehouse-5-warehouses-8-threads-120s">9.2 TPC-C Small Warehouse (5 warehouses × 8 threads × 120s)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#93-bottleneck-notes">9.3 Bottleneck Notes</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#10-known-limitations-boundaries">10. Known Limitations &amp; Boundaries</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#11-faq">11. FAQ</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#q1-cgo-link-errors-during-build">Q1: cgo link errors during build?</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q2-table-names-colliding-with-keywords-eg-users-vs-show-users">Q2: Table names colliding with keywords (e.g., users vs SHOW USERS)?</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q3-what-is-the-idempotency-semantics-of-if-not-exists">Q3: What is the idempotency semantics of IF NOT EXISTS?</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q4-how-to-back-up-and-restore">Q4: How to back up and restore?</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q5-how-to-set-up-a-cluster">Q5: How to set up a cluster?</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q6-how-do-drivers-connect">Q6: How do drivers connect?</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q7-why-cant-i-connect-with-the-mysql-client">Q7: Why can't I connect with the MySQL client?</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q8-how-do-i-view-slow-queries">Q8: How do I view slow queries?</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q9-how-do-i-enable-tls">Q9: How do I enable TLS?</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#q10-are-the-performance-numbers-trustworthy-why-is-tps-low">Q10: Are the performance numbers trustworthy? Why is TPS low?</a>
+    </li>
+        </ul>
+    </li>
+    </ul>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Product Manual (English)</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/product_manual_en.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="openxdb-product-manual-english">OpenXDB Product Manual (English)<a class="headerlink" href="#openxdb-product-manual-english" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>Version: v1.0.0
+Last updated: 2026-10-16
+Positioning: single-node edge benchmark relational database kernel. All features and data in this manual are based on real content from README.md and docs/ design documents — no fabricated parameters, numbers, or commands.</p>
+</blockquote>
+<hr />
+<h2 id="table-of-contents">Table of Contents<a class="headerlink" href="#table-of-contents" title="Permanent link">&para;</a></h2>
+<ol>
+<li><a href="#1-product-overview--positioning">Product Overview &amp; Positioning</a></li>
+<li><a href="#2-quick-start">Quick Start</a></li>
+<li><a href="#3-installation--deployment">Installation &amp; Deployment</a></li>
+<li><a href="#4-sql-reference">SQL Reference</a></li>
+<li><a href="#5-client-drivers">Client Drivers</a></li>
+<li><a href="#6-data-security">Data Security</a></li>
+<li><a href="#7-operations--observability">Operations &amp; Observability</a></li>
+<li><a href="#8-distributed-capabilities">Distributed Capabilities</a></li>
+<li><a href="#9-performance-benchmark">Performance Benchmark</a></li>
+<li><a href="#10-known-limitations--boundaries">Known Limitations &amp; Boundaries</a></li>
+<li><a href="#11-faq">FAQ</a></li>
+</ol>
+<hr />
+<h2 id="1-product-overview-positioning">1. Product Overview &amp; Positioning<a class="headerlink" href="#1-product-overview-positioning" title="Permanent link">&para;</a></h2>
+<p>OpenXDB is a <strong>from-scratch</strong> single-node/distributed relational database kernel written in Go, with a storage engine built on top of RocksDB (accessed through a thin cgo bridge). The kernel fully includes WAL (write-ahead log), transactions, SQL parsing &amp; execution, replication, sharding, 2PC, HA (high availability), backup &amp; restore — evolving from a learning/experimentation kernel into one with complete distributed capabilities.</p>
+<h3 id="11-positioning-boundaries">1.1 Positioning Boundaries<a class="headerlink" href="#11-positioning-boundaries" title="Permanent link">&para;</a></h3>
+<ul>
+<li>OpenXDB speaks a <strong>self-developed binary TCP protocol</strong> (<code>pkg/server</code>) and is <strong>not a MySQL wire protocol</strong> implementation. It therefore cannot directly interoperate with MySQL ecosystem tools (e.g., standard sysbench, mysqldump beyond the built-in import, binlog tools).</li>
+<li>Performance positioning is <strong>single-node edge benchmark</strong>: the kernel implements the full functional chain, and performance optimization is still ongoing; measured throughput is presented in <a href="#9-performance-benchmark">Chapter 9</a>.</li>
+<li>OpenXDB does not position itself against TiDB, TDSQL, or MySQL. It is an independently implemented kernel for learning, experimentation, and edge scenarios.</li>
+</ul>
+<h3 id="12-core-capabilities">1.2 Core Capabilities<a class="headerlink" href="#12-core-capabilities" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Storage engine</td>
+<td>RocksDB-backed KV storage (cgo bridge <code>pkg/storage/rocksdb</code>) + pure-Go in-memory B+Tree (<code>pkg/storage/btree</code>, reference implementation &amp; comparator)</td>
+</tr>
+<tr>
+<td>WAL</td>
+<td>Append-only write-ahead log with replay recovery (<code>pkg/wal</code>)</td>
+</tr>
+<tr>
+<td>Transactions</td>
+<td>Local ACID transactions with snapshot isolation; read-your-writes merge, tombstones, point/range scan (<code>pkg/txn</code>)</td>
+</tr>
+<tr>
+<td>SQL subset</td>
+<td>DDL/DML/query/ops statements, see <a href="#4-sql-reference">Chapter 4</a></td>
+</tr>
+<tr>
+<td>Secondary indexes</td>
+<td>Backfill on creation, automatic maintenance on DML, query optimization for equality/range scans and ORDER BY</td>
+</tr>
+<tr>
+<td>Replication</td>
+<td>master-follower async replication (M2), with async / semi-sync / sync modes (T33)</td>
+</tr>
+<tr>
+<td>Sharding</td>
+<td>Logical sharding: RegionInfo metadata + Router half-open <code>[StartKey, EndKey)</code> + region-prefixed physical keys (M3)</td>
+</tr>
+<tr>
+<td>Multi-node cluster</td>
+<td>Node topology, cluster route table (region → node), cross-node SELECT forwarding &amp; merge (M4)</td>
+</tr>
+<tr>
+<td>Distributed write / 2PC</td>
+<td>Cross-node write atomicity via two-phase commit (M5)</td>
+</tr>
+<tr>
+<td>HA / Failover</td>
+<td>Heartbeat-based failure detection, automatic region re-assignment, read failover, replication master failover (M6)</td>
+</tr>
+<tr>
+<td>Region split &amp; load balancing</td>
+<td>Write-path auto-split, manual/periodic load balancing, online migration (M7)</td>
+</tr>
+<tr>
+<td>Distributed transactions / TSO</td>
+<td>Global monotonic timestamp, distributed snapshot isolation, 2PC recovery hardening (M8)</td>
+</tr>
+<tr>
+<td>Backup &amp; Restore (BR)</td>
+<td>Consistent-snapshot logical backup, idempotent restore, LSN-based PITR</td>
+</tr>
+<tr>
+<td>Client drivers</td>
+<td>JDBC &amp; Python drivers (T19) wrapping the pkg/server protocol</td>
+</tr>
+<tr>
+<td>Ops toolchain</td>
+<td><code>openxdb doctor</code> / <code>stats</code>, one-click deploy scripts (T20)</td>
+</tr>
+<tr>
+<td>Security</td>
+<td>TLS transport encryption (T36), RBAC roles &amp; privileges (M11/M17), audit log (T30)</td>
+</tr>
+<tr>
+<td>Observability</td>
+<td>Slow query log, Prometheus metrics, status view, alert rules (M13/T37)</td>
+</tr>
+<tr>
+<td>Ecosystem interop</td>
+<td>CSV/JSON Lines/Parquet export (M19), mysqldump-compatible import (M14)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="13-architecture-layers">1.3 Architecture Layers<a class="headerlink" href="#13-architecture-layers" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Package</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Protocol + CLI</td>
+<td><code>cmd/openxdb</code>, <code>pkg/server</code></td>
+<td>TCP server, REPL, binary protocol framing</td>
+</tr>
+<tr>
+<td>SQL</td>
+<td><code>pkg/sql</code></td>
+<td>Recursive-descent parser, executor (project/filter/sort/aggregate), metadata catalog, secondary index layer</td>
+</tr>
+<tr>
+<td>Transaction</td>
+<td><code>pkg/txn</code></td>
+<td>Begin/commit/rollback, snapshot isolation, read-your-writes</td>
+</tr>
+<tr>
+<td>Storage</td>
+<td><code>pkg/storage</code></td>
+<td>KV interface, key encoding; RocksDB engine and B+Tree engine</td>
+</tr>
+<tr>
+<td>WAL</td>
+<td><code>pkg/wal</code></td>
+<td>Append-only log, replay recovery</td>
+</tr>
+<tr>
+<td>Replication</td>
+<td><code>pkg/replication</code>, <code>pkg/txn</code>, <code>pkg/db</code></td>
+<td>Binlog store, master replicator (push + heartbeat), follower idempotent apply, commit-hook wiring</td>
+</tr>
+<tr>
+<td>Sharding</td>
+<td><code>pkg/sharding</code>, <code>pkg/sql</code>, <code>pkg/db</code></td>
+<td>RegionInfo metadata, Router key→region mapping, region-prefixed physical keys, cross-region query merge, split management</td>
+</tr>
+<tr>
+<td>Cluster</td>
+<td><code>pkg/cluster</code>, <code>pkg/sql</code>, <code>pkg/db</code></td>
+<td>Node registry (m:nodes), handshake/liveness, cluster route table (region→node), cross-node SELECT forwarding + merge, region data load (REGION_PUSH)</td>
+</tr>
+<tr>
+<td>Distributed write / 2PC</td>
+<td><code>pkg/cluster</code>, <code>pkg/sql/2pc.go</code>, <code>pkg/db</code></td>
+<td>Two-phase commit coordinator, participant prepare persistence, idempotent commit/abort, crash recovery</td>
+</tr>
+<tr>
+<td>HA / Failover</td>
+<td><code>pkg/cluster</code>, <code>pkg/sql/ha.go</code>, <code>pkg/db/ha.go</code></td>
+<td>Heartbeat timeout → node down, automatic region re-assignment, read failover, replication master failover</td>
+</tr>
+<tr>
+<td>Split &amp; Balance</td>
+<td><code>pkg/sql/balance.go</code>, <code>pkg/cluster</code>, <code>pkg/db</code></td>
+<td>Write-path auto-split, manual/auto load balancing, cluster-not-enabled guard</td>
+</tr>
+<tr>
+<td>Global Timestamp (TSO)</td>
+<td><code>pkg/tso</code>, <code>pkg/cluster/tso.go</code>, <code>pkg/db</code></td>
+<td>Global monotonic timestamp (64-bit ms + logical layout), batch issuance, overflow protection, transaction-boundary Reset</td>
+</tr>
+<tr>
+<td>Snapshot Isolation (distributed)</td>
+<td><code>pkg/cluster/txn2pc.go</code>, <code>pkg/sql/executor.go</code>, <code>pkg/db</code></td>
+<td>Version records (m:ver), begin_ts/commit_ts global filtering, cross-node version passthrough</td>
+</tr>
+<tr>
+<td>Backup / Restore</td>
+<td><code>pkg/sql/backup.go</code>, <code>pkg/sql</code>, <code>pkg/db</code></td>
+<td>Consistent-snapshot logical backup (single file, version + CRC32), idempotent restore, binlog replay to target LSN</td>
+</tr>
+<tr>
+<td>Data dir</td>
+<td><code>pkg/db</code></td>
+<td>Initialization, engine + WAL + txn manager wiring, crash recovery</td>
+</tr>
+</tbody>
+</table>
+<h3 id="14-key-encoding">1.4 Key Encoding<a class="headerlink" href="#14-key-encoding" title="Permanent link">&para;</a></h3>
+<pre><code>physical key: r{regionID:8B}{innerKey}
+row key:    s{tableID:8B}{pk}                          (inner, M1)
+index key:  i{tableID:8B}{indexID:8B}{idxVal}p{pk}    (inner, T6)
+</code></pre>
+<p>Every stored key carries a region prefix (<code>r</code> + 8-byte big-endian regionID); the inner key keeps the M1/T6 layout, so keys stay contiguous within a region and region boundaries are explicit. Index values use sort-friendly encoding: INT flips the sign bit (<code>v ^ 0x8000000000000000</code>), TEXT stays raw bytes, so byte order equals value order.</p>
+<hr />
+<h2 id="2-quick-start">2. Quick Start<a class="headerlink" href="#2-quick-start" title="Permanent link">&para;</a></h2>
+<h3 id="21-build-requirements">2.1 Build Requirements<a class="headerlink" href="#21-build-requirements" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Go 1.22+</li>
+<li>A C/C++ toolchain for cgo (e.g., MinGW-w64 on Windows, gcc/clang on Linux/macOS)</li>
+<li>RocksDB (tested with v11.8.1 source build, no third-party compression libs)</li>
+</ul>
+<h3 id="22-build-windows-mingw-go">2.2 Build (Windows + MinGW + Go)<a class="headerlink" href="#22-build-windows-mingw-go" title="Permanent link">&para;</a></h3>
+<p>One-shot reproducible build scripts (auto-detect RocksDB install, then <code>go build</code> + optional <code>go test</code>):</p>
+<pre><code class="language-powershell"># Windows: build bin\openxdb.exe, verify go build ./..., run go test ./...
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -RunTests
+# explicit paths:
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -RocksSrcDir C:\rocksdb-src -RocksBuildDir C:\rocksdb-build -RunTests
+</code></pre>
+<pre><code class="language-sh"># Linux/macOS:
+./scripts/build.sh --test
+./scripts/build.sh --rocks-src /path/to/rocksdb-11.8.1 --rocks-build /path/to/librocksdb-dir --test
+</code></pre>
+<p>Manual cgo setup (equivalent, for custom toolchains):</p>
+<pre><code class="language-sh">export CGO_CFLAGS=-I&lt;rocksdb&gt;/include
+export CGO_CXXFLAGS=-I&lt;rocksdb&gt;/include
+export CGO_LDFLAGS=-L&lt;rocksdb-build&gt; -lrocksdb   # Windows: add -lshlwapi -lrpcrt4 -lws2_32
+
+go build ./...
+</code></pre>
+<p><code>pkg/storage/rocksdb</code> declares per-platform <code>#cgo</code> link flags (Windows <code>-lwinpthread -lshlwapi -lrpcrt4 -lws2_32</code>, Linux <code>-lstdc++ -lpthread</code>, Darwin <code>-lstdc++</code>), so only the RocksDB include/lib dirs need to be supplied via <code>CGO_CFLAGS</code> / <code>CGO_LDFLAGS</code>.</p>
+<blockquote>
+<p><strong>Note</strong>: the repository <code>#cgo</code> flags include <code>-static-libstdc++ -static-libgcc</code>; do not add undeclared link flags such as <code>-lstdc++</code> / <code>-lz</code>, which can cause link conflicts.</p>
+</blockquote>
+<h3 id="23-start-repl-tcp-server">2.3 Start REPL / TCP Server<a class="headerlink" href="#23-start-repl-tcp-server" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sh"># initialize a data directory
+openxdb init --data-dir ./data
+
+# local REPL
+openxdb repl --data-dir ./data
+
+# TCP server (default port 7788)
+openxdb start --data-dir ./data [--port 7788]
+
+# ops: health check + live metrics
+openxdb doctor --data-dir ./data [--addr 127.0.0.1:7788] [--json]
+openxdb stats [--addr 127.0.0.1:7788] [--interval 5] [--json]
+</code></pre>
+<h3 id="24-create-table-insert-query-example">2.4 Create Table, Insert, Query Example<a class="headerlink" href="#24-create-table-insert-query-example" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sql">CREATE TABLE users (id INT, name TEXT, age INT, PRIMARY KEY (id));
+INSERT INTO users VALUES (1, 'alice', 30), (2, 'bob', 25), (3, 'carol', 35);
+CREATE INDEX idx_age ON users (age);
+SELECT name FROM users WHERE age &gt;= 25 AND age &lt; 35 ORDER BY age;
+UPDATE users SET age = 31 WHERE id = 1;
+DELETE FROM users WHERE id = 3;
+</code></pre>
+<h3 id="25-run-tests">2.5 Run Tests<a class="headerlink" href="#25-run-tests" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sh">go test ./...
+</code></pre>
+<p>All packages pass: <code>cluster</code> (node handshake, query forwarding, heartbeat down, region push route learning, idempotent node re-register), <code>db</code> (replication integration, M4 two-node integration, M5 2PC integration, M6 HA integration, M7 split/balance integration, M8 distributed-txn integration, BR backup/restore integration), <code>replication</code>, <code>server</code>, <code>sharding</code>, <code>sql</code>, <code>storage</code>, <code>storage/btree</code>, <code>storage/rocksdb</code>, <code>tso</code>, <code>txn</code>, <code>wal</code>.</p>
+<hr />
+<h2 id="3-installation-deployment">3. Installation &amp; Deployment<a class="headerlink" href="#3-installation-deployment" title="Permanent link">&para;</a></h2>
+<h3 id="31-configuration-file-openxdbconf">3.1 Configuration File openxdb.conf<a class="headerlink" href="#31-configuration-file-openxdbconf" title="Permanent link">&para;</a></h3>
+<p>OpenXDB uses an INI-style configuration file (see <code>docs/openxdb.conf.example</code>). Core sections:</p>
+<pre><code class="language-ini">[server]
+data_dir = ./data
+port = 7788
+replica_port = 7789
+metrics_port = 7790
+# tls_cert = cert.pem
+# tls_key = key.pem
+
+[sql]
+query_cache = on
+slow_query_threshold = 100
+backup_dir = ./backup
+</code></pre>
+<ul>
+<li><code>[server]</code>: <code>data_dir</code> data directory, <code>port</code> main service port (default 7788), <code>replica_port</code> replication port, <code>metrics_port</code> Prometheus metrics port, <code>tls_cert</code>/<code>tls_key</code> TLS certificate and private key paths.</li>
+<li><code>[sql]</code>: <code>query_cache</code> query cache switch, <code>slow_query_threshold</code> slow query threshold in milliseconds (default 100ms), <code>backup_dir</code> backup directory.</li>
+</ul>
+<p>Start with a config file:</p>
+<pre><code class="language-sh">openxdb start --config openxdb.conf
+</code></pre>
+<blockquote>
+<p>Tip: hot-reloadable items (e.g., <code>query_cache</code>, <code>slow_query_threshold</code>, <code>slow_query_log</code>) can also be changed at runtime via <code>SET</code> / <code>SET PERSIST</code> — see <a href="#47-ops-statements">ops statements in Chapter 4</a>.</p>
+</blockquote>
+<h3 id="32-one-click-deploy-scripts">3.2 One-Click Deploy Scripts<a class="headerlink" href="#32-one-click-deploy-scripts" title="Permanent link">&para;</a></h3>
+<p>The repository ships Windows and Linux/macOS deploy scripts:</p>
+<pre><code class="language-powershell"># Windows
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -DataDir C:\openxdb\data -Port 7788
+</code></pre>
+<pre><code class="language-sh"># Linux/macOS
+./scripts/deploy.sh --data-dir /var/lib/openxdb --port 7788
+</code></pre>
+<p>Script flow: parameterized init (<code>-DataDir</code> / <code>-Port</code> / <code>--data-dir</code> / <code>--port</code>) → start → <code>openxdb doctor</code> health self-check → deployment summary.</p>
+<h3 id="33-startup-modes">3.3 Startup Modes<a class="headerlink" href="#33-startup-modes" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>openxdb init --data-dir &lt;dir&gt;</code></td>
+<td>Initialize a data directory</td>
+</tr>
+<tr>
+<td><code>openxdb repl --data-dir &lt;dir&gt;</code></td>
+<td>Local interactive REPL</td>
+</tr>
+<tr>
+<td><code>openxdb start --data-dir &lt;dir&gt; [--port 7788]</code></td>
+<td>Start TCP server (default port 7788)</td>
+</tr>
+<tr>
+<td><code>openxdb start --cluster-addr &lt;addr&gt;</code></td>
+<td>Start in cluster mode (node ID via <code>--node-id</code> or auto-generated)</td>
+</tr>
+<tr>
+<td><code>openxdb doctor</code></td>
+<td>Health check (exit codes 0=pass / 1=warn / 2=error)</td>
+</tr>
+<tr>
+<td><code>openxdb stats</code></td>
+<td>Live metrics</td>
+</tr>
+<tr>
+<td><code>openxdb gen-cert cert.pem key.pem</code></td>
+<td>Generate self-signed TLS certificate</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-sql-reference">4. SQL Reference<a class="headerlink" href="#4-sql-reference" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>All syntax in this chapter comes from README.md and T* design documents under docs/. The SQL capability list includes T41/T42 additions (IF NOT EXISTS, CREATE TABLE AS SELECT, INSERT INTO SELECT).</p>
+</blockquote>
+<h3 id="41-data-types">4.1 Data Types<a class="headerlink" href="#41-data-types" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>INT</code></td>
+<td>Integer</td>
+</tr>
+<tr>
+<td><code>TEXT</code></td>
+<td>Text</td>
+</tr>
+<tr>
+<td><code>DATE</code></td>
+<td>Date</td>
+</tr>
+<tr>
+<td><code>DECIMAL</code></td>
+<td>Fixed-point decimal (normalized to fixed 4 decimal places internally)</td>
+</tr>
+<tr>
+<td><code>BLOB</code></td>
+<td>Binary large object</td>
+</tr>
+</tbody>
+</table>
+<h3 id="42-ddl">4.2 DDL<a class="headerlink" href="#42-ddl" title="Permanent link">&para;</a></h3>
+<h4 id="create-table">CREATE TABLE<a class="headerlink" href="#create-table" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">-- Basic create (inline PRIMARY KEY is equivalent to table-level PRIMARY KEY)
+CREATE TABLE users (
+  id INT PRIMARY KEY,
+  name TEXT,
+  age INT
+);
+
+CREATE TABLE orders (
+  id INT,
+  user_id INT,
+  amount DECIMAL,
+  PRIMARY KEY (id)
+);
+
+-- IF NOT EXISTS: idempotent create (T41)
+CREATE TABLE IF NOT EXISTS users (id INT PRIMARY KEY, name TEXT);
+
+-- CREATE TABLE AS SELECT (CTAS, T41): create a table from query results
+CREATE TABLE adult_users AS SELECT id, name FROM users WHERE age &gt;= 18;
+</code></pre>
+<h4 id="create-index">CREATE INDEX<a class="headerlink" href="#create-index" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">CREATE INDEX idx_age ON users (age);
+</code></pre>
+<h4 id="views-materialized-views-triggers-stored-procedures">Views / Materialized Views / Triggers / Stored Procedures<a class="headerlink" href="#views-materialized-views-triggers-stored-procedures" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">-- View
+CREATE VIEW v_adult AS SELECT id, name FROM users WHERE age &gt;= 18;
+DROP VIEW v_adult;
+
+-- Materialized view
+CREATE MATERIALIZED VIEW mv_adult AS SELECT id, name FROM users WHERE age &gt;= 18;
+REFRESH MATERIALIZED VIEW mv_adult;
+DROP MATERIALIZED VIEW mv_adult;
+
+-- Trigger
+CREATE TRIGGER trg_after_insert AFTER INSERT ON users FOR EACH ROW ...;
+DROP TRIGGER trg_after_insert;
+SHOW TRIGGERS;
+
+-- Stored procedure
+CREATE PROCEDURE p_get_user(IN uid INT) ...;
+CALL p_get_user(1);
+DROP PROCEDURE p_get_user;
+SHOW PROCEDURES;
+</code></pre>
+<h4 id="users-roles">Users / Roles<a class="headerlink" href="#users-roles" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">CREATE USER 'alice' IDENTIFIED BY 'pwd123';        -- duplicate name errors
+DROP USER [IF EXISTS] 'alice';                     -- missing errors; IF EXISTS silent
+SHOW USERS;                                        -- sorted by name
+ALTER USER 'alice' IDENTIFIED BY 'newpwd';         -- reset password
+
+CREATE ROLE 'analyst';
+DROP ROLE [IF EXISTS] 'analyst';
+SHOW ROLES;
+GRANT ROLE 'analyst' TO 'alice';
+REVOKE ROLE 'analyst' FROM 'alice';
+SHOW GRANTS FOR 'alice';
+</code></pre>
+<h4 id="drop-if-exists">DROP ... IF EXISTS<a class="headerlink" href="#drop-if-exists" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS orders;
+</code></pre>
+<ul>
+<li><code>DROP TABLE IF EXISTS</code>: idempotent when the table is missing (T21 fix).</li>
+<li><code>DROP USER IF EXISTS</code> / <code>DROP ROLE IF EXISTS</code>: idempotent.</li>
+<li>Dropping users/tables/roles cascades cleanup of related grants.</li>
+</ul>
+<h3 id="43-dml">4.3 DML<a class="headerlink" href="#43-dml" title="Permanent link">&para;</a></h3>
+<h4 id="insert">INSERT<a class="headerlink" href="#insert" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">INSERT INTO users VALUES (1, 'alice', 30), (2, 'bob', 25);
+INSERT INTO users (id, name) VALUES (3, 'carol');
+</code></pre>
+<h4 id="insert-into-select-t42">INSERT INTO ... SELECT (T42)<a class="headerlink" href="#insert-into-select-t42" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">-- Insert query results into a target table (column list optional; full SELECT source compatibility; atomic transaction + rollback)
+INSERT INTO archive_users SELECT * FROM users WHERE age &gt;= 30;
+INSERT INTO archive_users (id, name) SELECT id, name FROM users WHERE age &gt;= 30;
+</code></pre>
+<ul>
+<li>Self-insert uses snapshot semantics (self-insert snapshot semantics).</li>
+<li><code>REPLACE INTO ... SELECT</code> is also supported.</li>
+</ul>
+<h4 id="replace-upsert">REPLACE / UPSERT<a class="headerlink" href="#replace-upsert" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">-- REPLACE: on primary-key conflict, delete then insert
+REPLACE INTO users VALUES (1, 'alice2', 31);
+
+-- INSERT ... ON DUPLICATE KEY UPDATE: update on conflict
+INSERT INTO users VALUES (1, 'alice', 30)
+  ON DUPLICATE KEY UPDATE age = 31;
+</code></pre>
+<h4 id="update-delete">UPDATE / DELETE<a class="headerlink" href="#update-delete" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">UPDATE users SET age = 31 WHERE id = 1;
+DELETE FROM users WHERE id = 3;
+</code></pre>
+<h3 id="44-query-full-select-capabilities">4.4 Query (Full SELECT Capabilities)<a class="headerlink" href="#44-query-full-select-capabilities" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sql">-- Basic query + WHERE
+SELECT * FROM users WHERE age &gt;= 25;
+
+-- ORDER BY &amp; pagination (LIMIT/OFFSET also works on GROUP BY/aggregate results, T40)
+SELECT name FROM users ORDER BY age LIMIT 10 OFFSET 5;
+
+-- GROUP BY + aggregates (MAX/MIN/COUNT/SUM/AVG; MAX/MIN added in T40)
+SELECT age, COUNT(*), SUM(amount), AVG(amount) FROM orders GROUP BY age;
+SELECT MAX(age), MIN(age) FROM users;
+
+-- DISTINCT (T40)
+SELECT DISTINCT age FROM users;
+
+-- JOIN
+SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id;
+
+-- Subquery
+SELECT name FROM users WHERE id IN (SELECT user_id FROM orders WHERE amount &gt; 100);
+
+-- CTE (M10)
+WITH adult AS (SELECT id, name FROM users WHERE age &gt;= 18)
+SELECT * FROM adult;
+
+-- Window functions (M10)
+SELECT name, age, ROW_NUMBER() OVER (ORDER BY age) AS rn FROM users;
+
+-- BETWEEN / IN / LIKE
+SELECT * FROM users WHERE age BETWEEN 25 AND 35;
+SELECT * FROM users WHERE name IN ('alice', 'bob');
+SELECT * FROM users WHERE name LIKE 'a%';
+
+-- CASE WHEN &amp; expressions (arithmetic expressions added in T40)
+SELECT name, CASE WHEN age &gt;= 18 THEN 'adult' ELSE 'minor' END AS bucket FROM users;
+SELECT id, amount * 2 AS double_amount FROM orders;
+SELECT -age AS neg_age FROM users;
+</code></pre>
+<h3 id="45-transactions">4.5 Transactions<a class="headerlink" href="#45-transactions" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sql">BEGIN;
+INSERT INTO users VALUES (4, 'dave', 40);
+UPDATE users SET age = 41 WHERE id = 4;
+COMMIT;
+
+-- or roll back
+BEGIN;
+DELETE FROM users WHERE id = 4;
+ROLLBACK;
+</code></pre>
+<p>Transaction characteristics: local ACID + snapshot isolation; read-your-writes merge, tombstones, point/range scan.</p>
+<h3 id="46-data-import-export">4.6 Data Import / Export<a class="headerlink" href="#46-data-import-export" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sql">-- CSV import (P1)
+IMPORT INTO users FROM '/path/users.csv';
+
+-- mysqldump-compatible import (M14, T27): parses mysqldump CREATE TABLE + INSERT statements
+IMPORT MYSQLDUMP FROM '/path/dump.sql' [BATCH 100] [IGNORE ERRORS];
+
+-- Export (P1 + M19 ecosystem export)
+EXPORT TABLE users TO '/path/users.csv';                        -- equivalent to FORMAT CSV
+EXPORT TABLE users TO '/path/users.csv' FORMAT CSV;
+EXPORT TABLE users TO '/path/users.jsonl' FORMAT JSON;          -- JSON Lines
+EXPORT TABLE users TO '/path/users.parquet' FORMAT PARQUET;     -- Parquet v1
+</code></pre>
+<ul>
+<li>CSV: for spreadsheet tools.</li>
+<li>JSON (JSON Lines): streaming object sequence, one record per line, suitable for log pipelines / data-lake ingestion / ETL.</li>
+<li>Parquet: columnar binary storage produced by a self-contained minimal Parquet v1 writer (single Row Group, PLAIN/UNCOMPRESSED encoding), directly consumable by Spark/Hive/DuckDB/Polars.</li>
+</ul>
+<h3 id="47-ops-statements">4.7 Ops Statements<a class="headerlink" href="#47-ops-statements" title="Permanent link">&para;</a></h3>
+<h4 id="show-statements">SHOW Statements<a class="headerlink" href="#show-statements" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">SHOW TABLES;                          -- list all tables
+SHOW INDEX FROM users;                -- show indexes of a table
+SHOW VIEWS;                           -- list views
+SHOW USERS;                           -- list users
+SHOW ROLES;                           -- list roles
+SHOW GRANTS FOR 'alice';              -- show grants of a user
+SHOW TRIGGERS;                        -- list triggers
+SHOW PROCEDURES;                      -- list stored procedures
+SHOW SLOWQUERIES;                     -- slow queries (newest first; columns: time|user|duration_ms|rows|error|sql)
+SHOW STATS;                           -- service status metrics
+SHOW CONFIG;                          -- show current configuration
+SHOW PERSISTED CONFIG;                -- show persisted configuration
+SHOW AUDITLOG;                        -- audit log
+SHOW ALERT RULES;                     -- alert rules
+SHOW ALERT STATUS;                    -- alert status
+SHOW ALERTS;                          -- alert events
+SHOW NODES;                           -- cluster nodes
+SHOW REGION ROUTES;                   -- region routes (region/table/start/end/node/local)
+LIST REGIONS;                         -- list regions
+LOCATE REGION &lt;key&gt;;                  -- locate the region containing a key
+</code></pre>
+<h4 id="explain">EXPLAIN<a class="headerlink" href="#explain" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">EXPLAIN &lt;SELECT&gt;;
+</code></pre>
+<h4 id="set-set-persist">SET / SET PERSIST<a class="headerlink" href="#set-set-persist" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">SET slow_query_threshold = 100;       -- slow query threshold (ms; &lt;=0 disables recording)
+SET slow_query_log = on;              -- slow query file logging switch
+SET query_cache = on;                 -- query cache switch
+SET replication_mode = async;         -- replication mode: async / semi-sync / sync
+SET replication_ack = 1;              -- semi-sync ACK count
+SET replication_timeout = 3000;       -- ACK timeout (ms)
+SET alert_rules = '...';              -- alert rules (JSON)
+SET audit_log = on;                   -- audit log hot switch
+SET PERSIST slow_query_threshold = 100;  -- persist configuration (restart-effective class)
+SET PERSIST tls_cert = 'cert.pem';    -- TLS certificate (restart-effective)
+SET PERSIST tls_key = 'key.pem';      -- TLS private key (restart-effective)
+SET PERSIST tls_allow_legacy = on;    -- allow plaintext/TLS coexistence listener
+SET @var = 1;                         -- user variable
+SELECT @var;                          -- read user variable
+</code></pre>
+<h4 id="backup-restore">BACKUP / RESTORE<a class="headerlink" href="#backup-restore" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">BACKUP TO '/path/backup.bk';                       -- consistent-snapshot logical backup
+RESTORE FROM '/path/backup.bk';                    -- idempotent restore (same-named tables drop-then-recreate)
+RESTORE FROM '/path/backup.bk' TO LSN 12345;       -- PITR: replay binlog after backup point up to target LSN
+</code></pre>
+<h4 id="prepare-execute-deallocate-m18">PREPARE / EXECUTE / DEALLOCATE (M18)<a class="headerlink" href="#prepare-execute-deallocate-m18" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">PREPARE stmt1 FROM 'SELECT * FROM users WHERE id = ?';
+EXECUTE stmt1 USING 1;                             -- bind user variables or literals
+EXECUTE stmt1 USING @var;
+DEALLOCATE PREPARE stmt1;
+</code></pre>
+<ul>
+<li>Session-scoped cache: re-PREPARE of the same name overwrites; EXECUTE/DEALLOCATE of unknown names errors; argument count must match placeholder count.</li>
+</ul>
+<h4 id="information_schema-read-only-views-m18">information_schema Read-Only Views (M18)<a class="headerlink" href="#information_schema-read-only-views-m18" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">SELECT * FROM information_schema.schemata;
+SELECT * FROM information_schema.tables;
+SELECT * FROM information_schema.columns;
+SELECT * FROM information_schema.statistics;
+</code></pre>
+<ul>
+<li>Read-only virtual database: case-insensitive column projection, <code>WHERE &lt;col&gt; = &lt;literal&gt;</code> equality filters (AND-combinable), ORDER BY, qualified <code>default.information_schema.tables</code> FROM; any CREATE/DROP/INSERT/UPDATE targeting the virtual library is rejected.</li>
+</ul>
+<hr />
+<h2 id="5-client-drivers">5. Client Drivers<a class="headerlink" href="#5-client-drivers" title="Permanent link">&para;</a></h2>
+<p>OpenXDB ships JDBC and Python standard client drivers (T19), both based on the self-developed binary TCP protocol (<code>pkg/server</code>) — <strong>not MySQL wire protocol</strong>.</p>
+<h3 id="51-protocol-notes">5.1 Protocol Notes<a class="headerlink" href="#51-protocol-notes" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Wire protocol: UTF-8 line protocol; each command is one line ending with <code>\n</code>; the server replies line by line.</li>
+<li>Reply forms: simple confirmation (OK/PONG/BYE), affected rows (N rows affected), text table (header row + separator + data rows + trailing N rows), error (ERR <message>).</li>
+<li>Empty cells map uniformly to NULL.</li>
+<li>Multi-line text is unsupported (<code>\n</code> / <code>\r</code> in parameterized string values are rejected by the driver).</li>
+<li>Parameterization: the server protocol has no prepared-statement binary parameter channel; both drivers safely escape <code>?</code> placeholders client-side.</li>
+</ul>
+<h3 id="52-jdbc-driver">5.2 JDBC Driver<a class="headerlink" href="#52-jdbc-driver" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Location: <code>drivers/jdbc</code>, Maven project, Java 8+, JUnit 5.</li>
+<li>Registration: static block <code>DriverManager.registerDriver(new OpenXDBDriver())</code> + <code>META-INF/services/java.sql.Driver</code> auto-registration.</li>
+<li>URL: <code>jdbc:openxdb://host:port</code> (default port 7788); <code>user</code>/<code>password</code> properties are accepted but ignored by default (runs as root when no AUTH handshake is exchanged).</li>
+<li>Core classes: <code>OpenXDBDriver</code> / <code>OpenXDBConnection</code> / <code>OpenXDBStatement</code> / <code>OpenXDBPreparedStatement</code> (client-side <code>?</code> placeholder substitution) / <code>OpenXDBResultSet</code> (forward-only, read-only) / <code>OpenXDBProtocol</code> (socket connection with 5s timeout).</li>
+<li>Transactions: <code>setAutoCommit(false)</code> triggers a session transaction; sends BEGIN automatically if not started before execution.</li>
+<li>TLS: the driver supports TLS connections (<code>InsecureTLSConfig</code> can disable certificate verification for dev; use verify-full / verify-ca in production).</li>
+</ul>
+<h3 id="53-python-driver">5.3 Python Driver<a class="headerlink" href="#53-python-driver" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Location: <code>drivers/python</code>, PEP 249 compliant.</li>
+<li>Metadata: <code>apilevel="2.0"</code>, <code>threadsafety=1</code>, <code>paramstyle="qmark"</code>, <code>__version__="0.10.0"</code>.</li>
+<li>Module-level <code>connect()</code>, <code>DEFAULT_PORT</code>; PEP 249 style error hierarchy.</li>
+</ul>
+<pre><code class="language-python">import openxdb
+conn = openxdb.connect(&quot;127.0.0.1&quot;, 7788)
+cur = conn.cursor()
+cur.execute(&quot;SELECT id, name FROM users WHERE id &gt; ?&quot;, (1,))
+for row in cur.fetchall():
+    print(row)
+conn.close()
+</code></pre>
+<ul>
+<li><code>Connection</code>: <code>cursor()</code> / <code>ping()</code> / <code>begin()</code> / <code>commit()</code> / <code>rollback()</code> / <code>close()</code>.</li>
+<li><code>Cursor</code>: <code>execute</code> / <code>executemany</code> / <code>fetchone</code> / <code>fetchmany</code> / <code>fetchall</code> / iterator.</li>
+<li>TLS: the driver supports TLS connection parameters (disable certificate verification for self-signed dev certs; use a trusted CA in production).</li>
+</ul>
+<hr />
+<h2 id="6-data-security">6. Data Security<a class="headerlink" href="#6-data-security" title="Permanent link">&para;</a></h2>
+<h3 id="61-backup-restore-br">6.1 Backup &amp; Restore (BR)<a class="headerlink" href="#61-backup-restore-br" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Consistent-snapshot logical backup</strong>: <code>BACKUP TO &lt;path&gt;</code> snapshots the full table catalog, all data rows, index keys, and region routing metadata on a single consistent snapshot, plus the backup-point LSN. Produces a single transportable file (magic + version + JSON meta + per-segment CRC32 integrity checks + atomic tmp+rename write).</li>
+<li><strong>Idempotent restore</strong>: <code>RESTORE FROM &lt;path&gt;</code> validates version/integrity first, then rebuilds tables/data/indexes/routing with "drop-then-recreate" semantics for same-named tables (stale rows/index residue cleared, catalog overwritten, whole restore runs in one transaction with full rollback).</li>
+<li><strong>PITR (point-in-time recovery)</strong>: <code>RESTORE FROM &lt;path&gt; TO LSN &lt;n&gt;</code> replays binlog records after the backup point up to the target LSN (inclusive) — the backup + binlog-replay PITR foundation.</li>
+<li><strong>Distributed backup consistency (T35)</strong>: a coordinator initiates multi-node consistent backup: PREPARE collects per-node LastLSN/TSO candidates → GlobalLSN = max(all LSN) as the global consistency point → DO phase snapshots each node with the aligned global_lsn (retry up to 3 rounds if a node exceeds G); artifacts keep v1 format + a manifest (GlobalLSN / node metadata / consistency marker); <code>RESTORE ... TO LSN G</code> drives every node to the global backup point; single-node zero-trigger keeps legacy BACKUP/RESTORE intact.</li>
+</ul>
+<h3 id="62-tls-transport-encryption-t36">6.2 TLS Transport Encryption (T36)<a class="headerlink" href="#62-tls-transport-encryption-t36" title="Permanent link">&para;</a></h3>
+<ul>
+<li>The main service listener supports TLS: when <code>--tls-cert</code> and <code>--tls-key</code> are both provided, encrypted listening is enabled; otherwise plaintext (behavior-compatible).</li>
+<li>The replica port (<code>--replica-port</code>) can be separately enabled with <code>--replica-tls</code>.</li>
+<li><strong>TLS-only listener by default</strong>, plaintext rejected; <code>--tls-allow-legacy</code> or <code>SET PERSIST tls_allow_legacy=on</code> enables plaintext/TLS coexistence (AutoListener).</li>
+<li>Certificate management: <code>openxdb gen-cert cert.pem key.pem</code> generates a self-signed certificate (dev/test only; use a trusted-CA-signed certificate in production and never commit private keys); <code>SET PERSIST tls_cert/tls_key</code> are restart-effective configs.</li>
+<li>Client verification: drivers support <code>verify-full</code> / <code>verify-ca</code>; disable verification for self-signed dev certs.</li>
+</ul>
+<pre><code class="language-sh"># Generate a self-signed certificate (openssl method)
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 365 -subj &quot;/CN=openxdb&quot;
+
+# Start TLS service (both flags required; providing only one errors out)
+openxdb start --data-dir ./data --tls-cert cert.pem --tls-key key.pem
+
+# Verify TLS handshake
+openssl s_client -connect 127.0.0.1:7788 -CAfile cert.pem
+</code></pre>
+<h3 id="63-rbac-privileges">6.3 RBAC &amp; Privileges<a class="headerlink" href="#63-rbac-privileges" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>User management</strong>: <code>CREATE USER</code> / <code>DROP USER [IF EXISTS]</code> / <code>ALTER USER</code> / <code>SHOW USERS</code>; passwords are stored as SHA-256 + per-user random salt hashes (no plaintext), with constant-time comparison against timing side channels.</li>
+<li><strong>Table-level privileges</strong>: <code>GRANT &lt;priv[,priv...]&gt; ON &lt;table&gt; TO '&lt;user&gt;'</code> / <code>REVOKE ... FROM '&lt;user&gt;'</code>; priv ∈ {SELECT, INSERT, UPDATE, DELETE, ALL}; repeated GRANT/REVOKE are idempotent.</li>
+<li><strong>Database-level &amp; column-level privileges (M17)</strong>: <code>GRANT/REVOKE &lt;priv&gt; ON DATABASE &lt;db&gt; TO/FROM '&lt;user&gt;'</code>, <code>GRANT/REVOKE &lt;priv&gt; ON &lt;table&gt; (&lt;col&gt;, ...) TO/FROM ...</code>; role-targeted grants.</li>
+<li><strong>Role system (M17)</strong>: <code>CREATE ROLE</code> / <code>DROP ROLE [IF EXISTS]</code> / <code>SHOW ROLES</code>, <code>GRANT ROLE '&lt;role&gt;' TO '&lt;user&gt;'</code> / <code>REVOKE ROLE ... FROM '&lt;user&gt;'</code>, <code>SHOW GRANTS FOR '&lt;user&gt;'</code>.</li>
+<li><strong>Aggregated privilege checks</strong>: table direct ∪ database ∪ role inheritance for SELECT/INSERT/UPDATE/DELETE, plus column-level checks.</li>
+<li><strong>Cascade cleanup</strong>: DROP USER / DROP TABLE / DROP ROLE automatically clean related grants to avoid dangling authorizations.</li>
+<li><strong>Connection auth</strong>: the server supports optional connection auth (AUTH handshake); without it the connection runs as the default root user; when <code>AllowLegacy</code> is enabled legacy clients fall back to a restricted guest mode, or are rejected in strict mode.</li>
+</ul>
+<h3 id="64-audit-log-t30">6.4 Audit Log (T30)<a class="headerlink" href="#64-audit-log-t30" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Audited events: connect, auth, DML, DDL, privilege events.</li>
+<li>Storage: ring buffer + JSON Lines persistence.</li>
+<li>Query: <code>SHOW AUDITLOG</code>; hot switch: <code>SET audit_log = on/off</code>.</li>
+</ul>
+<hr />
+<h2 id="7-operations-observability">7. Operations &amp; Observability<a class="headerlink" href="#7-operations-observability" title="Permanent link">&para;</a></h2>
+<h3 id="71-openxdb-doctor-health-check-t20">7.1 openxdb doctor Health Check (T20)<a class="headerlink" href="#71-openxdb-doctor-health-check-t20" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sh">openxdb doctor --data-dir ./data [--addr 127.0.0.1:7788] [--json]
+</code></pre>
+<p>Checks:
+- Data directory &amp; WAL integrity;
+- RocksDB open health;
+- <code>m:tables</code> / <code>m:regions</code> metadata consistency &amp; route self-consistency;
+- Binlog readability &amp; LSN (read-only <code>PeekLastLSN</code>);
+- Optional online port/PING and slow-query checks.</p>
+<p>Output: human-readable or <code>--json</code> report; exit codes 0=pass / 1=warn / 2=error.</p>
+<h3 id="72-openxdb-stats-live-metrics-t20">7.2 openxdb stats Live Metrics (T20)<a class="headerlink" href="#72-openxdb-stats-live-metrics-t20" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sh">openxdb stats [--addr 127.0.0.1:7788] [--interval 5] [--json]
+</code></pre>
+<p>Metrics: active connections (server session counter), table count, region count &amp; route distribution, slow query count, binlog LSN (optional two-sample growth via <code>--interval</code>), table or <code>--json</code> output; backed by the <code>SHOW STATS</code> statement.</p>
+<h3 id="73-prometheus-metrics-m13">7.3 Prometheus Metrics (M13)<a class="headerlink" href="#73-prometheus-metrics-m13" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Metrics port: <code>metrics_port</code> (default 7790), exposing Prometheus-format metrics.</li>
+<li>Metrics source: same <code>metrics.Snapshot</code> data source (connections, table/region counts, slow queries, LSN, etc.).</li>
+</ul>
+<h3 id="74-slow-queries-m13">7.4 Slow Queries (M13)<a class="headerlink" href="#74-slow-queries-m13" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Threshold: default 100ms; <code>SET slow_query_threshold = &lt;ms&gt;</code> (&lt;=0 disables recording).</li>
+<li>File logging: default <code>&lt;data_dir&gt;/slow.log</code>, configurable; <code>SET slow_query_log = on/off</code> hot switch.</li>
+<li>In-memory: keeps the most recent N records (default 64, adjustable via <code>Engine.SetSlowQueryMax(n)</code>); query via <code>SHOW SLOWQUERIES</code> (newest first).</li>
+<li>Record fields: SQL text, user, start time, duration (ms), result rows (0 on failure), error message (empty on success).</li>
+<li>Low-overhead design: threshold check before formatting; normal statements incur zero formatting cost.</li>
+</ul>
+<h3 id="75-alert-rules-t37">7.5 Alert Rules (T37)<a class="headerlink" href="#75-alert-rules-t37" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Rule model: <code>metric</code> / <code>op</code> / <code>threshold</code> / <code>duration_sec</code> / <code>severity</code>, stored as JSON.</li>
+<li>Configuration: <code>SET</code> / <code>SET PERSIST alert_rules*</code>.</li>
+<li>Evaluation engine: over the same <code>metrics.Snapshot</code> data source, NORMAL/ALERT/RESOLVED state machine + duration debounce.</li>
+<li>Notification: logx ring buffer + optional webhook / file channel.</li>
+<li>Management statements: <code>SHOW ALERT RULES</code> / <code>SHOW ALERT STATUS</code> / <code>SHOW ALERTS</code>.</li>
+<li>Evaluation loop wired to the database lifecycle.</li>
+</ul>
+<h3 id="76-region-split-load-balancing-m7">7.6 Region Split &amp; Load Balancing (M7)<a class="headerlink" href="#76-region-split-load-balancing-m7" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Auto-split</strong>: the write path (INSERT/UPDATE/DELETE) accumulates per-table write counters after commits; at half the row threshold a real row-count check runs (scans the local region's physical key space); a local region exceeding the threshold is split in half along its data midpoint inside the same transaction (existing rows re-routed, route table replaced, metadata persisted).</li>
+<li><strong>Manual split</strong>: <code>SPLIT REGION</code> (by data midpoint) or explicit boundaries.</li>
+<li><strong>Manual balance</strong>: <code>BALANCE</code> (returns number of migrated regions; a second BALANCE returns 0).</li>
+<li><strong>Auto balance</strong>: <code>Engine.SetAutoBalance(enabled, interval)</code> periodic trigger; compares local region counts with the least-loaded live node and migrates the largest region there.</li>
+<li><strong>Online migration</strong>: source route unchanged during migration, reads/writes uninterrupted; scan source region rows → <code>REGION_PUSH</code> loads the target → switch local route and persist; other live nodes learn the new owner via the next heartbeat route sync.</li>
+<li>Single-node mode <code>BALANCE</code> reports <code>cluster not enabled</code>.</li>
+</ul>
+<h3 id="77-ha-failover-m6">7.7 HA Failover (M6)<a class="headerlink" href="#77-ha-failover-m6" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Failure detection</strong>: heartbeat (PING/PONG, default 2s/6s) timeout → node marked down (OnDown callback).</li>
+<li><strong>Automatic region re-assignment</strong>: regions owned by the down node are re-assigned to a live node (fullest replica scan + <code>REGION_PUSH</code>), replacing manual <code>ASSIGN REGION</code>.</li>
+<li><strong>Read failover</strong>: cross-node reads transparently re-route to the new owner (QUERY_REQ re-routed), no client error.</li>
+<li><strong>Replication master failover</strong>: follower auto-promotes when the old master is down (<code>PromoteToMaster</code> / <code>EnableAutoFailover</code> / <code>StopAutoFailover</code>), keeping the write path available.</li>
+</ul>
+<hr />
+<h2 id="8-distributed-capabilities">8. Distributed Capabilities<a class="headerlink" href="#8-distributed-capabilities" title="Permanent link">&para;</a></h2>
+<h3 id="81-replication-m2-t33">8.1 Replication (M2 + T33)<a class="headerlink" href="#81-replication-m2-t33" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Async replication (default)</strong>: master-follower; commit-hook binlog (independent append-only file, monotonically increasing LSN); replicator push with per-slot resume; follower idempotent apply; PING/PONG heartbeats with offline detection.</li>
+<li><strong>Semi-sync replication</strong>: <code>SET replication_mode = semi-sync</code>; waits for partial/full ACK (outside the transaction lock); degrades to async on ACK timeout or no slave.</li>
+<li><strong>Sync replication</strong>: <code>SET replication_mode = sync</code>; waits for all ACKs; refuses pseudo-sync when requirements cannot be met.</li>
+<li>Hot-switch config: <code>SET replication_mode</code> / <code>SET replication_ack</code> / <code>SET replication_timeout</code>.</li>
+</ul>
+<h3 id="82-sharding-m3">8.2 Sharding (M3)<a class="headerlink" href="#82-sharding-m3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>RegionInfo metadata persisted as <code>m:regions</code>; Router with half-open <code>[StartKey, EndKey)</code> boundary semantics.</li>
+<li>Region-prefixed physical keys (<code>r</code> + regionID:8B + inner key).</li>
+<li>Cross-region point/range/full-table queries via range expansion + merge.</li>
+<li>Management: <code>SPLIT</code> / <code>LIST REGIONS</code> / <code>LOCATE REGION</code>; default single-region shape keeps pre-sharding behavior unchanged.</li>
+</ul>
+<h3 id="83-multi-node-cluster-m4">8.3 Multi-Node Cluster (M4)<a class="headerlink" href="#83-multi-node-cluster-m4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Node topology: <code>NodeInfo</code> (NodeID/Addr/Role master|follower/State active|down + last seen), node registry persisted to <code>m:nodes</code>, auto-restored on open.</li>
+<li>Management: <code>ADD NODE '&lt;addr&gt;'</code> / <code>SHOW NODES</code>; <code>openxdb start --cluster-addr &lt;addr&gt;</code> starts cluster mode.</li>
+<li>Cluster route table: region → node; <code>ASSIGN REGION &lt;id&gt; TO NODE '&lt;nodeID&gt;'</code> updates ownership and pushes data; <code>SHOW REGION ROUTES</code> shows everything in one table.</li>
+<li>Cross-node reads: non-local regions are forwarded over TCP to their owning node and merged back; Local semantics (Node empty or equal to selfID) keep single-node deployments at zero regression.</li>
+</ul>
+<h3 id="84-distributed-write-2pc-m5">8.4 Distributed Write / 2PC (M5)<a class="headerlink" href="#84-distributed-write-2pc-m5" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Cross-node write atomicity: autocommit INSERT/UPDATE/DELETE (incl. CSV IMPORT) touching both local and remote regions execute as two-phase commit.</li>
+<li>Flow: coordinator applies local ops → PREPAREs remote participants (ops persisted under <code>m:2pc:*</code> for crash recovery) → commits locally → idempotently COMMITs all participants.</li>
+<li>Failure semantics: any PREPARE failure or local commit failure ABORTs the whole statement; error codes <code>TXN_PREPARE_FAILED</code> / <code>TXN_COMMIT_ABORTED</code> / <code>TXN_COMMIT_UNCERTAIN</code>.</li>
+<li>Protocol frames 22-27 extend M4 framing; single-node deployments never enter the 2PC path (zero regression).</li>
+</ul>
+<h3 id="85-distributed-transactions-tso-m8">8.5 Distributed Transactions / TSO (M8)<a class="headerlink" href="#85-distributed-transactions-tso-m8" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Global Timestamp (TSO)</strong>: 64-bit physical-ms + 24-bit logical layout; strict monotonicity (clock-fallback safe); batch issuance (GetBatch allocates contiguous ranges, remote clients cache a batch to amortize RTT); transaction-boundary Reset drops unconsumed cache so a new snapshot reads from the authoritative sequence head.</li>
+<li><strong>Distributed snapshot isolation</strong>: version records <code>m:ver:&lt;key&gt;:&lt;commit_ts&gt;</code> (key-first so per-key ranges stay contiguous); begin_ts/commit_ts globally comparable across nodes with cross-node passthrough.</li>
+<li><strong>2PC recovery hardening</strong>: coordinator persists CoordRecord (<code>m:2pc:coord:&lt;txid&gt;</code>), decides commit/abort on restart (RecoverCoordinated2PC), and idempotently drives participants to completion (<code>TXN_COMMIT_UNCERTAIN</code> completion).</li>
+</ul>
+<h3 id="86-cross-node-ddl-t34">8.6 Cross-Node DDL (T34)<a class="headerlink" href="#86-cross-node-ddl-t34" title="Permanent link">&para;</a></h3>
+<ul>
+<li>DDL metadata is broadcast to all online nodes via cluster DDL_PUSH frames; each node applies idempotently by TableID.</li>
+<li>Offline/apply-failure nodes record pending items, replayed before the next broadcast or via <code>ReplayPendingDDL</code>.</li>
+<li>Single-node zero-trigger compatibility; works alongside the T33 replication chain.</li>
+</ul>
+<h3 id="87-distributed-backup-consistency-t35">8.7 Distributed Backup Consistency (T35)<a class="headerlink" href="#87-distributed-backup-consistency-t35" title="Permanent link">&para;</a></h3>
+<p>See <a href="#61-backup--restore-br">section 6.1</a>.</p>
+<hr />
+<h2 id="9-performance-benchmark">9. Performance Benchmark<a class="headerlink" href="#9-performance-benchmark" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>Source: E5 standard bench alignment experiment (<code>docs/experiments/E5_standard_bench_alignment.md</code>). Because OpenXDB speaks a self-developed protocol (not MySQL wire protocol), standard sysbench/TPC-C official tools cannot connect directly; we used <strong>Python PEP 249 driver equivalence</strong> with real measurements. Performance positioning is <strong>single-node edge benchmark</strong>.</p>
+</blockquote>
+<h3 id="91-sysbench-oltp-8-threads-60s-python-driver-self-developed-protocol">9.1 sysbench OLTP (8 threads × 60s, Python driver, self-developed protocol)<a class="headerlink" href="#91-sysbench-oltp-8-threads-60s-python-driver-self-developed-protocol" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Workload</th>
+<th>TPS</th>
+<th>QPS</th>
+<th>errs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>read (read-only)</td>
+<td>1.73</td>
+<td>24.27</td>
+<td>0</td>
+</tr>
+<tr>
+<td>write (write-only)</td>
+<td>0.93</td>
+<td>3.73</td>
+<td>0</td>
+</tr>
+<tr>
+<td>read_write (mixed)</td>
+<td>1.32</td>
+<td>23.70</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<h3 id="92-tpc-c-small-warehouse-5-warehouses-8-threads-120s">9.2 TPC-C Small Warehouse (5 warehouses × 8 threads × 120s)<a class="headerlink" href="#92-tpc-c-small-warehouse-5-warehouses-8-threads-120s" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value</th>
+<th>errs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tpmC</td>
+<td>13.50</td>
+<td>0</td>
+</tr>
+<tr>
+<td>TPM</td>
+<td>32.50</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<h3 id="93-bottleneck-notes">9.3 Bottleneck Notes<a class="headerlink" href="#93-bottleneck-notes" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Current throughput bottleneck: <strong>global session-lock serialization</strong> + <strong>per-statement round trips</strong> (each statement is exchanged between driver and server one by one).</li>
+<li>E5 also fixed a shared-session concurrency bug and completed arithmetic-expression / DISTINCT / DECIMAL-precision workarounds.</li>
+<li>Historical benchmark references: E3 SQL OLTP end-to-end 256.3 TPS (8:2) / 605.4 TPS (5:5); E4 stability 6-min mixed load 307–385 TPS without degradation, restart COUNT(*) == 150466; E2 fsync engine benchmark sync write 747k TPS seq / 198k rand (batch=1000), group-commit batch 181x vs per-key fsync. These are experiment records, not external commitments.</li>
+</ul>
+<hr />
+<h2 id="10-known-limitations-boundaries">10. Known Limitations &amp; Boundaries<a class="headerlink" href="#10-known-limitations-boundaries" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>For the full list see KNOWN_LIMITATIONS.md (to be created). Summary:</p>
+</blockquote>
+<ol>
+<li><strong>SQL subset</strong>: OpenXDB implements a SQL subset, not the full SQL standard. The <code>HAVING</code> clause is not supported; DDL/DML/query capabilities are as defined in <a href="#4-sql-reference">Chapter 4</a>.</li>
+<li><strong>Not MySQL wire protocol</strong>: uses a self-developed binary TCP protocol, so MySQL ecosystem tools (standard sysbench, official mysqldump client, etc.) cannot directly connect.</li>
+<li><strong>Global session-lock performance boundary</strong>: the current serialized global session lock is the primary throughput bottleneck (see <a href="#9-performance-benchmark">Chapter 9</a>); high-concurrency write throughput is limited.</li>
+<li><strong>Line protocol limits</strong>: cell newlines are unsupported (multi-line parameter strings are rejected by drivers); empty cells represent both NULL and empty string.</li>
+<li><strong>Types &amp; precision</strong>: DECIMAL is normalized to fixed 4 decimal places internally; in JSON export DECIMAL is approximated via <code>strconv.ParseFloat</code> (or kept as a string).</li>
+<li><strong>Auth &amp; legacy mode</strong>: without an AUTH handshake connections run as the default root user; legacy clients fall back to a restricted guest mode when <code>AllowLegacy</code> is enabled, or are rejected in strict mode.</li>
+<li><strong>Stored procedures/triggers are a restricted subset</strong>: only the syntax and semantics defined in the design documents are supported; no full SQL/PL capabilities.</li>
+<li><strong>Distributed statements limited in single-node mode</strong>: <code>BALANCE</code> and similar cluster statements explicitly report <code>cluster not enabled</code>; cross-node writes require cluster mode.</li>
+<li><strong>Distributed capability boundaries</strong>: cross-node writes rely on 2PC protocol frames; replication modes (async/semi-sync/sync) are switched via hot config; sync mode refuses pseudo-sync when ACKs cannot be satisfied.</li>
+<li><strong>Import compatibility</strong>: mysqldump import is text-rule parsing covering a common dump syntax subset; unknown types error in strict mode and skip the table in lenient mode; cell parse failures drop the row in lenient mode.</li>
+</ol>
+<hr />
+<h2 id="11-faq">11. FAQ<a class="headerlink" href="#11-faq" title="Permanent link">&para;</a></h2>
+<h3 id="q1-cgo-link-errors-during-build">Q1: cgo link errors during build?<a class="headerlink" href="#q1-cgo-link-errors-during-build" title="Permanent link">&para;</a></h3>
+<p>Check that the CGO environment variables point to RocksDB: <code>CGO_CFLAGS</code> / <code>CGO_CXXFLAGS</code> → <code>&lt;rocksdb&gt;/include</code>, <code>CGO_LDFLAGS</code> → <code>&lt;rocksdb-build&gt; -lrocksdb</code>. On Windows add <code>-lshlwapi -lrpcrt4 -lws2_32</code> (already in repository <code>#cgo</code>). Prefer <code>scripts/build.ps1</code> / <code>scripts/build.sh</code> for one-shot builds. Do not add undeclared flags such as <code>-lstdc++</code> / <code>-lz</code>.</p>
+<h3 id="q2-table-names-colliding-with-keywords-eg-users-vs-show-users">Q2: Table names colliding with keywords (e.g., <code>users</code> vs <code>SHOW USERS</code>)?<a class="headerlink" href="#q2-table-names-colliding-with-keywords-eg-users-vs-show-users" title="Permanent link">&para;</a></h3>
+<p><code>SHOW USERS</code> is implemented by identifier text matching; <code>USERS</code> is not in the keyword table, so <code>CREATE TABLE users</code> and <code>SHOW USERS</code> coexist without special handling. For other keyword conflicts, consult the parsing rules in the design documents.</p>
+<h3 id="q3-what-is-the-idempotency-semantics-of-if-not-exists">Q3: What is the idempotency semantics of IF NOT EXISTS?<a class="headerlink" href="#q3-what-is-the-idempotency-semantics-of-if-not-exists" title="Permanent link">&para;</a></h3>
+<p><code>CREATE TABLE IF NOT EXISTS</code> / <code>DROP TABLE IF EXISTS</code> / <code>DROP USER IF EXISTS</code> / <code>DROP ROLE IF EXISTS</code> succeed silently when the object does not exist; when it exists, normal semantics apply (create errors or drop succeeds).</p>
+<h3 id="q4-how-to-back-up-and-restore">Q4: How to back up and restore?<a class="headerlink" href="#q4-how-to-back-up-and-restore" title="Permanent link">&para;</a></h3>
+<p><code>BACKUP TO '&lt;path&gt;'</code> produces a single-file consistent-snapshot backup; <code>RESTORE FROM '&lt;path&gt;'</code> idempotently restores (same-named tables drop-then-recreate); for point-in-time recovery use <code>RESTORE FROM '&lt;path&gt;' TO LSN &lt;n&gt;</code> to replay binlog up to the target LSN. For distributed clusters use the T35 coordinator for multi-node consistent backup.</p>
+<h3 id="q5-how-to-set-up-a-cluster">Q5: How to set up a cluster?<a class="headerlink" href="#q5-how-to-set-up-a-cluster" title="Permanent link">&para;</a></h3>
+<p>Initialize each node with <code>openxdb init --data-dir &lt;dir&gt;</code>, then start in cluster mode with <code>openxdb start --cluster-addr &lt;addr&gt;</code>; register peers with <code>ADD NODE '&lt;addr&gt;'</code>, assign region ownership with <code>ASSIGN REGION &lt;id&gt; TO NODE '&lt;nodeID&gt;'</code>, and inspect with <code>SHOW NODES</code> / <code>SHOW REGION ROUTES</code>.</p>
+<h3 id="q6-how-do-drivers-connect">Q6: How do drivers connect?<a class="headerlink" href="#q6-how-do-drivers-connect" title="Permanent link">&para;</a></h3>
+<p>JDBC: <code>jdbc:openxdb://host:7788</code>; Python: <code>openxdb.connect("host", 7788)</code>. Both drivers use the self-developed protocol with <code>?</code> placeholders (client-side safe escaping). For TLS, configure certificate verification mode in JDBC and pass TLS connection parameters in Python.</p>
+<h3 id="q7-why-cant-i-connect-with-the-mysql-client">Q7: Why can't I connect with the MySQL client?<a class="headerlink" href="#q7-why-cant-i-connect-with-the-mysql-client" title="Permanent link">&para;</a></h3>
+<p>OpenXDB uses a self-developed binary TCP protocol (<code>pkg/server</code>), not MySQL wire protocol, so the official MySQL client cannot connect directly. Use the built-in REPL (<code>openxdb repl</code>) or the JDBC / Python drivers.</p>
+<h3 id="q8-how-do-i-view-slow-queries">Q8: How do I view slow queries?<a class="headerlink" href="#q8-how-do-i-view-slow-queries" title="Permanent link">&para;</a></h3>
+<p><code>SET slow_query_threshold = &lt;ms&gt;</code> sets the threshold (default 100ms); after executing statements, <code>SHOW SLOWQUERIES</code> shows recent records; <code>SET slow_query_log = on</code> enables file logging (default <code>&lt;data_dir&gt;/slow.log</code>).</p>
+<h3 id="q9-how-do-i-enable-tls">Q9: How do I enable TLS?<a class="headerlink" href="#q9-how-do-i-enable-tls" title="Permanent link">&para;</a></h3>
+<p>Generate a certificate, then start with <code>openxdb start --data-dir ./data --tls-cert cert.pem --tls-key key.pem</code> (both flags required); TLS-only is the default with plaintext rejected; <code>SET PERSIST tls_allow_legacy=on</code> enables plaintext/TLS coexistence. Use <code>--replica-tls</code> for the replica port.</p>
+<h3 id="q10-are-the-performance-numbers-trustworthy-why-is-tps-low">Q10: Are the performance numbers trustworthy? Why is TPS low?<a class="headerlink" href="#q10-are-the-performance-numbers-trustworthy-why-is-tps-low" title="Permanent link">&para;</a></h3>
+<p>All performance numbers come from the E5 standard bench alignment experiment (<code>docs/experiments/E5_standard_bench_alignment.md</code>) with real measurements (8 threads × 60s / 120s, 0 errors). The current throughput bottleneck is global session-lock serialization + per-statement round trips; the project positions itself as a single-node edge benchmark — functional completeness first, performance optimization ongoing.</p>
+<hr />
+<p><em>This manual is compiled from the OpenXDB README.md and docs/ design documents, v1.0.0.</em></p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../product_manual_zh/" class="btn btn-neutral float-left" title="产品手册（中文）"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../blog_why_openxdb_rocksdb/" class="btn btn-neutral float-right" title="Why RocksDB">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../product_manual_zh/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../blog_why_openxdb_rocksdb/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

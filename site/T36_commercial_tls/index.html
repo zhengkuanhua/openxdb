@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T36 TLS 合规 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T36 TLS \u5408\u89c4";
+        var mkdocs_page_input_path = "T36_commercial_tls.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">T36 TLS 合规</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#1">1. 背景与目标</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#2-t36">2. 现状盘点（T36 前既有基础）</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#3">3. 架构设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#31">3.1 分层模型</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#32-tls-autotls">3.2 服务端监听：纯 TLS 与 AutoTLS（明文降级）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#33">3.3 证书加载与校验</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#34-set-persist-restart-effective">3.4 SET PERSIST 持久化配置（restart-effective）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#35-openxdb-gen-cert">3.5 证书生成工具：openxdb gen-cert</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#36-tls">3.6 客户端/驱动 TLS</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#go-pkgserverclientgo">Go 客户端（pkg/server/client.go）</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#python-driverspython">Python 驱动（drivers/python）</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#jdbc-driversjdbc">JDBC 驱动（drivers/jdbc）</a>
+    </li>
+        </ul>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#4">4. 文件改动清单</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#5">5. 测试计划</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#6">6. 安全与兼容</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">T36 TLS 合规</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T36_commercial_tls.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t36-tls">T36 商用档：连接层 TLS 加密与证书管理<a class="headerlink" href="#t36-tls" title="Permanent link">&para;</a></h1>
+<ul>
+<li>版本：v0.25.0-alpha（T36）</li>
+<li>状态：已实现</li>
+<li>关联：P0 TLS 既有基础（--tls-cert/--tls-key 监听层加密）、M11 连接鉴权（AUTH）、T19 客户端驱动（JDBC/Python）</li>
+</ul>
+<h2 id="1">1. 背景与目标<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>v1.0 商用档第一项：连接层 TLS 合规。目标：</p>
+<ol>
+<li>服务端证书/私钥配置：启动参数（--tls-cert/--tls-key，既有）与 SET PERSIST 持久化配置（restart-effective）。</li>
+<li>TLS 握手流程与现有 AUTH 的配合：传输层加密先行，应用层行协议（含 AUTH）在 TLS 通道之上原样工作。</li>
+<li>纯文本降级策略（AllowLegacy 类似语义）：默认纯 TLS（安全默认，明文握手失败即断开）；显式开启 --tls-allow-legacy 时同一端口自动探测明文连接并以 legacy 会话标记。</li>
+<li>客户端驱动 TLS 连接支持：Go 客户端、JDBC、Python 驱动均可 TLS 连接，支持证书校验（verify-ca / verify-full）。</li>
+<li>证书校验与自签名证书生成工具：openxdb gen-cert 子命令生成自签名证书；启动时校验有效期。</li>
+</ol>
+<h2 id="2-t36">2. 现状盘点（T36 前既有基础）<a class="headerlink" href="#2-t36" title="Permanent link">&para;</a></h2>
+<ul>
+<li>pkg/server/server.go：Server.tlsConfig 字段 + SetTLS；ServeTCP 在 tlsConfig 非 nil 时使用 tls.Listen，nil 保持明文（默认兼容）。</li>
+<li>pkg/server/client.go：Dial / DialTimeout（tlsCfg nil=明文，非 nil=TLS）；InsecureTLSConfig（InsecureSkipVerify，内网/自签名测试）。</li>
+<li>cmd/openxdb/main.go：loadTLSConfig 解析 --tls-cert/--tls-key（必须同时提供）；主服务与 --replica-port 复制端口复用同一 TLS 配置；replica 子命令 --replica-tls（Insecure）。</li>
+<li>pkg/sql/config.go：M16-1 配置注册表（configSpecs）+ persisted.json 持久化（LoadPersistedConfig / SET PERSIST）。</li>
+<li>测试：pkg/server/server_tls_test.go（TLS 握手 + 明文往返）、cmd/openxdb/main_tls_test.go（loadTLSConfig 参数解析）。</li>
+<li>缺口（T36 补齐）：无证书生成工具（README 提到的 gen_cert.go 已不存在）；无有效期校验；无明文/TLS 同端口并存；驱动侧（JDBC/Python）无 TLS；无 SET PERSIST TLS 配置；客户端仅 Insecure 模式，无 CA 校验模式。</li>
+</ul>
+<h2 id="3">3. 架构设计<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<h3 id="31">3.1 分层模型<a class="headerlink" href="#31" title="Permanent link">&para;</a></h3>
+<pre><code>客户端                         服务端
+-----                         -----
+TCP connect ───────────────▶ tls.Listen / AutoTLS 监听
+TLS handshake（可选，先于一切）─▶ tls.Config 握手；失败即断开（默认）
+行协议命令（PING/AUTH/SQL…）──▶ handleLocked（明文与 TLS 会话共用）
+</code></pre>
+<ul>
+<li>TLS 是传输层信封：握手完成后连接即加密通道，应用层行协议（含 AUTH <user> <password>）零改动。</li>
+<li>AUTH 配合：TLS 只解决"传输加密"，身份鉴权仍由 M11 AUTH 握手负责；两者正交可组合（TLS + AUTH、TLS 无 AUTH、明文 + AUTH、明文无 AUTH 均可）。</li>
+<li>会话安全标记：session.secure（TLS 连接=true，明文=false），供后续审计/权限增强（本期仅内部记录，不改变权限语义）。</li>
+</ul>
+<h3 id="32-tls-autotls">3.2 服务端监听：纯 TLS 与 AutoTLS（明文降级）<a class="headerlink" href="#32-tls-autotls" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>触发</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>纯 TLS（默认，安全）</td>
+<td>配置证书，未开 legacy</td>
+<td>仅接受 TLS 握手；明文客户端握手失败断开</td>
+</tr>
+<tr>
+<td>AutoTLS（AllowLegacy 语义）</td>
+<td>配置证书 + --tls-allow-legacy / SET PERSIST tls_allow_legacy=on</td>
+<td>同一端口 peek 首字节：TLS ClientHello（0x16）走 TLS 握手；否则按明文会话处理并标记 secure=false（legacy）</td>
+</tr>
+<tr>
+<td>纯明文（向后兼容）</td>
+<td>未配置证书</td>
+<td>原行为，secure=false</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>实现：pkg/server 新增 AutoListener：Accept 后缓冲读取首字节判断 0x16（TLS 记录层 ContentType=handshake）→ tls.Server 包装；否则返回原始明文连接。</li>
+<li>安全默认：默认纯 TLS，明文降级必须显式开启（与 AUTH AllowLegacy 一致的反默认安全取向）。</li>
+<li>行协议首命令均为 ASCII 字母（PING/AUTH/HELP/SQL…），首字节不可能为 0x16，探测无歧义。</li>
+</ul>
+<h3 id="33">3.3 证书加载与校验<a class="headerlink" href="#33" title="Permanent link">&para;</a></h3>
+<ul>
+<li>loadTLSConfig（cmd/openxdb）增强：</li>
+<li>仅提供 --tls-cert 或 --tls-key 之一 → 报错（既有）。</li>
+<li>tls.LoadX509KeyPair 加载并校验证书/私钥匹配（既有）。</li>
+<li>新增：解析证书链首张证书，校验当前时间 ∈ [NotBefore, NotAfter]；过期或未生效 → 启动报错 "TLS certificate expired/not yet valid"，拒绝启动（商用合规：过期证书不得静默运行）。</li>
+<li>证书文件读取失败/格式错误 → 启动报错（既有行为）。</li>
+</ul>
+<h3 id="34-set-persist-restart-effective">3.4 SET PERSIST 持久化配置（restart-effective）<a class="headerlink" href="#34-set-persist-restart-effective" title="Permanent link">&para;</a></h3>
+<p>新增三个配置键（pkg/sql/config.go configSpecs 注册表）：</p>
+<table>
+<thead>
+<tr>
+<th>键</th>
+<th>值</th>
+<th>语义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tls_cert</td>
+<td>PEM 证书文件路径</td>
+<td>TLS 证书（重启生效）</td>
+</tr>
+<tr>
+<td>tls_key</td>
+<td>PEM 私钥文件路径</td>
+<td>TLS 私钥（重启生效）</td>
+</tr>
+<tr>
+<td>tls_allow_legacy</td>
+<td>on/off/1/0</td>
+<td>同端口明文降级开关（重启生效）</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>仅支持 SET PERSIST（TLS 监听属启动装配，无法热更新）；SET（非 PERSIST）返回明确报错："tls_* 为启动级配置，仅支持 SET PERSIST（重启生效）"。</li>
+<li>SHOW CONFIG 正常展示（来源 persist/default）。</li>
+<li>启动装配优先级：命令行 --tls-cert/--tls-key/--tls-allow-legacy &gt; 持久化 tls_cert/tls_key/tls_allow_legacy &gt; 默认（无 TLS）。</li>
+<li>实现：sql.Executor 新增 PersistedTLSConfig() 返回持久化意图；cmdStart 在 loadTLSConfig 之后、db.Open 之后读取持久化意图合并（命令行优先）。</li>
+</ul>
+<h3 id="35-openxdb-gen-cert">3.5 证书生成工具：openxdb gen-cert<a class="headerlink" href="#35-openxdb-gen-cert" title="Permanent link">&para;</a></h3>
+<p>新增子命令（cmd/openxdb/gen_cert.go，纯 Go 标准库 crypto/x509/ecdsa，无第三方依赖）：</p>
+<pre><code>openxdb gen-cert --cert cert.pem --key key.pem [--days 365] [--cn localhost] [--out-dir]
+</code></pre>
+<ul>
+<li>生成 ECDSA P-256 自签名证书：Subject CN=--cn（默认 localhost），SAN=DNS:localhost, IP:127.0.0.1（商用客户端主机名校验可用）。</li>
+<li>--days 默认 365；有效期写入 NotBefore=now-1h（容忍时钟偏差）、NotAfter=now+days。</li>
+<li>私钥 PKCS#8 PEM；证书 X.509 PEM。</li>
+<li>已存在文件报错不覆盖（安全）；--force 覆盖。</li>
+</ul>
+<h3 id="36-tls">3.6 客户端/驱动 TLS<a class="headerlink" href="#36-tls" title="Permanent link">&para;</a></h3>
+<h4 id="go-pkgserverclientgo">Go 客户端（pkg/server/client.go）<a class="headerlink" href="#go-pkgserverclientgo" title="Permanent link">&para;</a></h4>
+<ul>
+<li>既有：Dial/DialTimeout + InsecureTLSConfig。</li>
+<li>新增 VerifyTLSConfig(caPath, serverName)：加载 CA PEM 构建 RootCAs，ServerName=serverName，校验链与主机名（verify-full 语义，商用默认）。</li>
+<li>新增 CAFileTLSConfig(caPath)：仅校验链不校验主机名（verify-ca 语义，内网 IP 证书场景）。</li>
+<li>CLI replica：新增 --replica-tls-ca <path>（verify-full，配合 --master 主机名）；保留 --replica-tls（Insecure）向后兼容。</li>
+</ul>
+<h4 id="python-driverspython">Python 驱动（drivers/python）<a class="headerlink" href="#python-driverspython" title="Permanent link">&para;</a></h4>
+<p>Connection 新增参数（protocol.py 用 ssl.create_default_context 包装 socket）：</p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>语义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ssl=None/False</td>
+<td>明文（默认，向后兼容）</td>
+</tr>
+<tr>
+<td>ssl=True</td>
+<td>TLS 不校验（InsecureSkipVerify，内网/自签名快速联调）</td>
+</tr>
+<tr>
+<td>ssl_ca=<path></td>
+<td>TLS 并校验 CA 链 + 主机名（verify-full，商用默认）</td>
+</tr>
+<tr>
+<td>ssl_cert / ssl_key</td>
+<td>可选客户端证书（双向 TLS）</td>
+</tr>
+<tr>
+<td>ssl_check_hostname=False</td>
+<td>配合 ssl_ca 时仅校验 CA 不校验主机名（verify-ca）</td>
+</tr>
+</tbody>
+</table>
+<h4 id="jdbc-driversjdbc">JDBC 驱动（drivers/jdbc）<a class="headerlink" href="#jdbc-driversjdbc" title="Permanent link">&para;</a></h4>
+<p>URL 形式：<code>jdbc:openxdb://host:port?ssl=true&amp;sslMode=verify-full&amp;trustStore=&lt;pem&gt;&amp;hostnameInCertificate=&lt;name&gt;</code></p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>默认</th>
+<th>语义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ssl</td>
+<td>false</td>
+<td>true 启用 TLS 连接</td>
+</tr>
+<tr>
+<td>sslMode</td>
+<td>disable</td>
+<td>disable / verify-ca（信任 trustStore 证书链）/ verify-full（链 + 主机名）</td>
+</tr>
+<tr>
+<td>trustStore</td>
+<td>（空）</td>
+<td>CA PEM 文件路径（verify-ca/verify-full 必填）</td>
+</tr>
+<tr>
+<td>hostnameInCertificate</td>
+<td>连接 host</td>
+<td>主机名校验用名</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>ssl=true 且 sslMode=disable → 不校验（Insecure，等价 Go Insecure）。</li>
+<li>sslMode=verify-* 但无 trustStore → SQLException 报错。</li>
+<li>实现：OpenXDBProtocol 构造改为接受 SslConfig；verify-full 用 SSLSocket.setEndpointIdentificationAlgorithm("HTTPS") 做主机名校验；verify-ca 只信任 trustStore 链。</li>
+</ul>
+<h2 id="4">4. 文件改动清单<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>改动</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>docs/T36_commercial_tls.md</td>
+<td>本设计文档（新增）</td>
+</tr>
+<tr>
+<td>cmd/openxdb/main.go</td>
+<td>子命令分发加 gen-cert；loadTLSConfig 有效期校验；cmdStart 合并持久化 TLS 意图；usage 更新</td>
+</tr>
+<tr>
+<td>cmd/openxdb/gen_cert.go</td>
+<td>gen-cert 子命令（新增）</td>
+</tr>
+<tr>
+<td>pkg/server/listener.go</td>
+<td>AutoListener 明文/TLS 自动探测（新增）</td>
+</tr>
+<tr>
+<td>pkg/server/server.go</td>
+<td>ServeTCP 支持 AutoListener；会话 secure 标记</td>
+</tr>
+<tr>
+<td>pkg/server/client.go</td>
+<td>VerifyTLSConfig / CAFileTLSConfig</td>
+</tr>
+<tr>
+<td>pkg/sql/config.go</td>
+<td>tls_cert/tls_key/tls_allow_legacy 注册 + PersistedTLSConfig</td>
+</tr>
+<tr>
+<td>cmd/openxdb/main_tls_test.go</td>
+<td>有效期校验测试；gen-cert 测试</td>
+</tr>
+<tr>
+<td>pkg/server/server_tls_test.go</td>
+<td>AutoTLS 并存、CA 校验、过期/主机名不匹配测试</td>
+</tr>
+<tr>
+<td>pkg/sql/config_test.go</td>
+<td>tls 键 SET PERSIST/SHOW/restart 意图测试</td>
+</tr>
+<tr>
+<td>drivers/python/openxdb/protocol.py</td>
+<td>ssl 包装 socket</td>
+</tr>
+<tr>
+<td>drivers/python/openxdb/connection.py</td>
+<td>ssl/ssl_ca/ssl_cert/ssl_key 参数</td>
+</tr>
+<tr>
+<td>drivers/python/tests/test_driver.py</td>
+<td>TLS 连接测试</td>
+</tr>
+<tr>
+<td>drivers/jdbc/.../OpenXDBDriver.java</td>
+<td>URL 参数解析（ssl/sslMode/trustStore）</td>
+</tr>
+<tr>
+<td>drivers/jdbc/.../OpenXDBProtocol.java</td>
+<td>SSLSocket 创建与校验</td>
+</tr>
+<tr>
+<td>drivers/jdbc/.../OpenXDBConnection.java</td>
+<td>透传 SSL 配置</td>
+</tr>
+<tr>
+<td>drivers/jdbc/.../OpenXDBDriverTest.java</td>
+<td>TLS 连接测试</td>
+</tr>
+<tr>
+<td>README.md</td>
+<td>Status 勾选 T36、Roadmap 链接、版本 v0.25.0-alpha</td>
+</tr>
+</tbody>
+</table>
+<h2 id="5">5. 测试计划<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<ul>
+<li>服务端：TLS 握手往返（既有保留）；纯 TLS 端口明文客户端被拒；AutoTLS 同端口明文/TLS 并存且 secure 标记正确；客户端校验：CA 链成功、Insecure 自签成功、过期证书失败、主机名不匹配失败（verify-full）。</li>
+<li>证书：gen-cert 生成证书可被 loadTLSConfig 加载；过期证书启动报错。</li>
+<li>配置：SET PERSIST tls_cert/tls_key/tls_allow_legacy 落盘；SET（非 PERSIST）报错；PersistedTLSConfig 意图读取；命令行优先。</li>
+<li>驱动：Python pytest 连 TLS 服务（verify-full 成功 / 自签失败 / Insecure 成功）；JDBC 驱动单测连 TLS 服务（mvn 环境运行，另行说明）。</li>
+<li>全量：go test ./... -count=1 -p 1 串行（并行端口竞争规避）。</li>
+</ul>
+<h2 id="6">6. 安全与兼容<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<ul>
+<li>默认安全：配置证书后即纯 TLS，明文必须显式 --tls-allow-legacy；未配置证书保持明文（向后兼容旧部署）。</li>
+<li>过期证书拒绝启动；证书/私钥不匹配拒绝启动。</li>
+<li>明文降级会话标记 legacy（secure=false），与 AUTH AllowLegacy 语义对齐但不降低 AUTH 强制等级。</li>
+<li>驱动默认明文（兼容）；TLS 均为可选开启，开启后默认校验（verify-full），不校验需显式选择。
+<em>（内容由AI生成，仅供参考）</em></li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T35_m20_dist_backup_consistency/" class="btn btn-neutral float-left" title="T35 分布式备份一致性"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T37_commercial_alerting/" class="btn btn-neutral float-right" title="T37 监控告警">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T35_m20_dist_backup_consistency/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T37_commercial_alerting/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

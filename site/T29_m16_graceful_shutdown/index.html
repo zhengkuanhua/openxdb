@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T29 M16 运维增强簇（2/3）：优雅停机 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T29 M16 \u8fd0\u7ef4\u589e\u5f3a\u7c07\uff082/3\uff09\uff1a\u4f18\u96c5\u505c\u673a";
+        var mkdocs_page_input_path = "T29_m16_graceful_shutdown.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">T29 M16 运维增强簇（2/3）：优雅停机</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T29_m16_graceful_shutdown.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t29-m16-23">T29 M16 运维增强簇（2/3）：优雅停机<a class="headerlink" href="#t29-m16-23" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v5.0-P16-M16, v0.20.0-alpha
+日期：2026-10-12
+范围：<code>pkg/server/server.go</code>（停机状态机、SHUTDOWN 命令、GracefulShutdown/WaitShutdown/ForceExited、监听器关闭、drain 逻辑）、<code>cmd/openxdb/main.go</code>（停机钩子装配、<code>--shutdown-timeout</code> 参数、SIGINT/SIGTERM 信号处理）、<code>pkg/sql</code>（executor.go 停机超时字段与方法、config.go 新增 <code>shutdown_timeout</code> 配置项、sql.go 透传 ShutdownTimeout）、新增 <code>pkg/server/server_shutdown_test.go</code>、<code>cmd/openxdb/main_shutdown_test.go</code>、<code>docs/T29_m16_graceful_shutdown.md</code>（本文档）。
+闭环：CGO 环境下 <code>go build ./...</code> + <code>go test ./... -count=1</code> 全绿（含 8 个 M16-2 停机用例），未 push
+提交：<code>M16: graceful shutdown</code>（本地，未 push）</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>M16 运维增强簇按 Roadmap 依次落地三个子功能：在线配置热更新（1/3，已完成，提交 60cd6ce）、优雅停机（2/3，本次）、灰度升级辅助（3/3）。优雅停机在 60cd6ce 之上增量开发，目标：数据库停止服务时拒绝新连接/新事务，等待进行中事务在超时窗口内完成（drain），随后 flush/关闭存储（WAL、RocksDB、持久化配置）并正常退出（退出码 0）；drain 超时则强制退出（退出码非 0）并明确告警，但存储仍完成关闭，保证重启后数据完整可重新打开。SIGINT/SIGTERM 与 SQL 命令 <code>SHUTDOWN [GRACEFUL]</code> 走同一停机流程。</p>
+<h2 id="_2">设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="_3">触发途径<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>途径</th>
+<th>行为</th>
+<th>退出码</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SHUTDOWN [GRACEFUL]</code> 命令（SQL 会话/CLI/TCP）</td>
+<td>进入优雅停机流程，返回 <code>OK: graceful shutdown started</code></td>
+<td>0（正常）/ 1（超时强制）</td>
+</tr>
+<tr>
+<td><code>SIGINT</code>（Ctrl-C）/ <code>SIGTERM</code></td>
+<td><code>cmd/openxdb</code> 捕获信号并触发同一流程</td>
+<td>0（正常）/ 1（超时强制）</td>
+</tr>
+<tr>
+<td><code>--shutdown-timeout &lt;sec&gt;</code> 启动参数</td>
+<td>覆盖停机超时（优先级高于配置项）</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>SET [PERSIST] shutdown_timeout = &lt;sec&gt;</code></td>
+<td>热更新停机超时（M16-1 配置体系扩展）</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">停机流程（状态机）<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<pre><code>state 0 (运行中)
+  │  触发 SHUTDOWN / 信号
+  ▼
+state 1 (draining)
+  ├─ 关闭监听器 → 拒绝新 TCP 连接（已建连会话在命令入口拒绝新命令/新事务）
+  ├─ 放行：COMMIT / ROLLBACK / QUIT / PING / HELP / SHUTDOWN（事务终态收尾）
+  ├─ drain 条件：无正在执行命令（active==0 且命令锁空闲）且无未收尾显式事务（cur==nil）
+  ├─ 超时未排空 → forced=1，记录 TIMEOUT 告警日志 → state 2
+  ▼
+state 2 (closed)
+  ├─ 调用关闭钩子（db.Close：按序停止 txn/WAL/storage，flush RocksDB 与持久化配置）
+  ├─ 关闭完成 → 关闭 shutdownDone 通道
+  └─ 返回：forced=0 → nil（退出码 0）；forced=1 → ErrShutdownTimeout（退出码 1）
+</code></pre>
+<h3 id="_5">超时语义<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li>超时来源优先级：命令行 <code>--shutdown-timeout</code> &gt; SQL 引擎 <code>shutdown_timeout</code>（内存 <code>SET</code> &gt; 持久化 <code>SET PERSIST</code> &gt; 默认 30s）；</li>
+<li>drain 从监听器关闭时刻开始计时，以 20ms 周期轮询；</li>
+<li>超时强制路径<strong>不跳过存储关闭</strong>：数据完整可 reopen，仅退出码为 1 并记录告警；</li>
+<li>未提交事务在强制路径回滚（由事务层保证），已提交数据不丢失。</li>
+</ul>
+<h3 id="logprintf-logf">可观察日志（<code>log.Printf</code> 装配，测试可注入 Logf 收集器断言）<a class="headerlink" href="#logprintf-logf" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>graceful shutdown: start, drain timeout=30s</code></li>
+<li><code>graceful shutdown: rejecting new connections</code></li>
+<li><code>graceful shutdown: TIMEOUT after 30s, force exit (active cmds=N, active conns=M, explicit txn=true)</code></li>
+<li><code>graceful shutdown: drained, storage closed (exit code 0)</code> / <code>graceful shutdown: forced exit (exit code 1)</code></li>
+</ul>
+<h2 id="_6">使用方式<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<pre><code># 启动服务（命令行覆盖停机超时）
+openxdb start --data-dir ./data --shutdown-timeout 60
+
+# 运行中通过 SQL 命令触发优雅停机
+SHUTDOWN GRACEFUL
+
+# 热更新停机超时（会话级）
+SET shutdown_timeout = 120;
+# 持久化（重启仍生效）
+SET PERSIST shutdown_timeout = 120;
+
+# 或直接 Ctrl-C / kill -TERM &lt;pid&gt;：走同一优雅停机流程
+</code></pre>
+<h2 id="_7">实现结构<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>pkg/server/server.go</code>：Server 新增停机字段（<code>state</code>/<code>forced</code>/<code>ln</code>/<code>shutdownHook</code>/<code>shutdownOnce</code>/<code>shutdownDone</code>/<code>ShutdownTimeout</code>/<code>Logf</code> 等）；<code>GracefulShutdown</code> 状态机、<code>WaitShutdown</code>/<code>ForceExited</code>/<code>ShuttingDown</code>/<code>SetShutdownHook</code>/<code>closeListener</code>；<code>handleLocked</code> 停机拒绝检查 + <code>SHUTDOWN</code> 分支；<code>ServeListener</code> 记录监听器并在主动关闭时正常返回；</li>
+<li><code>cmd/openxdb/main.go</code>：<code>SetShutdownHook(d.Close)</code>、<code>ShutdownTimeout</code> 装配（命令行 &gt; SQL 配置）、<code>log.Printf</code>、<code>signal.Notify(SIGINT/SIGTERM)</code>、<code>runSignalLoop</code> 返回退出码；</li>
+<li><code>pkg/sql/executor.go</code>：<code>shutdownTimeoutSec</code> 字段 + <code>SetShutdownTimeoutSec</code>/<code>ShutdownTimeoutSec</code>；<code>config.go</code>：<code>configSpecs</code> 新增 <code>shutdown_timeout</code>（正整数秒）；<code>sql.go</code>：<code>Engine.ShutdownTimeout() time.Duration</code> 透传。</li>
+</ul>
+<h2 id="_8">限制（文档化）<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h2>
+<ul>
+<li>drain 粒度：等待"正在执行的命令 + 未提交的显式事务"，长查询本身不设限，仅受总超时约束；</li>
+<li>停机一旦触发不可撤销；停机完成后服务不再接受任何新命令（存储已关闭）；</li>
+<li><code>SHUTDOWN</code> 为管理命令：鉴权模式（Auth 启用）下仅 root 可执行，未鉴权会话需先 <code>AUTH</code>；</li>
+<li>已建立连接在停机后仅放行事务终态与 <code>QUIT</code>，无法再发起新查询；</li>
+<li>Windows 下 SIGTERM 语义由 <code>os/signal</code> + <code>syscall.SIGTERM</code> 提供（与 Ctrl-C/SIGINT 等效）。</li>
+</ul>
+<h2 id="8">测试（8 用例，全绿）<a class="headerlink" href="#8" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>用例</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestShutdownCommandStartsGraceful</code></td>
+<td>SHUTDOWN GRACEFUL 命令触发停机；重复触发明确报错；无挂起事务正常退出（非强制）</td>
+</tr>
+<tr>
+<td><code>TestShutdownRejectsNewCommands</code></td>
+<td>停机中拒绝 SET/BEGIN，放行 PING/QUIT</td>
+</tr>
+<tr>
+<td><code>TestShutdownDrainsActiveTxn</code></td>
+<td>进行中显式事务在 drain 窗口内 COMMIT 收尾；期间拒绝新事务；正常退出码 0</td>
+</tr>
+<tr>
+<td><code>TestShutdownTimeoutForcesExit</code></td>
+<td>挂起事务超时未收尾 → ErrShutdownTimeout + 强制退出 + 存储钩子仍执行</td>
+</tr>
+<tr>
+<td><code>TestShutdownCloseHookAndReopen</code></td>
+<td>停机 flush 关闭存储后 reopen 验证数据完整（已提交 + 进行中事务）</td>
+</tr>
+<tr>
+<td><code>TestShutdownRejectsNewConnections</code></td>
+<td>停机后监听器关闭：新 TCP 连接被拒；已建连拒绝新命令、QUIT 放行</td>
+</tr>
+<tr>
+<td><code>TestRunSignalLoopInterruptExitZero</code></td>
+<td>SIGINT（os.Interrupt）路径正常退出码 0</td>
+</tr>
+<tr>
+<td><code>TestRunSignalLoopSIGTERMTimeoutExitOne</code></td>
+<td>SIGTERM 路径挂起事务超时强制退出码 1；已提交数据 reopen 完整、未提交回滚</td>
+</tr>
+<tr>
+<td><em>（内容由AI生成，仅供参考）</em></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

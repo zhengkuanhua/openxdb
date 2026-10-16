@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>M12 分布式 SQL 簇 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "M12 \u5206\u5e03\u5f0f SQL \u7c07";
+        var mkdocs_page_input_path = "T25_m12_join.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">M12 分布式 SQL 簇</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#_1">背景</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_2">设计</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#planjoinroute">路由判定（planJoinRoute）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#routedjoin">执行路径（routedJoin）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#_3">退化与兜底</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#_4">代码落点</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_5">测试</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#pkgsqlm12_join_testgo">pkg/sql/m12_join_test.go（单机 + 分片路由）</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#pkgdbdb_m12_join_testgo">pkg/db/db_m12_join_test.go（双节点真分布式）</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#_6">取舍说明</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#readme">README 勾选</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">设计文档</li>
+      <li class="breadcrumb-item active">M12 分布式 SQL 簇</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T25_m12_join.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t25-m12-13-join">T25 M12 功能簇（1/3）：分布式 JOIN（跨分片路由 + 合并）<a class="headerlink" href="#t25-m12-13-join" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v5.0-P13-M12, v0.14.0-alpha
+日期：2026-10-11
+范围：<code>pkg/sql</code>（distjoin.go / executor.go + 测试 <code>m12_join_test.go</code>）、<code>pkg/db</code>（跨节点集成测试 <code>db_m12_join_test.go</code>）
+闭环：<code>go test ./pkg/sharding/ ./pkg/sql/ ./pkg/server/ -count=1</code> 全绿，不 push（README 勾选由 M12 整簇收尾提交统一更新）
+提交：<code>M12: distributed join</code>（本地，未 push）</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>OpenXDB 在 M1-M8 已具备单机 SQL（含普通 JOIN：<code>joinRels</code> 全量内存拼接）与分布式存储/分片/集群能力（<code>pkg/sharding</code> region 路由、<code>pkg/cluster</code> 跨节点转发合并、行键带 region 前缀）。但既有 JOIN 只做<strong>驱动表全量扫描 + 右表全量扫描 + 内存拼接</strong>：即使右表可按分区键/主键定位到单个 region，也会退化为全表扫描右表，跨节点时放大网络传输且无法利用分片局部性。本子功能补齐<strong>分布式 SQL 路由合并层</strong>：右表主键等值 JOIN 时，驱动行按分区键<strong>路由点查</strong>右表（本地直读 / 远端转发），仅合并各分片命中行；单分区时自然退化为本地点查，行为与单机 JOIN 一致。</p>
+<h2 id="_2">设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="planjoinroute">路由判定（planJoinRoute）<a class="headerlink" href="#planjoinroute" title="Permanent link">&para;</a></h3>
+<p>满足以下条件时走分布式路由路径，否则回退 <code>joinRels</code> 全量内存 JOIN（行为与 M1 单机一致）：
+- 右表为<strong>物理表</strong>（非子查询派生表）；
+- ON 条件全部为<strong>等值</strong>（<code>=</code>，多列 AND 等值支持）；
+- 至少一条等值条件引用<strong>右表主键列</strong>，且驱动侧对应列可在左 Rel 中解析；两种书写方向均可：
+  - <code>a.x = b.pk</code>（右主键在右操作数侧）；
+  - <code>b.pk = a.x</code>（右主键在左操作数侧）；
+- 驱动侧列类型与右表主键编码兼容（见「回退兜底」）。</p>
+<h3 id="routedjoin">执行路径（routedJoin）<a class="headerlink" href="#routedjoin" title="Permanent link">&para;</a></h3>
+<pre><code>驱动表（左）仍由 scanMergedCluster 跨 region / 跨节点全量扫描合并得到左行
+  → 对每个左行：
+      1. 驱动值 pkBytes 编码右表主键；
+      2. e.locateRow(meta, pk) 按分区键定位所属 region；
+      3. e.rowKeyAt 编码【带 region 前缀】的物理行键（与 INSERT 写入键一致）；
+      4. e.getKVCluster 点查：本地 region 直读（快照版本过滤）/ 远端 region 经
+         cluster 转发（携带 begin_ts），未命中返回 storage.ErrNotFound；
+      5. 命中 → decodeRow 还原右行 → matchJoinOn 按完整 ON（含多列 AND 等值）
+         校验；未命中或条件不满足 → INNER 丢弃该左行，LEFT 以空值补右列。
+</code></pre>
+<ul>
+<li>右表主键唯一，每左行至多命中 1 行，输出语义与 <code>joinRels</code> 全量拼接一致；</li>
+<li>空分区天然正确：驱动扫描展开到每个 region，右表某 region 无数据即点查未命中；</li>
+<li>快照一致性：点查与驱动扫描共用 <code>snapshotTS()</code> 的 begin_ts，本地/远端均按 M8 快照版本过滤，无幻读差异。</li>
+</ul>
+<h3 id="_3">退化与兜底<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>单分区</strong>：未 SplitTable 时 router 隐式单 region，<code>locateRow</code> 定位默认 region，点查即本地点查，行为与单机 JOIN 完全一致（测试显式覆盖）；</li>
+<li><strong>键类型不兼容</strong>：驱动列 Kind 与右表主键类型编码不兼容（如 INT 主键对 TEXT 驱动值）时，路由点查必然 miss 而全量 JOIN 可能按字符串比较匹配，因此 <code>routedJoin</code> 返回 <code>errJoinUnroutable</code>，由 <code>joinRel</code> 捕获后<strong>回退 <code>joinRels</code></strong>，保证与单机语义零偏差；</li>
+<li><strong>不可路由 JOIN</strong>（子查询右表、非等值 ON、无右主键等值条件）直接走 <code>joinRels</code>。</li>
+</ul>
+<h3 id="_4">代码落点<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>pkg/sql/distjoin.go</code>（新增）：<code>joinRoutePlan</code> / <code>planJoinRoute</code> / <code>joinRel</code>（统一入口）/ <code>routedJoin</code> / <code>leftJoinNullRow</code> / <code>joinKeyCompatible</code> / <code>errJoinUnroutable</code>；</li>
+<li><code>pkg/sql/executor.go</code>：<code>execSelectRel</code> JOIN 循环由 <code>joinRels</code> 改为 <code>e.joinRel</code>（一行改动接入）。</li>
+</ul>
+<h2 id="_5">测试<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<h3 id="pkgsqlm12_join_testgo">pkg/sql/m12_join_test.go（单机 + 分片路由）<a class="headerlink" href="#pkgsqlm12_join_testgo" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestM12JoinRoutedInner</code></td>
+<td>users/orders 各拆 3 region，<code>u.id = o.id</code>（右主键等值）INNER JOIN 路由合并，4 行结果正确</td>
+</tr>
+<tr>
+<td><code>TestM12JoinRoutedLeft</code></td>
+<td>LEFT JOIN 路由路径：10 行，未匹配左行右列补空</td>
+</tr>
+<tr>
+<td><code>TestM12JoinMultiColEq</code></td>
+<td>多列 AND 等值（右主键 + 一般列）：路由命中后按完整 ON 校验，名不匹配行被过滤</td>
+</tr>
+<tr>
+<td><code>TestM12JoinReverseDirection</code></td>
+<td>方向二 <code>o.id = u.id</code> 同样走路由路径</td>
+</tr>
+<tr>
+<td><code>TestM12JoinAliasRoute</code></td>
+<td>表别名限定列路由</td>
+</tr>
+<tr>
+<td><code>TestM12JoinFallbackNonPK</code></td>
+<td>关联列非右主键 → 回退 joinRels，分片后结果正确</td>
+</tr>
+<tr>
+<td><code>TestM12JoinSinglePartitionDegrade</code></td>
+<td>单分区（未分片）路由 JOIN 退化为本地点查，行为正确</td>
+</tr>
+<tr>
+<td><code>TestM12JoinEmptyPartition</code></td>
+<td>右表某 region 为空时 LEFT JOIN 仍正确（空分区）</td>
+</tr>
+<tr>
+<td><code>TestM12JoinSplitConsistency</code></td>
+<td>未分片 vs 分片：INNER/LEFT/反向全量结果 DeepEqual 一致</td>
+</tr>
+<tr>
+<td><code>TestM12JoinFallbackTypeMismatch</code></td>
+<td>驱动 TEXT 值对 INT 主键：路由不兼容 → 回退 joinRels，按字符串比较匹配（与单机一致）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="pkgdbdb_m12_join_testgo">pkg/db/db_m12_join_test.go（双节点真分布式）<a class="headerlink" href="#pkgdbdb_m12_join_testgo" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestM12JoinCrossNodeInner</code></td>
+<td>双节点集群 + ASSIGN 中间 region 给 B：驱动扫描跨节点合并 + 右表点查命中远端 region 转发，INNER JOIN 4 行正确</td>
+</tr>
+<tr>
+<td><code>TestM12JoinCrossNodeLeft</code></td>
+<td>跨节点 LEFT JOIN：10 行，匹配行金额正确、未匹配补空</td>
+</tr>
+<tr>
+<td><code>TestM12JoinCrossNodeReverse</code></td>
+<td>跨节点方向二写法 <code>o.id = u.id</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="_6">取舍说明<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>驱动侧全量扫描 + 右表路由点查</strong>：分片下 JOIN 代价 = O(左表) 点查，相比 joinRels 的 O(左×右) 全量拼接显著降低跨节点传输；未做 Hash Join / Broadcast Join 优化（数据分布未知、右表大时后续可加），本子功能聚焦正确性路由层；</li>
+<li><strong>物理行键带 region 前缀</strong>：routedJoin 必须经 <code>locateRow + rowKeyAt</code> 构造与写入一致的键（早期实现直接用 <code>EncodeTableKey</code> 无前缀导致点查全部 miss，已修正并纳入测试）；</li>
+<li><strong>不兼容即回退</strong>：宁可回退全量 JOIN 也不冒险用不匹配的编码路由，正确性优先于性能；</li>
+<li><strong>非右主键等值不回退也正确</strong>：回退 joinRels 只是性能取舍，非主键关联列目前不支持哈希/索引路由（后续可在二级索引之上扩展）。</li>
+</ul>
+<h2 id="readme">README 勾选<a class="headerlink" href="#readme" title="Permanent link">&para;</a></h2>
+<p>由 M12 整簇收尾提交统一执行：
+- Status 行更新为 M12 分布式 SQL 纵深簇；
+- T 表格追加 <code>T25 M12 distributed SQL cluster: distributed join + cross-node ORDER BY/paging + distributed subquery</code>；
+- 文档列表追加 <code>T25_m12_join.md</code>（随本提交加入）。</p>
+<p><em>（内容由AI生成，仅供参考）</em>
+<em>（内容由AI生成，仅供参考）</em></p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../T24_m11_user/" class="btn btn-neutral float-left" title="M11 认证权限簇"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../T26_m13_slowlog/" class="btn btn-neutral float-right" title="M13 可观测簇">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../T24_m11_user/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../T26_m13_slowlog/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

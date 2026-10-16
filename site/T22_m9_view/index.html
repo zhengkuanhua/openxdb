@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="author" content="OpenXDB Team" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>T22 M9 功能簇（5/5）：视图 - OpenXDB</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "T22 M9 \u529f\u80fd\u7c07\uff085/5\uff09\uff1a\u89c6\u56fe";
+        var mkdocs_page_input_path = "T22_m9_view.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/sql.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/json.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> OpenXDB
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_zh/">产品手册（中文）</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../product_manual_en/">Product Manual (English)</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../blog_why_openxdb_rocksdb/">Why RocksDB</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">设计文档</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../T1_rocksdb_storage_impl/">存储与事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T2_wal_impl/">WAL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_sql_layer/">SQL 层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T3_txn_impl/">事务实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T5_cli_impl/">CLI 实现</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T6_index_layer/">索引层</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T4_acid_notes/">ACID 笔记</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../W4_adr_engine_selection/">引擎选型 ADR</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T7_m2m3_reservations/">M2/M3 接口预留</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T8_p0_sql_enhancements/">P0 SQL 增强</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T9_p1_csv_types/">P1 CSV 类型</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T10_p2_ops_expr/">P2 运维语句与表达式</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T11_m2_replication/">M2 复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T12_m3_sharding/">M3 分片</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T13_m4_multinode/">M4 多节点集群</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T14_m5_2pc/">M5 分布式写 / 2PC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T15_m6_ha/">M6 高可用</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T16_m7_split_balance/">M7 分裂与负载均衡</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T17_m8_dist_txn/">M8 分布式事务</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T18_backup_restore/">T18 备份恢复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T19_client_drivers/">T19 客户端驱动</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T20_ops_toolchain/">T20 运维工具链</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T21_sql_parser_fixes/">T21 SQL 解析修复</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T22_m9_online_ddl/">M9 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T23_m10_cte/">M10 SQL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T24_m11_user/">M11 认证权限簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T25_m12_join/">M12 分布式 SQL 簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T26_m13_slowlog/">M13 可观测簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T27_m14_mysqldump_import/">M14 生态接入簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T28_m15_matview/">M15 SQL 功能簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T29_m16_hot_config/">M16 运维簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T30_m17_audit/">M17 审计与 RBAC</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T31_m18_mysql_compat/">M18 MySQL 兼容</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T32_m19_ecosystem_export/">M19 生态导出</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T33_m20_sync_semi_sync_replication/">T33 同步/半同步复制</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T34_m20_cross_node_ddl/">T34 跨节点 DDL</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T35_m20_dist_backup_consistency/">T35 分布式备份一致性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T36_commercial_tls/">T36 TLS 合规</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T37_commercial_alerting/">T37 监控告警</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T38_commercial_real_user_validation/">T38 真实用户验证</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T39_sql_capability_gap_assessment/">T39 SQL 能力差距评估</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T40_sql_capability_cluster/">T40 SQL 能力簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T41_ddl_compat_cluster/">T41 DDL 兼容簇</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../T42_insert_select/">T42 INSERT INTO SELECT</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">基准实验</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E1_rocksdb_bench/">E1 存储基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E2_rocksdb_fsync_bench/">E2 fsync 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E3_sql_oltp_bench/">E3 SQL OLTP 基准</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E4_stability/">E4 稳定性</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../experiments/E5_standard_bench_alignment/">E5 标准基准对齐</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">OpenXDB</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">T22 M9 功能簇（5/5）：视图</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/zhengkuanhua/openxdb/edit/master/docs/T22_m9_view.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="t22-m9-55">T22 M9 功能簇（5/5）：视图<a class="headerlink" href="#t22-m9-55" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>版本：v5.0-P11-M9VIEW, v0.13.0-alpha
+日期：2026-10-10
+范围：<code>pkg/sql</code>（新增 <code>view.go</code> + lexer / ast / parser / executor）+ 单元测试（<code>m9_view_test.go</code>）+ README 勾选
+闭环：<code>go build ./...</code> 与 <code>go test ./... -count=1</code> 全绿，不 push
+提交：<code>M9: view (CREATE/DROP VIEW + SHOW VIEWS, definition expansion, cycle guard)</code>（本地，未 push）</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>SQL 层只有物理表可查询，复杂查询（过滤、排序、多表 JOIN）需每次重复书写。
+M9 视图把<strong>命名查询定义</strong>持久化：<code>CREATE VIEW</code> 保存展开式 SELECT 定义，
+<code>SELECT ... FROM view</code> 时<strong>定义展开执行</strong>（视图即宏，实时反映底层数据变更，
+无物化快照）；<code>DROP VIEW</code> 与 <code>SHOW VIEWS</code> 提供生命周期管理与盘点；
+循环引用（自引用 / 间接环）在创建期静态拦截，执行期另有栈式防护兜底。</p>
+<h2 id="_2">设计<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="_3">语法<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<pre><code class="language-sql">CREATE VIEW name AS SELECT ...;   -- 定义须引用已存在的表或视图
+DROP VIEW [IF EXISTS] name;       -- 被其它视图引用时拒绝（RESTRICT）
+SHOW VIEWS;                       -- 列出视图名 + 定义摘要
+</code></pre>
+<h3 id="_4">词法 / 语法层<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>lexer.go</code>：关键字表补充 <code>VIEW</code> / <code>VIEWS</code>；</li>
+<li><code>ast.go</code>：新增 <code>CreateViewStmt{Name, Select}</code> / <code>DropViewStmt{Name, IfExists}</code>
+  / <code>ShowViewsStmt</code>；</li>
+<li><code>parser.go</code>：<code>parseCreate</code> 增加 <code>VIEW</code> 分支（<code>parseCreateView</code>：解析视图名
+  与 <code>AS SELECT</code> 子句并断言为 <code>SelectStmt</code>）；<code>parseDrop</code> 增加 <code>VIEW</code> 分支
+  （支持 <code>IF EXISTS</code>）；<code>parseShow</code> 增加 <code>VIEWS</code> 分支。</li>
+</ul>
+<h3 id="viewgo">元数据层（view.go）<a class="headerlink" href="#viewgo" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>ViewMeta{Name string, Select *SelectStmt}</code> 视图定义随
+  <code>viewsKey</code>（全局键，同表元数据模式）持久化；</li>
+<li><code>loadViews</code> / <code>saveViews</code> 读写全部视图元数据；<code>findView</code> 按名查找；</li>
+<li><code>viewRefNames</code> 提取定义中引用的全部表 / 视图名（From + JOIN 左右表）；</li>
+<li><code>checkViewCycle</code> 静态循环防护：DFS 沿已有视图引用链展开，若到达
+  新视图名自身即判定 <code>cyclic view reference</code>（直接自引用与经
+  v1→v2→v1 的间接环均拦截）；</li>
+<li><code>viewSummary</code> 生成 SHOW VIEWS 定义摘要。</li>
+</ul>
+<h3 id="executor">执行层（executor）<a class="headerlink" href="#executor" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>execCreateView</code>：依次校验 ① 与表重名（<code>view name conflicts with table</code>）
+  ② 重名视图（<code>view already exists</code>）③ 循环引用（先于存在性检查，
+  保证自引用报循环错误）④ 引用名字存在性（<code>table not exists</code>），
+  通过后持久化；</li>
+<li><code>execDropView</code>：RESTRICT——被其它视图引用的视图禁止删除
+  （<code>referenced by view</code>）；<code>IF EXISTS</code> 下不存在视图静默成功，否则报错；</li>
+<li><code>execShowViews</code>：输出 <code>view</code> / <code>definition</code> 两列；</li>
+<li>定义展开：<code>execSelect</code> 入口调用 <code>expandViews</code>——递归扫描 FROM /
+  JOIN 中的视图名，替换为 <code>Subquery</code>（深拷贝定义，防元数据被修改），
+  交由高级 SELECT 关系执行路径运行；嵌套视图（视图引用视图）逐层展开；</li>
+<li>运行期防护：<code>cyclicView</code> 借助展开栈记录，异常路径下兜底拒绝循环展开
+  避免死循环（静态防护为主，运行期为第二道防线）。</li>
+</ul>
+<h2 id="pkgsqlm9_view_testgo">测试（pkg/sql/m9_view_test.go）<a class="headerlink" href="#pkgsqlm9_view_testgo" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>测试</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TestCreateViewBasic</code></td>
+<td>CREATE VIEW + SELECT FROM view 基本查询</td>
+</tr>
+<tr>
+<td><code>TestCreateViewWithFilterAndOrder</code></td>
+<td>视图定义含 WHERE / ORDER BY</td>
+</tr>
+<tr>
+<td><code>TestCreateViewWithJoin</code></td>
+<td>视图定义含 JOIN 多表</td>
+</tr>
+<tr>
+<td><code>TestCreateViewQualifiedQuery</code></td>
+<td><code>SELECT vw.col FROM vw WHERE vw.id=...</code> 限定列查询</td>
+</tr>
+<tr>
+<td><code>TestCreateViewDuplicate</code></td>
+<td>重名视图报错</td>
+</tr>
+<tr>
+<td><code>TestCreateViewNameConflictsTable</code></td>
+<td>与表重名报错</td>
+</tr>
+<tr>
+<td><code>TestCreateViewMissingTable</code></td>
+<td>定义引用不存在表报错</td>
+</tr>
+<tr>
+<td><code>TestCreateViewSelfCycle</code></td>
+<td>自引用报 <code>cyclic view reference</code></td>
+</tr>
+<tr>
+<td><code>TestCreateViewIndirectCycle</code></td>
+<td>v1→v2→v1 间接环：DROP v1 被 RESTRICT 拒绝</td>
+</tr>
+<tr>
+<td><code>TestViewOverView</code></td>
+<td>视图引用视图逐层展开查询</td>
+</tr>
+<tr>
+<td><code>TestDropView</code></td>
+<td>DROP 后查询报错、可重建同名视图</td>
+</tr>
+<tr>
+<td><code>TestDropViewIfExists</code></td>
+<td>IF EXISTS 静默成功 / 无 IF 报错</td>
+</tr>
+<tr>
+<td><code>TestDropViewReferencedRestrict</code></td>
+<td>被引用视图禁止删除</td>
+</tr>
+<tr>
+<td><code>TestShowViews</code></td>
+<td>列名与视图清单 + 定义摘要非空</td>
+</tr>
+<tr>
+<td><code>TestViewReflectsUnderlyingChanges</code></td>
+<td>展开执行：底层数据变更实时反映</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_5">取舍说明<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<ul>
+<li>视图是<strong>展开式宏</strong>而非物化表：每次查询实时执行底层 SQL，保证数据
+  新鲜、无快照一致性负担；代价是复杂视图每次全量执行；</li>
+<li>循环防护以<strong>创建期静态检查</strong>为主（用户可即时感知错误），运行期
+  栈式防护兜底防止元数据被外部篡改后死循环；</li>
+<li><code>DROP VIEW</code> 采用 RESTRICT 语义：被引用的视图不可删，须先删引用方；</li>
+<li>视图不支持写操作（INSERT / UPDATE / DELETE 视图），后续可扩展
+  可更新视图。</li>
+</ul>
+<h2 id="readme">README 勾选<a class="headerlink" href="#readme" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Status 行更新为 <code>M9 view: CREATE/DROP VIEW + SHOW VIEWS, definition expansion, cycle guard (v5.0-P11-M9VIEW), v0.13.0-alpha.</code></li>
+<li>T 列表追加 <code>+ T22 M9: view (CREATE/DROP VIEW + SHOW VIEWS, definition expansion, cycle guard)</code>
+<em>（内容由AI生成，仅供参考）</em></li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/zhengkuanhua/openxdb" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
