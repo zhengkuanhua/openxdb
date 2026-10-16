@@ -1,0 +1,27 @@
+ok  	github.com/zhengkuanhua/openxdb/cmd/openxdb	10.213s
+?   	github.com/zhengkuanhua/openxdb/examples	[no test files]
+ok  	github.com/zhengkuanhua/openxdb/pkg/cdc	1.607s
+ok  	github.com/zhengkuanhua/openxdb/pkg/cluster	1.456s
+ok  	github.com/zhengkuanhua/openxdb/pkg/configfile	0.699s
+ok  	github.com/zhengkuanhua/openxdb/pkg/db	10.444s
+ok  	github.com/zhengkuanhua/openxdb/pkg/export	1.011s
+ok  	github.com/zhengkuanhua/openxdb/pkg/import	0.846s
+ok  	github.com/zhengkuanhua/openxdb/pkg/logx	1.187s
+ok  	github.com/zhengkuanhua/openxdb/pkg/metrics	0.900s
+ok  	github.com/zhengkuanhua/openxdb/pkg/replication	12.261s
+ok  	github.com/zhengkuanhua/openxdb/pkg/server	3.831s
+ok  	github.com/zhengkuanhua/openxdb/pkg/sharding	0.903s
+ok  	github.com/zhengkuanhua/openxdb/pkg/sql	23.897s
+ok  	github.com/zhengkuanhua/openxdb/pkg/storage	1.768s
+ok  	github.com/zhengkuanhua/openxdb/pkg/storage/btree	1.371s
+ok  	github.com/zhengkuanhua/openxdb/pkg/storage/rocksdb	2.069s
+ok  	github.com/zhengkuanhua/openxdb/pkg/tso	1.355s
+ok  	github.com/zhengkuanhua/openxdb/pkg/txn	1.996s
+ok  	github.com/zhengkuanhua/openxdb/pkg/wal	0.568s
+?   	github.com/zhengkuanhua/openxdb/tests/bench	[no test files]
+ok  	github.com/zhengkuanhua/openxdb/tests/bench/br_pitr_drill	1.899s
+?   	github.com/zhengkuanhua/openxdb/tests/bench/sql_bench	[no test files]
+?   	github.com/zhengkuanhua/openxdb/tests/bench/sql_bench_profile	[no test files]
+?   	github.com/zhengkuanhua/openxdb/tests/bench/stability	[no test files]
+?   	github.com/zhengkuanhua/openxdb/tests/bench/tmp_mini	[no test files]
+?   	github.com/zhengkuanhua/openxdb/tests/dbg_btree	[no test files]

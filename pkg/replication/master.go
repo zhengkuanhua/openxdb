@@ -38,6 +38,17 @@ type MasterReplicator struct {
 	// HeartbeatInterval 心跳发送间隔；HeartbeatTimeout 未收到任何帧即判离线。
 	HeartbeatInterval time.Duration
 	HeartbeatTimeout  time.Duration
+
+	// T33 同步/半同步复制（M20）状态：模式、半同步参数、ACK 等待与降级记录。
+	mode       ReplMode        // 当前复制模式（默认 ModeAsync，M2 兼容）
+	semiAckN   int             // 半同步最少确认副本数（默认 1）
+	ackTimeout time.Duration   // ACK 等待超时（默认 10s）
+	degraded   bool            // 半同步当前降级异步标志
+	degLSN     storage.LSN     // 最近一次降级位点
+	degAt      time.Time       // 最近一次降级时间
+	degCount   int64           // 累计降级次数
+	lastWaitMs int64           // 最近一次 WaitAck 实际等待毫秒
+	waiting    bool            // 当前是否有提交在等待 ACK
 }
 
 type slaveConn struct {
@@ -86,6 +97,9 @@ func NewMasterTLS(binlogPath, addr string, tlsCfg *tls.Config) (*MasterReplicato
 		wake:              make(chan struct{}, 1),
 		HeartbeatInterval: 2 * time.Second,
 		HeartbeatTimeout:  10 * time.Second,
+		mode:              ModeAsync,
+		semiAckN:          DefaultSemiAckN,
+		ackTimeout:        DefaultAckTimeout,
 	}, nil
 }
 
@@ -148,7 +162,7 @@ func (m *MasterReplicator) handleSlave(conn net.Conn) {
 		_ = conn.Close()
 	}()
 
-	if err := writeFrame(conn, msgHelloOK, encodeHelloOK(m.store.LastLSN())); err != nil {
+	if err := writeFrame(conn, msgHelloOK, encodeHelloOK(m.store.LastLSN(), m.ReplicationMode())); err != nil {
 		return
 	}
 	go m.readLoop(sc)

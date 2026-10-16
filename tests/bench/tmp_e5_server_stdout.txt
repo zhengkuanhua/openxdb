@@ -1,0 +1,4 @@
+slow query log: tests\bench\e5_data\slow.log (threshold 100ms, use SHOW SLOWQUERIES)
+backup scheduler: disabled (use --backup-interval <sec> / SET PERSIST backup_interval)
+alert rules engine: started (use SET alert_rules_enabled=on, SHOW ALERT RULES)
+OpenXDB v0.27.0-alpha serving on :7797 (data dir: tests\bench\e5_data), Ctrl-C to stop.

@@ -129,6 +129,10 @@ func (e *Executor) execCreateMatView(sess *Session, s *CreateMatViewStmt) (*Resu
 		return nil, err
 	}
 	if findMatView(mvs, s.Name) != nil {
+		// T41：CREATE MATERIALIZED VIEW IF NOT EXISTS——已存在时静默跳过
+		if s.IfNotExists {
+			return &Result{}, nil
+		}
 		return nil, &SQLError{Msg: "materialized view already exists: " + s.Name}
 	}
 	if findTable(tabs, s.Name) != nil {

@@ -28,3 +28,6 @@ Desktop.ini
 # 日志与临时文件
 *.log
 temp/
+
+# mkdocs 构建产物（GitHub Pages 用 site/ 单独发布，不入主仓库）
+site/

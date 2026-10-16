@@ -83,6 +83,9 @@ type Server struct {
 	// tlsConfig 非 nil 时 ServeTCP 使用 tls.Listen 提供加密监听（P0 TLS）；
 	// nil 保持明文监听（默认行为，向后兼容）。经 SetTLS 装配。
 	tlsConfig *tls.Config
+	// tlsAllowLegacy T36：true 时已装配 TLS 的 ServeTCP 使用 AutoListener，
+	// 同端口明文/TLS 并存（AllowLegacy 语义）；false（默认）为纯 TLS 监听。
+	tlsAllowLegacy bool
 }
 
 // AuthConfig 连接鉴权配置：经 SetAuth 装配到 Server。
@@ -107,6 +110,8 @@ type session struct {
 	useGlobalSQL bool
 	// sqlSess 每连接独立 SQL 会话（懒创建，仅 useGlobalSQL=false 时使用）。
 	sqlSess *sql.Session
+	// secure T36 传输层安全标记：true=TLS 加密会话，false=明文（AllowLegacy）。
+	secure bool
 }
 
 // New 创建协议执行器。
@@ -118,6 +123,12 @@ func New(tm txn.TxnManager) *Server {
 // 向后兼容）；非 nil 时 ServeTCP 使用 tls.Listen 提供加密监听，客户端须
 // 以 TLS 连接（pkg/server 的 Dial/InsecureTLSConfig 可配合内网自签名测试）。
 func (s *Server) SetTLS(cfg *tls.Config) { s.tlsConfig = cfg }
+
+// SetTLSLegacy 开启同端口明文/TLS 并存（T36 AllowLegacy 语义）：仅在
+// 已装配 TLS 配置时生效；开启后 ServeTCP 使用 AutoListener，非 TLS
+// 连接按明文处理并标记会话 secure=false；默认（false）为纯 TLS 监听，
+// 明文连接握手失败即断开。传 false 恢复纯 TLS 监听。
+func (s *Server) SetTLSLegacy(on bool) { s.tlsAllowLegacy = on }
 
 // ActiveConns 返回当前活跃 TCP 连接数（T20 会话计数）。
 func (s *Server) ActiveConns() int64 { return atomic.LoadInt64(&s.conns) }
@@ -162,6 +173,7 @@ func (s *Server) connSession() *session {
 	ss := s.defaultSession()
 	if s.SQL != nil {
 		ss.sqlSess = s.SQL.NewSession()
+		ss.useGlobalSQL = false
 	}
 	return ss
 }
@@ -586,13 +598,23 @@ func (s *Server) REPLSession(r io.Reader, w io.Writer, sess *session) error {
 }
 
 // ServeTCP 监听 addr 并启动 TCP 服务。已配置 TLS（SetTLS 非 nil）时使用
-// tls.Listen 提供加密监听；未配置时保持明文监听（默认行为）。
+// tls.Listen 提供加密监听；未配置时保持明文监听（默认行为）。T36：
+// SetTLSLegacy(true) 时同端口明文/TLS 并存（AllowLegacy 语义）。
 func (s *Server) ServeTCP(addr string) error {
 	var ln net.Listener
 	var err error
-	if s.tlsConfig != nil {
+	switch {
+	case s.tlsConfig != nil && s.tlsAllowLegacy:
+		// T36 AllowLegacy：同一端口自动识别 TLS 与明文连接。
+		raw, lerr := net.Listen("tcp", addr)
+		if lerr != nil {
+			err = lerr
+			break
+		}
+		ln = NewAutoListener(raw, s.tlsConfig)
+	case s.tlsConfig != nil:
 		ln, err = tls.Listen("tcp", addr, s.tlsConfig)
-	} else {
+	default:
 		ln, err = net.Listen("tcp", addr)
 	}
 	if err != nil {
@@ -640,7 +662,15 @@ func (s *Server) serveConn(c net.Conn) {
 	// 每连接独立会话（含独立 SQL 会话：跨连接 SQL 并行执行；显式事务
 	// 状态与语句快照隔离）：Auth 启用时默认未鉴权 guest，需先 AUTH；
 	// Auth 未启用时直接以超级用户 root 进入（旧行为）。
-	_ = s.REPLSession(c, c, s.connSession())
+	sess := s.connSession()
+	// T36 会话安全标记：纯 TLS 监听连接为 *tls.Conn → secure=true；
+	// AllowLegacy AutoTLS 连接实现 Secure() 接口逐连接判定；明文 false。
+	if _, ok := c.(*tls.Conn); ok {
+		sess.secure = true
+	} else if sc, ok := c.(interface{ Secure() bool }); ok {
+		sess.secure = sc.Secure()
+	}
+	_ = s.REPLSession(c, c, sess)
 }
 
 // ---- M16-2 优雅停机 ----

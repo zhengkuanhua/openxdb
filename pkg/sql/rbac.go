@@ -182,6 +182,10 @@ func (e *Executor) execCreateRole(sess *Session, s *CreateRoleStmt) (*Result, er
 		return nil, err
 	}
 	if _, ok := roles[s.Name]; ok {
+		// T41：CREATE ROLE IF NOT EXISTS——角色已存在时静默跳过
+		if s.IfNotExists {
+			return &Result{}, nil
+		}
 		return nil, &SQLError{Msg: "role already exists: " + s.Name}
 	}
 	roles[s.Name] = roleGrants{TableGrants: map[string]int{}, DbGrants: map[string]int{}}

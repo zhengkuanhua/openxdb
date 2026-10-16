@@ -6,6 +6,8 @@ package sql
 // 存储/WAL（db.Open 失败路径）等关键模块异常。
 
 import (
+	"strconv"
+
 	"github.com/zhengkuanhua/openxdb/pkg/logx"
 )
 
@@ -22,9 +24,11 @@ func (e *Executor) execShowAlerts(sess *Session, s *ShowAlertsStmt) (*Result, er
 }
 
 // execShowAlertStatus SHOW ALERT STATUS：查看告警开关与出口配置
-// （variable/value 两列，与 SHOW BACKUP STATUS 同风格）。
+// （variable/value 两列，与 SHOW BACKUP STATUS 同风格）。T37 起追加
+// 规则告警状态行（alert_rules_enabled / alert_eval_interval / alert_rule_count）。
 func (e *Executor) execShowAlertStatus(sess *Session, s *ShowAlertStatusStmt) (*Result, error) {
 	c := logx.DefaultAlerts.Config()
+	rulesOn, evalInterval, ruleCount := e.AlertRulesStatus()
 	return &Result{
 		Columns: []string{"variable", "value"},
 		Rows: [][]Value{
@@ -33,6 +37,9 @@ func (e *Executor) execShowAlertStatus(sess *Session, s *ShowAlertStatusStmt) (*
 			{StrVal("webhook"), StrVal(c.Webhook)},
 			{StrVal("keep"), StrVal(itoa(int64(c.Keep)))},
 			{StrVal("level"), StrVal(logx.Default.Level().String())},
+			{StrVal("alert_rules_enabled"), StrVal(boolValStr(rulesOn))},
+			{StrVal("alert_eval_interval"), StrVal(strconv.FormatInt(evalInterval, 10))},
+			{StrVal("alert_rule_count"), StrVal(itoa(int64(ruleCount)))},
 		},
 	}, nil
 }

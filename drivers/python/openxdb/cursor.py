@@ -81,6 +81,12 @@ class Cursor:
             self._rowcount = _parse_affected(raw)
             self._description = None
             self._rows = []
+        elif raw == "OK":
+            # Connection-level statement (BEGIN / COMMIT / ROLLBACK / ...):
+            # single-line OK reply, no result set, no affected-row count.
+            self._rowcount = -1
+            self._description = None
+            self._rows = []
         else:
             header, rows = _parse_table(raw)
             self._description = header

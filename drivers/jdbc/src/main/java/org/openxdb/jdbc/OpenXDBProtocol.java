@@ -3,17 +3,30 @@ package org.openxdb.jdbc;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.Closeable;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import javax.net.ssl.SNIHostName;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 
 /**
  * Line-protocol client mirroring pkg/server.Server.Handle.
@@ -69,9 +82,21 @@ final class OpenXDBProtocol {
     private boolean closed;
 
     OpenXDBProtocol(String host, int port) throws SQLException {
+        this(host, port, null);
+    }
+
+    OpenXDBProtocol(String host, int port, SslConfig sslConfig) throws SQLException {
         try {
-            Socket s = new Socket();
-            s.connect(new InetSocketAddress(host, port), 5000);
+            Socket s;
+            if (sslConfig != null && sslConfig.ssl) {
+                SSLSocket ss = sslConfig.createSSLSocket(sslConfig.identityHost(host));
+                ss.connect(new InetSocketAddress(host, port), 5000);
+                ss.startHandshake();
+                s = ss;
+            } else {
+                s = new Socket();
+                s.connect(new InetSocketAddress(host, port), 5000);
+            }
             s.setSoTimeout(0);
             this.socket = s;
             this.in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
@@ -198,5 +223,152 @@ final class OpenXDBProtocol {
     static String cellValue(String cell) {
         String t = cell.trim();
         return t.isEmpty() ? null : t;
+    }
+}
+
+/**
+ * TLS configuration for the JDBC driver (T36). Parsed from the JDBC URL query
+ * string ({@code ssl=true&sslMode=verify-full&trustStore=ca.pem}) or from
+ * {@code Properties}. Modes mirror pkg/server and the Python driver:
+ * <ul>
+ *   <li>{@code disable} &mdash; plaintext (default) or TLS without verification when ssl=true</li>
+ *   <li>{@code verify-ca} &mdash; verify the server certificate chain against trustStore</li>
+ *   <li>{@code verify-full} &mdash; verify chain + hostname (hostnameInCertificate / host)</li>
+ * </ul>
+ */
+final class SslConfig {
+    static final String MODE_DISABLE = "disable";
+    static final String MODE_VERIFY_CA = "verify-ca";
+    static final String MODE_VERIFY_FULL = "verify-full";
+
+    final boolean ssl;
+    final String mode;
+    final String trustStore;
+    final String hostnameInCertificate;
+
+    SslConfig(boolean ssl, String mode, String trustStore, String hostnameInCertificate) {
+        this.ssl = ssl;
+        this.mode = mode == null ? MODE_DISABLE : mode;
+        this.trustStore = trustStore;
+        this.hostnameInCertificate = hostnameInCertificate;
+    }
+
+    boolean verifyChain() {
+        return MODE_VERIFY_CA.equals(mode) || MODE_VERIFY_FULL.equals(mode);
+    }
+
+    SSLSocket createSSLSocket(String identityHost) throws IOException {
+        try {
+            SSLContext ctx = SSLContext.getInstance("TLS");
+            TrustManager[] tms = new TrustManager[]{verifyChain() ? new PemTrustManager(trustStore) : TRUST_ALL};
+            ctx.init(null, tms, new SecureRandom());
+            SSLSocketFactory f = ctx.getSocketFactory();
+            SSLSocket s = (SSLSocket) f.createSocket();
+            if (MODE_VERIFY_FULL.equals(mode) && identityHost != null && !identityHost.isEmpty()) {
+                SSLParameters params = s.getSSLParameters();
+                params.setEndpointIdentificationAlgorithm("HTTPS");
+                try {
+                    params.setServerNames(Collections.singletonList(new SNIHostName(identityHost)));
+                } catch (IllegalArgumentException ignore) {
+                    // non-DNS identity: hostname check still applies via endpoint id
+                }
+                s.setSSLParameters(params);
+            }
+            return s;
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            IOException io = new IOException("cannot initialize TLS context: " + e.getMessage());
+            io.initCause(e);
+            throw io;
+        }
+    }
+
+    /** @return hostname used for verify-full endpoint identification. */
+    String identityHost(String connectHost) {
+        return hostnameInCertificate == null || hostnameInCertificate.isEmpty()
+                ? connectHost : hostnameInCertificate;
+    }
+
+    private static final X509TrustManager TRUST_ALL = new X509TrustManager() {
+        @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType) {
+            // no client certificates on the OpenXDB wire
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType) {
+            // ssl=true without sslMode=verify-*: accept any server certificate
+        }
+
+        @Override
+        public X509Certificate[] getAcceptedIssuers() {
+            return new X509Certificate[0];
+        }
+    };
+
+    /** Trust manager that pins the trustStore CA PEM file(s). */
+    private static final class PemTrustManager implements X509TrustManager {
+        private final X509Certificate[] cas;
+
+        PemTrustManager(String trustStore) throws IOException {
+            if (trustStore == null || trustStore.isEmpty()) {
+                throw new IOException("sslMode verify-ca/verify-full requires trustStore=<CA PEM path>");
+            }
+            try {
+                List<X509Certificate> certs = new ArrayList<X509Certificate>();
+                try (FileInputStream in = new FileInputStream(trustStore)) {
+                    CertificateFactory cf = CertificateFactory.getInstance("X.509");
+                    for (Certificate c : cf.generateCertificates(in)) {
+                        if (c instanceof X509Certificate) {
+                            certs.add((X509Certificate) c);
+                        }
+                    }
+                }
+                if (certs.isEmpty()) {
+                    throw new IOException("no X.509 certificates found in trustStore: " + trustStore);
+                }
+                cas = certs.toArray(new X509Certificate[0]);
+            } catch (IOException e) {
+                throw e;
+            } catch (Exception e) {
+                IOException io = new IOException("cannot load trustStore " + trustStore + ": " + e.getMessage());
+                io.initCause(e);
+                throw io;
+            }
+        }
+
+        @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType) {
+            // no client certificates on the OpenXDB wire
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+            if (chain == null || chain.length == 0) {
+                throw new CertificateException("empty server certificate chain");
+            }
+            for (X509Certificate serverCert : chain) {
+                for (X509Certificate ca : cas) {
+                    if (serverCert.equals(ca)) {
+                        return; // self-signed certificate pinned directly in trustStore
+                    }
+                }
+            }
+            for (X509Certificate ca : cas) {
+                try {
+                    chain[0].verify(ca.getPublicKey());
+                    return; // chain signed by a pinned CA
+                } catch (Exception ignored) {
+                    // try next pinned CA
+                }
+            }
+            throw new CertificateException("server certificate not trusted by trustStore");
+        }
+
+        @Override
+        public X509Certificate[] getAcceptedIssuers() {
+            return cas.clone();
+        }
     }
 }

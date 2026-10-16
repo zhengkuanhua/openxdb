@@ -1,0 +1,10 @@
+﻿OpenXDB upgrade preflight (M16-3)
+  data dir      : C:\Users\27756\AppData\Roaming\Tencent\Marvis\User\oAN1i2RORm9ewWWUXrcT2XBfRk0c\workspace\conv_5d15f4c8d8ec46778266acaa06c35c33\temp\openxdb-t38\master
+  binary version: v0.25.0-alpha (data format v1)
+  checks:
+    [PASS] data_dir         数据目录与配置文件存在，engine = rocksdb
+    [PASS] persisted_config 无持久化配置记录（persisted.json 不存在），按默认配置即可启动
+    [PASS] open_storage     数据目录可打开：存储/WAL/事务恢复/持久化配置全部通过（reopen 验证）
+    [PASS] version_compat   数据格式 v1 <= 当前二进制 v1，兼容（升级路径：旧数据可被当前版本打开）
+  PREFLIGHT RESULT: PASS
+

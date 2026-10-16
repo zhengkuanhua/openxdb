@@ -38,6 +38,8 @@ type Cond struct {
 	InList   []Value         // IN 列表
 	Sub      *SelectStmt     // IN 子查询（右值）
 	LeftCase *CaseWhenClause // 左操作数为 CASE 表达式（P2）
+	LeftExpr *Expr           // 左操作数为算术表达式（T40；与 Ref/Col/LeftCase 互斥）
+	RightExpr *Expr          // 右操作数为算术表达式（T40；与 RightRef/Val/InList/Sub 互斥）
 }
 
 // Where 条件组（全部 AND 语义）。
@@ -52,7 +54,10 @@ type CreateTableStmt struct {
 	Name        string
 	Columns     []ColumnDef
 	PK          string       // 主键列名；未声明 PRIMARY KEY 时默认第一列
+	Indexes     []IndexMeta  // M18：表级 UNIQUE (col) 约束（建表时登记二级索引元数据）
 	ForeignKeys []ForeignKey // M9 外键约束（列级/表级，解析时收集）
+	IfNotExists bool         // T41：CREATE TABLE IF NOT EXISTS（表已存在时静默跳过）
+	Select      *SelectStmt  // T41：CTAS——CREATE TABLE <name> AS SELECT ...（非空时走 CTAS 执行路径）
 }
 
 func (CreateTableStmt) stmt() {}
@@ -80,8 +85,9 @@ func (DropTableStmt) stmt() {}
 // CreateUserStmt CREATE USER '<name>' IDENTIFIED BY '<pwd>'。
 // 密码仅以哈希形式持久化（SHA-256+salt，见 user.go）。
 type CreateUserStmt struct {
-	Name     string
-	Password string
+	Name        string
+	Password    string
+	IfNotExists bool // T41：CREATE USER IF NOT EXISTS（用户已存在时静默跳过）
 }
 
 func (CreateUserStmt) stmt() {}
@@ -142,7 +148,8 @@ func (RevokeStmt) stmt() {}
 
 // CreateRoleStmt CREATE ROLE '<role>'（M17 RBAC）：创建角色（空权限集合）。
 type CreateRoleStmt struct {
-	Name string
+	Name        string
+	IfNotExists bool // T41：CREATE ROLE IF NOT EXISTS（角色已存在时静默跳过）
 }
 
 func (CreateRoleStmt) stmt() {}
@@ -177,10 +184,11 @@ func (ShowAuditLogStmt) stmt() {}
 
 // CreateIndexStmt CREATE INDEX（T6 二级索引；M10 支持 UNIQUE）。
 type CreateIndexStmt struct {
-	Name   string // 索引名（表内唯一）
-	Table  string
-	Col    string // 单列索引
-	Unique bool   // M10：UNIQUE 索引（唯一约束）
+	Name        string // 索引名（表内唯一）
+	Table       string
+	Col         string // 单列索引
+	Unique      bool   // M10：UNIQUE 索引（唯一约束）
+	IfNotExists bool   // T41：CREATE INDEX IF NOT EXISTS（索引已存在时静默跳过）
 }
 
 func (CreateIndexStmt) stmt() {}
@@ -215,13 +223,15 @@ func (AlterTableStmt) stmt() {}
 
 // InsertStmt INSERT / REPLACE（M10 UPSERT）。
 // OnDup 非空表示 INSERT ... ON DUPLICATE KEY UPDATE（冲突时更新）；
-// Replace=true 表示 REPLACE INTO（冲突时删除旧行再插入，事务内原子）。
+// Replace=true 表示 REPLACE INTO（冲突时删除旧行再插入，事务内原子）；
+// Select 非空表示 INSERT INTO ... SELECT（T42：忽略 Rows，按 SELECT 结果逐行灌入）。
 type InsertStmt struct {
 	Table   string
 	Columns []string // 空 = 全部列按定义序
 	Rows    [][]Value
 	OnDup   *OnDuplicateUpdate // M10：ON DUPLICATE KEY UPDATE 赋值项
 	Replace bool               // M10：REPLACE INTO 语义
+	Select  *SelectStmt        // T42：INSERT INTO ... SELECT 源（非空时忽略 Rows）
 }
 
 func (InsertStmt) stmt() {}
@@ -231,19 +241,42 @@ type OnDuplicateUpdate struct {
 	Sets []SetItem
 }
 
-// SelectColumn SELECT 目标列：普通列 / 聚合函数 / 窗口函数 / CASE 表达式（P2 / M10）。
-// Window 非空表示窗口函数列：Agg 为函数名（"ROW_NUMBER"|"RANK"|"DENSE_RANK"|"COUNT"|"SUM"|"AVG"），
+// SelectColumn SELECT 目标列：普通列 / 聚合函数 / 窗口函数 / CASE 表达式 / 算术表达式（P2 / M10 / T40）。
+// Window 非空表示窗口函数列：Agg 为函数名（"ROW_NUMBER"|"RANK"|"DENSE_RANK"|"COUNT"|"SUM"|"AVG"|"MAX"|"MIN"），
 // Window 描述 PARTITION BY / ORDER BY；仅允许出现在 SELECT 列表，其它位置解析报错。
+// Expr 非空表示投影列或聚合参数为算术表达式（T40，忽略 Col/Ref 作普通列取值）。
 type SelectColumn struct {
-	Raw    string          // 原始文本（列名、*、COUNT(*)、SUM(x)、AVG(x)、CASE 表达式）
-	Agg    string          // "" | "COUNT" | "SUM" | "AVG" | "ROW_NUMBER" | "RANK" | "DENSE_RANK"
+	Raw    string          // 原始文本（列名、*、COUNT(*)、SUM(x)、AVG(x)、CASE 表达式、算术表达式）
+	Agg    string          // "" | "COUNT" | "SUM" | "AVG" | "MAX" | "MIN" | "ROW_NUMBER" | "RANK" | "DENSE_RANK"
 	Ref    string          // 限定表名/别名（t.col 时非空；聚合参数亦可限定）
 	Col    string          // 聚合目标列 / 裸列名（COUNT 可为空）
 	Name   string          // 输出列名
 	Alias  string          // AS 别名（空 = 默认输出名）
 	Case   *CaseWhenClause // 非空 = 输出 CASE 表达式求值结果（忽略 Col）
+	Expr   *Expr           // 非空 = 投影/聚合参数为算术表达式（T40）
 	Window *WindowSpec     // 非空 = 窗口函数列（OVER 子句）
+	Var    string          // M18-C：用户变量引用（SELECT @var，含 @）
 }
+
+// Expr 算术表达式节点（T40）：二元算术（+ - * / %）与一元负号（NEG）。
+// Op 为空表示叶子节点：Val 非 nil 为字面量，否则 Ref/Col 为列引用（限定/裸）。
+// Raw 为表达式原始文本（用于输出列名与报错信息）。
+type Expr struct {
+	Op    string // "" | "+" | "-" | "*" | "/" | "%" | "NEG"
+	Left  *Expr  // 二元左操作数（NEG 时为空）
+	Right *Expr  // 二元右操作数 / NEG 子表达式
+	Ref   string // 叶子：限定表名/别名（空 = 未限定）
+	Col   string // 叶子：裸列名（Val 为 nil 时有效）
+	Val   *Value // 叶子：字面量（nil = 列引用）
+	Raw   string // 原始文本
+}
+
+// isPlainColumn 判断 Expr 是否为纯列引用叶子（Op 为空且非字面量）。
+func (e *Expr) isPlainColumn() bool { return e != nil && e.Op == "" && e.Val == nil }
+
+// isLiteral 判断 Expr 是否为纯字面量叶子（Op 为空、无列引用），
+// 用于 WHERE 右值回落为旧路径常量 c.Val，保持 matchWhere 语义。
+func (e *Expr) isLiteral() bool { return e != nil && e.Op == "" && e.Val != nil }
 
 // JoinClause JOIN 子句（INNER / LEFT，支持子查询右表）。
 type JoinClause struct {
@@ -270,6 +303,7 @@ type WindowSpec struct {
 // SelectStmt SELECT。
 type SelectStmt struct {
 	Columns   []SelectColumn
+	Distinct  bool        // SELECT DISTINCT（T40）：投影行去重，先于 ORDER BY/LIMIT
 	CTEs      []CTE       // M10 WITH 子句（可为空）
 	From      string      // 表名（无 JOIN/子查询时）
 	FromAlias string      // FROM 表别名（空 = 表名）
@@ -279,6 +313,7 @@ type SelectStmt struct {
 	Where     *Where
 	GroupBy   []string // GROUP BY 列（t.col / col）
 	OrderBy   *OrderBy
+	OrderBys  []OrderBy // M18-C：多列 ORDER BY（首列同步写入 OrderBy 保持既有单列路径兼容）
 	Limit     int // <=0 不限
 	Offset    int // <=0 不偏移（M12-2 分页）
 }
@@ -317,8 +352,9 @@ func (DeleteStmt) stmt() {}
 
 // CreateViewStmt CREATE VIEW <name> AS <SELECT>（M9 视图）。
 type CreateViewStmt struct {
-	Name   string
-	Select *SelectStmt
+	Name        string
+	Select      *SelectStmt
+	IfNotExists bool // T41：CREATE VIEW IF NOT EXISTS（视图已存在时静默跳过）
 }
 
 func (CreateViewStmt) stmt() {}
@@ -340,8 +376,9 @@ func (ShowViewsStmt) stmt() {}
 // 物化视图本质是一张"影子表"：定义以 SelectStmt 持久化于 m:matviews，
 // SELECT 直接读同名影子表，REFRESH 全量重算写回。
 type CreateMatViewStmt struct {
-	Name   string
-	Select *SelectStmt
+	Name        string
+	Select      *SelectStmt
+	IfNotExists bool // T41：CREATE MATERIALIZED VIEW IF NOT EXISTS（已存在时静默跳过）
 }
 
 func (CreateMatViewStmt) stmt() {}
@@ -369,11 +406,12 @@ func (DropMatViewStmt) stmt() {}
 // 持久化，DML 触发时重新解析执行。FOR EACH ROW 为语法兼容：体不支持 NEW/OLD
 // 引用，触发粒度为语句级（受影响行数 > 0 时触发）。
 type CreateTriggerStmt struct {
-	Name   string
-	Timing string // "BEFORE" | "AFTER"
-	Event  string // "INSERT" | "UPDATE" | "DELETE"
-	Table  string // 源表
-	Body   string // 触发器体原始 SQL 文本
+	Name        string
+	Timing      string // "BEFORE" | "AFTER"
+	Event       string // "INSERT" | "UPDATE" | "DELETE"
+	Table       string // 源表
+	Body        string // 触发器体原始 SQL 文本
+	IfNotExists bool   // T41：CREATE TRIGGER IF NOT EXISTS（触发器已存在时静默跳过）
 }
 
 func (CreateTriggerStmt) stmt() {}
@@ -414,9 +452,10 @@ type ProcedureMeta struct {
 // 过程体为一条或多条受支持语句，以原始 SQL 文本持久化，CALL 时逐条解析执行；
 // IN 关键字可省略（参数默认 IN 输入参数）。
 type CreateProcedureStmt struct {
-	Name   string
-	Params []ParamMeta
-	Body   string
+	Name        string
+	Params      []ParamMeta
+	Body        string
+	IfNotExists bool // T41：CREATE PROCEDURE IF NOT EXISTS（存储过程已存在时静默跳过）
 }
 
 func (CreateProcedureStmt) stmt() {}
@@ -458,14 +497,38 @@ type RollbackStmt struct{}
 
 func (RollbackStmt) stmt() {}
 
-// ExportStmt 导出表数据到 CSV（EXPORT TABLE t [(cols)] TO 'path'）。
+// ExportStmt 导出表数据（EXPORT TABLE t [(cols)] TO 'path' [FORMAT CSV|JSON|PARQUET]）。
 type ExportStmt struct {
 	Table   string
 	Columns []string // 空 = 全部列按定义序
 	Path    string
+	Format  string // ""=CSV（缺省）；"JSON" / "PARQUET"（M19）
 }
 
 func (ExportStmt) stmt() {}
+
+// PrepareStmt PREPARE <name> FROM '<sql-text>'（M18 prepared statement）。
+type PrepareStmt struct {
+	Name string
+	SQL  string
+}
+
+func (PrepareStmt) stmt() {}
+
+// ExecuteStmt EXECUTE <name> [USING @a, @b]（M18 prepared statement）。
+type ExecuteStmt struct {
+	Name string
+	Args []string // 用户变量名（含 @）或字面量文本
+}
+
+func (ExecuteStmt) stmt() {}
+
+// DeallocateStmt DEALLOCATE PREPARE <name>（M18 prepared statement）。
+type DeallocateStmt struct {
+	Name string
+}
+
+func (DeallocateStmt) stmt() {}
 
 // ImportStmt 从 CSV 导入建行（IMPORT INTO t FROM 'path' [BATCH n] [IGNORE ERRORS]）。
 // Batch>0 时逐批提交（每 n 行一批）；IgnoreErrors 时坏行计数跳过不整体回滚。
@@ -582,6 +645,12 @@ type ShowAlertStatusStmt struct{}
 
 func (ShowAlertStatusStmt) stmt() {}
 
+// ShowAlertRulesStmt SHOW ALERT RULES（T37 监控告警）：列出告警规则与运行时
+// 状态（id/metric/op/threshold/duration_sec/severity/enabled/state/last_value）。
+type ShowAlertRulesStmt struct{}
+
+func (ShowAlertRulesStmt) stmt() {}
+
 // ShowBinlogEventsStmt SHOW BINLOG EVENTS [FROM <lsn>] [LIMIT <n>]（M14 CDC）：
 // 只读展示 binlog 增量变更流；From 为起始位点（nil=从头），Limit<=0=不限。
 type ShowBinlogEventsStmt struct {
@@ -593,10 +662,13 @@ func (ShowBinlogEventsStmt) stmt() {}
 
 // SetStmt 会话变量设置：SET [PERSIST] <name> = <value>（M9 查询缓存开关等；
 // M16-1 起支持 PERSIST：应用后同时写入持久化配置文件，重启后仍生效）。
+// M18-C：SET @var = value 为用户变量赋值（Var 非空时忽略 Name/Value 走 userVars）。
 type SetStmt struct {
 	Name    string
 	Value   string
 	Persist bool // M16-1：true 表示 SET PERSIST <key> = <value>
+	Var     string // M18-C：用户变量名（含 @），非空表示用户变量赋值
+	VarVal  Value  // M18-C：用户变量值
 }
 
 func (SetStmt) stmt() {}

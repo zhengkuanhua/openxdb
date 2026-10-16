@@ -125,6 +125,10 @@ func (e *Executor) execCreateTrigger(sess *Session, s *CreateTriggerStmt) (*Resu
 		return nil, err
 	}
 	if findTrigger(trs, s.Name) != nil {
+		// T41：CREATE TRIGGER IF NOT EXISTS——触发器已存在时静默跳过
+		if s.IfNotExists {
+			return &Result{}, nil
+		}
 		return nil, &SQLError{Msg: "trigger already exists: " + s.Name}
 	}
 	trs = append(trs, &TriggerMeta{

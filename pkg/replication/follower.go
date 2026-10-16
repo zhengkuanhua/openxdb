@@ -145,7 +145,7 @@ func (f *Follower) StartTLS(ctx context.Context, masterAddr string, tlsCfg *tls.
 		f.setOffline(masterAddr, "unexpected handshake response")
 		return errors.New("replication: unexpected handshake response")
 	}
-	if _, err := decodeHelloOK(payload); err != nil {
+	if _, _, err := decodeHelloOK(payload); err != nil {
 		f.setOffline(masterAddr, err.Error())
 		return err
 	}

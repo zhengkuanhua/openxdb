@@ -75,22 +75,39 @@ func (e *Executor) execExport(sess *Session, s *ExportStmt) (*Result, error) {
 		return nil, &SQLError{Msg: "export failed: " + err.Error()}
 	}
 	defer f.Close()
-	w := csv.NewWriter(f)
-	if err := w.Write(cols); err != nil {
-		return nil, &SQLError{Msg: "export failed: " + err.Error()}
+	format := strings.ToUpper(s.Format)
+	if format == "" {
+		format = "CSV"
 	}
-	for _, row := range rows {
-		rec := make([]string, len(row))
-		for i, v := range row {
-			rec[i] = csvValue(v)
-		}
-		if err := w.Write(rec); err != nil {
+	switch format {
+	case "CSV":
+		w := csv.NewWriter(f)
+		if err := w.Write(cols); err != nil {
 			return nil, &SQLError{Msg: "export failed: " + err.Error()}
 		}
-	}
-	w.Flush()
-	if err := w.Error(); err != nil {
-		return nil, &SQLError{Msg: "export failed: " + err.Error()}
+		for _, row := range rows {
+			rec := make([]string, len(row))
+			for i, v := range row {
+				rec[i] = csvValue(v)
+			}
+			if err := w.Write(rec); err != nil {
+				return nil, &SQLError{Msg: "export failed: " + err.Error()}
+			}
+		}
+		w.Flush()
+		if err := w.Error(); err != nil {
+			return nil, &SQLError{Msg: "export failed: " + err.Error()}
+		}
+	case "JSON":
+		if err := exportJSON(f, cols, rows); err != nil {
+			return nil, err
+		}
+	case "PARQUET":
+		if err := exportParquet(f, meta, cols, rows); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, &SQLError{Msg: "unsupported export format: " + format}
 	}
 	return &Result{Columns: cols, AffectedRows: len(rows)}, nil
 }

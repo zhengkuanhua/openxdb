@@ -49,6 +49,11 @@ type TxnManager interface {
 	// 在提交串行化锁内按提交顺序调用 hook(lsn, seq, batch)。hook 返回的错误仅
 	// 记录在 HookErr，不影响事务提交成功语义（复制推送为异步）。
 	SetCommitHook(hook func(lsn storage.LSN, seq uint64, batch *storage.WriteBatch) error)
+	// SetCommitWaitHook 注册提交后置确认回调（T33 同步/半同步复制挂接点）：
+	// 在事务提交串行化锁外、Commit 返回前调用 hook(lsn, seq)，可安全阻塞等待
+	// 副本 ACK。hook 返回的错误直接回传 Commit 调用者（此时事务已本地提交，
+	// 属"提交不确定"窗口）。async 模式下可注册但不阻塞（立即返回 nil）。
+	SetCommitWaitHook(hook func(lsn storage.LSN, seq uint64) error)
 	// HookErr 返回最近一次提交后回调的错误（无错误返回 nil）。
 	HookErr() error
 	Close() error

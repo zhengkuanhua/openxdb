@@ -34,10 +34,17 @@ type Session struct {
 	// procDepth 防存储过程嵌套展开。
 	triggerDepth int
 	procDepth    int
+	// M18：prepared statement（名称→SQL 文本，会话级）。
+	prepared map[string]string
+	// M18：用户变量（@name→值，会话级；SET @a=... 写入，SELECT @a 读取）。
+	userVars map[string]Value
 }
 
 // NewSession 创建独立会话。服务端每 TCP 连接调用一次；
 // 同一 Session 不应被多个 goroutine 同时使用（连接内串行语义）。
 func (e *Executor) NewSession() *Session {
-	return &Session{}
+	return &Session{
+		prepared: map[string]string{},
+		userVars: map[string]Value{},
+	}
 }

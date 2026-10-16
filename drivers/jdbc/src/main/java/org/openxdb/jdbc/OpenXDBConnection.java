@@ -42,9 +42,13 @@ public class OpenXDBConnection implements Connection {
     private SQLWarning warnings;
 
     OpenXDBConnection(String host, int port) throws SQLException {
+        this(host, port, null);
+    }
+
+    OpenXDBConnection(String host, int port, SslConfig sslConfig) throws SQLException {
         this.host = host;
         this.port = port;
-        this.protocol = new OpenXDBProtocol(host, port);
+        this.protocol = new OpenXDBProtocol(host, port, sslConfig);
     }
 
     OpenXDBProtocol protocol() {

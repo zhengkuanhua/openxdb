@@ -291,6 +291,12 @@ func (e *Executor) matchCondRelCached(sess *Session, tx txn.Txn, rel *Rel, row [
 		if err != nil {
 			return false, err
 		}
+	} else if c.LeftExpr != nil {
+		// T40：左操作数为算术表达式（如 k+1 > 5）。
+		a, err = evalExprForRow(rel, row, c.LeftExpr)
+		if err != nil {
+			return false, err
+		}
 	} else {
 		a, err = relValue(rel, row, qualifiedName(c.Ref, c.Col))
 		if err != nil {
@@ -330,6 +336,14 @@ func (e *Executor) matchCondRelCached(sess *Session, tx txn.Txn, rel *Rel, row [
 	case "=", "!=", "<", ">", "<=", ">=":
 		if c.RightRef != "" {
 			b, err := relValue(rel, row, c.RightRef)
+			if err != nil {
+				return false, err
+			}
+			return matchCond(a, c.Op, b), nil
+		}
+		if c.RightExpr != nil {
+			// T40：右值为算术表达式（如 k = v*2）。
+			b, err := evalExprForRow(rel, row, c.RightExpr)
 			if err != nil {
 				return false, err
 			}

@@ -1,0 +1,9 @@
+﻿OpenXDB stats: 127.0.0.1:7788 (collected at 2026-10-15T15:38:11+08:00)
+metric             value
+------------------ ------------
+connections        1
+tables             7
+regions            0
+slow_queries       0
+binlog_lsn         53
+

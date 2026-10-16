@@ -1,10 +1,16 @@
 package sql
 
 // M8(BR)：备份/恢复（BACKUP/RESTORE + PITR 基础），详见 docs/T18_backup_restore.md。
+// T35：分布式备份一致性扩展（多节点协调、全局一致性标记），详见 docs/T35_m20_dist_backup_consistency.md。
 //
 // 语法：
 //   BACKUP TO '<path>'                      — 基于一致快照生成完整逻辑备份文件
 //   RESTORE FROM '<path>' [TO LSN <n>]      — 校验并恢复备份；可选回放 binlog 到指定 LSN
+//
+// 单机路径（mgr==nil 或未注册远端节点）：与 T18 完全一致，不产生 manifest。
+// 集群路径（存在远端节点）：BACKUP 由协调者组织 PREPARE/DO 两阶段对齐全局 LSN，
+//   额外生成 '<path>.manifest'（各节点备份文件清单 + 全局一致性标记）；
+//   RESTORE 检测到 manifest 时按清单驱动各节点恢复到全局 LSN。
 //
 // 备份内容（单一文件，便于传输）：
 //   - 全部表元数据（m:tables 原值：CREATE TABLE/CREATE INDEX 等价 DDL 记录）
@@ -52,6 +58,8 @@ const (
 )
 
 // backupMeta 备份文件元信息（JSON 段）。
+// T35 新增字段（NodeID/BackupID/GlobalLSN/GlobalTSO）均为可选：单机备份与旧版
+// reader 完全兼容（未知字段忽略），分布式备份据此完成节点归属与全局对齐。
 type backupMeta struct {
 	FormatVersion int    `json:"format_version"`
 	CreatedAt     string `json:"created_at"`
@@ -59,10 +67,48 @@ type backupMeta struct {
 	TablesRaw     []byte `json:"tables_raw"`     // m:tables 原值（"null" 表示空目录）
 	HasRegions    bool   `json:"has_regions"`    // 是否含 region 路由元数据
 	RegionsRaw    []byte `json:"regions_raw"`    // m:regions 原值
+
+	NodeID    string `json:"node_id,omitempty"`     // 产生该备份的节点（单机为空）
+	BackupID  string `json:"backup_id,omitempty"`   // 分布式备份批次 ID
+	GlobalLSN uint64 `json:"global_lsn,omitempty"`  // 全局一致性点（0=单机）
+	GlobalTSO uint64 `json:"global_tso,omitempty"`  // 全局一致性参考时间戳
 }
 
-// execBackup BACKUP TO '<path>'：基于一致快照生成完整逻辑备份文件。
+// backupOutcome backupCore 的结果（供单机结果与分布式 DO 回执复用）。
+type backupOutcome struct {
+	BackupLSN uint64
+	Tables    int
+	Rows      int
+}
+
+// restoreOutcome restoreCore 的结果（供单机结果与分布式 DO 回执复用）。
+type restoreOutcome struct {
+	Tables int
+	Rows   int
+	LSN    uint64
+}
+
+// execBackup BACKUP TO '<path>'：单机走 backupCore；集群（存在远端节点）走
+// distributedBackup（两阶段对齐全局 LSN，生成 manifest）。
 func (e *Executor) execBackup(sess *Session, s *BackupStmt) (*Result, error) {
+	if e.clusterEnabled() {
+		return e.distributedBackup(s.Path)
+	}
+	out, err := e.backupCore(s.Path, "", "", 0)
+	if err != nil {
+		return nil, err
+	}
+	return &Result{
+		Columns:      []string{"path", "tables", "rows", "lsn"},
+		AffectedRows: out.Rows,
+		Rows:         [][]Value{{StrVal(s.Path), IntVal(int64(out.Tables)), IntVal(int64(out.Rows)), IntVal(int64(out.BackupLSN))}},
+	}, nil
+}
+
+// backupCore 单节点一致快照备份：生成 backupVersion 1 备份文件。
+// 分布式场景由协调者传入 nodeID/backupID/globalLSN 写入 meta 全局字段；
+// 单机场景传空/0，行为与 T18 完全一致。
+func (e *Executor) backupCore(path, nodeID, backupID string, globalLSN uint64) (*backupOutcome, error) {
 	if e.st == nil {
 		return nil, &SQLError{Msg: "backup failed: storage not injected"}
 	}
@@ -94,6 +140,12 @@ func (e *Executor) execBackup(sess *Session, s *BackupStmt) (*Result, error) {
 			_ = bs.Close()
 		}
 	}
+	var globalTSO uint64
+	if e.ts != nil {
+		if ts, terr := e.ts.Get(); terr == nil {
+			globalTSO = ts
+		}
+	}
 	meta := backupMeta{
 		FormatVersion: backupVersion,
 		CreatedAt:     timeNow(),
@@ -101,6 +153,10 @@ func (e *Executor) execBackup(sess *Session, s *BackupStmt) (*Result, error) {
 		TablesRaw:     tablesRaw,
 		HasRegions:    len(regionsRaw) > 0,
 		RegionsRaw:    regionsRaw,
+		NodeID:        nodeID,
+		BackupID:      backupID,
+		GlobalLSN:     globalLSN,
+		GlobalTSO:     globalTSO,
 	}
 	metaBytes, err := json.Marshal(meta)
 	if err != nil {
@@ -145,7 +201,7 @@ func (e *Executor) execBackup(sess *Session, s *BackupStmt) (*Result, error) {
 	dataCRC := crc32.ChecksumIEEE(data.Bytes())
 
 	// 写文件（原子替换：先写 .tmp 再 rename）。
-	tmpPath := s.Path + ".tmp"
+	tmpPath := path + ".tmp"
 	f, err := os.Create(tmpPath)
 	if err != nil {
 		return nil, &SQLError{Msg: "backup failed: create: " + err.Error()}
@@ -180,29 +236,43 @@ func (e *Executor) execBackup(sess *Session, s *BackupStmt) (*Result, error) {
 	if err := f.Close(); err != nil {
 		return nil, &SQLError{Msg: "backup failed: close: " + err.Error()}
 	}
-	if _, err := os.Stat(s.Path); err == nil {
-		if err := os.Remove(s.Path); err != nil {
+	if _, err := os.Stat(path); err == nil {
+		if err := os.Remove(path); err != nil {
 			return nil, &SQLError{Msg: "backup failed: replace old backup: " + err.Error()}
 		}
 	}
-	if err := os.Rename(tmpPath, s.Path); err != nil {
+	if err := os.Rename(tmpPath, path); err != nil {
 		return nil, &SQLError{Msg: "backup failed: finalize: " + err.Error()}
 	}
+	return &backupOutcome{BackupLSN: backupLSN, Tables: tables, Rows: rows}, nil
+}
+
+// execRestore RESTORE FROM '<path>' [TO LSN <n>]。
+// 集群路径：'<path>.manifest' 存在时按清单驱动各节点恢复到全局 LSN；
+// 否则单机路径（兼容旧备份文件与单机部署）。
+func (e *Executor) execRestore(sess *Session, s *RestoreStmt) (*Result, error) {
+	if manifestExists(s.Path) {
+		return e.distributedRestore(s.Path)
+	}
+	out, err := e.restoreCore(s.Path, s.ToLSN, s.HasToLSN)
+	if err != nil {
+		return nil, err
+	}
 	return &Result{
-		Columns:      []string{"path", "tables", "rows", "lsn"},
-		AffectedRows: rows,
-		Rows:         [][]Value{{StrVal(s.Path), IntVal(int64(tables)), IntVal(int64(rows)), IntVal(int64(backupLSN))}},
+		Columns:      []string{"tables", "rows", "lsn"},
+		AffectedRows: out.Tables,
+		Rows:         [][]Value{{IntVal(int64(out.Tables)), IntVal(int64(out.Rows)), IntVal(int64(out.LSN))}},
 	}, nil
 }
 
-// execRestore RESTORE FROM '<path>' [TO LSN <n>]：校验并恢复备份快照。
-// 幂等语义：目标库同名表先删（行+索引物理键）再按备份重建；整体事务，失败回滚。
-// PITR：备份点之后的 binlog 记录回放到 TO LSN（含），物理写直接落到引擎级 Storage。
-func (e *Executor) execRestore(sess *Session, s *RestoreStmt) (*Result, error) {
+// restoreCore 单节点恢复：校验并恢复备份快照（整体事务、幂等），
+// 可选 PITR 回放 binlog 到 toLSN（含）。toLSN 仅当 hasToLSN 时生效。
+// 分布式场景由协调者传入全局 LSN（hasToLSN=true）完成跨节点对齐。
+func (e *Executor) restoreCore(path string, toLSN uint64, hasToLSN bool) (*restoreOutcome, error) {
 	if e.st == nil {
 		return nil, &SQLError{Msg: "restore failed: storage not injected"}
 	}
-	meta, ops, err := readBackupFile(s.Path)
+	meta, ops, err := readBackupFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -313,11 +383,11 @@ func (e *Executor) execRestore(sess *Session, s *RestoreStmt) (*Result, error) {
 
 	// PITR：备份点之后的 binlog 回放到指定 TO LSN（含）。
 	finalLSN := meta.BackupLSN
-	if s.HasToLSN {
-		if s.ToLSN < meta.BackupLSN {
-			return nil, &SQLError{Msg: fmt.Sprintf("restore failed: TO LSN %d earlier than backup LSN %d", s.ToLSN, meta.BackupLSN)}
+	if hasToLSN {
+		if toLSN < meta.BackupLSN {
+			return nil, &SQLError{Msg: fmt.Sprintf("restore failed: TO LSN %d earlier than backup LSN %d", toLSN, meta.BackupLSN)}
 		}
-		if s.ToLSN > meta.BackupLSN {
+		if toLSN > meta.BackupLSN {
 			if e.binlogPath == "" {
 				return nil, &SQLError{Msg: "restore failed: binlog not enabled, cannot replay to LSN"}
 			}
@@ -328,7 +398,7 @@ func (e *Executor) execRestore(sess *Session, s *RestoreStmt) (*Result, error) {
 			defer bs.Close()
 			errStop := errors.New("replay stop")
 			rerr := bs.ReadFrom(storage.LSN(meta.BackupLSN+1), func(en *replication.BinlogEntry) error {
-				if uint64(en.LSN) > s.ToLSN {
+				if uint64(en.LSN) > toLSN {
 					return errStop
 				}
 				if werr := e.st.Write(en.Batch); werr != nil {
@@ -339,15 +409,11 @@ func (e *Executor) execRestore(sess *Session, s *RestoreStmt) (*Result, error) {
 			if rerr != nil && rerr != errStop {
 				return nil, &SQLError{Msg: "restore failed: replay binlog: " + rerr.Error()}
 			}
-			finalLSN = s.ToLSN
+			finalLSN = toLSN
 		}
 	}
 
-	return &Result{
-		Columns:      []string{"tables", "rows", "lsn"},
-		AffectedRows: len(ops),
-		Rows:         [][]Value{{IntVal(int64(len(bakTabs))), IntVal(int64(restoredRows)), IntVal(int64(finalLSN))}},
-	}, nil
+	return &restoreOutcome{Tables: len(bakTabs), Rows: restoredRows, LSN: finalLSN}, nil
 }
 
 // readBackupFile 读取并校验备份文件（magic/version/metaCRC/dataCRC），
@@ -428,4 +494,10 @@ func readBackupFile(path string) (*backupMeta, []storage.KVPair, error) {
 		return nil, nil, &SQLError{Msg: "restore failed: backup data checksum mismatch (file corrupted)"}
 	}
 	return &meta, ops, nil
+}
+
+// manifestExists 判断是否存在分布式备份 manifest（协调者备份路径旁）。
+func manifestExists(path string) bool {
+	_, err := os.Stat(path + ".manifest")
+	return err == nil
 }

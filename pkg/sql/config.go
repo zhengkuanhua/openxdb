@@ -24,12 +24,15 @@ import (
 
 // configSpec 一个可热更新的配置项：校验与应用（apply）以及当前值读取（read）。
 // apply 完全复用 M9/M13 原有 SET 语义与报错文案，保证现有 SET 行为零回归。
+// persistOnly 标记启动级配置（T36 tls_*）：仅允许 SET PERSIST 落盘，
+// 普通 SET 直接报错；实际生效在启动装配（restart-effective）。
 type configSpec struct {
-	key   string
-	desc  string
-	def   string // 默认值（SHOW CONFIG 来源 default 时展示）
-	apply func(e *Executor, v string) error
-	read  func(e *Executor) string
+	key         string
+	desc        string
+	def         string // 默认值（SHOW CONFIG 来源 default 时展示）
+	persistOnly bool   // T36：true = 仅 SET PERSIST（启动级配置，重启生效）
+	apply       func(e *Executor, v string) error
+	read        func(e *Executor) string
 }
 
 // configSpecs 支持的配置键注册表（顺序即 SHOW CONFIG 输出顺序）。
@@ -253,6 +256,107 @@ var configSpecs = []*configSpec{
 		},
 		read: func(e *Executor) string { return strconv.Itoa(logx.DefaultAlerts.Config().Keep) },
 	},
+	// T37 商用档：监控告警规则（指标阈值 + 持续时长 + 严重级别）配置。
+	// alert_rules_enabled 为规则评估总开关；alert_eval_interval 为评估周期秒；
+	// alert_rules 为规则 JSON 数组（SET/PERSIST 均可，非法规则整体报错）。
+	// 评估引擎数据源与 Prometheus 指标同源（metrics.Registry.Snapshot）。
+	{
+		key:  "alert_rules_enabled",
+		desc: "告警规则总开关（T37 监控告警）：on/off/1/0；off 时规则不评估不通知",
+		def:  "off",
+		apply: func(e *Executor, v string) error {
+			on := false
+			switch v {
+			case "on", "true", "1":
+				on = true
+			case "off", "false", "0":
+				on = false
+			default:
+				return &SQLError{Msg: "invalid value for alert_rules_enabled: " + v + " (expected on/off/1/0)"}
+			}
+			e.SetAlertRulesEnabled(on)
+			return nil
+		},
+		read: func(e *Executor) string { return boolValStr(e.AlertRulesEnabled()) },
+	},
+	{
+		key:  "alert_eval_interval",
+		desc: "告警规则评估周期秒（T37 监控告警）：1-3600，即时生效",
+		def:  "10",
+		apply: func(e *Executor, v string) error {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 1 || n > 3600 {
+				return &SQLError{Msg: "invalid value for alert_eval_interval: " + v + " (expected 1-3600)"}
+			}
+			e.SetAlertEvalInterval(n)
+			return nil
+		},
+		read: func(e *Executor) string { return strconv.FormatInt(e.AlertEvalInterval(), 10) },
+	},
+	{
+		key:  "alert_rules",
+		desc: "告警规则 JSON 数组（T37 监控告警）：[{id,metric,op,threshold,duration_sec,severity,enabled}]；空=清空规则",
+		def:  "",
+		apply: func(e *Executor, v string) error {
+			if err := e.SetAlertRulesJSON(v); err != nil {
+				return &SQLError{Msg: "invalid value for alert_rules: " + err.Error()}
+			}
+			return nil
+		},
+		read: func(e *Executor) string { return e.AlertRulesJSON() },
+	},
+	// T36 商用档：连接层 TLS 启动级配置（persistOnly）。
+	// 仅允许 SET PERSIST 落盘（监听层在启动装配，无法热更新）；普通 SET 由
+	// executor.execSet 明确报错。启动装配优先级：命令行 > 持久化 intent > 默认（无 TLS）。
+	// tls_allow_legacy 安全默认 off（纯 TLS）；显式 on 时同端口明文/TLS 并存。
+	{
+		key:         "tls_cert",
+		desc:        "TLS 服务端证书路径（T36，启动级）：SET PERSIST 落盘重启生效，配合 tls_key",
+		def:         "",
+		persistOnly: true,
+		apply:       func(e *Executor, v string) error { return nil },
+		read: func(e *Executor) string { return e.configPersistedValue("tls_cert", "") },
+	},
+	{
+		key:         "tls_key",
+		desc:        "TLS 服务端私钥路径（T36，启动级）：SET PERSIST 落盘重启生效，配合 tls_cert",
+		def:         "",
+		persistOnly: true,
+		apply:       func(e *Executor, v string) error { return nil },
+		read: func(e *Executor) string { return e.configPersistedValue("tls_key", "") },
+	},
+	{
+		key:         "tls_allow_legacy",
+		desc:        "TLS 同端口明文降级开关（T36，启动级）：on/off/1/0；on=允许明文会话并存，off=纯 TLS（安全默认）",
+		def:         "off",
+		persistOnly: true,
+		apply: func(e *Executor, v string) error {
+			switch v {
+			case "on", "true", "1", "off", "false", "0":
+				return nil
+			default:
+				return &SQLError{Msg: "invalid value for tls_allow_legacy: " + v + " (expected on/off/1/0)"}
+			}
+		},
+		read: func(e *Executor) string {
+			return e.configPersistedValue("tls_allow_legacy", "off")
+		},
+	},
+}
+
+// configPersistedValue 返回配置键当前生效值：内存 SET/SET PERSIST（sessionCfg）优先，
+// 其次持久化（persistedCfg），最后给定默认值。仅用于 persistOnly 键的 SHOW CONFIG 展示。
+// 注意：不得引用 configSpecs/lookupConfigSpec（否则构成包级初始化循环）。
+func (e *Executor) configPersistedValue(key, def string) string {
+	e.cfgMu.Lock()
+	defer e.cfgMu.Unlock()
+	if v, ok := e.sessionCfg[key]; ok {
+		return v
+	}
+	if v, ok := e.persistedCfg[key]; ok {
+		return v
+	}
+	return def
 }
 
 // lookupConfigSpec 按键查找配置项；未知键返回 nil（对应 unknown session variable）。
@@ -365,6 +469,26 @@ func (e *Executor) PersistedSlowLogIntent() int {
 	default:
 		return 0
 	}
+}
+
+// PersistedTLSConfig 返回持久化 TLS 启动意图（T36）：证书/私钥路径与
+// 明文降级开关。cmd/openxdb 在 db.Open（已加载 persisted.json）后调用，
+// 与命令行参数合并装配监听层（命令行优先）。allowLegacy 默认 off（纯 TLS，
+// 安全默认）；持久化未配置 tls_allow_legacy 时返回 false。
+func (e *Executor) PersistedTLSConfig() (cert, key string, allowLegacy bool) {
+	e.cfgMu.Lock()
+	defer e.cfgMu.Unlock()
+	cert = e.persistedCfg["tls_cert"]
+	key = e.persistedCfg["tls_key"]
+	if v, ok := e.persistedCfg["tls_allow_legacy"]; ok {
+		switch v {
+		case "on", "true", "1":
+			allowLegacy = true
+		default:
+			allowLegacy = false
+		}
+	}
+	return cert, key, allowLegacy
 }
 
 // persistConfigValue 应用后写入持久化配置：校验已在 apply 阶段完成，

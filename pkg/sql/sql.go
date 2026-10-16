@@ -52,6 +52,30 @@ func (e *Engine) ExecutorRouter() *sharding.Router { return e.ex.Router() }
 // SetCluster 注入 M4 集群管理器与本节点 ID（供 db.Open 装配，节点注册/转发/路由展开）。
 func (e *Engine) SetCluster(mgr *cluster.Manager, selfID string) { e.ex.SetCluster(mgr, selfID) }
 
+// ApplyRemoteDDL 节点侧应用远端 DDL 目录变更（T34 跨节点 DDL 广播接收端）。
+func (e *Engine) ApplyRemoteDDL(req cluster.DDLPushReq) error { return e.ex.ApplyRemoteDDL(req) }
+
+// ReplayPendingDDL 重放待同步的 DDL 广播（启动/运维/测试）。
+func (e *Engine) ReplayPendingDDL() (int, error) { return e.ex.ReplayPendingDDL() }
+
+// RemoteBackupPrepare 节点侧 T35 备份候选点回调（db.StartCluster 装配到 cluster.Server）。
+func (e *Engine) RemoteBackupPrepare(req cluster.BackupPrepareReq) (cluster.BackupPrepareResp, error) {
+	return e.ex.RemoteBackupPrepare(req)
+}
+
+// RemoteBackupDo 节点侧 T35 分布式备份执行回调（对齐 GlobalLSN 写本地备份）。
+func (e *Engine) RemoteBackupDo(req cluster.BackupDoReq) (cluster.BackupDoResp, error) {
+	return e.ex.RemoteBackupDo(req)
+}
+
+// RemoteRestoreDo 节点侧 T35 分布式恢复执行回调（恢复本地备份并 PITR 到 GlobalLSN）。
+func (e *Engine) RemoteRestoreDo(req cluster.RestoreDoReq) (cluster.RestoreDoResp, error) {
+	return e.ex.RemoteRestoreDo(req)
+}
+
+// SetReplicationModeSetter 装配 T33 复制模式控制器（db.Open 调用，转发至 Executor）。
+func (e *Engine) SetReplicationModeSetter(c ReplicationModeSetter) { e.ex.SetReplicationModeSetter(c) }
+
 // AuthenticateUser 校验用户名与密码（M11 预留：server 层连接鉴权握手与执行期权限校验用）。
 // 用户不存在或密码不匹配返回 (false, nil)；存储层错误原样返回。密码只做哈希比对，不落明文。
 func (e *Engine) AuthenticateUser(name, password string) (bool, error) {
@@ -109,6 +133,41 @@ func (e *Engine) StopBackupScheduler() { e.ex.StopBackupScheduler() }
 
 // BackupScheduleStatus 返回备份调度状态快照（SHOW BACKUP STATUS 数据源）。
 func (e *Engine) BackupScheduleStatus() BackupScheduleStatus { return e.ex.BackupScheduleStatus() }
+
+// T37 商用档：监控告警（规则与阈值配置）Engine 装配。
+// 规则评估引擎以 metrics.Registry.Snapshot 为数据源（与 Prometheus 同源），
+// 通知出口复用 logx.DefaultAlerts（内存缓冲 + 文件 + webhook）。cmd/main
+// start 在 SetMetrics 后调用 StartAlertRules；db 关闭流程调用 StopAlertRules。
+
+// StartAlertRules 启动告警规则评估循环（cmd/main start 装配后调用；幂等）。
+func (e *Engine) StartAlertRules() { e.ex.StartAlertRules() }
+
+// StopAlertRules 停止告警规则评估循环（db 关闭流程装配，避免关闭竞态）。
+func (e *Engine) StopAlertRules() { e.ex.StopAlertRules() }
+
+// SetAlertRulesEnabled 设置规则告警总开关（SET alert_rules_enabled 数据源）。
+func (e *Engine) SetAlertRulesEnabled(on bool) { e.ex.SetAlertRulesEnabled(on) }
+
+// AlertRulesEnabled 返回规则告警总开关。
+func (e *Engine) AlertRulesEnabled() bool { return e.ex.AlertRulesEnabled() }
+
+// SetAlertEvalInterval 设置评估周期秒（SET alert_eval_interval 数据源）。
+func (e *Engine) SetAlertEvalInterval(sec int64) { e.ex.SetAlertEvalInterval(sec) }
+
+// AlertEvalInterval 返回评估周期秒。
+func (e *Engine) AlertEvalInterval() int64 { return e.ex.AlertEvalInterval() }
+
+// SetAlertRulesJSON 解析并应用规则 JSON（SET alert_rules 数据源；非法返回错误）。
+func (e *Engine) SetAlertRulesJSON(s string) error { return e.ex.SetAlertRulesJSON(s) }
+
+// AlertRulesJSON 返回当前规则集 JSON（SHOW CONFIG 数据源）。
+func (e *Engine) AlertRulesJSON() string { return e.ex.AlertRulesJSON() }
+
+// AlertRules 返回规则状态快照（SHOW ALERT RULES 数据源）。
+func (e *Engine) AlertRules() []RuleStatus { return e.ex.AlertRules() }
+
+// EvaluateAlertRulesNow 立即执行一轮规则评估（测试/运维手动触发）。
+func (e *Engine) EvaluateAlertRulesNow() { e.ex.EvaluateAlertRulesNow() }
 
 // BackupNow 手动立即执行一次备份（运维/测试接口），返回备份文件路径。
 // 正在执行时返回错误；结果同时记录到 SHOW BACKUP STATUS 最近状态。
@@ -180,6 +239,12 @@ func (e *Engine) LoadPersistedConfig() error { return e.ex.LoadPersistedConfig()
 // （1=on、0=off、-1=无记录），供服务装配慢日志路径时尊重持久化开关。
 func (e *Engine) PersistedSlowLogIntent() int { return e.ex.PersistedSlowLogIntent() }
 
+// PersistedTLSConfig 返回持久化 TLS 启动意图（T36）：证书/私钥路径与
+// AllowLegacy 开关（cert/key 均空表示无持久化 TLS），供服务装配监听层。
+func (e *Engine) PersistedTLSConfig() (cert, key string, allowLegacy bool) {
+	return e.ex.PersistedTLSConfig()
+}
+
 // SlowLogEnabled 返回当前慢查询落盘开关状态。
 func (e *Engine) SlowLogEnabled() bool { return e.ex.SlowLogEnabled() }
 
@@ -230,7 +295,7 @@ func (e *Engine) ClusterSelfNode() (cluster.NodeInfo, bool) {
 // IsSQL 判断一行命令是否以 SQL 关键字开头（供协议层路由）。
 func IsSQL(line string) bool {
 	trimmed := strings.TrimLeft(line, " \t\r\n")
-	for _, kw := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "GRANT", "REVOKE", "BEGIN", "COMMIT", "ROLLBACK", "EXPORT", "IMPORT", "SHOW", "EXPLAIN", "SPLIT", "BALANCE", "BACKUP", "RESTORE", "ALTER", "SET"} {
+	for _, kw := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "GRANT", "REVOKE", "BEGIN", "COMMIT", "ROLLBACK", "EXPORT", "IMPORT", "SHOW", "EXPLAIN", "SPLIT", "BALANCE", "BACKUP", "RESTORE", "ALTER", "SET", "REFRESH", "USE", "CALL"} {
 		if strings.HasPrefix(strings.ToUpper(trimmed), kw+" ") ||
 			strings.EqualFold(trimmed, kw) {
 			return true

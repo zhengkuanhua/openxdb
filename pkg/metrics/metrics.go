@@ -30,6 +30,30 @@ type RegionStats struct {
 	Remote  int64            // 归属远端节点的 region 数
 }
 
+// RocksStats RocksDB 内部统计快照（由 rocksdb.StatsOf 采集后注入）。
+// 未装配采集源时全 0，各字段与 rocksdb.RocksStats 一一对应。
+type RocksStats struct {
+	NumLevels             int64    // LSM 层数
+	NumFilesAtLevel       [8]int64 // 各层 SST 文件数
+	CurSizeAllMemTables   int64    // 当前 MemTable 总大小（字节）
+	SizeAllMemTables      int64    // 含 immutable MemTable 的总大小（字节）
+	CompactionPending     int64    // 待 compaction 任务数
+	NumRunningCompactions int64    // 运行中 compaction 数
+	NumRunningFlushes     int64    // 运行中 flush 数
+	LiveSSTFilesSize      int64    // 活跃 SST 文件总字节
+	NumLiveVersions       int64    // 当前 live versions 数
+	EstimateNumKeys       int64    // 估算键数
+}
+
+// TotalSSTFiles 所有层 SST 文件总数（未装配时 0）。
+func (s RocksStats) TotalSSTFiles() int64 {
+	var n int64
+	for i := int64(0); i < s.NumLevels && i < 8; i++ {
+		n += s.NumFilesAtLevel[i]
+	}
+	return n
+}
+
 // qpsWindow 秒级 QPS 窗口：无锁 CAS 滚动。
 //   - bump(nowSec)：同秒计数 +1；跨秒时原子换窗并置 1；
 //   - value(nowSec)：返回当前秒已累计的请求数（渲染输出即时值）。
@@ -82,6 +106,7 @@ type Registry struct {
 	slowThreshold func() int64
 	storageBytes  func() int64
 	regionStats   func() RegionStats
+	rocksStats    func() RocksStats
 
 	now func() time.Time // 时间源（测试注入）
 }
@@ -134,6 +159,10 @@ func (m *Registry) SetStorageBytesSource(f func() int64) { m.storageBytes = f }
 // SetRegionStatsSource 注入 region 分片状态采集源（sql.Engine.MetricsRegionStats）。
 func (m *Registry) SetRegionStatsSource(f func() RegionStats) { m.regionStats = f }
 
+// SetRocksStatsSource 注入 RocksDB 内部统计采集源（rocksdb.StatsOf 包装，
+// 未装配 RocksDB 时注入返回空快照的函数即可，全部字段输出 0）。
+func (m *Registry) SetRocksStatsSource(f func() RocksStats) { m.rocksStats = f }
+
 // ---- 状态快照 ----
 
 // Snapshot 结构化状态快照（M13 子功能三 STATUS 聚合的数据源）。
@@ -149,6 +178,7 @@ type Snapshot struct {
 	SlowThresholdMs int64       // 慢查询阈值毫秒（注入源，0 = 未装配）
 	StorageBytes    int64       // 存储总数据量字节（注入源，0 = 未装配）
 	Regions         RegionStats // region 分片状态（注入源，空 = 未装配）
+	Rocks           RocksStats  // RocksDB 内部统计（注入源，空 = 未装配）
 	TxnCommit       int64       // 事务提交累计数
 	TxnRollback     int64       // 事务回滚累计数
 	LocalTotal      int64       // 本节点数据访问累计数
@@ -180,6 +210,9 @@ func (m *Registry) Snapshot() Snapshot {
 	}
 	if m.regionStats != nil {
 		snap.Regions = m.regionStats()
+	}
+	if m.rocksStats != nil {
+		snap.Rocks = m.rocksStats()
 	}
 	return snap
 }
@@ -254,6 +287,36 @@ func (m *Registry) Render() string {
 		"", rs.Local)
 	writeMetric(&sb, "openxdb_region_remote", "Regions owned by remote nodes.", "gauge",
 		"", rs.Remote)
+
+	var rks RocksStats
+	if m.rocksStats != nil {
+		rks = m.rocksStats()
+	}
+	// RocksDB 内部统计：LSM 层数 / 各层 SST 文件数 / MemTable 大小 / Compaction 进度。
+	writeMetric(&sb, "openxdb_rocksdb_lsm_levels", "RocksDB LSM tree level count.", "gauge",
+		"", rks.NumLevels)
+	for i := int64(0); i < rks.NumLevels && i < 8; i++ {
+		writeMetric(&sb, "openxdb_rocksdb_sst_files", "SST files at level.", "gauge",
+			`{level="`+fmt.Sprintf("%d", i)+`"}`, rks.NumFilesAtLevel[i])
+	}
+	writeMetric(&sb, "openxdb_rocksdb_sst_files_total", "Total SST files across all levels.", "gauge",
+		"", rks.TotalSSTFiles())
+	writeMetric(&sb, "openxdb_rocksdb_memtable_bytes", "Current memtable total size in bytes.", "gauge",
+		"", rks.CurSizeAllMemTables)
+	writeMetric(&sb, "openxdb_rocksdb_memtable_total_bytes", "Memtable total size including immutable in bytes.", "gauge",
+		"", rks.SizeAllMemTables)
+	writeMetric(&sb, "openxdb_rocksdb_compaction_pending", "Pending compaction tasks.", "gauge",
+		"", rks.CompactionPending)
+	writeMetric(&sb, "openxdb_rocksdb_compaction_running", "Running compaction tasks.", "gauge",
+		"", rks.NumRunningCompactions)
+	writeMetric(&sb, "openxdb_rocksdb_flush_running", "Running flush tasks.", "gauge",
+		"", rks.NumRunningFlushes)
+	writeMetric(&sb, "openxdb_rocksdb_live_sst_bytes", "Live SST files total size in bytes.", "gauge",
+		"", rks.LiveSSTFilesSize)
+	writeMetric(&sb, "openxdb_rocksdb_live_versions", "Number of live versions.", "gauge",
+		"", rks.NumLiveVersions)
+	writeMetric(&sb, "openxdb_rocksdb_estimate_keys", "Estimated number of keys.", "gauge",
+		"", rks.EstimateNumKeys)
 
 	writeMetric(&sb, "openxdb_txn_commit_total", "Transactions committed.", "counter",
 		"", m.txnCommit.Load())

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import ssl as _ssl
+
 from .cursor import Cursor
 from .errors import ConnectionClosedError, ProgrammingError
 from .protocol import DEFAULT_PORT, OpenXDBProtocol
@@ -19,14 +21,27 @@ class Connection:
 
     def __init__(self, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
                  user: str | None = None, password: str | None = None,
-                 timeout: float = 30.0):
-        # The OpenXDB line protocol has no authentication handshake;
-        # user/password are accepted for API compatibility and ignored.
+                 timeout: float = 30.0,
+                 ssl: bool | _ssl.SSLContext | None = None,
+                 ssl_ca: str | None = None, ssl_cert: str | None = None,
+                 ssl_key: str | None = None, ssl_check_hostname: bool = True,
+                 server_hostname: str | None = None):
+        # M11: when credentials are supplied the driver performs the AUTH
+        # handshake immediately; servers with --auth reject unauthenticated
+        # connections otherwise. TLS (T36): ssl=True → TLS without
+        # verification; ssl_ca=<path> → verify-full (CA chain + hostname);
+        # ssl_cert/ssl_key → mutual TLS.
         self._host = host
         self._port = port
         self._user = user
         self._password = password
-        self._protocol = OpenXDBProtocol(host, port, timeout)
+        self._protocol = OpenXDBProtocol(
+            host, port, timeout,
+            ssl=ssl, ssl_ca=ssl_ca, ssl_cert=ssl_cert, ssl_key=ssl_key,
+            ssl_check_hostname=ssl_check_hostname, server_hostname=server_hostname,
+        )
+        if user is not None:
+            self._protocol.auth(user, password or "")
         self._closed = False
 
     # -- attributes ------------------------------------------------------

@@ -1,0 +1,2 @@
+{"event":"rule_triggered","level":"error","module":"alert-rules","msg":"rule=r1 metric=sql_qps op=\u003e threshold=1 current=48 duration=0s severity=warn state=ALERT","time":"2026-10-15T15:38:07.990+08:00"}
+{"event":"rule_resolved","level":"error","module":"alert-rules","msg":"rule=r1 metric=sql_qps op=\u003e threshold=1 current=0 duration=0s severity=warn state=RESOLVED","time":"2026-10-15T15:38:09.217+08:00"}

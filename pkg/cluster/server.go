@@ -51,6 +51,18 @@ type Server struct {
 	// tso 本地/全局时间戳源（M8）：nil = 未装配（旧路径，不做版本过滤）。
 	// 中心化部署下本节点即为发号权威，TSO_REQ 由其批量发放。
 	tso tso.Source
+	// ddlApply 节点侧 DDL 元数据 apply 回调（T34）：由 db.StartCluster 装配
+	// sql.Executor.ApplyRemoteDDL；nil = 未装配（不接收目录变更）。
+	ddlApply func(req DDLPushReq) error
+	// backupPrepare 节点侧 T35 备份候选点回调（db.StartCluster 装配
+	// sql.Executor.RemoteBackupPrepare）；nil = 未装配（回执 Err）。
+	backupPrepare func(req BackupPrepareReq) (BackupPrepareResp, error)
+	// backupDo 节点侧 T35 分布式备份执行回调（db.StartCluster 装配
+	// sql.Executor.RemoteBackupDo）；nil = 未装配（回执 Err）。
+	backupDo func(req BackupDoReq) (BackupDoResp, error)
+	// restoreDo 节点侧 T35 分布式恢复执行回调（db.StartCluster 装配
+	// sql.Executor.RemoteRestoreDo）；nil = 未装配（回执 Err）。
+	restoreDo func(req RestoreDoReq) (RestoreDoResp, error)
 }
 
 // SetTSO 注入时间戳源（M8：db.StartCluster 装配本地发号器）。
@@ -173,6 +185,14 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.handle2pcAbort(conn, payload)
 		case msgTsoReq:
 			s.handleTso(conn, payload)
+		case msgDDLPush:
+			s.handleDDLPush(conn, payload)
+		case msgBackupPrepare:
+			s.handleBackupPrepare(conn, payload)
+		case msgBackupDo:
+			s.handleBackupDo(conn, payload)
+		case msgRestoreDo:
+			s.handleRestoreDo(conn, payload)
 		default:
 			return // 未知帧：断开
 		}

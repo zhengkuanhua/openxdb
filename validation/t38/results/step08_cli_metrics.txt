@@ -1,0 +1,46 @@
+﻿# HELP openxdb_queries_total Total queries executed.
+# TYPE openxdb_queries_total counter
+openxdb_queries_total{type="sql"} 151
+# HELP openxdb_queries_total Total queries executed.
+# TYPE openxdb_queries_total counter
+openxdb_queries_total{type="kv"} 0
+# HELP openxdb_qps Queries per second (current window).
+# TYPE openxdb_qps gauge
+openxdb_qps{type="sql"} 15
+# HELP openxdb_qps Queries per second (current window).
+# TYPE openxdb_qps gauge
+openxdb_qps{type="kv"} 0
+# HELP openxdb_connections_active Current active TCP connections.
+# TYPE openxdb_connections_active gauge
+openxdb_connections_active 1
+# HELP openxdb_slow_query_total Total slow queries recorded.
+# TYPE openxdb_slow_query_total counter
+openxdb_slow_query_total 0
+# HELP openxdb_slow_query_threshold_ms Slow query threshold in milliseconds.
+# TYPE openxdb_slow_query_threshold_ms gauge
+openxdb_slow_query_threshold_ms 0
+# HELP openxdb_storage_bytes Total on-disk data size in bytes.
+# TYPE openxdb_storage_bytes gauge
+openxdb_storage_bytes 1116822
+# HELP openxdb_region_count Total region count.
+# TYPE openxdb_region_count gauge
+openxdb_region_count 0
+# HELP openxdb_region_local Regions physically local.
+# TYPE openxdb_region_local gauge
+openxdb_region_local 0
+# HELP openxdb_region_remote Regions owned by remote nodes.
+# TYPE openxdb_region_remote gauge
+openxdb_region_remote 0
+# HELP openxdb_txn_commit_total Transactions committed.
+# TYPE openxdb_txn_commit_total counter
+openxdb_txn_commit_total 5
+# HELP openxdb_txn_rollback_total Transactions rolled back.
+# TYPE openxdb_txn_rollback_total counter
+openxdb_txn_rollback_total 2
+# HELP openxdb_query_local_total Data accesses served locally.
+# TYPE openxdb_query_local_total counter
+openxdb_query_local_total 3203
+# HELP openxdb_query_remote_total Data accesses forwarded to remote nodes.
+# TYPE openxdb_query_remote_total counter
+openxdb_query_remote_total 0
+

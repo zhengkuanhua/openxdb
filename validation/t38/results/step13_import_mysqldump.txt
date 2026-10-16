@@ -1,0 +1,2 @@
+﻿imported D:\AI项目\OpenXDB开源数据库开发\openxdb\validation\t38\t38_mysqldump_sample.sql -> tables=1 inserted=3 skipped=0 errors=0 batches=1
+

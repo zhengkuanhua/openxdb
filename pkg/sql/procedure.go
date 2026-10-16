@@ -313,6 +313,10 @@ func (e *Executor) execCreateProcedure(sess *Session, s *CreateProcedureStmt) (*
 		return nil, err
 	}
 	if findProcedure(procs, s.Name) != nil {
+		// T41：CREATE PROCEDURE IF NOT EXISTS——存储过程已存在时静默跳过
+		if s.IfNotExists {
+			return &Result{}, nil
+		}
 		return nil, &SQLError{Msg: "procedure already exists: " + s.Name}
 	}
 	procs = append(procs, &ProcedureMeta{

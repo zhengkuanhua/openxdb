@@ -9,7 +9,6 @@ compatibility and ignored.
 Usage::
 
     import openxdb
-
     conn = openxdb.connect("127.0.0.1", 7788)
     cur = conn.cursor()
     cur.execute("SELECT id, name FROM users WHERE id > ?", (1,))
@@ -17,6 +16,8 @@ Usage::
         print(row)
     conn.close()
 """
+
+from __future__ import annotations
 
 from .connection import Connection
 from .errors import (
@@ -52,7 +53,20 @@ paramstyle = "qmark"
 
 def connect(host: str = "127.0.0.1", port: int = DEFAULT_PORT,
             user: str | None = None, password: str | None = None,
-            timeout: float = 30.0) -> Connection:
-    """Connect to an OpenXDB server listening on *host*:*port*."""
+            timeout: float = 30.0,
+            ssl: bool | "ssl.SSLContext" | None = None,
+            ssl_ca: str | None = None, ssl_cert: str | None = None,
+            ssl_key: str | None = None, ssl_check_hostname: bool = True,
+            server_hostname: str | None = None) -> Connection:
+    """Connect to an OpenXDB server listening on *host*:*port*.
+
+    TLS parameters (``ssl``/``ssl_ca``/``ssl_cert``/``ssl_key``/
+    ``ssl_check_hostname``/``server_hostname``) are forwarded to
+    :class:`Connection` so encrypted connections are available through
+    the module-level factory (T36/T38 compatibility).
+    """
     return Connection(host=host, port=port, user=user, password=password,
-                      timeout=timeout)
+                      timeout=timeout, ssl=ssl, ssl_ca=ssl_ca,
+                      ssl_cert=ssl_cert, ssl_key=ssl_key,
+                      ssl_check_hostname=ssl_check_hostname,
+                      server_hostname=server_hostname)

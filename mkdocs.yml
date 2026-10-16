@@ -1,0 +1,78 @@
+site_name: OpenXDB
+site_description: OpenXDB — from-scratch relational database kernel (Go + RocksDB), single-node / distributed, v1.0.0
+site_author: OpenXDB Team
+repo_url: https://github.com/zhengkuanhua/openxdb
+nav:
+  - 首页: index.md
+  - 产品手册（中文）: product_manual_zh.md
+  - Product Manual (English): product_manual_en.md
+  - Why RocksDB: blog_why_openxdb_rocksdb.md
+  - 设计文档:
+      - 存储与事务: T1_rocksdb_storage_impl.md
+      - WAL: T2_wal_impl.md
+      - SQL 层: T3_sql_layer.md
+      - 事务实现: T3_txn_impl.md
+      - CLI 实现: T5_cli_impl.md
+      - 索引层: T6_index_layer.md
+      - ACID 笔记: T4_acid_notes.md
+      - 引擎选型 ADR: W4_adr_engine_selection.md
+      - M2/M3 接口预留: T7_m2m3_reservations.md
+      - P0 SQL 增强: T8_p0_sql_enhancements.md
+      - P1 CSV 类型: T9_p1_csv_types.md
+      - P2 运维语句与表达式: T10_p2_ops_expr.md
+      - M2 复制: T11_m2_replication.md
+      - M3 分片: T12_m3_sharding.md
+      - M4 多节点集群: T13_m4_multinode.md
+      - M5 分布式写 / 2PC: T14_m5_2pc.md
+      - M6 高可用: T15_m6_ha.md
+      - M7 分裂与负载均衡: T16_m7_split_balance.md
+      - M8 分布式事务: T17_m8_dist_txn.md
+      - T18 备份恢复: T18_backup_restore.md
+      - T19 客户端驱动: T19_client_drivers.md
+      - T20 运维工具链: T20_ops_toolchain.md
+      - T21 SQL 解析修复: T21_sql_parser_fixes.md
+      - M9 SQL 功能簇: T22_m9_online_ddl.md
+      - M10 SQL 兼容簇: T23_m10_cte.md
+      - M11 认证权限簇: T24_m11_user.md
+      - M12 分布式 SQL 簇: T25_m12_join.md
+      - M13 可观测簇: T26_m13_slowlog.md
+      - M14 生态接入簇: T27_m14_mysqldump_import.md
+      - M15 SQL 功能簇: T28_m15_matview.md
+      - M16 运维簇: T29_m16_hot_config.md
+      - M17 审计与 RBAC: T30_m17_audit.md
+      - M18 MySQL 兼容: T31_m18_mysql_compat.md
+      - M19 生态导出: T32_m19_ecosystem_export.md
+      - T33 同步/半同步复制: T33_m20_sync_semi_sync_replication.md
+      - T34 跨节点 DDL: T34_m20_cross_node_ddl.md
+      - T35 分布式备份一致性: T35_m20_dist_backup_consistency.md
+      - T36 TLS 合规: T36_commercial_tls.md
+      - T37 监控告警: T37_commercial_alerting.md
+      - T38 真实用户验证: T38_commercial_real_user_validation.md
+      - T39 SQL 能力差距评估: T39_sql_capability_gap_assessment.md
+      - T40 SQL 能力簇: T40_sql_capability_cluster.md
+      - T41 DDL 兼容簇: T41_ddl_compat_cluster.md
+      - T42 INSERT INTO SELECT: T42_insert_select.md
+  - 基准实验:
+      - E1 存储基准: experiments/E1_rocksdb_bench.md
+      - E2 fsync 基准: experiments/E2_rocksdb_fsync_bench.md
+      - E3 SQL OLTP 基准: experiments/E3_sql_oltp_bench.md
+      - E4 稳定性: experiments/E4_stability.md
+      - E5 标准基准对齐: experiments/E5_standard_bench_alignment.md
+theme:
+  name: readthedocs
+  highlightjs: true
+  hljs_languages:
+    - go
+    - sql
+    - python
+    - json
+  features:
+    - navigation.sections
+markdown_extensions:
+  - tables
+  - fenced_code
+  - toc:
+      permalink: true
+validation:
+  links:
+    not_found: ignore

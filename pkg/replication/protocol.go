@@ -59,22 +59,28 @@ func decodeHello(payload []byte) (ReplicaRole, storage.LSN, error) {
 	return role, from, nil
 }
 
-// helloOK payload: version(2B) + lastLSN(8B)
-func encodeHelloOK(last storage.LSN) []byte {
-	b := make([]byte, 0, 2+8)
+// helloOK payload: version(2B) + lastLSN(8B) [+ mode(1B)]（T33 起追加 mode，
+// 旧 10B 帧兼容解析为 ModeAsync）。
+func encodeHelloOK(last storage.LSN, mode ReplMode) []byte {
+	b := make([]byte, 0, 2+8+1)
 	b = binary.BigEndian.AppendUint16(b, protoVersion)
 	b = binary.BigEndian.AppendUint64(b, uint64(last))
+	b = append(b, byte(mode))
 	return b
 }
 
-func decodeHelloOK(payload []byte) (storage.LSN, error) {
-	if len(payload) != 2+8 {
-		return 0, ErrCorrupt
+func decodeHelloOK(payload []byte) (storage.LSN, ReplMode, error) {
+	if len(payload) != 2+8 && len(payload) != 2+8+1 {
+		return 0, ModeAsync, ErrCorrupt
 	}
 	if binary.BigEndian.Uint16(payload[0:2]) != protoVersion {
-		return 0, errors.New("replication: hello_ok version mismatch")
+		return 0, ModeAsync, errors.New("replication: hello_ok version mismatch")
 	}
-	return storage.LSN(binary.BigEndian.Uint64(payload[2:10])), nil
+	mode := ModeAsync
+	if len(payload) == 2+8+1 {
+		mode = ReplMode(payload[10])
+	}
+	return storage.LSN(binary.BigEndian.Uint64(payload[2:10])), mode, nil
 }
 
 // ack payload: lsn(8B)

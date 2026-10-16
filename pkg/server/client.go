@@ -2,7 +2,10 @@ package server
 
 import (
 	"crypto/tls"
+	"crypto/x509"
+	"fmt"
 	"net"
+	"os"
 	"time"
 )
 
@@ -31,4 +34,51 @@ func DialTimeout(addr string, tlsCfg *tls.Config, timeout time.Duration) (net.Co
 // 校验 CA 与 ServerName 的标准配置。
 func InsecureTLSConfig() *tls.Config {
 	return &tls.Config{InsecureSkipVerify: true}
+}
+
+// VerifyTLSConfig 返回商用校验的客户端 TLS 配置（T36 verify-full 语义）：
+// 以 caPath（PEM CA 证书）为信任根校验服务器证书链，并以 serverName
+// 校验证书主机名（SAN/CN）。证书过期、链不可信、主机名不匹配均握手失败。
+// serverName 必填（verify-full 必须校验主机名）；仅校验链用 CAFileTLSConfig。
+func VerifyTLSConfig(caPath, serverName string) (*tls.Config, error) {
+	if serverName == "" {
+		return nil, fmt.Errorf("client: VerifyTLSConfig requires non-empty serverName")
+	}
+	roots, err := loadCACertPool(caPath)
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Config{
+		RootCAs:    roots,
+		ServerName: serverName,
+	}, nil
+}
+
+// CAFileTLSConfig 返回仅校验证书链、不校验主机名的客户端 TLS 配置
+// （T36 verify-ca 语义）：以 caPath 为信任根校验链；serverName 传空时
+// 不校验主机名（适合证书 SAN 与连接地址不一致的内网场景）。
+func CAFileTLSConfig(caPath, serverName string) (*tls.Config, error) {
+	roots, err := loadCACertPool(caPath)
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Config{
+		RootCAs:    roots,
+		ServerName: serverName,
+		// Go 的 TLS 客户端默认在 ServerName 非空时校验主机名；传空则
+		// 仅校验链。此函数保留 serverName 参数供调用方选择 verify-full。
+	}, nil
+}
+
+// loadCACertPool 读取 PEM CA 证书文件并构建信任根池。
+func loadCACertPool(caPath string) (*x509.CertPool, error) {
+	pem, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("client: read CA file %s: %w", caPath, err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("client: no valid CA certificates in %s", caPath)
+	}
+	return roots, nil
 }

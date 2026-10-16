@@ -91,9 +91,16 @@ func (m *AlertManager) Config() AlertConfig {
 // Alert 记录一条告警（level 固定 error）。module 为关键模块名
 // （wal/storage/network/backup/sql 等），event 为事件名，msg 为人类可读描述。
 func (m *AlertManager) Alert(module, event, msg string) {
+	m.Notify("error", module, event, msg)
+}
+
+// Notify 记录一条告警（可指定严重级别 level：error/warn/info 等，T37 规则告警
+// 按规则 severity 区分）。module 为关键模块名，event 为事件名，msg 为人类可读
+// 描述。行为与 Alert 一致：内存环形缓冲 + 可选文件落盘 + webhook 推送。
+func (m *AlertManager) Notify(level, module, event, msg string) {
 	a := Alert{
 		Time:   time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
-		Level:  "error",
+		Level:  level,
 		Module: module,
 		Event:  event,
 		Msg:    msg,

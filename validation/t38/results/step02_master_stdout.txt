@@ -1,0 +1,6 @@
+OpenXDB v0.25.0-alpha replication listening on :7789 (binlog: binlog.log)
+slow query log: C:\Users\27756\AppData\Roaming\Tencent\Marvis\User\oAN1i2RORm9ewWWUXrcT2XBfRk0c\workspace\conv_5d15f4c8d8ec46778266acaa06c35c33\temp\openxdb-t38\master\slow.log (threshold 100ms, use SHOW SLOWQUERIES)
+backup scheduler: disabled (use --backup-interval <sec> / SET PERSIST backup_interval)
+alert rules engine: started (use SET alert_rules_enabled=on, SHOW ALERT RULES)
+metrics endpoint: http://127.0.0.1:7790/metrics
+OpenXDB v0.25.0-alpha serving on :7788 (data dir: C:\Users\27756\AppData\Roaming\Tencent\Marvis\User\oAN1i2RORm9ewWWUXrcT2XBfRk0c\workspace\conv_5d15f4c8d8ec46778266acaa06c35c33\temp\openxdb-t38\master), Ctrl-C to stop.

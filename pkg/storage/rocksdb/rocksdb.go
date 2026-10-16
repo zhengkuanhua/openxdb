@@ -116,6 +116,61 @@ func (r *rocks) Close() error {
 	return nil
 }
 
+// RocksStats RocksDB 内部统计快照（LSM/SST/MemTable/Compaction 等）。
+// 由 xdb_stats_get 一次调用批量采集，供监控看板 / 管理台对接。
+type RocksStats struct {
+	NumLevels             int64    // LSM 层数（level 0 为内存 flush 目标层）
+	NumFilesAtLevel       [8]int64 // 各层 SST 文件数（i < NumLevels）
+	CurSizeAllMemTables   int64    // 当前 MemTable 总大小（字节）
+	SizeAllMemTables      int64    // 含 immutable MemTable 的总大小（字节）
+	CompactionPending     int64    // 待 compaction 任务数
+	NumRunningCompactions int64    // 运行中 compaction 数
+	NumRunningFlushes     int64    // 运行中 flush 数
+	LiveSSTFilesSize      int64    // 活跃 SST 文件总字节
+	NumLiveVersions       int64    // 当前 live versions 数
+	EstimateNumKeys       int64    // 估算键数
+}
+
+// TotalSSTFiles 所有层 SST 文件总数。
+func (s *RocksStats) TotalSSTFiles() int64 {
+	var n int64
+	for i := int64(0); i < s.NumLevels && i < 8; i++ {
+		n += s.NumFilesAtLevel[i]
+	}
+	return n
+}
+
+// Stats 采集 RocksDB 内部统计（Storage 接口之外的可选能力，
+// 通过类型断言使用：st.(*rocks).Stats()）。
+func (r *rocks) Stats() (*RocksStats, error) {
+	if r.h == nil {
+		return nil, fmt.Errorf("rocksdb: stats: closed")
+	}
+	var cs C.xdb_stats
+	var errmsg *C.char
+	ret := C.xdb_stats_get(r.h, &cs, &errmsg)
+	if ret != 0 {
+		err := fmt.Errorf("rocksdb: stats: %s", cString(errmsg))
+		freeStr(errmsg)
+		return nil, err
+	}
+	s := &RocksStats{
+		NumLevels:             int64(cs.num_levels),
+		CurSizeAllMemTables:   int64(cs.cur_size_all_mem_tables),
+		SizeAllMemTables:      int64(cs.size_all_mem_tables),
+		CompactionPending:     int64(cs.compaction_pending),
+		NumRunningCompactions: int64(cs.num_running_compactions),
+		NumRunningFlushes:     int64(cs.num_running_flushes),
+		LiveSSTFilesSize:      int64(cs.live_sst_files_size),
+		NumLiveVersions:       int64(cs.num_live_versions),
+		EstimateNumKeys:       int64(cs.estimate_num_keys),
+	}
+	for i := 0; i < 8; i++ {
+		s.NumFilesAtLevel[i] = int64(cs.num_files_at_level[i])
+	}
+	return s, nil
+}
+
 type snapshot struct {
 	s *C.xsnap
 }
@@ -218,6 +273,16 @@ func (sn *snapshot) Release() {
 	}
 	C.xdb_snapshot_release(sn.s)
 	sn.s = nil
+}
+
+// StatsOf 从 storage.Storage 提取 RocksDB 内部统计；非 RocksDB 实现返回错误。
+// 供管理台 / metrics 采集源装配使用：rocksdb.StatsOf(d.Storage)。
+func StatsOf(st storage.Storage) (*RocksStats, error) {
+	r, ok := st.(*rocks)
+	if !ok {
+		return nil, fmt.Errorf("rocksdb: stats: storage is not rocksdb-backed")
+	}
+	return r.Stats()
 }
 
 // ---- cgo 辅助 ----

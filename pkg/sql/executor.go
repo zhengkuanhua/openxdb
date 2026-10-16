@@ -3,6 +3,7 @@ package sql
 import (
 	"bytes"
 	"fmt"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +24,9 @@ import (
 type Executor struct {
 	tm    txn.TxnManager
 	mu    sync.Mutex
+	// T33 复制模式控制器（nil = 未装配，SET replication_* 返回明确错误）。
+	// 由 db.Open 注入（避免 sql 包依赖 db 包）；实现见 ReplicationModeSetter。
+	replCtl ReplicationModeSetter
 	// 全局会话（旧单会话 API 使用：Engine.Execute/ExecuteAs、CLI、既有测试）。
 	// 服务端多连接场景使用 NewSession 创建独立会话，显式事务状态互不干扰。
 	globalSess *Session
@@ -96,6 +100,11 @@ type Executor struct {
 	// backup_schedule.go）。NewExecutor 初始化；config.go 的 backup_* 键
 	// 热更新、cmd/main 启动装配与 SHOW BACKUP STATUS 均读写此调度器。
 	backupSched *BackupScheduler
+	// T37 商用档：告警规则评估引擎（指标阈值规则 + 状态机 + 通知出口，
+	// alert_rules.go）。NewExecutor 初始化；config.go 的 alert_rules* 键
+	// 热更新、cmd/main 启动装配与 SHOW ALERT RULES / SHOW ALERT STATUS
+	// 均读写此引擎。评估数据源为 metrics.Registry.Snapshot（e.m，同 Prometheus）。
+	alertRules *AlertRulesEngine
 }
 
 // splitConfig M7 自动分裂配置。
@@ -107,7 +116,7 @@ type splitConfig struct {
 func NewExecutor(tm txn.TxnManager) *Executor {
 e := &Executor{
 		tm:            tm,
-		globalSess:    &Session{},
+		globalSess:    &Session{prepared: map[string]string{}, userVars: map[string]Value{}},
 		router:        sharding.NewRouter(),
 		failoverDone:  map[string]bool{},
 		splitAcc:      map[uint64]int64{},
@@ -127,6 +136,9 @@ e := &Executor{
 	// BR 方向②：备份调度器单点装配（需引用 Executor 本身执行 BACKUP，
 	// 故构造后单独初始化；db.Close 停止调度亦依赖此字段非 nil）。
 	e.initBackupScheduler()
+	// T37 商用档：告警规则评估引擎单点装配（需引用 Executor 取指标快照，
+	// 故构造后单独初始化；cmd/main 启动/停止评估循环亦依赖此字段非 nil）。
+	e.initAlertRulesEngine()
 	return e
 }
 
@@ -190,7 +202,18 @@ func (e *Executor) SetStatsSources(conn func() int64, binlog func() (uint64, err
 }
 
 // SetMetrics 注入指标注册表（M13 metrics 导出；nil 关闭计数）。
-func (e *Executor) SetMetrics(m *metrics.Registry) { e.m = m }
+// T37 起同时把注册表快照源注入告警规则评估引擎（评估数据与 Prometheus
+// /metrics 同源；nil 时规则引擎不评估）。
+func (e *Executor) SetMetrics(m *metrics.Registry) {
+	e.m = m
+	if e.alertRules != nil {
+		if m != nil {
+			e.alertRules.snapshot = m.Snapshot
+		} else {
+			e.alertRules.snapshot = nil
+		}
+	}
+}
 
 // incLocal / incRemote 数据访问本地/远端转发计数（M13 metrics）。
 func (e *Executor) incLocal() {
@@ -410,6 +433,12 @@ func (e *Executor) execStmt(sess *Session, stmt Stmt) (*Result, error) {
 		return e.execExport(sess, s)
 	case *ImportStmt:
 		return e.execImport(sess, s)
+	case *PrepareStmt:
+		return e.execPrepare(sess, s)
+	case *ExecuteStmt:
+		return e.execExecute(sess, s)
+	case *DeallocateStmt:
+		return e.execDeallocate(sess, s)
 	case *CreateViewStmt:
 		return e.execCreateView(sess, s)
 	case *DropViewStmt:
@@ -468,6 +497,8 @@ func (e *Executor) execStmt(sess *Session, stmt Stmt) (*Result, error) {
 		return e.execShowAlerts(sess, s)
 	case *ShowAlertStatusStmt:
 		return e.execShowAlertStatus(sess, s)
+	case *ShowAlertRulesStmt:
+		return e.execShowAlertRules(sess, s)
 	case *ShowBinlogEventsStmt:
 		return e.execShowBinlogEvents(sess, s)
 	case *SetStmt:
@@ -591,6 +622,21 @@ func (e *Executor) rollbackTx(sess *Session) error {
 	return nil
 }
 
+// resetSessionTxState 复位会话事务状态（T42：INSERT INTO ... SELECT 在
+// autocommit 下临时提升的显式事务，其事务句柄已由 exec2pcWrite 提交或
+// defer Rollback 处理，此处仅清理会话残留，避免 inTx/curTx 泄漏影响后续语句）。
+func (e *Executor) resetSessionTxState(sess *Session) {
+	e.mu.Lock()
+	sess.inTx = false
+	sess.curTx = nil
+	sess.curBeginTS = 0
+	sess.curTxID = ""
+	e.mu.Unlock()
+	if e.ts != nil {
+		e.ts.Reset()
+	}
+}
+
 // SetTSO 注入全局时间戳源（M8：db.Open/StartCluster 装配）。
 // nil 表示不启用快照隔离（单机旧路径零回归）。
 func (e *Executor) SetTSO(src tso.Source) {
@@ -689,13 +735,25 @@ func (e *Executor) execCreateTable(sess *Session, s *CreateTableStmt) (*Result, 
 	if err != nil {
 		return nil, err
 	}
+	// M18-A：information_schema 为只读虚拟目录，禁止建表。
+	if isInfoSchemaName(s.Name) {
+		return nil, &SQLError{Msg: "cannot create table in information_schema"}
+	}
 	if findTable(tabs, s.Name) != nil {
+		// T41：CREATE TABLE IF NOT EXISTS——表已存在时静默跳过
+		if s.IfNotExists {
+			return &Result{}, nil
+		}
 		return nil, &SQLError{Msg: "table already exists: " + s.Name}
+	}
+	// T41：CTAS——CREATE TABLE <name> AS SELECT ...（原子建表+插数）
+	if s.Select != nil {
+		return e.execCreateTableAsSelect(sess, s, tabs)
 	}
 	if s.PK == "" && len(s.Columns) > 0 {
 		s.PK = s.Columns[0].Name
 	}
-	meta := &TableMeta{ID: nextTableID(tabs), Name: s.Name, Columns: s.Columns, PK: s.PK, ForeignKeys: s.ForeignKeys}
+	meta := &TableMeta{ID: nextTableID(tabs), Name: s.Name, Columns: s.Columns, PK: s.PK, ForeignKeys: s.ForeignKeys, Indexes: s.Indexes}
 	// M9 外键：建表时校验引用关系（父表存在/列存在/引用主键/类型兼容）
 	if err := validateForeignKeys(tabs, meta); err != nil {
 		return nil, err
@@ -712,11 +770,104 @@ func (e *Executor) execCreateTable(sess *Session, s *CreateTableStmt) (*Result, 
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
+		e.broadcastDDL(cluster.DDLOpCreate, meta, 0, "")
 	}
 	return &Result{AffectedRows: 0}, nil
 }
 
+// execCreateTableAsSelect 执行 CREATE TABLE <name> AS SELECT（T41 的 CTAS）。
+// 流程：事务内执行 SELECT 取快照 → 由结果列名与值推断列类型（复用物化视图
+// 推断：INT/DECIMAL/DATE/BLOB/TEXT，空结果集全 TEXT）→ 注册新表（无显式主键
+// 时按项目惯例默认首列为 PK）→ 逐行编码写入（行键路由与普通 INSERT 一致）→
+// 同一事务原子提交：建表与插数要么全部生效要么全部回滚。
+func (e *Executor) execCreateTableAsSelect(sess *Session, s *CreateTableStmt, tabs []*TableMeta) (*Result, error) {
+	if s.Select == nil {
+		return nil, &SQLError{Msg: "CREATE TABLE AS requires SELECT"}
+	}
+	needTx := !sess.inTx
+	if needTx {
+		if err := e.beginTx(sess); err != nil {
+			return nil, err
+		}
+		defer func() {
+			if sess.inTx {
+				_ = e.rollbackTx(sess)
+			}
+		}()
+	}
+	tx := sess.curTx
+	res, err := e.execSelect(sess, s.Select)
+	if err != nil {
+		return nil, err
+	}
+	cols, err := matViewColumnNames(res.Columns)
+	if err != nil {
+		return nil, err
+	}
+	defs, normRows, err := inferMatViewSchema(cols, res.Rows)
+	if err != nil {
+		return nil, err
+	}
+	meta := &TableMeta{
+		ID:      nextTableID(tabs),
+		Name:    s.Name,
+		Columns: defs,
+	}
+	if len(defs) > 0 {
+		meta.PK = defs[0].Name // 未指定主键：按项目惯例默认首列
+	}
+	tabs = append(tabs, meta)
+	raw, err := saveTables(tabs)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(metaKey, raw); err != nil {
+		return nil, err
+	}
+	n, err := e.writeCtasRows(tx, meta, normRows)
+	if err != nil {
+		return nil, err
+	}
+	if needTx {
+		if err := e.commitTx(sess); err != nil {
+			return nil, err
+		}
+	}
+	return &Result{AffectedRows: int(n)}, nil
+}
+
+// writeCtasRows 把 CTAS 结果行写入新表：主键为默认首列（项目惯例），
+// 行键路由与普通 INSERT 一致（locateRow + rowKeyAt + encodeRow）。
+func (e *Executor) writeCtasRows(tx txn.Txn, meta *TableMeta, rows [][]Value) (int, error) {
+	for _, row := range rows {
+		if len(row) != len(meta.Columns) {
+			return 0, &SQLError{Msg: "corrupted CTAS result"}
+		}
+		raw, err := encodeRow(meta, row)
+		if err != nil {
+			return 0, err
+		}
+		pk, err := pkBytes(meta, row[0])
+		if err != nil {
+			return 0, err
+		}
+		rid, err := e.locateRow(meta, pk)
+		if err != nil {
+			return 0, err
+		}
+		key := e.rowKeyAt(meta, rid, pk)
+		if err := tx.Put(key, raw); err != nil {
+			return 0, err
+		}
+	}
+	return len(rows), nil
+}
+
 func (e *Executor) execDropTable(sess *Session, s *DropTableStmt) (*Result, error) {
+	// M18-C：information_schema 为只读虚拟目录，禁止 DROP 虚拟表。
+	if isInfoSchemaName(s.Name) {
+		return nil, &SQLError{Msg: "cannot drop table in information_schema"}
+	}
 	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
@@ -841,6 +992,7 @@ func (e *Executor) execDropTable(sess *Session, s *DropTableStmt) (*Result, erro
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
+		e.broadcastDDL(cluster.DDLOpDrop, meta, meta.ID, meta.Name)
 	}
 	return &Result{AffectedRows: len(pairs)}, nil
 }
@@ -863,6 +1015,10 @@ func (e *Executor) execCreateUser(sess *Session, s *CreateUserStmt) (*Result, er
 		return nil, err
 	}
 	if findUser(users, s.Name) != nil {
+		// T41：CREATE USER IF NOT EXISTS——用户已存在时静默跳过
+		if s.IfNotExists {
+			return &Result{}, nil
+		}
 		return nil, &SQLError{Msg: "user already exists: " + s.Name}
 	}
 	saltHash, err := hashPassword(s.Password)
@@ -1052,6 +1208,10 @@ func (e *Executor) execCreateIndex(sess *Session, s *CreateIndexStmt) (*Result, 
 		return nil, &SQLError{Msg: "table not exists: " + s.Table}
 	}
 	if findIndex(meta, s.Name) != nil {
+		// T41：CREATE INDEX IF NOT EXISTS——索引已存在时静默跳过
+		if s.IfNotExists {
+			return &Result{}, nil
+		}
 		return nil, &SQLError{Msg: "index already exists: " + s.Name}
 	}
 	if colIndex(meta, s.Col) < 0 {
@@ -1234,6 +1394,9 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 		if err := e.ddlCommit(sess, tx, tabs, ops, auto); err != nil {
 			return nil, err
 		}
+		if auto {
+			e.broadcastDDL(cluster.DDLOpAlter, meta, 0, "")
+		}
 		return &Result{AffectedRows: affected}, nil
 	case "DROP_COLUMN":
 		if colIndex(meta, s.Col) < 0 {
@@ -1296,6 +1459,9 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 		if err := e.ddlCommit(sess, tx, tabs, ops, auto); err != nil {
 			return nil, err
 		}
+		if auto {
+			e.broadcastDDL(cluster.DDLOpAlter, meta, 0, "")
+		}
 		return &Result{AffectedRows: affected}, nil
 	case "RENAME_COLUMN":
 		if colIndex(meta, s.Col) < 0 {
@@ -1321,6 +1487,9 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 		if err := e.ddlCommit(sess, tx, tabs, nil, auto); err != nil {
 			return nil, err
 		}
+		if auto {
+			e.broadcastDDL(cluster.DDLOpAlter, meta, 0, "")
+		}
 		return &Result{AffectedRows: 0}, nil
 	case "RENAME_TABLE":
 		if findTable(tabs, s.NewName) != nil {
@@ -1329,6 +1498,9 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 		meta.Name = s.NewName
 		if err := e.ddlCommit(sess, tx, tabs, nil, auto); err != nil {
 			return nil, err
+		}
+		if auto {
+			e.broadcastDDL(cluster.DDLOpAlter, meta, 0, "")
 		}
 		return &Result{AffectedRows: 0}, nil
 	case "ADD_INDEX":
@@ -1369,6 +1541,7 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 			if err := tx.Commit(); err != nil {
 				return nil, err
 			}
+			e.broadcastDDL(cluster.DDLOpAlter, meta, 0, "")
 		}
 		return &Result{AffectedRows: len(pairs)}, nil
 	case "DROP_INDEX":
@@ -1405,6 +1578,7 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 			if err := tx.Commit(); err != nil {
 				return nil, err
 			}
+			e.broadcastDDL(cluster.DDLOpAlter, meta, 0, "")
 		}
 		return &Result{AffectedRows: len(pairs)}, nil
 	}
@@ -1414,11 +1588,25 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 // ---- DML ----
 
 func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
+	// M18-C：information_schema 为只读虚拟目录，禁止 INSERT。
+	if isInfoSchemaName(s.Table) {
+		return nil, &SQLError{Msg: "cannot insert into information_schema"}
+	}
+	auto := e.autocommit(sess)
+	// T42：INSERT INTO ... SELECT 需要 SELECT 读取与写入同一事务。autocommit
+	// 下先将会话提升为显式事务（execSelect 复用 curTx，不再独立开临时事务并
+	// defer Rollback），提交路径仍走 exec2pcWrite；函数返回前无论成败复位会话
+	// 事务状态，避免提交/回滚后残留 inTx/curTx 影响后续语句。
+	if s.Select != nil && auto {
+		if err := e.beginTx(sess); err != nil {
+			return nil, err
+		}
+		defer e.resetSessionTxState(sess)
+	}
 	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -1435,14 +1623,35 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 	// M10 UPSERT：语句内已计划写入的最终行（含 REPLACE 删旧插新后的新行、
 	// ON DUPLICATE 更新后的目标行），用于语句内主键/唯一键冲突判定。
 	var pending [][]Value
-	for _, row := range s.Rows {
-		rops, aff, err := e.insertRowUpsertOps(sess, tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &pending)
+	if s.Select != nil {
+		// T42：先完整执行 SELECT 取快照（目标表与源表相同时先读后写，快照语义），
+		// 再逐行灌入目标表——复用 insertRowUpsertOps 与 VALUES 路径完全一致
+		// （类型 coerced / 主键与唯一索引冲突 / ON DUPLICATE 更新 / REPLACE 删旧插新 /
+		// 索引维护 / 外键检查 / pending 语句内重复判定）。
+		res, err := e.execSelect(sess, s.Select)
 		if err != nil {
 			return nil, err
 		}
-		if aff > 0 {
-			affected += aff
-			ops = append(ops, rops...)
+		for _, row := range res.Rows {
+			rops, aff, err := e.insertRowUpsertOps(sess, tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &pending)
+			if err != nil {
+				return nil, err
+			}
+			if aff > 0 {
+				affected += aff
+				ops = append(ops, rops...)
+			}
+		}
+	} else {
+		for _, row := range s.Rows {
+			rops, aff, err := e.insertRowUpsertOps(sess, tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &pending)
+			if err != nil {
+				return nil, err
+			}
+			if aff > 0 {
+				affected += aff
+				ops = append(ops, rops...)
+			}
 		}
 	}
 	// M15-2：BEFORE 触发器（在写入提交前执行；失败则整个 DML 随事务回滚）
@@ -1454,8 +1663,14 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 	if auto {
 		// autocommit：本地 + 远端统一走 2PC 提交（单机零触发）
 		if err := e.exec2pcWrite(sess, tx, ops); err != nil {
+			// T42：临时提升的会话事务已被 exec2pcWrite 处理（提交或半途失败），
+			// 立即复位会话事务状态，避免残留 inTx/curTx 影响后续语句。
+			e.resetSessionTxState(sess)
 			return nil, err
 		}
+		// T42：临时提升的会话事务已提交，立即复位会话事务状态，
+		// 避免后续 maybeAutoSplit / AFTER 触发器通过 getTx 拿到已提交的 curTx。
+		e.resetSessionTxState(sess)
 	} else {
 		// 显式会话事务：仅支持本地 region 写（远端写 M5 返回明确错误）
 		if e.hasRemoteOps(ops) {
@@ -1887,7 +2102,48 @@ func (e *Executor) insertRow(sess *Session, tx txn.Txn, tabs []*TableMeta, meta 
 	return true, nil
 }
 
+// resolveWhereVars 将 WHERE 条件值中的 @var 用户变量替换为会话值（M18-C）。
+// 变量未设置时报错；CASE 分支等值节点同样处理。
+func (e *Executor) resolveWhereVars(sess *Session, w *Where) error {
+	if w == nil {
+		return nil
+	}
+	for i := range w.Conds {
+		c := &w.Conds[i]
+		if c.Val.Kind == "VAR" {
+			v, ok := sess.userVars[c.Val.S]
+			if !ok {
+				return &SQLError{Msg: "user variable not set: " + c.Val.S}
+			}
+			c.Val = v
+		}
+		if c.LeftCase != nil {
+			for j := range c.LeftCase.Branches {
+				b := &c.LeftCase.Branches[j]
+				for k := range b.Conds.Conds {
+					if b.Conds.Conds[k].Val.Kind == "VAR" {
+						v, ok := sess.userVars[b.Conds.Conds[k].Val.S]
+						if !ok {
+							return &SQLError{Msg: "user variable not set: " + b.Conds.Conds[k].Val.S}
+						}
+						b.Conds.Conds[k].Val = v
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
+	// M18-C：SELECT @var 无 FROM 常量投影（用户变量取值）。
+	if s.From == "" && len(s.Columns) == 1 && s.Columns[0].Var != "" {
+		v, ok := sess.userVars[s.Columns[0].Var]
+		if !ok {
+			return nil, &SQLError{Msg: "user variable not set: " + s.Columns[0].Var}
+		}
+		return &Result{Columns: []string{s.Columns[0].Var}, Rows: [][]Value{{v}}}, nil
+	}
 	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
@@ -1895,6 +2151,20 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
 	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
+	}
+	// M18-C：WHERE 中的 @var 用户变量在查询执行前替换为会话值（未设置报错）。
+	if err := e.resolveWhereVars(sess, s.Where); err != nil {
+		return nil, err
+	}
+	// 普通 schema.table 限定名剥去 schema（OpenXDB 单库模型）；information_schema.* 保留全名。
+	s.From = normalizeTableRef(s.From)
+	// M18-A：information_schema 虚拟表（只读目录视图），拦截在 CTE/视图展开之前。
+	if isInfoSchemaName(s.From) {
+		tabs, err := loadTables(tx.Get)
+		if err != nil {
+			return nil, err
+		}
+		return execInfoSchema(s, tabs)
 	}
 	// M10 CTE：执行前展开语句级 WITH 子句（引用 CTE 名替换为定义子查询），
 	// 先于视图展开执行（语句内作用域优先）；循环引用在此阶段报错。
@@ -2192,8 +2462,15 @@ func (e *Executor) finishSelectWindow(meta *TableMeta, s *SelectStmt, rows [][]V
 			winCols = append(winCols, &s.Columns[i])
 		}
 	}
+	cols := make([]string, 0, len(res.Columns))
+	for _, col := range visibleColumns(meta) {
+		cols = append(cols, col.Name)
+	}
+	rel := &Rel{Cols: cols, Rows: rows}
 	winVals, err := computeWindows(rows, func(row []Value, col string) (Value, error) {
 		return rowValue(meta, row, col)
+	}, func(row []Value, e *Expr) (Value, error) {
+		return evalExprForRow(rel, row, e)
 	}, winCols)
 	if err != nil {
 		return nil, err
@@ -2305,12 +2582,12 @@ type Rel struct {
 
 // hasAdvancedSelect 判断 SELECT 是否走增强路径（保留旧单表路径的索引优化与既有行为）。
 func hasAdvancedSelect(s *SelectStmt) bool {
-	if s.Subquery != nil || len(s.Joins) > 0 || len(s.GroupBy) > 0 {
+	if s.Subquery != nil || len(s.Joins) > 0 || len(s.GroupBy) > 0 || s.Distinct {
 		return true
 	}
 	if s.Where != nil {
 		for _, c := range s.Where.Conds {
-			if c.Ref != "" || c.Op == "BETWEEN" || c.Op == "IN" || c.RightRef != "" || c.Sub != nil {
+			if c.Ref != "" || c.Op == "BETWEEN" || c.Op == "IN" || c.RightRef != "" || c.Sub != nil || c.LeftExpr != nil || c.RightExpr != nil {
 				return true
 			}
 		}
@@ -2319,7 +2596,7 @@ func hasAdvancedSelect(s *SelectStmt) bool {
 		return true
 	}
 	for _, c := range s.Columns {
-		if c.Ref != "" || c.Alias != "" {
+		if c.Ref != "" || c.Alias != "" || c.Expr != nil || c.Agg == "MAX" || c.Agg == "MIN" {
 			return true
 		}
 	}
@@ -2477,6 +2754,122 @@ func relValue(rel *Rel, row []Value, name string) (Value, error) {
 	return row[idx], nil
 }
 
+// evalExprForRow 在 Rel 行上求值算术表达式（T40）。
+// 支持叶子字面量（INT/DECIMAL/TEXT）、叶子列引用（限定/裸）与二元算术 + - * / %、
+// 一元负号（NEG）。
+func evalExprForRow(rel *Rel, row []Value, e *Expr) (Value, error) {
+	if e == nil {
+		return Value{}, &SQLError{Msg: "empty expression"}
+	}
+	switch e.Op {
+	case "":
+		if e.Val != nil {
+			return *e.Val, nil
+		}
+		return relValue(rel, row, qualifiedName(e.Ref, e.Col))
+	case "NEG":
+		v, err := evalExprForRow(rel, row, e.Right)
+		if err != nil {
+			return Value{}, err
+		}
+		switch v.Kind {
+		case "INT":
+			return IntVal(-v.I), nil
+		case "DECIMAL":
+			return decVal(-v.I), nil
+		default:
+			return Value{}, &SQLError{Msg: "unsupported operand for unary minus: " + v.Kind}
+		}
+	}
+	l, err := evalExprForRow(rel, row, e.Left)
+	if err != nil {
+		return Value{}, err
+	}
+	r, err := evalExprForRow(rel, row, e.Right)
+	if err != nil {
+		return Value{}, err
+	}
+	return evalArith(l, r, e.Op)
+}
+
+// evalArith 计算二元算术（T40）。
+// 类型规则：INT op INT → INT（除法除外，INT/INT → DECIMAL；取模为 INT）；
+// 任一操作数为 DECIMAL → DECIMAL（定点 scale=4）；TEXT/DATE/BLOB 参与算术报错。
+// 内部统一用 big.Int 计算防溢出；除零报错。
+func evalArith(a, b Value, op string) (Value, error) {
+	if !isNumericKind(a.Kind) || !isNumericKind(b.Kind) {
+		return Value{}, &SQLError{Msg: "arithmetic on non-numeric operand: " + a.Kind + " and " + b.Kind}
+	}
+	switch op {
+	case "+", "-", "*", "/", "%":
+	default:
+		return Value{}, errf("unsupported arithmetic operator %q", op)
+	}
+	dec := a.Kind == "DECIMAL" || b.Kind == "DECIMAL"
+	if !dec {
+		ab := new(big.Int).SetInt64(a.I)
+		bb := new(big.Int).SetInt64(b.I)
+		if op == "/" || op == "%" {
+			if bb.Sign() == 0 {
+				return Value{}, &SQLError{Msg: "division by zero"}
+			}
+		}
+		switch op {
+		case "+":
+			ab.Add(ab, bb)
+		case "-":
+			ab.Sub(ab, bb)
+		case "*":
+			ab.Mul(ab, bb)
+		case "/":
+			ab.Mul(ab, big.NewInt(decUnit))
+			ab.Quo(ab, bb)
+			if !ab.IsInt64() {
+				return Value{}, &SQLError{Msg: "DECIMAL overflow in division"}
+			}
+			return decVal(ab.Int64()), nil
+		case "%":
+			ab.Rem(ab, bb)
+		}
+		if !ab.IsInt64() {
+			return Value{}, &SQLError{Msg: "INT overflow in arithmetic"}
+		}
+		return IntVal(ab.Int64()), nil
+	}
+	// DECIMAL 路径：统一为缩放整数（INT 放大 1e4 对齐 scale）。
+	as := new(big.Int).SetInt64(a.I)
+	if a.Kind == "INT" {
+		as.Mul(as, big.NewInt(decUnit))
+	}
+	bs := new(big.Int).SetInt64(b.I)
+	if b.Kind == "INT" {
+		bs.Mul(bs, big.NewInt(decUnit))
+	}
+	if op == "/" || op == "%" {
+		if bs.Sign() == 0 {
+			return Value{}, &SQLError{Msg: "division by zero"}
+		}
+	}
+	switch op {
+	case "+":
+		as.Add(as, bs)
+	case "-":
+		as.Sub(as, bs)
+	case "*":
+		as.Mul(as, bs)
+		as.Quo(as, big.NewInt(decUnit)) // scaled*scaled/1e4 → scaled
+	case "/":
+		as.Mul(as, big.NewInt(decUnit))
+		as.Quo(as, bs)
+	case "%":
+		as.Rem(as, bs)
+	}
+	if !as.IsInt64() {
+		return Value{}, &SQLError{Msg: "DECIMAL overflow in arithmetic"}
+	}
+	return decVal(as.Int64()), nil
+}
+
 // execSelectRel 增强路径主流程：FROM（表/子查询）→ JOIN → WHERE → 聚合/分组 → 排序/投影。
 func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Result, error) {
 	tabs, err := loadTables(tx.Get)
@@ -2595,18 +2988,45 @@ func (e *Executor) inSubquery(sess *Session, tx txn.Txn, v Value, sub *SelectStm
 	return false, nil
 }
 
-// aggValues 计算单列聚合值（COUNT/SUM/AVG）。
+// aggOperand 取聚合参数的逐行操作数：算术表达式（T40）或列引用（限定/裸）。
+func aggOperand(rel *Rel, row []Value, c *SelectColumn) (Value, error) {
+	if c.Expr != nil {
+		return evalExprForRow(rel, row, c.Expr)
+	}
+	return relValue(rel, row, qualifiedName(c.Ref, c.Col))
+}
+
+// aggValues 计算单列聚合值（COUNT/SUM/AVG/MAX/MIN）。
 func aggValues(rel *Rel, rows [][]Value, c *SelectColumn) (Value, error) {
 	switch c.Agg {
 	case "COUNT":
 		return IntVal(int64(len(rows))), nil
+	case "MAX", "MIN":
+		if len(rows) == 0 {
+			return IntVal(0), nil
+		}
+		best, err := aggOperand(rel, rows[0], c)
+		if err != nil {
+			return Value{}, err
+		}
+		for _, r := range rows[1:] {
+			v, err := aggOperand(rel, r, c)
+			if err != nil {
+				return Value{}, err
+			}
+			cmp := compareVal(v, best)
+			if (c.Agg == "MAX" && cmp > 0) || (c.Agg == "MIN" && cmp < 0) {
+				best = v
+			}
+		}
+		return best, nil
 	case "SUM", "AVG":
 		// INT：int64 求和；DECIMAL：scaled int64 求和后保持精度。
 		dec := false
 		var isum int64
 		var dsum int64
 		for _, r := range rows {
-			v, err := relValue(rel, r, qualifiedName(c.Ref, c.Col))
+			v, err := aggOperand(rel, r, c)
 			if err != nil {
 				return Value{}, err
 			}
@@ -2642,14 +3062,15 @@ func aggValues(rel *Rel, rows [][]Value, c *SelectColumn) (Value, error) {
 
 // computeWindows 计算所有窗口列在 rows 上的逐行值（M10 窗口函数）。
 // 返回 winVals[i][j] = 第 i 行、第 j 个窗口列的值；winCols 须按 SELECT 列表顺序传入。
-func computeWindows(rows [][]Value, getter func(row []Value, col string) (Value, error), winCols []*SelectColumn) ([][]Value, error) {
+// exprEval 用于窗口聚合参数为算术表达式（T40，如 SUM(k+1) OVER ()）；可为 nil。
+func computeWindows(rows [][]Value, getter func(row []Value, col string) (Value, error), exprEval func(row []Value, e *Expr) (Value, error), winCols []*SelectColumn) ([][]Value, error) {
 	n := len(rows)
 	out := make([][]Value, n)
 	for i := range out {
 		out[i] = make([]Value, len(winCols))
 	}
 	for j, c := range winCols {
-		vals, err := computeWindowCol(rows, getter, c)
+		vals, err := computeWindowCol(rows, getter, exprEval, c)
 		if err != nil {
 			return nil, err
 		}
@@ -2663,7 +3084,7 @@ func computeWindows(rows [][]Value, getter func(row []Value, col string) (Value,
 // computeWindowCol 计算单个窗口列在 rows 上的逐行值。
 // 默认框架 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW（逐行累计）；
 // ROW_NUMBER/RANK/DENSE_RANK 按窗口 ORDER BY 键分配，无 ORDER BY 时保持行序。
-func computeWindowCol(rows [][]Value, getter func(row []Value, col string) (Value, error), c *SelectColumn) ([]Value, error) {
+func computeWindowCol(rows [][]Value, getter func(row []Value, col string) (Value, error), exprEval func(row []Value, e *Expr) (Value, error), c *SelectColumn) ([]Value, error) {
 	ws := c.Window
 	vals := make([]Value, len(rows))
 	// 分区：按 PARTITION BY 列取值拼键分组；无分区时整个结果集为一组
@@ -2713,6 +3134,7 @@ func computeWindowCol(rows [][]Value, getter func(row []Value, col string) (Valu
 		rank := 1
 		dense := 1
 		var isum, dsum int64
+		var bestWin Value
 		dec := false
 		cnt := 0
 		for t, oi := range sorted {
@@ -2733,8 +3155,35 @@ func computeWindowCol(rows [][]Value, getter func(row []Value, col string) (Valu
 			case "COUNT":
 				cnt++
 				v = IntVal(int64(cnt))
+			case "MAX", "MIN":
+				var av Value
+				var err error
+				if c.Expr != nil {
+					av, err = exprEval(rows[oi], c.Expr)
+				} else {
+					av, err = getter(rows[oi], c.Col)
+				}
+				if err != nil {
+					return nil, err
+				}
+				if cnt == 0 {
+					bestWin = av
+				} else {
+					cmp := compareVal(av, bestWin)
+					if (c.Agg == "MAX" && cmp > 0) || (c.Agg == "MIN" && cmp < 0) {
+						bestWin = av
+					}
+				}
+				cnt++
+				v = bestWin
 			case "SUM", "AVG":
-				av, err := getter(rows[oi], c.Col)
+				var av Value
+				var err error
+				if c.Expr != nil {
+					av, err = exprEval(rows[oi], c.Expr)
+				} else {
+					av, err = getter(rows[oi], c.Col)
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -2781,7 +3230,24 @@ func (e *Executor) aggRel(s *SelectStmt, rel *Rel) (*Result, error) {
 		out = append(out, v)
 	}
 	res.Rows = append(res.Rows, out)
+	// T40 遗留：全局聚合结果同样应用 LIMIT/OFFSET（先 OFFSET 跳过、再 LIMIT 截断；LIMIT<=0 不截断）。
+	res.Rows = applyOffsetLimit(res.Rows, s.Offset, s.Limit)
 	return res, nil
+}
+
+// applyOffsetLimit 对结果行应用 LIMIT/OFFSET，语义与 finishRel 截断一致：
+// 先 OFFSET 跳过、再 LIMIT 截断；LIMIT<=0 不截断。
+func applyOffsetLimit(rows [][]Value, offset, limit int) [][]Value {
+	if offset > 0 {
+		if offset >= len(rows) {
+			return rows[:0]
+		}
+		rows = rows[offset:]
+	}
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows
 }
 
 // groupRel GROUP BY 分组聚合：每组一行；非聚合列必须属于分组键，取组内首行值。
@@ -2826,6 +3292,15 @@ func (e *Executor) groupRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel) 
 				continue
 			}
 			if c.Agg == "" {
+				if c.Expr != nil {
+					// T40：GROUP BY 下表达式投影列取组内首行求值（表达式列名含原始文本）。
+					v, err := evalExprForRow(rel, g.rows[0], c.Expr)
+					if err != nil {
+						return nil, err
+					}
+					out = append(out, v)
+					continue
+				}
 				if !inGroupBy(s.GroupBy, qualifiedName(c.Ref, c.Col)) {
 					return nil, &SQLError{Msg: "column not in GROUP BY: " + c.Name}
 				}
@@ -2844,6 +3319,8 @@ func (e *Executor) groupRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel) 
 		}
 		res.Rows = append(res.Rows, out)
 	}
+	// T40 遗留：GROUP BY 分组完成后同样应用 LIMIT/OFFSET（先 OFFSET 跳过、再 LIMIT 截断；LIMIT<=0 不截断）。
+	res.Rows = applyOffsetLimit(res.Rows, s.Offset, s.Limit)
 	return res, nil
 }
 
@@ -2879,17 +3356,6 @@ func (e *Executor) finishRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel,
 			return cmp < 0
 		})
 	}
-	// LIMIT / OFFSET（M12-2）
-	if s.Offset > 0 {
-		if s.Offset >= len(rows) {
-			rows = rows[:0]
-		} else {
-			rows = rows[s.Offset:]
-		}
-	}
-	if s.Limit > 0 && len(rows) > s.Limit {
-		rows = rows[:s.Limit]
-	}
 	res := &Result{}
 	for _, c := range s.Columns {
 		if c.Name == "*" {
@@ -2913,11 +3379,15 @@ func (e *Executor) finishRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel,
 		var err error
 		winVals, err = computeWindows(rows, func(row []Value, col string) (Value, error) {
 			return relValue(rel, row, col)
+		}, func(row []Value, e *Expr) (Value, error) {
+			return evalExprForRow(rel, row, e)
 		}, winCols)
 		if err != nil {
 			return nil, err
 		}
 	}
+	// 逐行投影（T40：投影列可为算术表达式 c.Expr），保持结果集行序。
+	projAll := make([][]Value, len(rows))
 	for ri, row := range rows {
 		var out []Value
 		wi := 0
@@ -2933,6 +3403,12 @@ func (e *Executor) finishRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel,
 					return nil, err
 				}
 				out = append(out, v)
+			} else if c.Expr != nil {
+				v, err := evalExprForRow(rel, row, c.Expr)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, v)
 			} else {
 				v, err := relValue(rel, row, qualifiedName(c.Ref, c.Col))
 				if err != nil {
@@ -2941,7 +3417,43 @@ func (e *Executor) finishRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel,
 				out = append(out, v)
 			}
 		}
-		res.Rows = append(res.Rows, out)
+		projAll[ri] = out
+	}
+	// SELECT DISTINCT（T40）：对投影后全行去重，保持首次出现顺序。
+	keep := make([]int, len(projAll))
+	for i := range keep {
+		keep[i] = i
+	}
+	if s.Distinct {
+		keep = keep[:0]
+		seen := make(map[string]struct{}, len(projAll))
+		for i, row := range projAll {
+			var kb strings.Builder
+			for _, v := range row {
+				kb.WriteString(v.String())
+				kb.WriteByte(0xff)
+			}
+			key := kb.String()
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			keep = append(keep, i)
+		}
+	}
+	// LIMIT / OFFSET（M12-2；DISTINCT 时作用于去重后的结果行）
+	if s.Offset > 0 {
+		if s.Offset >= len(keep) {
+			keep = keep[:0]
+		} else {
+			keep = keep[s.Offset:]
+		}
+	}
+	if s.Limit > 0 && len(keep) > s.Limit {
+		keep = keep[:s.Limit]
+	}
+	for _, ri := range keep {
+		res.Rows = append(res.Rows, projAll[ri])
 	}
 	return res, nil
 }
@@ -3555,6 +4067,10 @@ func (e *Executor) execCreateView(sess *Session, s *CreateViewStmt) (*Result, er
 		return nil, &SQLError{Msg: "view name conflicts with table: " + s.Name}
 	}
 	if findView(views, s.Name) != nil {
+		// T41：CREATE VIEW IF NOT EXISTS——视图已存在时静默跳过
+		if s.IfNotExists {
+			return &Result{}, nil
+		}
 		return nil, &SQLError{Msg: "view already exists: " + s.Name}
 	}
 	if s.Select == nil {
@@ -3914,9 +4430,19 @@ func (e *Executor) execShowSlowQueries(sess *Session) (*Result, error) {
 // 持久化配置文件，重启仍生效）。校验与应用统一走配置注册表（config.go），
 // 非法键报 unknown session variable，非法值/类型按配置项给出明确报错。
 func (e *Executor) execSet(sess *Session, s *SetStmt) (*Result, error) {
+	// M18-C：SET @var = value 用户变量赋值（会话级）。
+	if s.Var != "" {
+		sess.userVars[s.Var] = s.VarVal
+		return &Result{Columns: []string{"variable", "value"}}, nil
+	}
 	spec := lookupConfigSpec(s.Name)
 	if spec == nil {
 		return nil, &SQLError{Msg: "unknown session variable: " + s.Name}
+	}
+	// T36：persistOnly 键（tls_cert/tls_key/tls_allow_legacy）为启动级配置，
+	// 监听层在启动装配无法热更新；普通 SET 明确报错，仅 SET PERSIST 落盘。
+	if spec.persistOnly && !s.Persist {
+		return nil, &SQLError{Msg: s.Name + " 为启动级配置，仅支持 SET PERSIST（重启生效）"}
 	}
 	if err := spec.apply(e, s.Value); err != nil {
 		return nil, err
@@ -3933,6 +4459,132 @@ func (e *Executor) execSet(sess *Session, s *SetStmt) (*Result, error) {
 		e.cfgMu.Unlock()
 	}
 	return &Result{Columns: []string{"variable", "value"}}, nil
+}
+
+// maskQuestionMarks 将 SQL 文本中引号外的 ? 替换为 0（用于 PREPARE 语法校验，
+// 与 expandPrepared 的扫描规则一致：单引号字符串内不替换）。
+func maskQuestionMarks(sqlText string) string {
+	bs := []byte(sqlText)
+	inStr := false
+	for i := 0; i < len(bs); i++ {
+		switch bs[i] {
+		case '\'':
+			inStr = !inStr
+		case '?':
+			if !inStr {
+				bs[i] = '0'
+			}
+		}
+	}
+	return string(bs)
+}
+
+// execPrepare PREPARE <name> FROM '<sql-text>'（M18）：编译期即校验语法，
+// 通过后登记会话级 prepared 缓存；同名覆盖。不持有事务副作用。
+func (e *Executor) execPrepare(sess *Session, s *PrepareStmt) (*Result, error) {
+	// PREPARE 文本允许 ? 占位符：校验前将引号外的 ? 掩码为数字 0（结构位置等价），
+	// 保持普通 Parse 拒绝裸 ? 的语义不变（占位符仅存在于 PREPARE 文本产物）。
+	if _, err := Parse(maskQuestionMarks(s.SQL)); err != nil {
+		return nil, &SQLError{Msg: "prepared statement syntax error: " + err.Error()}
+	}
+	sess.prepared[s.Name] = s.SQL
+	return &Result{Columns: []string{"prepared", "sql"}}, nil
+}
+
+// execExecute EXECUTE <name> [USING @a, @b]（M18）：取回登记 SQL，按序
+// 替换 ? 占位符（@var 取会话用户变量，字面量原样），再走完整解析+执行。
+func (e *Executor) execExecute(sess *Session, s *ExecuteStmt) (*Result, error) {
+	sqlText, ok := sess.prepared[s.Name]
+	if !ok {
+		return nil, &SQLError{Msg: "prepared statement not found: " + s.Name}
+	}
+	expanded, err := e.expandPrepared(sess, sqlText, s.Args)
+	if err != nil {
+		return nil, err
+	}
+	inner, err := Parse(expanded)
+	if err != nil {
+		return nil, &SQLError{Msg: "prepared statement expansion error: " + err.Error()}
+	}
+	return e.execStmt(sess, inner)
+}
+
+// expandPrepared 将 prepared SQL 中的 ? 占位符按参数列表顺序替换为 SQL 文本。
+func (e *Executor) expandPrepared(sess *Session, sqlText string, args []string) (string, error) {
+	var sb strings.Builder
+	argIdx := 0
+	placeholders := 0
+	i := 0
+	for i < len(sqlText) {
+		c := sqlText[i]
+		switch c {
+		case '\'':
+			// 字符串字面量整体跳过（不误替换引号内的 ?）
+			sb.WriteByte(c)
+			j := i + 1
+			for j < len(sqlText) {
+				if sqlText[j] == '\'' {
+					if j+1 < len(sqlText) && sqlText[j+1] == '\'' {
+						j += 2
+						continue
+					}
+					j++
+					break
+				}
+				j++
+			}
+			sb.WriteString(sqlText[i+1 : j])
+			i = j
+			continue
+		case '?':
+			placeholders++
+			if argIdx >= len(args) {
+				return "", &SQLError{Msg: fmt.Sprintf("prepared statement expects %d argument(s), got %d", placeholders, len(args))}
+			}
+			rep, err := e.resolvePreparedArg(sess, args[argIdx])
+			if err != nil {
+				return "", err
+			}
+			sb.WriteString(rep)
+			argIdx++
+			i++
+			continue
+		}
+		sb.WriteByte(c)
+		i++
+	}
+	if argIdx != len(args) {
+		return "", &SQLError{Msg: fmt.Sprintf("prepared statement got %d argument(s), expects %d", len(args), placeholders)}
+	}
+	return sb.String(), nil
+}
+
+// resolvePreparedArg 解析单个 EXECUTE 参数：@var 查会话用户变量；数字/字符串字面量原样。
+func (e *Executor) resolvePreparedArg(sess *Session, arg string) (string, error) {
+	if strings.HasPrefix(arg, "@") {
+		v, ok := sess.userVars[arg]
+		if !ok {
+			return "", &SQLError{Msg: "user variable not set: " + arg}
+		}
+		if v.Kind == "INT" {
+			return strconv.FormatInt(v.I, 10), nil
+		}
+		return "'" + strings.ReplaceAll(v.S, "'", "''") + "'", nil
+	}
+	// 字面量：数字原样；字符串补引号并转义
+	if strings.HasPrefix(arg, "'") && strings.HasSuffix(arg, "'") {
+		return "'" + strings.ReplaceAll(arg[1:len(arg)-1], "'", "''") + "'", nil
+	}
+	return arg, nil
+}
+
+// execDeallocate DEALLOCATE PREPARE <name>（M18）：移除会话级登记。
+func (e *Executor) execDeallocate(sess *Session, s *DeallocateStmt) (*Result, error) {
+	if _, ok := sess.prepared[s.Name]; !ok {
+		return nil, &SQLError{Msg: "prepared statement not found: " + s.Name}
+	}
+	delete(sess.prepared, s.Name)
+	return &Result{Columns: []string{"deallocated"}}, nil
 }
 
 // boolVal 布尔值转 SQL 文本值（SHOW STATS 等输出用）。

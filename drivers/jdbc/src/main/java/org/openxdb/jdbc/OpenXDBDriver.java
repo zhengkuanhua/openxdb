@@ -49,12 +49,73 @@ public class OpenXDBDriver implements Driver {
         String[] hostPort = parseHostPort(url);
         String host = hostPort[0];
         int port = Integer.parseInt(hostPort[1]);
-        return new OpenXDBConnection(host, port);
+        return new OpenXDBConnection(host, port, parseSslConfig(url, info));
+    }
+
+    /**
+     * Parse T36 TLS parameters from the JDBC URL query string
+     * ({@code ?ssl=true&sslMode=verify-full&trustStore=ca.pem&hostnameInCertificate=db}) or from
+     * connection {@code Properties}. Mirrors the Python driver and pkg/server semantics.
+     */
+    static SslConfig parseSslConfig(String url, Properties info) throws SQLException {
+        String query = "";
+        int q = url.indexOf('?');
+        if (q >= 0) {
+            query = url.substring(q + 1);
+        }
+        boolean ssl = parseBool(getParam(query, info, "ssl", null), false);
+        String mode = getParam(query, info, "sslMode", "disable");
+        if (!SslConfig.MODE_DISABLE.equals(mode)
+                && !SslConfig.MODE_VERIFY_CA.equals(mode)
+                && !SslConfig.MODE_VERIFY_FULL.equals(mode)) {
+            throw new SQLException("invalid sslMode: " + mode + " (expected disable|verify-ca|verify-full)");
+        }
+        String trustStore = getParam(query, info, "trustStore", null);
+        String hostname = getParam(query, info, "hostnameInCertificate", null);
+        if (ssl && (SslConfig.MODE_VERIFY_CA.equals(mode) || SslConfig.MODE_VERIFY_FULL.equals(mode))
+                && (trustStore == null || trustStore.isEmpty())) {
+            throw new SQLException("sslMode " + mode + " requires trustStore=<CA PEM path>");
+        }
+        return new SslConfig(ssl, mode, trustStore, hostname);
+    }
+
+    private static String getParam(String query, Properties info, String key, String dflt) {
+        for (String pair : query.split("&")) {
+            if (pair.isEmpty()) {
+                continue;
+            }
+            int eq = pair.indexOf('=');
+            String k = eq < 0 ? pair : pair.substring(0, eq);
+            if (k.equals(key)) {
+                return eq < 0 ? "" : pair.substring(eq + 1);
+            }
+        }
+        if (info != null && info.containsKey(key)) {
+            return String.valueOf(info.getProperty(key));
+        }
+        return dflt;
+    }
+
+    private static boolean parseBool(String v, boolean dflt) throws SQLException {
+        if (v == null || v.isEmpty()) {
+            return dflt;
+        }
+        if ("true".equalsIgnoreCase(v) || "1".equals(v)) {
+            return true;
+        }
+        if ("false".equalsIgnoreCase(v) || "0".equals(v)) {
+            return false;
+        }
+        throw new SQLException("invalid boolean value: " + v);
     }
 
     /** Parse the host:port part after the scheme. Returns {host, port}. */
     static String[] parseHostPort(String url) throws SQLException {
         String rest = url.substring(URL_PREFIX.length());
+        int query = rest.indexOf('?');
+        if (query >= 0) {
+            rest = rest.substring(0, query);
+        }
         int slash = rest.indexOf('/');
         if (slash >= 0) {
             rest = rest.substring(0, slash);

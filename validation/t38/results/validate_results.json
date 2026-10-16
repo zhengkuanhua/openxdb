@@ -1,0 +1,164 @@
+{
+  "results": [
+    {
+      "name": "连接主节点",
+      "status": "PASS",
+      "detail": "127.0.0.1:7788"
+    },
+    {
+      "name": "视图返回新订单",
+      "status": "PASS",
+      "detail": "rows=[('5001', 'alice', 'NEW', '898.0000', '2026-10-15')]"
+    },
+    {
+      "name": "触发器审计生效",
+      "status": "PASS",
+      "detail": "audit_log=[('order inserted',)]"
+    },
+    {
+      "name": "物化视图汇总包含 NEW",
+      "status": "PASS",
+      "detail": "mv=[('NEW', '1', '898.0000')]"
+    },
+    {
+      "name": "存储过程 CALL 生效",
+      "status": "PASS",
+      "detail": "rows=[('9001', 'NEW')]"
+    },
+    {
+      "name": "事务提交持久",
+      "status": "PASS",
+      "detail": "rows=[('tx_commit',)]"
+    },
+    {
+      "name": "事务回滚生效",
+      "status": "PASS",
+      "detail": "rows=[]"
+    },
+    {
+      "name": "唯一约束拦截",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "外键约束拦截",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "主键冲突拦截",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "并发写入双方均可见",
+      "status": "PASS",
+      "detail": "a=[('conc_a',)] b=[('conc_b',)]"
+    },
+    {
+      "name": "用户订单聚合",
+      "status": "PASS",
+      "detail": "rows=[('alice', '4')]"
+    },
+    {
+      "name": "窗口函数 RANK",
+      "status": "PASS",
+      "detail": "rows=[('27寸显示器', '1299.0000', '1'), ('人体工学椅', '899.0000', '2'), ('降噪耳机', '499.0000', '3')]"
+    },
+    {
+      "name": "子查询过滤",
+      "status": "PASS",
+      "detail": "rows=[('降噪耳机',), ('人体工学椅',), ('27寸显示器',)]"
+    },
+    {
+      "name": "GROUP BY 聚合",
+      "status": "PASS",
+      "detail": "rows=[('外设', '3'), ('显示', '1'), ('配件', '2'), ('家具', '1'), ('音频', '1')]"
+    },
+    {
+      "name": "插入新商品",
+      "status": "PASS",
+      "detail": "rows=[('upsert_prod',)]"
+    },
+    {
+      "name": "REPLACE 错误拦截",
+      "status": "PASS",
+      "detail": "REPLACE 报错被正确拦截"
+    },
+    {
+      "name": "EXPLAIN 可用",
+      "status": "PASS",
+      "detail": "explain=[('access: index scan on ux_users_email(email)',), ('filter: email = alice@example.com',), ('projection: *',)]"
+    },
+    {
+      "name": "参数化 PREPARE 语义",
+      "status": "PASS",
+      "detail": "rows=[('2', 'bob')]"
+    },
+    {
+      "name": "RBAC 未认证连接被拒",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "RBAC 未授权表被拒",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "RBAC 授权表可读",
+      "status": "PASS",
+      "detail": "rows=[('8',)]"
+    },
+    {
+      "name": "TLS 加密连接",
+      "status": "PASS",
+      "detail": "rows=[]"
+    },
+    {
+      "name": "明文连接被拒",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "备份恢复回滚增量",
+      "status": "PASS",
+      "detail": "before=2 after=0"
+    },
+    {
+      "name": "PITR 回放到 LSN",
+      "status": "PASS",
+      "detail": "rows=[('0',)]"
+    },
+    {
+      "name": "告警规则配置生效",
+      "status": "PASS",
+      "detail": "rules=[('r1', 'sql_qps', '>', '1', '0', 'warn', 'on', 'RESOLVED', '0')]"
+    },
+    {
+      "name": "告警状态可见",
+      "status": "PASS",
+      "detail": "status=[('enabled', 'off'), ('file', None), ('webhook', None), ('keep', '100'), ('level', 'info'), ('alert_rules_enabled', 'on'), ('alert_eval_interval', '1'), ('alert_rule_count', '1')]"
+    },
+    {
+      "name": "告警状态快照",
+      "status": "INFO",
+      "detail": "[('r1', 'sql_qps', '>', '1', '0', 'warn', 'on', 'RESOLVED', '0')] | [('enabled', 'off'), ('file', None), ('webhook', None), ('keep', '100'), ('level', 'info'), ('alert_rules_enabled', 'on'), ('alert_eval_interval', '1'), ('alert_rule_count', '1')]"
+    },
+    {
+      "name": "批量写入 1000 行",
+      "status": "PASS",
+      "detail": "count=1000"
+    },
+    {
+      "name": "批量写入耗时",
+      "status": "INFO",
+      "detail": "0.050s / 1000 rows = 20035 rows/s"
+    }
+  ],
+  "summary": {
+    "passed": 29,
+    "failed": 0,
+    "total": 31
+  }
+}

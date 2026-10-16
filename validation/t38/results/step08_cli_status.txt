@@ -1,0 +1,15 @@
+﻿OPENXDB STATUS (aggregated snapshot)
+status        | ok
+time          | 2026-10-15T15:38:11+08:00
+connections   | 1
+qps_sql       | 11
+qps_kv        | 0
+storage_bytes | 1116822
+nodes:
+  node-369bdbf7    DATA   UP     -
+regions:
+  total=0 local=0 remote=0
+slow_queries:
+  threshold_ms=0 enabled=false recent=0
+transactions  | commit=5 rollback=2
+

@@ -57,6 +57,21 @@ func (p *parser) expectKeyword(kw string) error {
 	return nil
 }
 
+// expectName 读取一个对象名（标识符或关键字均可，如 information_schema.tables
+// 中的 TABLES 是关键字），返回消费掉的 token。
+func (p *parser) expectName(what string) (token, error) {
+	if p.cur().kind != tokIdent && p.cur().kind != tokKeyword {
+		return token{}, errf("expected %s at %d, got %q", what, p.cur().pos, p.cur().text)
+	}
+	t := p.cur()
+	p.next()
+	// 关键字作表名时恢复原文大小写（如 CREATE TABLE user）。
+	if t.kind == tokKeyword && t.raw != "" {
+		t.text = t.raw
+	}
+	return t, nil
+}
+
 func (p *parser) parseStmt() (Stmt, error) {
 	if p.cur().kind != tokKeyword {
 		return nil, errf("expected statement at %d, got %q", p.cur().pos, p.cur().text)
@@ -92,6 +107,12 @@ func (p *parser) parseStmt() (Stmt, error) {
 		return p.parseExport()
 	case "IMPORT":
 		return p.parseImport()
+	case "PREPARE":
+		return p.parsePrepare()
+	case "EXECUTE":
+		return p.parseExecute()
+	case "DEALLOCATE":
+		return p.parseDeallocate()
 	case "SHOW":
 		return p.parseShow()
 	case "EXPLAIN":
@@ -138,6 +159,36 @@ func (p *parser) parseSet() (Stmt, error) {
 	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "PERSIST") {
 		s.Persist = true
 		p.next()
+	}
+	// M18-C：SET @var = value 用户变量赋值（值可为数字/字符串/标识符）
+	if p.cur().kind == tokVar {
+		s.Var = p.cur().text
+		p.next()
+		if _, err := p.expect(tokEq, "="); err != nil {
+			return nil, err
+		}
+		switch p.cur().kind {
+		case tokNumber:
+			n, _ := strconv.ParseInt(p.cur().text, 10, 64)
+			s.VarVal = IntVal(n)
+			p.next()
+		case tokString:
+			s.VarVal = StrVal(p.cur().text)
+			p.next()
+		case tokIdent, tokKeyword:
+			t := strings.ToLower(p.cur().text)
+			if t == "true" || t == "on" {
+				s.VarVal = IntVal(1)
+			} else if t == "false" || t == "off" {
+				s.VarVal = IntVal(0)
+			} else {
+				s.VarVal = StrVal(t)
+			}
+			p.next()
+		default:
+			return nil, errf("expected value at %d, got %q", p.cur().pos, p.cur().text)
+		}
+		return s, nil
 	}
 	if p.cur().kind != tokIdent {
 		return nil, errf("expected variable name at %d, got %q", p.cur().pos, p.cur().text)
@@ -384,11 +435,16 @@ func (p *parser) parseCreateRole() (Stmt, error) {
 	if err := p.expectKeyword("ROLE"); err != nil {
 		return nil, err
 	}
+	// T41：CREATE ROLE [IF NOT EXISTS] '<role>'
+	ifNot, err := p.parseIfNotExists()
+	if err != nil {
+		return nil, err
+	}
 	roleTok, err := p.expect(tokString, "role name")
 	if err != nil {
 		return nil, err
 	}
-	return &CreateRoleStmt{Name: roleTok.text}, nil
+	return &CreateRoleStmt{Name: roleTok.text, IfNotExists: ifNot}, nil
 }
 
 // parseDropRole DROP ROLE [IF EXISTS] '<role>'：删除角色（M17 RBAC）。
@@ -668,6 +724,26 @@ func (p *parser) parseSplitRegion() (Stmt, error) {
 	return &SplitRegionStmt{RegionID: rid}, nil
 }
 
+// parseIfNotExists 解析 CREATE 系列可选的 IF NOT EXISTS（T41）。
+// 与 DROP 系列的 IF EXISTS 模式一致，仅中间多一个 NOT（NOT 未登记为关键字，
+// 与列级 NOT NULL 同按文本匹配）。
+func (p *parser) parseIfNotExists() (bool, error) {
+	if p.cur().kind == tokKeyword && p.cur().text == "IF" {
+		if err := p.expectKeyword("IF"); err != nil {
+			return false, err
+		}
+		if !strings.EqualFold(p.cur().text, "NOT") {
+			return false, errf("expected NOT after IF at %d, got %q", p.cur().pos, p.cur().text)
+		}
+		p.next()
+		if err := p.expectKeyword("EXISTS"); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 func (p *parser) parseCreate() (Stmt, error) {
 	if err := p.expectKeyword("CREATE"); err != nil {
 		return nil, err
@@ -703,14 +779,43 @@ func (p *parser) parseCreate() (Stmt, error) {
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
 	}
-	nameTok, err := p.expect(tokIdent, "table name")
+	// T41：CREATE TABLE [IF NOT EXISTS] <name> ...（表已存在时静默跳过）
+	ifNot, err := p.parseIfNotExists()
 	if err != nil {
 		return nil, err
+	}
+	nameTok, err := p.expectName("table name")
+	if err != nil {
+		return nil, err
+	}
+	name := nameTok.text
+	// M18-C：CREATE TABLE information_schema.x 支持点号限定名（executor 拒绝写）。
+	for p.cur().kind == tokDot {
+		p.next()
+		seg, err := p.expectName("table name after dot")
+		if err != nil {
+			return nil, err
+		}
+		name += "." + seg.text
+	}
+	stmt := &CreateTableStmt{Name: name, IfNotExists: ifNot}
+	// T41：CTAS——CREATE TABLE [IF NOT EXISTS] <name> AS <SELECT>
+	if p.cur().kind == tokKeyword && p.cur().text == "AS" {
+		p.next()
+		selStmt, err := p.parseSelect()
+		if err != nil {
+			return nil, err
+		}
+		sel, ok := selStmt.(*SelectStmt)
+		if !ok {
+			return nil, errf("expected SELECT after AS at %d", p.cur().pos)
+		}
+		stmt.Select = sel
+		return stmt, nil
 	}
 	if _, err := p.expect(tokLParen, "("); err != nil {
 		return nil, err
 	}
-	stmt := &CreateTableStmt{Name: nameTok.text}
 	for {
 		col, err := p.expect(tokIdent, "column name")
 		if err != nil {
@@ -733,7 +838,7 @@ func (p *parser) parseCreate() (Stmt, error) {
 		case tokComma:
 			p.next()
 			// 逗号后可以是表级 PRIMARY KEY (col) 或 FOREIGN KEY 约束
-			if p.cur().kind == tokKeyword && (p.cur().text == "PRIMARY" || p.cur().text == "FOREIGN") {
+			if p.cur().kind == tokKeyword && (p.cur().text == "PRIMARY" || p.cur().text == "FOREIGN" || p.cur().text == "UNIQUE") {
 				done, err := p.parseTableLevelTail(stmt)
 				if err != nil {
 					return nil, err
@@ -750,6 +855,38 @@ func (p *parser) parseCreate() (Stmt, error) {
 			}
 			return stmt, nil
 		default:
+			// M18-C：列级 NOT NULL（仅语法接受；可空性由主键决定）。NOT/NULL 未注册
+			// 关键字，按 tokIdent 或 tokKeyword 均接受。
+			if (p.cur().kind == tokIdent || p.cur().kind == tokKeyword) && p.cur().text == "NOT" {
+				p.next()
+				if (p.cur().kind != tokIdent && p.cur().kind != tokKeyword) || p.cur().text != "NULL" {
+					return nil, errf("expected NULL after NOT at %d, got %q", p.cur().pos, p.cur().text)
+				}
+				p.next()
+				switch p.cur().kind {
+				case tokComma:
+					p.next()
+					if p.cur().kind == tokKeyword && (p.cur().text == "PRIMARY" || p.cur().text == "FOREIGN" || p.cur().text == "UNIQUE") {
+						done, err := p.parseTableLevelTail(stmt)
+						if err != nil {
+							return nil, err
+						}
+						if done {
+							return stmt, nil
+						}
+						return nil, errf("expected ) at %d", p.cur().pos)
+					}
+					continue
+				case tokRParen:
+					p.next()
+					if stmt.PK == "" && len(stmt.Columns) > 0 {
+						stmt.PK = stmt.Columns[0].Name
+					}
+					return stmt, nil
+				default:
+					return nil, errf("expected , or ) at %d, got %q", p.cur().pos, p.cur().text)
+				}
+			}
 			// 行内主键：id INT PRIMARY KEY（等价于将该列设为主键）
 			if p.cur().kind == tokKeyword && p.cur().text == "PRIMARY" {
 				if err := p.expectKeyword("PRIMARY"); err != nil {
@@ -763,7 +900,7 @@ func (p *parser) parseCreate() (Stmt, error) {
 				case tokComma:
 					p.next()
 					// 行内主键后仍可跟表级 PRIMARY KEY (col) / FOREIGN KEY 约束
-					if p.cur().kind == tokKeyword && (p.cur().text == "PRIMARY" || p.cur().text == "FOREIGN") {
+					if p.cur().kind == tokKeyword && (p.cur().text == "PRIMARY" || p.cur().text == "FOREIGN" || p.cur().text == "UNIQUE") {
 						done, err := p.parseTableLevelTail(stmt)
 						if err != nil {
 							return nil, err
@@ -812,6 +949,11 @@ func (p *parser) parseCreateUser() (Stmt, error) {
 	if err := p.expectKeyword("USER"); err != nil {
 		return nil, err
 	}
+	// T41：CREATE USER [IF NOT EXISTS] '<name>' IDENTIFIED BY '<pwd>'
+	ifNot, err := p.parseIfNotExists()
+	if err != nil {
+		return nil, err
+	}
 	nameTok, err := p.expect(tokString, "user name")
 	if err != nil {
 		return nil, err
@@ -826,7 +968,7 @@ func (p *parser) parseCreateUser() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &CreateUserStmt{Name: nameTok.text, Password: pwdTok.text}, nil
+	return &CreateUserStmt{Name: nameTok.text, Password: pwdTok.text, IfNotExists: ifNot}, nil
 }
 
 func (p *parser) parsePrimaryKey(stmt *CreateTableStmt) error {
@@ -875,8 +1017,13 @@ func (p *parser) parseTableLevelTail(stmt *CreateTableStmt) (bool, error) {
 				return false, err
 			}
 			stmt.ForeignKeys = append(stmt.ForeignKeys, fk)
+		} else if p.cur().kind == tokKeyword && p.cur().text == "UNIQUE" {
+			// M18：表级 UNIQUE (col) 约束（information_schema.statistics 数据源之一）。
+			if err := p.parseUniqueConstraint(stmt); err != nil {
+				return false, err
+			}
 		} else {
-			return false, errf("expected PRIMARY KEY or FOREIGN KEY at %d, got %q", p.cur().pos, p.cur().text)
+			return false, errf("expected PRIMARY KEY, FOREIGN KEY or UNIQUE at %d, got %q", p.cur().pos, p.cur().text)
 		}
 		if p.cur().kind == tokComma {
 			p.next()
@@ -888,6 +1035,31 @@ func (p *parser) parseTableLevelTail(stmt *CreateTableStmt) (bool, error) {
 		}
 		return false, errf("expected , or ) at %d, got %q", p.cur().pos, p.cur().text)
 	}
+}
+
+// parseUniqueConstraint 表级唯一约束：UNIQUE (col) → IndexMeta（M18 information_schema.statistics）。
+func (p *parser) parseUniqueConstraint(stmt *CreateTableStmt) error {
+	if err := p.expectKeyword("UNIQUE"); err != nil {
+		return err
+	}
+	if _, err := p.expect(tokLParen, "("); err != nil {
+		return err
+	}
+	col, err := p.expect(tokIdent, "column name")
+	if err != nil {
+		return err
+	}
+	if _, err := p.expect(tokRParen, ")"); err != nil {
+		return err
+	}
+	// 校验列存在（列定义必须先于表级约束）。
+	for _, c := range stmt.Columns {
+		if c.Name == col.text {
+			stmt.Indexes = append(stmt.Indexes, IndexMeta{Name: col.text, Col: col.text, Unique: true})
+			return nil
+		}
+	}
+	return errf("unknown column in UNIQUE constraint: %s", col.text)
 }
 
 // parseForeignKey FOREIGN KEY (col,...) REFERENCES tbl (col,...) [ON DELETE ...]
@@ -1008,11 +1180,20 @@ func (p *parser) parseDrop() (Stmt, error) {
 		}
 		s.IfExists = true
 	}
-	nameTok, err := p.expect(tokIdent, "table name")
+	nameTok, err := p.expectName("table name")
 	if err != nil {
 		return nil, err
 	}
 	s.Name = nameTok.text
+	// M18-A：DROP TABLE information_schema.x 支持限定名（executor 拒绝）。
+	if p.cur().kind == tokDot {
+		p.next()
+		seg, err := p.expectName("table name after dot")
+		if err != nil {
+			return nil, err
+		}
+		s.Name += "." + seg.text
+	}
 	return s, nil
 }
 
@@ -1045,6 +1226,11 @@ func (p *parser) parseCreateView() (Stmt, error) {
 	if err := p.expectKeyword("VIEW"); err != nil {
 		return nil, err
 	}
+	// T41：CREATE VIEW [IF NOT EXISTS] <name> AS <SELECT>
+	ifNot, err := p.parseIfNotExists()
+	if err != nil {
+		return nil, err
+	}
 	nameTok, err := p.expect(tokIdent, "view name")
 	if err != nil {
 		return nil, err
@@ -1061,7 +1247,7 @@ func (p *parser) parseCreateView() (Stmt, error) {
 	if !ok {
 		return nil, errf("expected SELECT after AS at %d", p.cur().pos)
 	}
-	return &CreateViewStmt{Name: nameTok.text, Select: sel}, nil
+	return &CreateViewStmt{Name: nameTok.text, Select: sel, IfNotExists: ifNot}, nil
 }
 
 // parseDropView DROP VIEW [IF EXISTS] <name>。
@@ -1103,6 +1289,11 @@ func (p *parser) remaining() string {
 // ON <table> FOR EACH ROW <body>（M15-2）。body 为剩余 SQL 原文，由执行层校验。
 func (p *parser) parseCreateTrigger() (Stmt, error) {
 	if err := p.expectKeyword("TRIGGER"); err != nil {
+		return nil, err
+	}
+	// T41：CREATE TRIGGER [IF NOT EXISTS] <name> BEFORE/AFTER ...
+	ifNot, err := p.parseIfNotExists()
+	if err != nil {
 		return nil, err
 	}
 	nameTok, err := p.expect(tokIdent, "trigger name")
@@ -1153,7 +1344,7 @@ func (p *parser) parseCreateTrigger() (Stmt, error) {
 	}
 	// 消耗剩余 token（body 已整体接收）
 	p.pos = len(p.toks) - 1
-	return &CreateTriggerStmt{Name: nameTok.text, Timing: timing, Event: event, Table: tableTok.text, Body: body}, nil
+	return &CreateTriggerStmt{Name: nameTok.text, Timing: timing, Event: event, Table: tableTok.text, Body: body, IfNotExists: ifNot}, nil
 }
 
 // parseCreateProcedure 解析 CREATE PROCEDURE <name> [( [IN] <param> <TYPE> [, ...] )]
@@ -1166,11 +1357,16 @@ func (p *parser) parseCreateProcedure() (Stmt, error) {
 	if err := p.expectKeyword("PROCEDURE"); err != nil {
 		return nil, err
 	}
+	// T41：CREATE PROCEDURE [IF NOT EXISTS] <name> ...
+	ifNot, err := p.parseIfNotExists()
+	if err != nil {
+		return nil, err
+	}
 	nameTok, err := p.expect(tokIdent, "procedure name")
 	if err != nil {
 		return nil, err
 	}
-	stmt := &CreateProcedureStmt{Name: nameTok.text}
+	stmt := &CreateProcedureStmt{Name: nameTok.text, IfNotExists: ifNot}
 	// 可选参数列表：( [IN] <param> <TYPE> [, ...] )
 	if p.cur().kind == tokLParen {
 		p.next()
@@ -1317,6 +1513,11 @@ func (p *parser) parseCreateMatView() (Stmt, error) {
 	if err := p.expectKeyword("VIEW"); err != nil {
 		return nil, err
 	}
+	// T41：CREATE MATERIALIZED VIEW [IF NOT EXISTS] <name> AS <SELECT>
+	ifNot, err := p.parseIfNotExists()
+	if err != nil {
+		return nil, err
+	}
 	nameTok, err := p.expect(tokIdent, "materialized view name")
 	if err != nil {
 		return nil, err
@@ -1333,7 +1534,7 @@ func (p *parser) parseCreateMatView() (Stmt, error) {
 	if !ok {
 		return nil, errf("expected SELECT after AS at %d", p.cur().pos)
 	}
-	return &CreateMatViewStmt{Name: nameTok.text, Select: sel}, nil
+	return &CreateMatViewStmt{Name: nameTok.text, Select: sel, IfNotExists: ifNot}, nil
 }
 
 // parseDropMatView 解析 DROP MATERIALIZED VIEW [IF EXISTS] <name>（M15）。
@@ -1403,6 +1604,11 @@ func (p *parser) parseCreateIndex() (Stmt, error) {
 	if err := p.expectKeyword("INDEX"); err != nil {
 		return nil, err
 	}
+	// T41：CREATE [UNIQUE] INDEX [IF NOT EXISTS] <idx> ON tbl (col)
+	ifNot, err := p.parseIfNotExists()
+	if err != nil {
+		return nil, err
+	}
 	nameTok, err := p.expect(tokIdent, "index name")
 	if err != nil {
 		return nil, err
@@ -1424,7 +1630,7 @@ func (p *parser) parseCreateIndex() (Stmt, error) {
 	if _, err := p.expect(tokRParen, ")"); err != nil {
 		return nil, err
 	}
-	return &CreateIndexStmt{Name: nameTok.text, Table: tableTok.text, Col: colTok.text, Unique: unique}, nil
+	return &CreateIndexStmt{Name: nameTok.text, Table: tableTok.text, Col: colTok.text, Unique: unique, IfNotExists: ifNot}, nil
 }
 
 // parseDropIndex DROP INDEX [idx] ON tbl
@@ -1465,11 +1671,20 @@ func (p *parser) parseInsertInto(replace bool) (Stmt, error) {
 	if err := p.expectKeyword("INTO"); err != nil {
 		return nil, err
 	}
-	nameTok, err := p.expect(tokIdent, "table name")
+	nameTok, err := p.expectName("table name")
 	if err != nil {
 		return nil, err
 	}
 	stmt := &InsertStmt{Table: nameTok.text, Replace: replace}
+	// M18-A：INSERT INTO information_schema.x 支持限定名（executor 拒绝）。
+	if p.cur().kind == tokDot {
+		p.next()
+		seg, err := p.expectName("table name after dot")
+		if err != nil {
+			return nil, err
+		}
+		stmt.Table += "." + seg.text
+	}
 	// 可选 (col, ...)
 	if p.cur().kind == tokLParen {
 		p.next()
@@ -1489,38 +1704,53 @@ func (p *parser) parseInsertInto(replace bool) (Stmt, error) {
 			break
 		}
 	}
-	if err := p.expectKeyword("VALUES"); err != nil {
-		return nil, err
-	}
-	for {
-		if _, err := p.expect(tokLParen, "("); err != nil {
+	// T42：INSERT INTO ... SELECT——VALUES 之外识别 SELECT 关键字，解析完整
+	// SELECT 语句（兼容 CTE/DISTINCT/表达式/聚合/JOIN/WHERE/GROUP BY/ORDER BY/LIMIT），
+	// 结果集按列清单逐行灌入目标表（REPLACE INTO ... SELECT 同样支持）。
+	if p.cur().kind == tokKeyword && p.cur().text == "SELECT" {
+		sel, err := p.parseSelect()
+		if err != nil {
 			return nil, err
 		}
-		var row []Value
+		selStmt, ok := sel.(*SelectStmt)
+		if !ok {
+			return nil, errf("invalid SELECT source for INSERT")
+		}
+		stmt.Select = selStmt
+	} else {
+		if err := p.expectKeyword("VALUES"); err != nil {
+			return nil, err
+		}
 		for {
-			v, err := p.parseValue()
-			if err != nil {
+			if _, err := p.expect(tokLParen, "("); err != nil {
 				return nil, err
 			}
-			row = append(row, v)
+			var row []Value
+			for {
+				v, err := p.parseValue()
+				if err != nil {
+					return nil, err
+				}
+				row = append(row, v)
+				if p.cur().kind == tokComma {
+					p.next()
+					continue
+				}
+				if _, err := p.expect(tokRParen, ")"); err != nil {
+					return nil, err
+				}
+				break
+			}
+			stmt.Rows = append(stmt.Rows, row)
 			if p.cur().kind == tokComma {
 				p.next()
 				continue
 			}
-			if _, err := p.expect(tokRParen, ")"); err != nil {
-				return nil, err
-			}
 			break
 		}
-		stmt.Rows = append(stmt.Rows, row)
-		if p.cur().kind == tokComma {
-			p.next()
-			continue
-		}
-		break
 	}
 	// M10 UPSERT：INSERT ... ON DUPLICATE KEY UPDATE col=val[, ...]
-	// （REPLACE 无此子句；无唯一/主键冲突时等价普通 INSERT）
+	// （REPLACE 无此子句；无唯一/主键冲突时等价普通 INSERT；SELECT 源同样适用）
 	if !replace && p.cur().kind == tokKeyword && p.cur().text == "ON" {
 		p.next()
 		if err := p.expectKeyword("DUPLICATE"); err != nil {
@@ -1566,6 +1796,57 @@ func (p *parser) parseSetItems() ([]SetItem, error) {
 	return sets, nil
 }
 
+// parseFromClause 解析 FROM 后的表引用：子查询 (SELECT ...) [AS] alias |
+// 表名 [AS] alias（支持 schema.table 限定名，information_schema 保留全名）。
+func (p *parser) parseFromClause(stmt *SelectStmt) error {
+	if p.cur().kind == tokLParen {
+		p.next()
+		sub, err := p.parseSelect()
+		if err != nil {
+			return err
+		}
+		subSel, ok := sub.(*SelectStmt)
+		if !ok {
+			return errf("invalid subquery in FROM")
+		}
+		if _, err := p.expect(tokRParen, ")"); err != nil {
+			return err
+		}
+		alias, err := p.parseOptAlias()
+		if err != nil {
+			return err
+		}
+		if alias == "" {
+			return errf("subquery in FROM requires alias")
+		}
+		stmt.Subquery = subSel
+		stmt.SubAlias = alias
+		return nil
+	}
+	nameTok, err := p.expectName("table name")
+	if err != nil {
+		return err
+	}
+	stmt.From = nameTok.text
+	// M18-A：FROM 支持 schema.table 限定名（保留全名，供 information_schema
+	// 虚拟表识别；普通 default.xxx 由 executor 规范化剥去 schema）。
+	// 支持多段限定名（如 default.information_schema.tables 三段）。
+	for p.cur().kind == tokDot {
+		p.next()
+		tbl, err := p.expectName("table name after dot")
+		if err != nil {
+			return err
+		}
+		stmt.From = stmt.From + "." + tbl.text
+	}
+	alias, err := p.parseOptAlias()
+	if err != nil {
+		return err
+	}
+	stmt.FromAlias = alias
+	return nil
+}
+
 func (p *parser) parseSelect() (Stmt, error) {
 	stmt := &SelectStmt{Limit: 0}
 	// M10 CTE：WITH name AS (SELECT ...) [, ...] 前缀（可嵌套，子查询 FROM 亦可带 WITH）
@@ -1604,6 +1885,11 @@ func (p *parser) parseSelect() (Stmt, error) {
 	if err := p.expectKeyword("SELECT"); err != nil {
 		return nil, err
 	}
+	// T40：SELECT DISTINCT（投影行去重，先于 ORDER BY/LIMIT）。
+	if p.cur().kind == tokKeyword && p.cur().text == "DISTINCT" {
+		stmt.Distinct = true
+		p.next()
+	}
 	for {
 		sc, err := p.parseSelectColumn()
 		if err != nil {
@@ -1616,43 +1902,12 @@ func (p *parser) parseSelect() (Stmt, error) {
 		}
 		break
 	}
-	if err := p.expectKeyword("FROM"); err != nil {
-		return nil, err
-	}
-	// FROM：子查询 (SELECT ...) [AS] alias | 表名 [AS] alias
-	if p.cur().kind == tokLParen {
+	// M18-C：FROM 可选（SELECT @var / 常量投影无 FROM；有 FROM 时解析表引用）。
+	if p.cur().kind == tokKeyword && p.cur().text == "FROM" {
 		p.next()
-		sub, err := p.parseSelect()
-		if err != nil {
+		if err := p.parseFromClause(stmt); err != nil {
 			return nil, err
 		}
-		subSel, ok := sub.(*SelectStmt)
-		if !ok {
-			return nil, errf("invalid subquery in FROM")
-		}
-		if _, err := p.expect(tokRParen, ")"); err != nil {
-			return nil, err
-		}
-		alias, err := p.parseOptAlias()
-		if err != nil {
-			return nil, err
-		}
-		if alias == "" {
-			return nil, errf("subquery in FROM requires alias")
-		}
-		stmt.Subquery = subSel
-		stmt.SubAlias = alias
-	} else {
-		nameTok, err := p.expect(tokIdent, "table name")
-		if err != nil {
-			return nil, err
-		}
-		stmt.From = nameTok.text
-		alias, err := p.parseOptAlias()
-		if err != nil {
-			return nil, err
-		}
-		stmt.FromAlias = alias
 	}
 	// JOIN 子句（可多个）
 	for p.cur().kind == tokKeyword && (p.cur().text == "JOIN" || p.cur().text == "INNER" || p.cur().text == "LEFT") {
@@ -1715,6 +1970,26 @@ func (p *parser) parseSelect() (Stmt, error) {
 			}
 		}
 		stmt.OrderBy = ob
+		stmt.OrderBys = append(stmt.OrderBys, *ob)
+		// M18-C：多列 ORDER BY（逗号分隔），全部写入 OrderBys 供排序消费。
+		for p.cur().kind == tokComma {
+			p.next()
+			ref2, col2, err := p.parseColumnRef()
+			if err != nil {
+				return nil, err
+			}
+			ob2 := &OrderBy{Ref: ref2, Col: col2}
+			if p.cur().kind == tokKeyword {
+				switch p.cur().text {
+				case "ASC":
+					p.next()
+				case "DESC":
+					ob2.Desc = true
+					p.next()
+				}
+			}
+			stmt.OrderBys = append(stmt.OrderBys, *ob2)
+		}
 	}
 	// LIMIT [OFFSET n]（M12-2 支持 OFFSET 分页：LIMIT n OFFSET m）
 	if p.cur().kind == tokKeyword && p.cur().text == "LIMIT" {
@@ -1852,7 +2127,7 @@ func (p *parser) parseColumnRef() (string, string, error) {
 	// 聚合/窗口函数只允许出现在 SELECT 列表；WHERE/GROUP BY/ORDER BY 等位置显式报错
 	if p.cur().kind == tokLParen {
 		switch strings.ToUpper(tok.text) {
-		case "COUNT", "SUM", "AVG", "ROW_NUMBER", "RANK", "DENSE_RANK":
+		case "COUNT", "SUM", "AVG", "MAX", "MIN", "ROW_NUMBER", "RANK", "DENSE_RANK":
 			return "", "", errf("function %s() only allowed in SELECT list", tok.text)
 		}
 	}
@@ -1879,6 +2154,16 @@ func (p *parser) parseSelectColumn() (SelectColumn, error) {
 		p.next()
 		return SelectColumn{Raw: "*", Name: "*"}, nil
 	}
+	// M18-C：SELECT @var 用户变量（无 FROM 时求值）
+	if p.cur().kind == tokVar {
+		v := p.cur().text
+		p.next()
+		sc := SelectColumn{Raw: v, Var: v, Name: v}
+		if err := p.parseSelectAlias(&sc); err != nil {
+			return SelectColumn{}, err
+		}
+		return sc, nil
+	}
 	// CASE WHEN 表达式（P2）
 	if p.cur().kind == tokKeyword && p.cur().text == "CASE" {
 		cc, err := p.parseCaseWhen()
@@ -1893,87 +2178,243 @@ func (p *parser) parseSelectColumn() (SelectColumn, error) {
 	}
 	if p.cur().kind == tokIdent {
 		first := p.cur().text
-		p.next()
-		// 限定列 t.col
-		if p.cur().kind == tokDot {
-			p.next()
-			colTok, err := p.expect(tokIdent, "column name")
-			if err != nil {
-				return SelectColumn{}, err
-			}
-			sc := SelectColumn{Raw: first + "." + colTok.text, Ref: first, Col: colTok.text, Name: first + "." + colTok.text}
-			if err := p.parseSelectAlias(&sc); err != nil {
-				return SelectColumn{}, err
-			}
-			return sc, nil
-		}
-		// 聚合/窗口函数：COUNT/SUM/AVG/ROW_NUMBER/RANK/DENSE_RANK(...)
-		if p.cur().kind == tokLParen {
+		// 聚合/窗口函数：COUNT/SUM/AVG/MAX/MIN/ROW_NUMBER/RANK/DENSE_RANK(...)
+		if p.peekKind() == tokLParen {
 			upper := strings.ToUpper(first)
-			if upper != "COUNT" && upper != "SUM" && upper != "AVG" && upper != "ROW_NUMBER" && upper != "RANK" && upper != "DENSE_RANK" {
-				return SelectColumn{}, errf("function %q not supported", first)
+			switch upper {
+			case "COUNT", "SUM", "AVG", "MAX", "MIN", "ROW_NUMBER", "RANK", "DENSE_RANK":
+				return p.parseAggSelectColumn(upper)
 			}
-			// 无参排名窗口函数：ROW_NUMBER() / RANK() / DENSE_RANK()，必须带 OVER
-			if upper == "ROW_NUMBER" || upper == "RANK" || upper == "DENSE_RANK" {
-				p.next() // (
-				if _, err := p.expect(tokRParen, ")"); err != nil {
-					return SelectColumn{}, err
-				}
-				sc := SelectColumn{Raw: upper + "()", Agg: upper, Name: upper + "()"}
-				if p.cur().kind == tokKeyword && p.cur().text == "OVER" {
-					if err := p.parseWindowSpec(&sc); err != nil {
-						return SelectColumn{}, err
-					}
-				} else {
-					return SelectColumn{}, errf("window function %s() requires OVER clause", upper)
-				}
-				if err := p.parseSelectAlias(&sc); err != nil {
-					return SelectColumn{}, err
-				}
-				return sc, nil
-			}
-			p.next() // (
-			if upper == "COUNT" && p.cur().kind == tokStar {
-				p.next()
-				if _, err := p.expect(tokRParen, ")"); err != nil {
-					return SelectColumn{}, err
-				}
-				sc := SelectColumn{Raw: "COUNT(*)", Agg: "COUNT", Name: "COUNT(*)"}
-				if p.cur().kind == tokKeyword && p.cur().text == "OVER" {
-					if err := p.parseWindowSpec(&sc); err != nil {
-						return SelectColumn{}, err
-					}
-				}
-				if err := p.parseSelectAlias(&sc); err != nil {
-					return SelectColumn{}, err
-				}
-				return sc, nil
-			}
-			argRef, argCol, err := p.parseColumnRef()
-			if err != nil {
-				return SelectColumn{}, err
-			}
-			if _, err := p.expect(tokRParen, ")"); err != nil {
-				return SelectColumn{}, err
-			}
-			sc := SelectColumn{Raw: upper + "(" + qualifiedName(argRef, argCol) + ")", Agg: upper, Ref: argRef, Col: argCol, Name: upper + "(" + qualifiedName(argRef, argCol) + ")"}
-			if p.cur().kind == tokKeyword && p.cur().text == "OVER" {
-				if err := p.parseWindowSpec(&sc); err != nil {
-					return SelectColumn{}, err
-				}
-			}
-			if err := p.parseSelectAlias(&sc); err != nil {
-				return SelectColumn{}, err
-			}
-			return sc, nil
+			p.next()
+			return SelectColumn{}, errf("function %q not supported", first)
 		}
-		sc := SelectColumn{Raw: first, Col: first, Name: first}
+		// 普通列或算术表达式（T40）：parseExpr 从当前 ident 开始，
+		// 纯列引用保持既有 Ref/Col 路径（索引/点查优化），复杂表达式填 Expr。
+		expr, err := p.parseExpr()
+		if err != nil {
+			return SelectColumn{}, err
+		}
+		sc := SelectColumn{}
+		if expr.isPlainColumn() {
+			sc = SelectColumn{Raw: expr.Raw, Ref: expr.Ref, Col: expr.Col, Name: expr.Raw}
+		} else {
+			sc = SelectColumn{Raw: expr.Raw, Expr: expr, Name: expr.Raw}
+		}
+		if err := p.parseSelectAlias(&sc); err != nil {
+			return SelectColumn{}, err
+		}
+		return sc, nil
+	}
+	// T40：数字 / ( / + / - 开头的算术表达式列（如 SELECT 1+2, (k+1)*2, -k）
+	if p.cur().kind == tokNumber || p.cur().kind == tokLParen || p.cur().kind == tokPlus || p.cur().kind == tokMinus {
+		expr, err := p.parseExpr()
+		if err != nil {
+			return SelectColumn{}, err
+		}
+		sc := SelectColumn{Raw: expr.Raw, Expr: expr, Name: expr.Raw}
 		if err := p.parseSelectAlias(&sc); err != nil {
 			return SelectColumn{}, err
 		}
 		return sc, nil
 	}
 	return SelectColumn{}, errf("expected select column at %d, got %q", p.cur().pos, p.cur().text)
+}
+
+// parseAggSelectColumn 解析聚合/窗口函数列（COUNT/SUM/AVG/MAX/MIN 及无参排名窗口）。
+// 聚合参数支持算术表达式（T40）：纯列引用保持 Ref/Col 语义，复杂表达式填 Expr。
+func (p *parser) parseAggSelectColumn(upper string) (SelectColumn, error) {
+	p.next() // ident（函数名）
+	// 无参排名窗口函数：ROW_NUMBER() / RANK() / DENSE_RANK()，必须带 OVER
+	if upper == "ROW_NUMBER" || upper == "RANK" || upper == "DENSE_RANK" {
+		p.next() // (
+		if _, err := p.expect(tokRParen, ")"); err != nil {
+			return SelectColumn{}, err
+		}
+		sc := SelectColumn{Raw: upper + "()", Agg: upper, Name: upper + "()"}
+		if p.cur().kind == tokKeyword && p.cur().text == "OVER" {
+			if err := p.parseWindowSpec(&sc); err != nil {
+				return SelectColumn{}, err
+			}
+		} else {
+			return SelectColumn{}, errf("window function %s() requires OVER clause", upper)
+		}
+		if err := p.parseSelectAlias(&sc); err != nil {
+			return SelectColumn{}, err
+		}
+		return sc, nil
+	}
+	p.next() // (
+	if upper == "COUNT" && p.cur().kind == tokStar {
+		p.next()
+		if _, err := p.expect(tokRParen, ")"); err != nil {
+			return SelectColumn{}, err
+		}
+		sc := SelectColumn{Raw: "COUNT(*)", Agg: "COUNT", Name: "COUNT(*)"}
+		if p.cur().kind == tokKeyword && p.cur().text == "OVER" {
+			if err := p.parseWindowSpec(&sc); err != nil {
+				return SelectColumn{}, err
+			}
+		}
+		if err := p.parseSelectAlias(&sc); err != nil {
+			return SelectColumn{}, err
+		}
+		return sc, nil
+	}
+	// 聚合参数：算术表达式（T40），纯列引用保持 Ref/Col。
+	arg, err := p.parseExpr()
+	if err != nil {
+		return SelectColumn{}, err
+	}
+	if _, err := p.expect(tokRParen, ")"); err != nil {
+		return SelectColumn{}, err
+	}
+	raw := upper + "(" + arg.Raw + ")"
+	sc := SelectColumn{Raw: raw, Agg: upper, Name: raw}
+	if arg.isPlainColumn() {
+		sc.Ref, sc.Col = arg.Ref, arg.Col
+	} else {
+		sc.Expr = arg
+	}
+	if p.cur().kind == tokKeyword && p.cur().text == "OVER" {
+		if err := p.parseWindowSpec(&sc); err != nil {
+			return SelectColumn{}, err
+		}
+	}
+	if err := p.parseSelectAlias(&sc); err != nil {
+		return SelectColumn{}, err
+	}
+	return sc, nil
+}
+
+// ---- T40：算术表达式解析（递归下降，优先级 * / % 高于 + -，一元负 NEG） ----
+
+// parseExpr 解析算术表达式。表达式结束时不消费后续 token（由调用方决定边界）。
+func (p *parser) parseExpr() (*Expr, error) {
+	return p.parseExprAddSub()
+}
+
+// parseExprAddSub 加减层（左结合）。
+func (p *parser) parseExprAddSub() (*Expr, error) {
+	left, err := p.parseExprMulDiv()
+	if err != nil {
+		return nil, err
+	}
+	for {
+		var op string
+		switch p.cur().kind {
+		case tokPlus:
+			op = "+"
+		case tokMinus:
+			op = "-"
+		default:
+			return left, nil
+		}
+		p.next()
+		right, err := p.parseExprMulDiv()
+		if err != nil {
+			return nil, err
+		}
+		left = &Expr{Op: op, Left: left, Right: right, Raw: left.Raw + op + right.Raw}
+	}
+}
+
+// parseExprMulDiv 乘除取模层（左结合）。
+func (p *parser) parseExprMulDiv() (*Expr, error) {
+	left, err := p.parseExprUnary()
+	if err != nil {
+		return nil, err
+	}
+	for {
+		var op string
+		switch p.cur().kind {
+		case tokStar:
+			op = "*"
+		case tokSlash:
+			op = "/"
+		case tokMod:
+			op = "%"
+		default:
+			return left, nil
+		}
+		p.next()
+		right, err := p.parseExprUnary()
+		if err != nil {
+			return nil, err
+		}
+		left = &Expr{Op: op, Left: left, Right: right, Raw: left.Raw + op + right.Raw}
+	}
+}
+
+// parseExprUnary 一元层：负号（NEG）/ 正号（忽略）。
+func (p *parser) parseExprUnary() (*Expr, error) {
+	switch p.cur().kind {
+	case tokMinus:
+		p.next()
+		sub, err := p.parseExprUnary()
+		if err != nil {
+			return nil, err
+		}
+		return &Expr{Op: "NEG", Right: sub, Raw: "-" + sub.Raw}, nil
+	case tokPlus:
+		p.next()
+		return p.parseExprUnary()
+	default:
+		return p.parseExprPrimary()
+	}
+}
+
+// parseExprPrimary 表达式原子：数字/字符串字面量、括号表达式、列引用（限定/裸）。
+func (p *parser) parseExprPrimary() (*Expr, error) {
+	switch p.cur().kind {
+	case tokNumber:
+		text := p.cur().text
+		p.next()
+		if strings.Contains(text, ".") {
+			scaled, canon, err := parseDecimal(text)
+			if err != nil {
+				return nil, err
+			}
+			v := Value{Kind: "DECIMAL", I: scaled, S: canon}
+			return &Expr{Val: &v, Raw: text}, nil
+		}
+		n, err := parseInt10(text)
+		if err != nil {
+			return nil, err
+		}
+		v := IntVal(n)
+		return &Expr{Val: &v, Raw: text}, nil
+	case tokString:
+		s := p.cur().text
+		p.next()
+		v := StrVal(s)
+		return &Expr{Val: &v, Raw: "'" + s + "'"}, nil
+	case tokLParen:
+		p.next()
+		sub, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(tokRParen, ")"); err != nil {
+			return nil, err
+		}
+		sub.Raw = "(" + sub.Raw + ")"
+		return sub, nil
+	case tokIdent:
+		ref, col, err := p.parseColumnRef()
+		if err != nil {
+			return nil, err
+		}
+		if ref != "" {
+			return &Expr{Ref: ref, Col: col, Raw: ref + "." + col}, nil
+		}
+		return &Expr{Col: col, Raw: col}, nil
+	case tokVar:
+		// M18-C：表达式中的用户变量（如 k+@n）由 executor 在查询前替换。
+		v := p.cur().text
+		p.next()
+		return &Expr{Val: &Value{Kind: "VAR", S: v}, Raw: v}, nil
+	}
+	return nil, errf("expected expression at %d, got %q", p.cur().pos, p.cur().text)
 }
 
 // parseSelectAlias 解析 SELECT 列可选的 [AS] alias（覆盖输出列名）。
@@ -2103,11 +2544,17 @@ func (p *parser) parseCond() (Cond, error) {
 		}
 		c.LeftCase = cc
 	} else {
-		ref, col, err := p.parseColumnRef()
+		// T40：左操作数可为列引用或算术表达式（如 k+1 > 5）；
+		// 纯列引用保持 Ref/Col 语义（索引/点查优化路径不变）。
+		lexpr, err := p.parseExpr()
 		if err != nil {
 			return c, err
 		}
-		c.Ref, c.Col = ref, col
+		if lexpr.isPlainColumn() {
+			c.Ref, c.Col = lexpr.Ref, lexpr.Col
+		} else {
+			c.LeftExpr = lexpr
+		}
 	}
 	switch p.cur().kind {
 	case tokEq:
@@ -2215,12 +2662,22 @@ func (p *parser) parseCond() (Cond, error) {
 		c.Sub = subSel
 		return c, nil
 	}
-	if p.cur().kind == tokIdent {
-		rref, rcol, err := p.parseColumnRef()
+	if p.cur().kind == tokIdent || p.cur().kind == tokLParen ||
+		p.cur().kind == tokNumber || p.cur().kind == tokPlus || p.cur().kind == tokMinus {
+		// T40：右值可为列引用或算术表达式（如 k = v*2, k+1 > 5）；
+		// 纯列引用保持 RightRef 语义（JOIN ON 场景）。
+		rexpr, err := p.parseExpr()
 		if err != nil {
 			return c, err
 		}
-		c.RightRef = qualifiedName(rref, rcol)
+		if rexpr.isPlainColumn() {
+			c.RightRef = qualifiedName(rexpr.Ref, rexpr.Col)
+		} else if rexpr.isLiteral() {
+			// 纯字面量回落为旧路径常量，保持 matchWhere / 索引点查快速路径语义。
+			c.Val = *rexpr.Val
+		} else {
+			c.RightExpr = rexpr
+		}
 		return c, nil
 	}
 	v, err := p.parseValue()
@@ -2316,6 +2773,11 @@ func (p *parser) parseValue() (Value, error) {
 		s := p.cur().text
 		p.next()
 		return StrVal(s), nil
+	case tokVar:
+		// M18-C：WHERE/值位置引用用户变量 @var（executor 在查询前替换为会话值）。
+		v := p.cur().text
+		p.next()
+		return Value{Kind: "VAR", S: v}, nil
 	}
 	return Value{}, errf("expected value at %d, got %q", p.cur().pos, p.cur().text)
 }
@@ -2477,8 +2939,13 @@ func (p *parser) parseShow() (Stmt, error) {
 	}
 	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "ALERT") {
 		p.next()
+		// T37 监控告警：SHOW ALERT RULES（规则与阈值配置查看）。
+		if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "RULES") {
+			p.next()
+			return &ShowAlertRulesStmt{}, nil
+		}
 		if !(p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "STATUS")) {
-			return nil, errf("expected keyword STATUS at %d, got %q", p.pos, p.cur().text)
+			return nil, errf("expected keyword STATUS or RULES at %d, got %q", p.pos, p.cur().text)
 		}
 		p.next()
 		return &ShowAlertStatusStmt{}, nil
@@ -2588,7 +3055,92 @@ func (p *parser) parseExport() (Stmt, error) {
 		return nil, err
 	}
 	stmt.Path = pathTok.text
+	// M19：可选 FORMAT CSV|JSON|PARQUET（缺省 CSV，保持向后兼容）
+	if p.cur().kind == tokKeyword && p.cur().text == "FORMAT" {
+		p.next()
+		fmtTok, err := p.expect(tokIdent, "export format")
+		if err != nil {
+			return nil, err
+		}
+		stmt.Format = strings.ToUpper(fmtTok.text)
+		switch stmt.Format {
+		case "CSV", "JSON", "PARQUET":
+		default:
+			return nil, errf("unsupported export format: %s", stmt.Format)
+		}
+	}
 	return stmt, nil
+}
+
+// parsePrepare PREPARE <name> FROM '<sql-text>'（M18 prepared statement）。
+func (p *parser) parsePrepare() (Stmt, error) {
+	if err := p.expectKeyword("PREPARE"); err != nil {
+		return nil, err
+	}
+	nameTok, err := p.expect(tokIdent, "prepared statement name")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("FROM"); err != nil {
+		return nil, err
+	}
+	sqlTok, err := p.expect(tokString, "prepared SQL text")
+	if err != nil {
+		return nil, err
+	}
+	return &PrepareStmt{Name: strings.ToLower(nameTok.text), SQL: sqlTok.text}, nil
+}
+
+// parseExecute EXECUTE <name> [USING @a, @b]（M18 prepared statement）。
+func (p *parser) parseExecute() (Stmt, error) {
+	if err := p.expectKeyword("EXECUTE"); err != nil {
+		return nil, err
+	}
+	nameTok, err := p.expect(tokIdent, "prepared statement name")
+	if err != nil {
+		return nil, err
+	}
+	s := &ExecuteStmt{Name: strings.ToLower(nameTok.text)}
+	if p.cur().kind == tokKeyword && p.cur().text == "USING" {
+		p.next()
+		for {
+			switch p.cur().kind {
+			case tokVar:
+				s.Args = append(s.Args, p.cur().text)
+				p.next()
+			case tokNumber:
+				s.Args = append(s.Args, p.cur().text)
+				p.next()
+			case tokString:
+				// 字符串参数保留引号形态，便于 executor 区分字面量类型并转义
+				s.Args = append(s.Args, "'"+p.cur().text+"'")
+				p.next()
+			default:
+				return nil, errf("expected variable or literal in USING at %d", p.cur().pos)
+			}
+			if p.cur().kind == tokComma {
+				p.next()
+				continue
+			}
+			break
+		}
+	}
+	return s, nil
+}
+
+// parseDeallocate DEALLOCATE PREPARE <name>（M18 prepared statement）。
+func (p *parser) parseDeallocate() (Stmt, error) {
+	if err := p.expectKeyword("DEALLOCATE"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("PREPARE"); err != nil {
+		return nil, err
+	}
+	nameTok, err := p.expect(tokIdent, "prepared statement name")
+	if err != nil {
+		return nil, err
+	}
+	return &DeallocateStmt{Name: strings.ToLower(nameTok.text)}, nil
 }
 
 // parseImport IMPORT MYSQLDUMP FROM 'path' [BATCH n] [IGNORE ERRORS] 或 IMPORT INTO t FROM 'path' [BATCH n] [IGNORE ERRORS]

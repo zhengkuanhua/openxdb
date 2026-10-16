@@ -1,0 +1,24 @@
+﻿openxdb.exe : {"event":"storage_open_failed","level":"error","module":"storage","msg":"open storage in C:\\Users\\27756
+\\AppData\\Roaming\\Tencent\\Marvis\\User\\oAN1i2RORm9ewWWUXrcT2XBfRk0c\\workspace\\conv_5d15f4c8d8ec46778266acaa06c35c
+33\\temp\\openxdb-t38\\master: rocksdb: open C:\\Users\\27756\\AppData\\Roaming\\Tencent\\Marvis\\User\\oAN1i2RORm9ewWW
+UXrcT2XBfRk0c\\workspace\\conv_5d15f4c8d8ec46778266acaa06c35c33\\temp\\openxdb-t38\\master\\data: IO error: Failed to c
+reate lock file: C:\\Users\\27756\\AppData\\Roaming\\Tencent\\Marvis\\User\\oAN1i2RORm9ewWWUXrcT2XBfRk0c\\workspace\\co
+nv_5d15f4c8d8ec46778266acaa06c35c33\\temp\\openxdb-t38\\master\\data/LOCK: ��һ����������ʹ�ô��ļ��������޷����ʡ�\r\n","tim
+e":"2026-10-15T13:22:19.394+08:00"}
+At D:\AI项目\OpenXDB开源数据库开发\openxdb\validation\t38\run_validation.ps1:115 char:11
++     $o = (& $Bin @($cli.a) 2>&1 | Out-String)
++           ~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ({"event":"stora...:19.394+08:00"}:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+OpenXDB upgrade preflight (M16-3)
+  data dir      : C:\Users\27756\AppData\Roaming\Tencent\Marvis\User\oAN1i2RORm9ewWWUXrcT2XBfRk0c\workspace\conv_5d15f4c8d8ec46778266acaa06c35c33\temp\openxdb-t38\master
+  binary version: v0.25.0-alpha (data format v1)
+  checks:
+    [PASS] data_dir         数据目录与配置文件存在，engine = rocksdb
+    [PASS] persisted_config 无持久化配置记录（persisted.json 不存在），按默认配置即可启动
+    [FAIL] open_storage     数据目录无法打开: db: open storage: rocksdb: open C:\Users\27756\AppData\Roaming\Tencent\Marvis\User\oAN1i2RORm9ewWWUXrcT2XBfRk0c\workspace\conv_5d15f4c8d8ec46778266acaa06c35c33\temp\openxdb-t38\master\data: IO error: Failed to create lock file: C:\Users\27756\AppData\Roaming\Tencent\Marvis\User\oAN1i2RORm9ewWWUXrcT2XBfRk0c\workspace\conv_5d15f4c8d8ec46778266acaa06c35c33\temp\openxdb-t38\master\data/LOCK: ��һ����������ʹ�ô��ļ��������޷����ʡ�
+
+    [PASS] version_compat   数据格式 v1 <= 当前二进制 v1，兼容（升级路径：旧数据可被当前版本打开）
+  PREFLIGHT RESULT: FAIL
+

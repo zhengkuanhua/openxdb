@@ -39,6 +39,9 @@ func (e *Executor) canDistributedOrder(meta *TableMeta, s *SelectStmt) bool {
 	if !e.clusterEnabled() || s.OrderBy == nil || s.OrderBy.Ref != "" {
 		return false
 	}
+	if s.Distinct {
+		return false // DISTINCT 去重须在全量结果上进行，分片截断会丢行
+	}
 	if s.Limit <= 0 && s.Offset <= 0 {
 		return false // 无分页需求，走既有全量排序（索引序优化等）
 	}
@@ -58,6 +61,9 @@ func (e *Executor) canDistributedOrder(meta *TableMeta, s *SelectStmt) bool {
 func (e *Executor) canDistributedTop(meta *TableMeta, s *SelectStmt) bool {
 	if !e.clusterEnabled() || s.OrderBy != nil || (s.Limit <= 0 && s.Offset <= 0) {
 		return false
+	}
+	if s.Distinct {
+		return false // DISTINCT 去重须在全量结果上进行，截断会丢行
 	}
 	if s.Where != nil && len(s.Where.Conds) > 0 {
 		return false

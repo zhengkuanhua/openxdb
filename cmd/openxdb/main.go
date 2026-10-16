@@ -4,8 +4,10 @@ package main
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,9 +23,10 @@ import (
 	"github.com/zhengkuanhua/openxdb/pkg/metrics"
 	"github.com/zhengkuanhua/openxdb/pkg/server"
 	"github.com/zhengkuanhua/openxdb/pkg/sql"
+	"github.com/zhengkuanhua/openxdb/pkg/storage/rocksdb"
 )
 
-const version = "v0.20.0-alpha"
+const version = "v1.0.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -56,6 +59,10 @@ func main() {
 		err = cmdImport(os.Args[2:])
 	case "backup":
 		err = cmdBackup(os.Args[2:])
+	case "gen-cert":
+		err = cmdGenCert(os.Args[2:])
+	case "metrics":
+		err = cmdMetrics(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -76,10 +83,11 @@ func flagValue(args []string, name string) (string, bool) {
 	return "", false
 }
 
-// loadTLSConfig 解析 --tls-cert/--tls-key 并加载服务端 TLS 配置（P0 TLS）：
+// loadTLSConfig 解析 --tls-cert/--tls-key 并加载服务端 TLS 配置（P0/T36）：
 //   - 两者都未提供 → 返回 (nil, nil)，保持明文监听（向后兼容）；
 //   - 仅提供一个 → 返回错误（必须成对提供）；
-//   - 两者都提供 → 加载 X509 证书密钥对，返回非 nil *tls.Config。
+//   - 两者都提供 → 加载 X509 证书密钥对，校验证书有效期（T36：过期/未生效
+//     拒绝启动，商用合规），返回非 nil *tls.Config。
 func loadTLSConfig(args []string) (*tls.Config, error) {
 	tlsCert, hasCert := flagValue(args, "--tls-cert")
 	tlsKey, hasKey := flagValue(args, "--tls-key")
@@ -92,9 +100,32 @@ func loadTLSConfig(args []string) (*tls.Config, error) {
 	if !hasCert {
 		return nil, nil
 	}
+	return loadTLSConfigFrom(tlsCert, tlsKey)
+}
+
+// loadTLSConfigFrom 从指定证书/私钥文件加载服务端 TLS 配置（T36）：
+// 加载 X509 证书密钥对并校验有效期（NotBefore/NotAfter 覆盖当前时间），
+// 过期或未生效返回明确错误拒绝启动（商用合规：过期证书不得静默运行）。
+func loadTLSConfigFrom(tlsCert, tlsKey string) (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
 	if err != nil {
 		return nil, fmt.Errorf("load TLS cert/key: %w", err)
+	}
+	if len(cert.Certificate) == 0 {
+		return nil, fmt.Errorf("TLS cert %s: empty certificate chain", tlsCert)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("TLS cert %s: parse certificate: %w", tlsCert, err)
+	}
+	now := time.Now()
+	if now.Before(leaf.NotBefore) {
+		return nil, fmt.Errorf("TLS certificate %s not yet valid (NotBefore %s, now %s)",
+			tlsCert, leaf.NotBefore.Format(time.RFC3339), now.Format(time.RFC3339))
+	}
+	if now.After(leaf.NotAfter) {
+		return nil, fmt.Errorf("TLS certificate %s expired (NotAfter %s, now %s)",
+			tlsCert, leaf.NotAfter.Format(time.RFC3339), now.Format(time.RFC3339))
 	}
 	return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
 }
@@ -348,13 +379,33 @@ func cmdStart(args []string) error {
 		}
 		logx.DefaultAlerts.Configure(ac)
 	}
-	// P0 TLS：主服务监听层加密（可选）。--tls-cert 与 --tls-key 必须同时提供，
-	// 仅提供一个即报错；两者都提供时加载证书并用 tls.Listen 加密监听，
-	// 否则保持明文监听（向后兼容，行为不变）。复制端口（--replica-port）
-	// 同样复用该 TLS 配置。
+	// P0/T36 TLS：主服务监听层加密（可选）。--tls-cert 与 --tls-key 必须同时提供，
+	// 仅提供一个即报错；两者都提供时加载证书并用 TLS 监听；否则回退持久化
+	// TLS intent（SET PERSIST tls_cert/tls_key，重启生效）；仍无则明文监听。
+	// 命令行参数优先级高于持久化配置。复制端口（--replica-port）复用同一配置。
 	tlsCfg, err := loadTLSConfig(args)
 	if err != nil {
 		return err
+	}
+	tlsAllowLegacy := hasFlag(args, "--tls-allow-legacy")
+	if tlsCfg == nil {
+		d0, derr := db.Open(dir)
+		if derr != nil {
+			return derr
+		}
+		pCert, pKey, pLegacy := d0.SQL.PersistedTLSConfig()
+		if pCert != "" && pKey != "" {
+			pc, lerr := loadTLSConfigFrom(pCert, pKey)
+			if lerr != nil {
+				_ = d0.Close()
+				return lerr
+			}
+			tlsCfg = pc
+			if !hasFlag(args, "--tls-allow-legacy") {
+				tlsAllowLegacy = pLegacy
+			}
+		}
+		_ = d0.Close()
 	}
 	d, err := db.Open(dir)
 	if err != nil {
@@ -426,11 +477,17 @@ func cmdStart(args []string) error {
 	addr := fmt.Sprintf(":%d", port)
 	s := server.New(d.Txn)
 	s.SQL = d.SQL
-	// P0 TLS：装配监听层加密（--tls-cert/--tls-key 同时提供时启用；
-	// 否则 s.tlsConfig == nil，ServeTCP 保持明文监听）。
+	// P0/T36 TLS：装配监听层加密（--tls-cert/--tls-key 或持久化 tls_cert/tls_key
+	// 生效时启用；否则 s.tlsConfig == nil，ServeTCP 保持明文监听）。
+	// --tls-allow-legacy / 持久化 tls_allow_legacy=on 开启同端口明文降级并存。
 	s.SetTLS(tlsCfg)
 	if tlsCfg != nil {
-		fmt.Printf("TLS enabled (cert/key loaded)\n")
+		s.SetTLSLegacy(tlsAllowLegacy)
+		if tlsAllowLegacy {
+			fmt.Printf("TLS enabled (cert/key loaded, legacy plaintext allowed on same port)\n")
+		} else {
+			fmt.Printf("TLS enabled (cert/key loaded, plaintext rejected)\n")
+		}
 	}
 	// M11 生产接线（P0-3）：连接鉴权装配。
 	// --auth 启用 TCP 连接握手鉴权（AUTH <user> <password>）；未指定时保持
@@ -540,8 +597,33 @@ func cmdStart(args []string) error {
 	m.SetSlowThresholdSource(d.SQL.SlowQueryThreshold)
 	m.SetStorageBytesSource(func() int64 { return dirSize(dir) })
 	m.SetRegionStatsSource(d.SQL.MetricsRegionStats)
+	// RocksDB 内部统计采集源：LSM/SST/MemTable/Compaction 等指标对接监控看板；
+	// 非 RocksDB 引擎时返回空快照（全 0），不影响整体渲染。
+	m.SetRocksStatsSource(func() metrics.RocksStats {
+		rs, err := rocksdb.StatsOf(d.Storage)
+		if err != nil {
+			return metrics.RocksStats{}
+		}
+		return metrics.RocksStats{
+			NumLevels:             rs.NumLevels,
+			NumFilesAtLevel:       rs.NumFilesAtLevel,
+			CurSizeAllMemTables:   rs.CurSizeAllMemTables,
+			SizeAllMemTables:      rs.SizeAllMemTables,
+			CompactionPending:     rs.CompactionPending,
+			NumRunningCompactions: rs.NumRunningCompactions,
+			NumRunningFlushes:     rs.NumRunningFlushes,
+			LiveSSTFilesSize:      rs.LiveSSTFilesSize,
+			NumLiveVersions:       rs.NumLiveVersions,
+			EstimateNumKeys:       rs.EstimateNumKeys,
+		}
+	})
 	s.SetMetrics(m)
 	d.SQL.SetMetrics(m)
+	// T37：监控告警规则评估引擎装配（指标阈值 + 持续时长 + 严重级别；
+	// 数据源与 Prometheus /metrics 同源 metrics.Registry）。启动评估循环，
+	// 规则通过 SET/SET PERSIST alert_rules* 配置，SHOW ALERT RULES 查看。
+	d.SQL.StartAlertRules()
+	fmt.Printf("alert rules engine: started (use SET alert_rules_enabled=on, SHOW ALERT RULES)\n")
 	if metricsPort > 0 {
 		go func() {
 			_ = http.ListenAndServe(fmt.Sprintf(":%d", metricsPort), m.Handler())
@@ -580,7 +662,8 @@ func cmdStart(args []string) error {
 		os.Exit(code)
 	}()
 	fmt.Printf("OpenXDB %s serving on %s (data dir: %s), Ctrl-C to stop.\n", version, addr, dir)
-	if err := s.ServeTCP(addr); err != nil {		return err
+	if err := s.ServeTCP(addr); err != nil {
+		return err
 	}
 	// ServeTCP 返回（SHUTDOWN 命令触发停机后监听器关闭）→ 等待收尾。
 	s.WaitShutdown()
@@ -647,8 +730,11 @@ func cmdBackup(args []string) error {
 		return errors.New("backup: unknown subcommand '" + args[0] + "' (expected push|pull)")
 	}
 }
+
 // cmdReplica 以从节点身份启动：连接主节点复制端口并异步应用 binlog。
-// 默认明文连接；--replica-tls 时以 TLS 连接（自签名/内网测试不校验服务器名）。
+// 默认明文连接；--replica-tls 时以 TLS 连接（自签名/内网测试不校验服务器名）；
+// --replica-tls-ca <path> 时以 TLS 连接并校验 CA 链与主机名（T36 verify-full，
+// 商用默认；--master 主机名须与证书 CN/SAN 匹配）。
 func cmdReplica(args []string) error {
 	dir, err := needDataDir(args)
 	if err != nil {
@@ -664,9 +750,21 @@ func cmdReplica(args []string) error {
 	}
 	defer d.Close()
 	var tlsCfg *tls.Config
-	for _, a := range args {
-		if a == "--replica-tls" {
-			tlsCfg = server.InsecureTLSConfig()
+	if caPath, hasCA := flagValue(args, "--replica-tls-ca"); hasCA {
+		// verify-full：主机名取 --master 的 host 部分（--master 可为 host:port）。
+		host := master
+		if h, _, err := net.SplitHostPort(master); err == nil {
+			host = h
+		}
+		tlsCfg, err = server.VerifyTLSConfig(caPath, host)
+		if err != nil {
+			return err
+		}
+	} else {
+		for _, a := range args {
+			if a == "--replica-tls" {
+				tlsCfg = server.InsecureTLSConfig()
+			}
 		}
 	}
 	if err := d.StartFollowerTLS(master, tlsCfg); err != nil {
@@ -695,7 +793,10 @@ Commands:
           [--tls-cert <path> --tls-key <path>] 启用监听层 TLS 加密
                                （两者必须同时提供；仅提供一个报错。
                                提供后主服务与 --replica-port 复制端口均加密监听；
-                               不提供保持明文，向后兼容）
+                               未提供时回退持久化 tls_cert/tls_key（SET PERSIST）；
+                               均未配置保持明文，向后兼容）
+          [--tls-allow-legacy] --tls-cert 生效时允许同端口明文/TLS 并存
+                               （默认纯 TLS，明文连接拒绝）
           [--replica-port <n>] 主节点复制端口（启用 M2 复制并生成 binlog）
           [--cluster-addr <addr>] 集群节点链路地址（启用 M4 节点握手/转发）
           [--metrics-port <n>] Prometheus /metrics 端口（默认 7789，0 禁用）
@@ -704,6 +805,11 @@ Commands:
           [--auth]            启用连接握手鉴权（AUTH <user> <password>）
           [--auth-allow-legacy] --auth 时允许无凭证客户端降级 guest（默认强制鉴权）
           [--root-password <pwd>] root 引导密码（无 root 用户时自动 CREATE USER；亦可经环境变量 OPENXDB_ROOT_PASSWORD 传入）
+  gen-cert [--cert <path>] [--key <path>] [--out-dir <dir>]
+                              生成自签名 TLS 证书（T36；ECDSA P-256，默认 cert.pem/key.pem）
+          [--days <n>]        证书有效期天数（默认 365）
+          [--cn <name>]       Subject CN 与 SAN（默认 localhost）
+          [--force]           覆盖已存在文件（默认拒绝覆盖）
   backup push --file <path> --url <http(s) url>
                               将本地备份文件上传到远程目标
   backup pull --url <http(s) url> --out <path>
@@ -711,6 +817,7 @@ Commands:
   replica --data-dir <dir> --master <host:port>
                              以从节点身份连接主节点并异步复制
           [--replica-tls]     以 TLS 加密连接主节点复制端口（自签名/内网测试不校验服务器名）
+          [--replica-tls-ca <path>] 以 TLS 连接并校验 CA 链与主机名（T36 verify-full）
   doctor  --data-dir <dir>   数据目录/本地服务健康巡检
           [--addr <host:port>] 在线服务检查（端口连通、慢查询等）
           [--json]            输出 JSON 报告（退出码：0=通过 1=警告 2=错误）

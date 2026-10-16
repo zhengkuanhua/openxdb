@@ -1,0 +1,33 @@
+﻿[PASS] 连接主节点  (127.0.0.1:7788)
+[PASS] 视图返回新订单  (rows=[('5001', 'alice', 'NEW', '898.0000', '2026-10-15')])
+[PASS] 触发器审计生效  (audit_log=[('order inserted',)])
+[PASS] 物化视图汇总包含 NEW  (mv=[('NEW', '1', '898.0000')])
+[PASS] 存储过程 CALL 生效  (rows=[('9001', 'NEW')])
+[PASS] 事务提交持久  (rows=[('tx_commit',)])
+[PASS] 事务回滚生效  (rows=[])
+[PASS] 唯一约束拦截
+[PASS] 外键约束拦截
+[PASS] 主键冲突拦截
+[PASS] 并发写入双方均可见  (a=[('conc_a',)] b=[('conc_b',)])
+[PASS] 用户订单聚合  (rows=[('alice', '4')])
+[PASS] 窗口函数 RANK  (rows=[('27寸显示器', '1299.0000', '1'), ('人体工学椅', '899.0000', '2'), ('降噪耳机', '499.0000', '3')])
+[PASS] 子查询过滤  (rows=[('降噪耳机',), ('人体工学椅',), ('27寸显示器',)])
+[PASS] GROUP BY 聚合  (rows=[('外设', '3'), ('显示', '1'), ('配件', '2'), ('家具', '1'), ('音频', '1')])
+[PASS] 插入新商品  (rows=[('upsert_prod',)])
+[PASS] REPLACE 错误拦截  (REPLACE 报错被正确拦截)
+[PASS] EXPLAIN 可用  (explain=[('access: index scan on ux_users_email(email)',), ('filter: email = alice@example.com',), ('projection: *',)])
+[PASS] 参数化 PREPARE 语义  (rows=[('2', 'bob')])
+[PASS] RBAC 未认证连接被拒
+[PASS] RBAC 未授权表被拒
+[PASS] RBAC 授权表可读  (rows=[('8',)])
+[PASS] TLS 加密连接  (rows=[])
+[PASS] 明文连接被拒
+[PASS] 备份恢复回滚增量  (before=2 after=0)
+[PASS] PITR 回放到 LSN  (rows=[('0',)])
+[PASS] 告警规则配置生效  (rules=[('r1', 'sql_qps', '>', '1', '0', 'warn', 'on', 'RESOLVED', '0')])
+[PASS] 告警状态可见  (status=[('enabled', 'off'), ('file', None), ('webhook', None), ('keep', '100'), ('level', 'info'), ('alert_rules_enabled', 'on'), ('alert_eval_interval', '1'), ('alert_rule_count', '1')])
+[INFO] ALERT RULES/STATUS: [('r1', 'sql_qps', '>', '1', '0', 'warn', 'on', 'RESOLVED', '0')] | [('enabled', 'off'), ('file', None), ('webhook', None), ('keep', '100'), ('level', 'info'), ('alert_rules_enabled', 'on'), ('alert_eval_interval', '1'), ('alert_rule_count', '1')]
+[PASS] 批量写入 1000 行  (count=1000)
+[INFO] 批量写入耗时: 0.050s / 1000 rows = 20035 rows/s
+SUMMARY passed=29 failed=0 total=31
+

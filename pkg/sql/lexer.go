@@ -12,6 +12,10 @@ const (
 	tokNumber
 	tokString
 	tokStar      // *
+	tokPlus      // +
+	tokMinus     // -
+	tokSlash     // /
+	tokMod       // %
 	tokLParen    // (
 	tokRParen    // )
 	tokComma     // ,
@@ -25,18 +29,20 @@ const (
 	tokDot       // .
 	tokKeyword   // 关键字（大写原文）
 	tokVar       // @ident（存储过程变量/参数引用，M15-3）
+	tokQuestion  // ?（M18 prepared statement 参数占位符）
 )
 
 type token struct {
 	kind tokKind
 	text string
 	pos  int
+	raw  string // 关键字原文（未大写化），用于表名等需保留原始大小写场景（M18-C）
 }
 
 // keywords 关键字表（大小写不敏感）。
 var keywords = map[string]bool{
 	"CREATE": true, "TABLE": true, "DROP": true, "IF": true, "EXISTS": true, "INSERT": true,
-	"INTO": true, "VALUES": true, "SELECT": true, "FROM": true,
+	"INTO": true, "VALUES": true, "SELECT": true, "FROM": true, "DISTINCT": true,
 	"WHERE": true, "ORDER": true, "BY": true, "ASC": true, "DESC": true,
 	"LIMIT": true, "OFFSET": true, "PRIMARY": true, "KEY": true, "UPDATE": true,
 	"SET": true, "DELETE": true, "AND": true, "INDEX": true, "ON": true,
@@ -44,6 +50,8 @@ var keywords = map[string]bool{
 	"GROUP": true, "BETWEEN": true, "IN": true, "AS": true,
 	"BEGIN": true, "COMMIT": true, "ROLLBACK": true,
 	"EXPORT": true, "IMPORT": true, "TO": true,
+	// M18：prepared statement + 生态导出 FORMAT
+	"PREPARE": true, "EXECUTE": true, "DEALLOCATE": true, "USING": true, "FORMAT": true,
 	// P2：运维语句 + 表达式增强
 	"SHOW": true, "EXPLAIN": true, "TABLES": true, "SLOWQUERIES": true, "STATS": true,
 	"LIKE": true, "CASE": true, "WHEN": true, "THEN": true, "ELSE": true, "END": true,
@@ -105,10 +113,31 @@ func lex(sql string) ([]token, error) {
 		case c == '@':
 			// M15-3：存储过程局部变量/参数引用 @ident
 			l.lexVar()
+		case c == '?':
+			// M18：prepared statement 参数占位符
+			l.emit(tokQuestion, "?", 1)
 		case c == ';':
 			l.emit(tokSemicolon, ";", 1)
 		case c == '*':
 			l.emit(tokStar, "*", 1)
+		case c == '+':
+			l.emit(tokPlus, "+", 1)
+		case c == '-':
+			// T40：负号消歧。前一 token 以值结束时为二元减号；否则若后随数字/小数点，
+			// 并入数字字面量（-5 / -1.0，保持 VALUES 等旧路径 tokNumber 语义）。
+			if l.prevEndsValue() {
+				l.emit(tokMinus, "-", 1)
+			} else if l.pos+1 < len(l.src) && (isDigit(l.src[l.pos+1]) || l.src[l.pos+1] == '.') {
+				if err := l.lexNumber(); err != nil {
+					return nil, err
+				}
+			} else {
+				l.emit(tokMinus, "-", 1)
+			}
+		case c == '/':
+			l.emit(tokSlash, "/", 1)
+		case c == '%':
+			l.emit(tokMod, "%", 1)
 		case c == '=':
 			l.emit(tokEq, "=", 1)
 		case c == '!':
@@ -133,7 +162,7 @@ func lex(sql string) ([]token, error) {
 			if err := l.lexString(c); err != nil {
 				return nil, err
 			}
-		case isDigit(c) || (c == '-' && isDigit(l.peek(1))):
+		case isDigit(c):
 			if err := l.lexNumber(); err != nil {
 				return nil, err
 			}
@@ -152,6 +181,19 @@ func (l *lexer) peek(n int) byte {
 		return 0
 	}
 	return l.src[l.pos+n]
+}
+
+// prevEndsValue 判断上一 token 是否为可结束操作数的值类 token
+// （用于 "-" 的负数/减法消歧，T40）。行首/运算符/关键字后返回 false。
+func (l *lexer) prevEndsValue() bool {
+	if len(l.toks) == 0 {
+		return false
+	}
+	switch l.toks[len(l.toks)-1].kind {
+	case tokIdent, tokNumber, tokString, tokRParen, tokStar, tokVar, tokQuestion:
+		return true
+	}
+	return false
 }
 
 func (l *lexer) emit(k tokKind, text string, width int) {
@@ -225,7 +267,7 @@ func (l *lexer) lexIdent() {
 	}
 	text := l.src[start:l.pos]
 	if keywords[strings.ToUpper(text)] {
-		l.toks = append(l.toks, token{kind: tokKeyword, text: strings.ToUpper(text), pos: start})
+		l.toks = append(l.toks, token{kind: tokKeyword, text: strings.ToUpper(text), raw: text, pos: start})
 		return
 	}
 	l.toks = append(l.toks, token{kind: tokIdent, text: text, pos: start})

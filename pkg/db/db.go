@@ -216,7 +216,10 @@ func Open(dir string) (*DB, error) {
 		_ = st.Close()
 		return nil, fmt.Errorf("db: load persisted config: %w", err)
 	}
-	return &DB{Dir: dir, Storage: st, WAL: w, Txn: tm, SQL: eng, Cluster: mgr, TSO: ts}, nil
+	db := &DB{Dir: dir, Storage: st, WAL: w, Txn: tm, SQL: eng, Cluster: mgr, TSO: ts}
+	// T33：装配复制模式控制器（SET replication_* 热切换入口）。
+	eng.SetReplicationModeSetter(db)
+	return db, nil
 }
 
 // SetTSONode 将本节点时间戳源切换为指向 nodeID 节点的远程 TSO 客户端
@@ -241,6 +244,12 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	srv := cluster.NewServer(d.Storage, d.Cluster.SelfID)
 	srv.SetRouter(d.SQL.ExecutorRouter())
 	srv.SetManager(d.Cluster)
+	// T34：装配节点侧 DDL 元数据 apply（跨节点 DDL 广播的接收端）。
+	srv.SetDDLApply(d.SQL.ApplyRemoteDDL)
+	// T35：装配节点侧分布式备份/恢复回调（备份候选点、对齐备份、对齐恢复）。
+	srv.SetBackupPrepare(d.SQL.RemoteBackupPrepare)
+	srv.SetBackupDo(d.SQL.RemoteBackupDo)
+	srv.SetRestoreDo(d.SQL.RemoteRestoreDo)
 	// M8：注入中心化时间戳源（TSO_REQ 由本节点批量发放）。
 	srv.SetTSO(d.TSO)
 	// M5：2PC 崩溃恢复——清理未决 prepare（未决事务回滚，数据从未写入）
@@ -310,9 +319,56 @@ func (d *DB) StartReplicationTLS(addr string, tlsCfg *tls.Config) error {
 	d.Txn.SetCommitHook(func(lsn storage.LSN, seq uint64, batch *storage.WriteBatch) error {
 		return r.Append(&replication.BinlogEntry{CommitLSN: lsn, Batch: batch, SchemaVer: 0})
 	})
+	// T33 提交后置确认钩子（锁外）：按当前复制模式等待副本 ACK。
+	// async 模式立即返回（M2 兼容零开销）；sync/semi-sync 由复制器内部处理。
+	d.Txn.SetCommitWaitHook(func(lsn storage.LSN, seq uint64) error {
+		return r.WaitAck(context.Background(), lsn)
+	})
 	d.Replicator = r
 	return nil
 }
+
+// SetReplicationMode 热切换主端复制模式（T33）。
+// mode 取值 replication.ModeAsync / ModeSemiSync / ModeSync；ackN 为半同步
+// 最少确认副本数（async 忽略）；timeout 为 ACK 等待超时（<=0 用默认 10s）。
+func (d *DB) SetReplicationMode(mode replication.ReplMode, ackN int, timeout time.Duration) error {
+	if d.Replicator == nil {
+		return replication.ErrReplicationNotStarted
+	}
+	return d.Replicator.SetReplicationMode(mode, ackN, timeout)
+}
+
+// ReplicationSyncStatus 返回主端复制同步状态（T33）。
+func (d *DB) ReplicationSyncStatus() replication.SyncStatus {
+	if d.Replicator == nil {
+		return replication.SyncStatus{Mode: replication.ModeAsync}
+	}
+	return d.Replicator.SyncStatus()
+}
+
+// SetMode 实现 sql.ReplicationModeSetter（T33）：字符串模式 + 毫秒超时转内部调用。
+func (d *DB) SetMode(mode string, ackN int, timeoutMs int64) error {
+	m, err := replication.ParseReplMode(mode)
+	if err != nil {
+		return err
+	}
+	return d.SetReplicationMode(m, ackN, time.Duration(timeoutMs)*time.Millisecond)
+}
+
+// ModeStatus 实现 sql.ReplicationModeSetter（T33）。
+func (d *DB) ModeStatus() string { return d.ReplicationSyncStatus().Mode.String() }
+
+// AckStatus 实现 sql.ReplicationModeSetter（T33）：半同步最少确认副本数。
+func (d *DB) AckStatus() int {
+	st := d.ReplicationSyncStatus()
+	if st.Mode != replication.ModeSemiSync {
+		return 1
+	}
+	return st.SemiAckN
+}
+
+// TimeoutStatus 实现 sql.ReplicationModeSetter（T33）：ACK 等待超时毫秒。
+func (d *DB) TimeoutStatus() int64 { return d.ReplicationSyncStatus().Timeout.Milliseconds() }
 
 // StartFollower 以从节点身份连接主节点 masterAddr 并开始异步复制（M2）。
 // 起始位点 = 当前已应用位点 + 1（断线重连可续传）；状态用 FollowerStatus 查询。
@@ -382,6 +438,11 @@ func (d *DB) Close() error {
 	//（备份依赖存储快照，存储关闭前必须停）。
 	if d.SQL != nil {
 		d.SQL.StopBackupScheduler()
+	}
+	// T37：停止告警规则评估循环，避免 Close 过程中并发取指标快照/写通知
+	//（评估依赖 metrics 注册表与 logx 出口，存储关闭前必须停）。
+	if d.SQL != nil {
+		d.SQL.StopAlertRules()
 	}
 	if d.Follower != nil {
 		if err := d.Follower.Stop(); err != nil {

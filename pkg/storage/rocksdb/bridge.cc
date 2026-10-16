@@ -7,6 +7,7 @@
 #include <rocksdb/snapshot.h>
 #include <rocksdb/write_batch.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -296,5 +297,60 @@ void xmget_free(xmget_item* items, int n) {
 }
 
 void xdb_free_str(char* p) { std::free(p); }
+
+// ---- 内部统计 ----
+
+namespace {
+
+// 读取单个 RocksDB 内部属性并解析为 int64；属性不存在/解析失败时输出 0。
+long long get_int_property(rocksdb::DB* db, const char* prop) {
+    std::string v;
+    if (!db->GetProperty(prop, &v)) return 0;
+    try {
+        size_t pos = 0;
+        long long n = std::stoll(v, &pos);
+        if (pos == 0) return 0;
+        return n;
+    } catch (...) {
+        return 0;
+    }
+}
+
+}  // namespace
+
+int xdb_stats_get(xdb* h, xdb_stats* out, char** errmsg) {
+    if (!h || !h->db || !out) {
+        if (errmsg) *errmsg = dup_status(rocksdb::Status::InvalidArgument("xdb_stats_get: null handle/out"));
+        return -1;
+    }
+    std::memset(out, 0, sizeof(xdb_stats));
+    rocksdb::DB* db = h->db;
+    // RocksDB 无 "rocksdb.num-levels" 属性；实际层数通过遍历
+    // "rocksdb.num-files-at-level<N>" 直到属性不存在来确定（默认 7 层 L0-L6）。
+    for (long long i = 0; i < 8; i++) {
+        char prop[64];
+        std::snprintf(prop, sizeof(prop), "rocksdb.num-files-at-level%lld", i);
+        std::string v;
+        if (!db->GetProperty(prop, &v)) break;
+        try {
+            size_t pos = 0;
+            long long n = std::stoll(v, &pos);
+            if (pos == 0) break;
+            out->num_files_at_level[i] = n;
+        } catch (...) {
+            break;
+        }
+        out->num_levels = i + 1;
+    }
+    out->cur_size_all_mem_tables = get_int_property(db, "rocksdb.cur-size-all-mem-tables");
+    out->size_all_mem_tables = get_int_property(db, "rocksdb.size-all-mem-tables");
+    out->compaction_pending = get_int_property(db, "rocksdb.compaction-pending");
+    out->num_running_compactions = get_int_property(db, "rocksdb.num-running-compactions");
+    out->num_running_flushes = get_int_property(db, "rocksdb.num-running-flushes");
+    out->live_sst_files_size = get_int_property(db, "rocksdb.live-sst-files-size");
+    out->num_live_versions = get_int_property(db, "rocksdb.num-live-versions");
+    out->estimate_num_keys = get_int_property(db, "rocksdb.estimate-num-keys");
+    return 0;
+}
 
 }  // extern "C"

@@ -65,6 +65,30 @@ void xmget_free(xmget_item* items, int n);
 
 void xdb_free_str(char* p);
 
+/* RocksDB 内部统计快照（监控看板 / 管理台对接）。一次调用批量采集：
+   - LSM 层数（num_levels，level 0 为内存 flush 目标层）
+   - 各层 SST 文件数（num_files_at_level[i]，i < num_levels）
+   - MemTable 大小（cur_size_all_mem_tables 当前 / size_all_mem_tables 含 immutable）
+   - Compaction 状态（compaction_pending / num_running_compactions）
+   - Flush 状态（num_running_flushes）
+   - 活跃 SST 文件总字节（live_sst_files_size）
+   - 版本与键规模（num_live_versions / estimate_num_keys） */
+typedef struct xdb_stats {
+    long long num_levels;
+    long long num_files_at_level[8];
+    long long cur_size_all_mem_tables;
+    long long size_all_mem_tables;
+    long long compaction_pending;
+    long long num_running_compactions;
+    long long num_running_flushes;
+    long long live_sst_files_size;
+    long long num_live_versions;
+    long long estimate_num_keys;
+} xdb_stats;
+
+/* 采集 RocksDB 内部统计。返回 0=成功；-1=失败（errmsg 置位）。 */
+int xdb_stats_get(xdb* h, xdb_stats* out, char** errmsg);
+
 #ifdef __cplusplus
 }
 #endif

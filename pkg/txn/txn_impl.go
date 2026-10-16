@@ -18,8 +18,9 @@ type txnManager struct {
 	applied   uint64     // 已成功应用到存储的最大提交序号
 	applyCond *sync.Cond // 关联 mu，等待轮到自己按序应用
 
-	commitHook func(lsn storage.LSN, seq uint64, batch *storage.WriteBatch) error // M2 复制挂接点
-	hookErr    error                                                              // 最近一次 hook 错误
+	commitHook    func(lsn storage.LSN, seq uint64, batch *storage.WriteBatch) error // M2 复制挂接点（锁内，异步推送）
+	hookErr       error                                                              // 最近一次 hook 错误
+	commitWaitHook func(lsn storage.LSN, seq uint64) error // T33 复制确认挂接点（锁外，同步/半同步等待 ACK）
 }
 
 // New 创建事务管理器并执行启动恢复（重放 WAL 已 Commit 记录）。
@@ -85,6 +86,14 @@ func (m *txnManager) SetCommitHook(hook func(lsn storage.LSN, seq uint64, batch 
 	defer m.mu.Unlock()
 	m.commitHook = hook
 	m.hookErr = nil
+}
+
+// SetCommitWaitHook 注册提交后置确认回调（T33 同步/半同步复制挂接点；
+// 在锁外、Commit 返回前调用，可阻塞等待副本 ACK；传 nil 清除）。
+func (m *txnManager) SetCommitWaitHook(hook func(lsn storage.LSN, seq uint64) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.commitWaitHook = hook
 }
 
 // HookErr 返回最近一次提交后回调的错误（无错误返回 nil）。
@@ -318,6 +327,14 @@ func (t *txnImpl) Commit() error {
 	}
 	t.finish(TxnCommitted)
 	m.mu.Unlock()
+	// T33 同步/半同步复制（M20）：锁外、Commit 返回前执行复制 ACK 等待。
+	// 错误（如 sync 超时）回传调用者——此时事务已本地提交，属于分布式
+	// "提交不确定"窗口，客户端重试幂等。
+	if m.commitWaitHook != nil {
+		if herr := m.commitWaitHook(lsn, seq); herr != nil {
+			return herr
+		}
+	}
 	return nil
 }
 

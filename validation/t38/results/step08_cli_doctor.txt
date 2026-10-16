@@ -1,0 +1,12 @@
+﻿OpenXDB doctor: data dir C:\Users\27756\AppData\Roaming\Tencent\Marvis\User\oAN1i2RORm9ewWWUXrcT2XBfRk0c\workspace\conv_5d15f4c8d8ec46778266acaa06c35c33\temp\openxdb-t38\master
+  online addr: 127.0.0.1:7788
+  [PASS] data_dir - 目录与配置文件正常
+  [PASS] wal - WAL 存在且可打开
+  [WARN] rocksdb - 引擎被占用（服务正在运行或残留进程持有 LOCK），跳过本地 Open 检查: rocksdb: open C:\Users\27756\AppData\Roaming\Tencent\Marvis\User\oAN1i2RORm9ewWWUXrcT2XBfRk0c\workspace\conv_5d15f4c8d8ec46778266acaa06c35c33\temp\openxdb-t38\master\data: IO error: Failed to create lock file: C:\Users\27756\AppData\Roaming\Tencent\Marvis\User\oAN1i2RORm9ewWWUXrcT2XBfRk0c\workspace\conv_5d15f4c8d8ec46778266acaa06c35c33\temp\openxdb-t38\master\data/LOCK: ��һ����������ʹ�ô��ļ��������޷����ʡ�
+
+  [WARN] metadata - 引擎被服务占用，跳过本地元数据检查（在线场景由 SHOW 语句覆盖）
+  [PASS] binlog - binlog 可读，当前位点 LSN=53
+  [PASS] port - 端口连通且协议响应正常 (127.0.0.1:7788)
+  [PASS] slowqueries - 慢查询表可用（0 条）
+result: WARNINGS (exit code 1)
+
