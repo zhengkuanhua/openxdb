@@ -32,9 +32,94 @@ AIGC:
 [![GitHub stars](https://img.shields.io/github/stars/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 [![GitHub issues](https://img.shields.io/github/issues/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 
-OpenXDB is a from-scratch, single-node relational database kernel built for learning and experimentation. It implements a storage engine on top of RocksDB via cgo, a write-ahead log (WAL), transactional layer with snapshot isolation, a SQL subset with secondary indexes, and an in-memory B+Tree used as both an LSM comparator and a reference implementation.
+OpenXDB 是从零自研的单机/分布式关系型数据库内核（Go + RocksDB），定位于学习与工程实践并重的开源数据库项目。内核自底向上实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务与带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA 故障转移、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动（JDBC/Python）、运维工具链、认证权限（审计 + RBAC）与生态导出（JSON/Parquet）等能力，当前版本 **v1.0.0**。
 
-> **Status: M18 MySQL compat cluster (prepared statement + information_schema) + M19 ecosystem export (JSON/Parquet) + M20 distributed depth step 3 (T35 distributed backup consistency) + M21 commercial hardening step 3 (T38 real-user validation) + E5 standard sysbench OLTP / TPC-C small-warehouse bench alignment (Python-driver equivalence, real measured) + T40 SQL capability cluster (MAX/MIN aggregate + arithmetic expressions + SELECT DISTINCT + GROUP BY/aggregate LIMIT/OFFSET truncation) + T41 DDL compat (IF NOT EXISTS + CREATE TABLE AS SELECT) + T42 INSERT INTO SELECT (INSERT/REPLACE INTO ... SELECT with column list optional, full SELECT source compatibility, atomic transaction + rollback, self-insert snapshot semantics) + v1.0.0 release wrap-up (中英文产品手册 docs/product_manual_zh.md / docs/product_manual_en.md + 发布收尾 CHANGELOG / RELEASE_NOTES / KNOWN_LIMITATIONS + docs 站点 mkdocs.yml / docs/index.md), v1.0.0.** T1–T29 complete (P0/P1/P2 feature clusters + M2 replication + M3 sharding + M4 multi-node read + M5 distributed write/2PC + M6 HA/failover + M7 region auto-split & load balancing + M8 distributed transactions: TSO global timestamp + distributed snapshot isolation + 2PC recovery hardening + BR backup/restore: consistent-snapshot logical backup + idempotent restore + LSN-based PITR + T19 client drivers: JDBC & Python drivers wrapping the pkg/server protocol + T20 ops toolchain: doctor health checks + stats monitoring + one-click deploy scripts + T21 SQL parser fixes: DROP TABLE IF EXISTS + inline PRIMARY KEY + T22 M9 SQL feature cluster: online DDL + query cache + bulk import + foreign key + view + T23 M10 SQL compatibility cluster: CTE + window functions + upsert + T24 M11 auth & privilege cluster: user management + GRANT/REVOKE + connection auth & privilege check + T25 M12 distributed SQL cluster: distributed join + cross-node ORDER BY/limit + distributed subquery + T26 M13 observability cluster: slow query log + Prometheus metrics + status view + T28 M15 SQL feature cluster: materialized view + trigger + stored procedure + T29 M16 ops cluster: hot config reload + graceful shutdown + upgrade assist + T30 M17 audit log cluster: audit log (connect/auth/DML/DDL/privilege events, ring buffer + JSON-line persistence, SHOW AUDITLOG, SET audit_log hot switch) + T30 M17 RBAC cluster: fine-grained role/privilege system (CREATE/DROP/SHOW ROLE, SHOW GRANTS, GRANT/REVOKE ON DATABASE, GRANT/REVOKE ON TABLE(cols), GRANT/REVOKE ROLE, aggregated table/database/role privilege checks + column-level checks, DROP USER/TABLE/ROLE cascade cleanup) + M18 MySQL compat cluster: prepared statement (PREPARE/EXECUTE/DEALLOCATE PREPARE + `?` placeholders + `@var` user variables via SET/SELECT, session-scoped cache with overwrite/not-found semantics, argument count validation) + information_schema read-only virtual views (schemata/tables/columns/statistics, case-insensitive projection, WHERE equality filter, ORDER BY, qualified `db.view` FROM, write rejection) + M19 ecosystem export (EXPORT ... FORMAT JSON as JSON Lines with proper escaping; FORMAT PARQUET via a self-contained minimal Parquet v1 writer: Thrift Compact-encoded FileMetaData, single row group, PLAIN/UNCOMPRESSED, INT/DECIMAL→TEXT/DATE/BLOB→BYTE_ARRAY with BLOB uppercase hex) + M20 distributed depth step 1: T33 sync & semi-sync replication (async default-compatible; WaitAck full/partial confirm outside txn lock; ACK timeout/no-slave degrade-to-async for semi-sync, refuse-pseudo-sync for sync; SET replication_mode/replication_ack/replication_timeout hot switch) + M20 distributed depth step 2: T34 cross-node DDL (DDL metadata broadcast to all online nodes via cluster DDL_PUSH frames; per-node idempotent apply by TableID; offline/apply-failure recorded pending and replayed before next broadcast or via ReplayPendingDDL; single-node zero-trigger compatibility; works alongside T33 replication chain) + M20 distributed depth step 3: T35 distributed backup consistency (coordinator-initiated multi-node consistent backup: PREPARE collects per-node LastLSN/TSO candidates → GlobalLSN = max(all LSN) as the global consistency point → DO snapshots each node with the aligned global_lsn (retry up to 3 rounds if a node exceeds G); backup artifacts keep version-1 format with optional per-node meta fields plus a manifest with GlobalLSN / node metadata / consistency marker; distributed RESTORE drives every node to the global backup point (RESTORE ... TO LSN G), offline/apply-failure fails fast with per-node status; single-node zero-trigger keeps legacy BACKUP/RESTORE intact) + M21 commercial hardening step 1: T36 TLS compliance (connection-layer TLS encryption & certificate management: TLS-only listener by default with plaintext rejected, --tls-allow-legacy / SET PERSIST tls_allow_legacy=on for AutoListener plaintext/TLS coexistence, per-session secure flag, client verify-full & verify-ca configs, SET PERSIST tls_cert/tls_key restart-effective config, openxdb gen-cert self-signed certificate generator, JDBC/Python driver TLS support) + M21 commercial hardening step 2: T37 monitoring & alerting (alert rule model metric/op/threshold/duration_sec/severity stored as JSON via SET/SET PERSIST alert_rules*; evaluation engine over same-source metrics.Snapshot with NORMAL/ALERT/RESOLVED state machine + duration debounce; notification via logx ring buffer + optional webhook/file channel; SHOW ALERT RULES / SHOW ALERT STATUS / SHOW ALERTS management statements; evaluation loop wired to database lifecycle) + M21 commercial hardening step 3: T38 real-user validation (end-to-end commercial scenario validation: order/inventory/user-center business schema + txn ACID + query analysis + ops ecosystem scripts, Python driver E2E covering business loop/concurrency/constraints/RBAC/TLS/backup & PITR/alerting/perf, orchestration with replica/import/CDC/CLI doctor-status-stats-metrics, offline preflight; run_validation.ps1 one-click, all green), all test suites green.
+## 快速开始
+
+### 1. 编译
+
+```sh
+# Linux/macOS：一键构建 + 测试（自动探测 RocksDB 安装）
+./scripts/build.sh --test
+# Windows：
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -RunTests
+```
+
+手动编译需提供 RocksDB 的 include / lib 目录（详见下文 Build 一节）：
+
+```sh
+export CGO_CFLAGS=-I<rocksdb>/include
+export CGO_LDFLAGS=-L<rocksdb-build> -lrocksdb
+go build ./...
+```
+
+### 2. 启动服务
+
+```sh
+openxdb init --data-dir ./data    # 初始化数据目录
+openxdb start --data-dir ./data   # 启动 TCP 服务（默认端口 7788）
+openxdb repl --data-dir ./data    # 或直接进入本地 REPL
+```
+
+### 3. 连接数据库
+
+- **REPL**：`openxdb repl --data-dir ./data`
+- **Python 驱动**（PEP 249）：
+
+```python
+import openxdb
+conn = openxdb.connect(host="127.0.0.1", port=7788, user="root")
+cur = conn.cursor()
+cur.execute("SELECT name FROM users WHERE age >= 25")
+print(cur.fetchall())
+```
+
+- **JDBC 驱动**：
+
+```java
+Class.forName("openxdb.jdbc.OpenXDBDriver");
+Connection conn = DriverManager.getConnection(
+    "jdbc:openxdb://127.0.0.1:7788", "root", "");
+```
+
+### 4. 第一个示例
+
+```sql
+CREATE TABLE users (id INT, name TEXT, age INT, PRIMARY KEY (id));
+INSERT INTO users VALUES (1, 'alice', 30), (2, 'bob', 25), (3, 'carol', 35);
+CREATE INDEX idx_age ON users (age);
+SELECT name FROM users WHERE age >= 25 AND age < 35 ORDER BY age;
+```
+
+## 特性亮点
+
+| 维度 | 能力 |
+|------|------|
+| **Storage** | RocksDB cgo 桥存储引擎 + 内存 B+Tree 参考实现（LSM comparator） |
+| **WAL** | 追加式 WAL + 崩溃重放恢复，group commit 批量 fsync |
+| **事务** | 本地快照隔离事务 + 分布式事务（TSO 全局时间戳 + 2PC + 分布式快照隔离） |
+| **SQL** | SELECT/JOIN/GROUP BY/子查询/CTE/窗口函数/upsert/视图/物化视图/触发器/存储过程/INSERT INTO SELECT 等 |
+| **RBAC 与安全** | 细粒度角色/权限体系、审计日志、TLS 加密传输、监控告警 |
+| **集群** | 复制（异步/半同步/同步）、region 分片、多节点 2PC、HA 故障转移、自动分裂与负载均衡 |
+| **备份恢复** | 一致性快照备份、幂等恢复、LSN 基 PITR、分布式一致备份 |
+| **生态导出** | JDBC/Python 驱动、mysqldump 导入、binlog CDC、JSON/Parquet 导出 |
+
+## 架构总览
+
+```
+Protocol / CLI (REPL · TCP server · JDBC/Python 驱动)
+        │
+        ▼
+     SQL 层 (Parser / Executor / Catalog / Index)
+        │
+        ▼
+ Txn（快照隔离） ◄──► WAL（追加式日志 · 重放恢复）
+        │
+        ▼
+ Storage (RocksDB cgo 桥 / 内存 B+Tree)
+```
+
+
 
 ## Documentation
 
@@ -46,7 +131,13 @@ OpenXDB is a from-scratch, single-node relational database kernel built for lear
 - **设计文档**: [docs/](docs/)（T1–T42 / M 系列 / E 系列）
 - **基准实验**: [docs/experiments/](docs/experiments/)（E1–E5）
 
-## Highlights
+## 版本状态与完整特性
+
+### 版本状态
+
+**v1.0.0（2026-10-16 正式发布）**：T1–T42 / M1–M21 / E1–E5 全部里程碑完成，全仓回归测试全绿。近期交付：**M18** MySQL 兼容（prepared statement + information_schema 虚拟视图）、**M19** 生态导出（JSON / Parquet）、**M20** 分布式深化（T33 同步/半同步复制、T34 跨节点 DDL、T35 分布式备份一致性）、**M21** 商业加固（T36 TLS 合规、T37 监控告警、T38 真实用户验证）、**E5** 标准 sysbench OLTP / TPC-C 基准对齐（Python 驱动等价实测）、**T40** SQL 能力簇（MAX/MIN 聚合、算术表达式、SELECT DISTINCT）、**T41** DDL 兼容（IF NOT EXISTS + CREATE TABLE AS SELECT）、**T42** INSERT INTO SELECT。
+
+### 完整特性
 
 - **Storage** — RocksDB-backed key-value storage via a thin C++ cgo bridge (`pkg/storage/rocksdb`), plus a pure-Go in-memory B+Tree (`pkg/storage/btree`) used as reference and comparator.
 - **WAL** — append-only write-ahead log with replay recovery (`pkg/wal`).
