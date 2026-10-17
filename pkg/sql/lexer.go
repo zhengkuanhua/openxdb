@@ -122,6 +122,9 @@ func lex(sql string) ([]token, error) {
 			l.emit(tokStar, "*", 1)
 		case c == '+':
 			l.emit(tokPlus, "+", 1)
+		case c == '-' && l.peek(1) == '-' && l.dashCommentAhead():
+			// MySQL 风格 -- 行注释（-- 后随空白或行尾）
+			l.skipToLineEnd()
 		case c == '-':
 			// T40：负号消歧。前一 token 以值结束时为二元减号；否则若后随数字/小数点，
 			// 并入数字字面量（-5 / -1.0，保持 VALUES 等旧路径 tokNumber 语义）。
@@ -134,8 +137,14 @@ func lex(sql string) ([]token, error) {
 			} else {
 				l.emit(tokMinus, "-", 1)
 			}
+		case c == '/' && l.peek(1) == '*':
+			// MySQL 风格 /* ... */ 块注释（含 /*! 版本注释一并跳过）
+			l.skipBlockComment()
 		case c == '/':
 			l.emit(tokSlash, "/", 1)
+		case c == '#':
+			// MySQL 风格 # 行注释
+			l.skipToLineEnd()
 		case c == '%':
 			l.emit(tokMod, "%", 1)
 		case c == '=':
@@ -181,6 +190,35 @@ func (l *lexer) peek(n int) byte {
 		return 0
 	}
 	return l.src[l.pos+n]
+}
+
+// dashCommentAhead 判断 "--" 是否构成 MySQL 行注释：
+// 后随空白或到达行尾/输入末尾时为注释，否则视为减法/负号序列。
+func (l *lexer) dashCommentAhead() bool {
+	n := l.pos + 2
+	if n >= len(l.src) {
+		return true
+	}
+	c := l.src[n]
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
+}
+
+// skipToLineEnd 跳过直到行尾（不含换行符本身）。
+func (l *lexer) skipToLineEnd() {
+	for l.pos < len(l.src) && l.src[l.pos] != '\n' {
+		l.pos++
+	}
+}
+
+// skipBlockComment 跳过 /* ... */ 块注释（从当前 '/' 起，含 /*! 版本注释）。
+// 未闭合时跳到输入末尾（宽容处理，与 MySQL 报错的差异可接受）。
+func (l *lexer) skipBlockComment() {
+	i := strings.Index(l.src[l.pos+2:], "*/")
+	if i < 0 {
+		l.pos = len(l.src)
+		return
+	}
+	l.pos += 2 + i + 2
 }
 
 // prevEndsValue 判断上一 token 是否为可结束操作数的值类 token
@@ -251,6 +289,23 @@ func (l *lexer) lexNumber() error {
 		}
 		for l.pos < len(l.src) && isDigit(l.src[l.pos]) {
 			l.pos++
+		}
+	}
+	// 科学计数法：1e5 / 6.0E-4 / 1E+06（MySQL 兼容，Connector/J setDouble 内联输出）。
+	// e/E 后必须跟数字或 +/-数字 才构成指数；否则回退保持"数字 + 后续 ident"的旧行为（如 1E 表名）。
+	if l.pos < len(l.src) && (l.src[l.pos] == 'e' || l.src[l.pos] == 'E') {
+		save := l.pos
+		exp := l.pos + 1
+		if exp < len(l.src) && (l.src[exp] == '+' || l.src[exp] == '-') {
+			exp++
+		}
+		if exp < len(l.src) && isDigit(l.src[exp]) {
+			l.pos = exp
+			for l.pos < len(l.src) && isDigit(l.src[l.pos]) {
+				l.pos++
+			}
+		} else {
+			l.pos = save
 		}
 	}
 	text := l.src[start:l.pos]

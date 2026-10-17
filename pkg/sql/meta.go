@@ -19,16 +19,18 @@ type TableMeta struct {
 	Name        string       `json:"name"`
 	Columns     []ColumnDef  `json:"columns"`
 	PK          string       `json:"pk"`
+	PKCols      []string     `json:"pk_cols,omitempty"` // 复合主键全列（空 = 单列主键 PK）
 	Indexes     []IndexMeta  `json:"indexes,omitempty"`
 	ForeignKeys []ForeignKey `json:"foreign_keys,omitempty"` // M9 外键约束（持久化）
 }
 
 // IndexMeta 二级索引元数据（T6；M10 支持 UNIQUE 唯一索引）。
 type IndexMeta struct {
-	ID     uint64 `json:"id"`
-	Name   string `json:"name"`
-	Col    string `json:"col"`
-	Unique bool   `json:"unique,omitempty"` // M10：唯一索引（键值全表唯一）
+	ID     uint64   `json:"id"`
+	Name   string   `json:"name"`
+	Col    string   `json:"col"`
+	Cols   []string `json:"cols,omitempty"` // 复合索引全列（空 = 单列索引 Col；仅登记，查询走扫描）
+	Unique bool     `json:"unique,omitempty"` // M10：唯一索引（键值全表唯一）
 }
 
 // metaKey 表目录键。
@@ -165,13 +167,120 @@ func pkBytes(t *TableMeta, v Value) ([]byte, error) {
 	}
 }
 
+// pkBytesMulti 复合主键字节编码：按 PKCols 顺序逐列编码后拼接。
+// 单列主键（PKCols 为空）时退化为 pkBytes 原行为；多列时 INT/DECIMAL 定长 8B，
+// TEXT/DATE/BLOB 加 2B 长度前缀避免拼接歧义（如 "a"+"bc" 与 "ab"+"c"）。
+func pkBytesMulti(t *TableMeta, vals []Value) ([]byte, error) {
+	if len(t.PKCols) == 0 {
+		for i, c := range t.Columns {
+			if c.Name == t.PK {
+				return pkBytes(t, vals[i])
+			}
+		}
+		return nil, &SQLError{Msg: "table has no primary key: " + t.Name}
+	}
+	var buf []byte
+	for _, pkCol := range t.PKCols {
+		idx := -1
+		for i, c := range t.Columns {
+			if c.Name == pkCol {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return nil, &SQLError{Msg: "pk column not found: " + pkCol}
+		}
+		v := vals[idx]
+		var b []byte
+		switch v.Kind {
+		case "INT":
+			b = make([]byte, 8)
+			binary.BigEndian.PutUint64(b, uint64(v.I))
+		case "DECIMAL":
+			b = make([]byte, 8)
+			binary.BigEndian.PutUint64(b, uint64(v.I)^(1<<63))
+		case "BLOB":
+			raw, err := decodeHex(strings.ToUpper(v.S))
+			if err != nil {
+				return nil, err
+			}
+			b = raw
+		default:
+			b = []byte(v.S)
+		}
+		if v.Kind != "INT" && v.Kind != "DECIMAL" {
+			lb := make([]byte, 2)
+			binary.BigEndian.PutUint16(lb, uint16(len(b)))
+			buf = append(buf, lb...)
+		}
+		buf = append(buf, b...)
+	}
+	return buf, nil
+}
+
+// indexColValue 计算索引键值：单列走 idxBytes；复合索引（Cols 非空）按多列拼接编码。
+func indexColValue(t *TableMeta, idx *IndexMeta, row []Value) ([]byte, error) {
+	if len(idx.Cols) > 0 {
+		return multiIndexBytes(t, row, idx.Cols)
+	}
+	ci := colIndex(t, idx.Col)
+	return idxBytes(row[ci])
+}
+
+// multiIndexBytes 复合索引键值：按 cols 顺序逐列编码后拼接。
+// 与 pkBytesMulti 同一编码策略（INT/DECIMAL 定长 8B，其余 2B 长度前缀），
+// 保证复合索引键无拼接歧义、唯一性检查按完整键前缀扫描。
+func multiIndexBytes(t *TableMeta, row []Value, cols []string) ([]byte, error) {
+	var buf []byte
+	for _, col := range cols {
+		ci := -1
+		for i, c := range t.Columns {
+			if c.Name == col {
+				ci = i
+				break
+			}
+		}
+		if ci < 0 {
+			return nil, &SQLError{Msg: "index column not found: " + col}
+		}
+		v := row[ci]
+		var b []byte
+		switch v.Kind {
+		case "INT":
+			b = make([]byte, 8)
+			binary.BigEndian.PutUint64(b, uint64(v.I))
+		case "DECIMAL":
+			b = make([]byte, 8)
+			binary.BigEndian.PutUint64(b, uint64(v.I)^(1<<63))
+		case "BLOB":
+			raw, err := decodeHex(strings.ToUpper(v.S))
+			if err != nil {
+				return nil, err
+			}
+			b = raw
+		default:
+			b = []byte(v.S)
+		}
+		if v.Kind != "INT" && v.Kind != "DECIMAL" {
+			lb := make([]byte, 2)
+			binary.BigEndian.PutUint16(lb, uint16(len(b)))
+			buf = append(buf, lb...)
+		}
+		buf = append(buf, b...)
+	}
+	return buf, nil
+}
+
 // encodeRow 行值 → JSON 字节（按列定义序）。
 // INT 存 number（兼容既有数据）；TEXT/DATE/DECIMAL/BLOB 存规范化字符串
 // （DECIMAL 存 scale=4 字符串，BLOB 存大写 hex）。
 func encodeRow(t *TableMeta, vals []Value) ([]byte, error) {
 	arr := make([]interface{}, len(vals))
 	for i, v := range vals {
-		if v.Kind == "INT" {
+		if v.Kind == "NULL" {
+			arr[i] = nil
+		} else if v.Kind == "INT" {
 			arr[i] = v.I
 		} else {
 			arr[i] = v.String()
@@ -191,6 +300,10 @@ func decodeRow(t *TableMeta, raw []byte) ([]Value, error) {
 	}
 	vals := make([]Value, len(arr))
 	for i, a := range arr {
+		if a == nil {
+			vals[i] = Value{Kind: "NULL"}
+			continue
+		}
 		switch t.Columns[i].Type {
 		case "INT":
 			f, ok := a.(float64)

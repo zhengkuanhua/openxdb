@@ -753,7 +753,7 @@ func (e *Executor) execCreateTable(sess *Session, s *CreateTableStmt) (*Result, 
 	if s.PK == "" && len(s.Columns) > 0 {
 		s.PK = s.Columns[0].Name
 	}
-	meta := &TableMeta{ID: nextTableID(tabs), Name: s.Name, Columns: s.Columns, PK: s.PK, ForeignKeys: s.ForeignKeys, Indexes: s.Indexes}
+	meta := &TableMeta{ID: nextTableID(tabs), Name: s.Name, Columns: s.Columns, PK: s.PK, PKCols: s.PKCols, ForeignKeys: s.ForeignKeys, Indexes: s.Indexes}
 	// M9 外键：建表时校验引用关系（父表存在/列存在/引用主键/类型兼容）
 	if err := validateForeignKeys(tabs, meta); err != nil {
 		return nil, err
@@ -1834,8 +1834,7 @@ func (e *Executor) upsertConflicts(sess *Session, tx txn.Txn, meta *TableMeta, v
 		if !idx.Unique {
 			continue
 		}
-		ci := colIndex(meta, idx.Col)
-		val, err := idxBytes(vals[ci])
+		val, err := indexColValue(meta, idx, vals)
 		if err != nil {
 			return nil, err
 		}
@@ -1869,8 +1868,7 @@ func (e *Executor) upsertConflicts(sess *Session, tx txn.Txn, meta *TableMeta, v
 		if !idx.Unique {
 			continue
 		}
-		ci := colIndex(meta, idx.Col)
-		val, err := idxBytes(vals[ci])
+		val, err := indexColValue(meta, idx, vals)
 		if err != nil {
 			return nil, err
 		}
@@ -1882,7 +1880,7 @@ func (e *Executor) upsertConflicts(sess *Session, tx txn.Txn, meta *TableMeta, v
 			if bytes.Equal(ppk, pk) {
 				continue
 			}
-			pv, err := idxBytes(prow[ci])
+			pv, err := indexColValue(meta, idx, prow)
 			if err != nil {
 				return nil, err
 			}
@@ -1914,7 +1912,16 @@ func (e *Executor) onDupUpdateOps(sess *Session, tx txn.Txn, tabs []*TableMeta, 
 		if idx < 0 {
 			return nil, 0, &SQLError{Msg: "unknown column: " + set.Col}
 		}
-		v, err := coerceValue(meta.Columns[idx].Type, set.Col, set.Val)
+		var v Value
+		if set.Expr != nil {
+			v, err = evalSetExpr(meta, newVals, set.Expr)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			v = set.Val
+		}
+		v, err = coerceValue(meta.Columns[idx].Type, set.Col, v)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -2136,13 +2143,49 @@ func (e *Executor) resolveWhereVars(sess *Session, w *Where) error {
 }
 
 func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
-	// M18-C：SELECT @var 无 FROM 常量投影（用户变量取值）。
-	if s.From == "" && len(s.Columns) == 1 && s.Columns[0].Var != "" {
-		v, ok := sess.userVars[s.Columns[0].Var]
-		if !ok {
-			return nil, &SQLError{Msg: "user variable not set: " + s.Columns[0].Var}
+	// 无 FROM 常量投影：SELECT 1 / SELECT 'x' / SELECT 1+2 / SELECT @var（M18-C / T45）。
+	// 兼容 mysql CLI 的 SELECT 1、Connector/J 连接探测等无表查询。
+	if s.From == "" {
+		cols := make([]string, 0, len(s.Columns))
+		row := make([]Value, 0, len(s.Columns))
+		for _, sc := range s.Columns {
+			name := sc.Name
+			if sc.Alias != "" {
+				name = sc.Alias
+			}
+			cols = append(cols, name)
+			var v Value
+			var err error
+			switch {
+			case sc.Var != "":
+				// M18-C：用户变量取值（未设置报错）。
+				var ok bool
+				v, ok = sess.userVars[sc.Var]
+				if !ok {
+					return nil, &SQLError{Msg: "user variable not set: " + sc.Var}
+				}
+			case sc.Expr != nil:
+				if hasColRef(sc.Expr) {
+					return nil, &SQLError{Msg: "column reference without FROM: " + sc.Expr.Raw}
+				}
+				v, err = evalExprForRow(nil, nil, sc.Expr)
+				if err != nil {
+					return nil, err
+				}
+			case sc.Case != nil:
+				if caseHasColRef(sc.Case) {
+					return nil, &SQLError{Msg: "column reference in CASE without FROM"}
+				}
+				v, err = e.evalCaseRel(sess, nil, nil, nil, sc.Case)
+				if err != nil {
+					return nil, err
+				}
+			default:
+				return nil, &SQLError{Msg: "unsupported constant select column: " + sc.Raw}
+			}
+			row = append(row, v)
 		}
-		return &Result{Columns: []string{s.Columns[0].Var}, Rows: [][]Value{{v}}}, nil
+		return &Result{Columns: cols, Rows: [][]Value{row}}, nil
 	}
 	tx, err := e.getTx(sess)
 	if err != nil {
@@ -2757,6 +2800,32 @@ func relValue(rel *Rel, row []Value, name string) (Value, error) {
 // evalExprForRow 在 Rel 行上求值算术表达式（T40）。
 // 支持叶子字面量（INT/DECIMAL/TEXT）、叶子列引用（限定/裸）与二元算术 + - * / %、
 // 一元负号（NEG）。
+// hasColRef 判断 Expr 树中是否存在列引用（非字面量叶子），用于无 FROM 常量投影守卫。
+func hasColRef(e *Expr) bool {
+	if e == nil {
+		return false
+	}
+	if e.Op == "" {
+		return e.Val == nil && (e.Col != "" || e.Ref != "")
+	}
+	return hasColRef(e.Left) || hasColRef(e.Right)
+}
+
+// caseHasColRef 判断 CASE 分支条件中是否存在列引用/子查询（无 FROM 常量投影时不可用）。
+func caseHasColRef(cc *CaseWhenClause) bool {
+	if cc == nil {
+		return false
+	}
+	for _, b := range cc.Branches {
+		for _, c := range b.Conds.Conds {
+			if c.Col != "" || c.RightRef != "" || c.Sub != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func evalExprForRow(rel *Rel, row []Value, e *Expr) (Value, error) {
 	if e == nil {
 		return Value{}, &SQLError{Msg: "empty expression"}
@@ -2786,6 +2855,47 @@ func evalExprForRow(rel *Rel, row []Value, e *Expr) (Value, error) {
 		return Value{}, err
 	}
 	r, err := evalExprForRow(rel, row, e.Right)
+	if err != nil {
+		return Value{}, err
+	}
+	return evalArith(l, r, e.Op)
+}
+
+// evalSetExpr 基于表元数据与当前行对 UPDATE SET 赋值表达式求值。
+// 与 evalExprForRow 等价，但列索引直接取自 TableMeta（无 Rel 对象场景）。
+func evalSetExpr(meta *TableMeta, row []Value, e *Expr) (Value, error) {
+	if e == nil {
+		return Value{}, &SQLError{Msg: "empty expression"}
+	}
+	switch e.Op {
+	case "":
+		if e.Val != nil {
+			return *e.Val, nil
+		}
+		idx := colIndex(meta, e.Col)
+		if idx < 0 {
+			return Value{}, &SQLError{Msg: "unknown column: " + e.Col}
+		}
+		return row[idx], nil
+	case "NEG":
+		v, err := evalSetExpr(meta, row, e.Right)
+		if err != nil {
+			return Value{}, err
+		}
+		switch v.Kind {
+		case "INT":
+			return IntVal(-v.I), nil
+		case "DECIMAL":
+			return decVal(-v.I), nil
+		default:
+			return Value{}, &SQLError{Msg: "unsupported operand for unary minus: " + v.Kind}
+		}
+	}
+	l, err := evalSetExpr(meta, row, e.Left)
+	if err != nil {
+		return Value{}, err
+	}
+	r, err := evalSetExpr(meta, row, e.Right)
 	if err != nil {
 		return Value{}, err
 	}
@@ -3543,7 +3653,17 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 			if idx < 0 {
 				return nil, &SQLError{Msg: "unknown column: " + set.Col}
 			}
-			v, err := coerceValue(meta.Columns[idx].Type, set.Col, set.Val)
+			var v Value
+			if set.Expr != nil {
+				// 表达式赋值（col = col + ? 等）：基于当前行求值后再做列类型转换。
+				v, err = evalSetExpr(meta, row, set.Expr)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				v = set.Val
+			}
+			v, err = coerceValue(meta.Columns[idx].Type, set.Col, v)
 			if err != nil {
 				return nil, err
 			}
@@ -3727,8 +3847,11 @@ func (e *Executor) coerceRow(meta *TableMeta, vals []Value) ([]Value, error) {
 	return vals, nil
 }
 
-// pkOf 从行值提取主键字节（INT 定长 / TEXT 原字节）。
+// pkOf 从行值提取主键字节（INT 定长 / TEXT 原字节；复合主键按 PKCols 多列编码）。
 func (e *Executor) pkOf(meta *TableMeta, vals []Value) ([]byte, error) {
+	if len(meta.PKCols) > 0 {
+		return pkBytesMulti(meta, vals)
+	}
 	for i, c := range meta.Columns {
 		if c.Name == meta.PK {
 			return pkBytes(meta, vals[i])
@@ -3752,8 +3875,7 @@ func (e *Executor) putIndexKeyOps(sess *Session, tx txn.Txn, meta *TableMeta, ro
 	ops := make([]kvOp, 0, len(meta.Indexes))
 	for i := range meta.Indexes {
 		idx := &meta.Indexes[i]
-		ci := colIndex(meta, idx.Col)
-		val, err := idxBytes(row[ci])
+		val, err := indexColValue(meta, idx, row)
 		if err != nil {
 			return nil, err
 		}
@@ -3788,7 +3910,7 @@ func (e *Executor) putIndexKeyOps(sess *Session, tx txn.Txn, meta *TableMeta, ro
 					if ignore != nil && ignore[string(ppk)] {
 						continue
 					}
-					pv, err := idxBytes(prow[ci])
+					pv, err := indexColValue(meta, idx, prow)
 					if err != nil {
 						return nil, err
 					}
@@ -3810,8 +3932,7 @@ func (e *Executor) delIndexKeyOps(meta *TableMeta, row []Value, pk []byte, rid s
 	ops := make([]kvOp, 0, len(meta.Indexes))
 	for i := range meta.Indexes {
 		idx := &meta.Indexes[i]
-		ci := colIndex(meta, idx.Col)
-		val, err := idxBytes(row[ci])
+		val, err := indexColValue(meta, idx, row)
 		if err != nil {
 			return nil, err
 		}
@@ -3860,6 +3981,31 @@ func matchWhere(meta *TableMeta, row []Value, w *Where) (bool, error) {
 				continue
 			}
 			if !matchCond(lv, c.Op, c.Val) {
+				return false, nil
+			}
+			continue
+		}
+		if c.Op == "TUPLE_IN" {
+			// 行值 IN：(col1, col2) IN ((v1,v2),(v3,v4))——逐列取行值后与每个元组逐列比较。
+			hit := false
+			for _, tup := range c.TupleVals {
+				eq := true
+				for k, lc := range c.TupleLeft {
+					lvv, err := rowValue(meta, row, lc)
+					if err != nil {
+						return false, err
+					}
+					if k >= len(tup) || compareVal(lvv, tup[k]) != 0 {
+						eq = false
+						break
+					}
+				}
+				if eq {
+					hit = true
+					break
+				}
+			}
+			if !hit {
 				return false, nil
 			}
 			continue

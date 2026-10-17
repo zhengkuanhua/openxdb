@@ -21,8 +21,10 @@ func StrVal(s string) Value { return Value{Kind: "TEXT", S: s} }
 
 // ColumnDef 列定义。
 type ColumnDef struct {
-	Name string
-	Type string // INT | TEXT
+	Name           string
+	Type           string // INT | TEXT | DATE | DECIMAL | BLOB
+	Params         []int  // 类型精度参数：varchar(10)→[10]、decimal(12,2)→[12,2]（仅解析接受，不强制长度）
+	AutoIncrement  bool   // AUTO_INCREMENT 列属性（MySQL DDL 兼容，仅登记）
 }
 
 // Cond 过滤条件：col op value（AND 组合，M1 不支持 OR）。
@@ -31,7 +33,7 @@ type ColumnDef struct {
 type Cond struct {
 	Ref      string          // 限定表名/别名（空 = 未限定）
 	Col      string          // 裸列名
-	Op       string          // = != < > <= >= BETWEEN IN LIKE
+	Op       string          // = != < > <= >= BETWEEN IN LIKE TUPLE_IN
 	Val      Value           // 右值（BETWEEN 下界）
 	Val2     Value           // BETWEEN 上界
 	RightRef string          // 右值为列引用（t.col，JOIN ON 场景；空 = 字面量 Val）
@@ -39,6 +41,10 @@ type Cond struct {
 	Sub      *SelectStmt     // IN 子查询（右值）
 	LeftCase *CaseWhenClause // 左操作数为 CASE 表达式（P2）
 	LeftExpr *Expr           // 左操作数为算术表达式（T40；与 Ref/Col/LeftCase 互斥）
+	// TPC-C 兼容：行值 IN——(col1, col2) IN ((v1,v2),(v3,v4))。
+	// Op == "TUPLE_IN" 时使用 TupleLeft + TupleVals，忽略 Col/Val/InList。
+	TupleLeft  []string // 左操作数列名列表
+	TupleVals  [][]Value // 右值元组列表
 	RightExpr *Expr          // 右操作数为算术表达式（T40；与 RightRef/Val/InList/Sub 互斥）
 }
 
@@ -53,7 +59,8 @@ func (Where) stmt() {}
 type CreateTableStmt struct {
 	Name        string
 	Columns     []ColumnDef
-	PK          string       // 主键列名；未声明 PRIMARY KEY 时默认第一列
+	PK          string       // 主键列名（复合主键时为首列）；未声明 PRIMARY KEY 时默认第一列
+	PKCols      []string     // 复合主键全列（空 = 单列主键 PK）
 	Indexes     []IndexMeta  // M18：表级 UNIQUE (col) 约束（建表时登记二级索引元数据）
 	ForeignKeys []ForeignKey // M9 外键约束（列级/表级，解析时收集）
 	IfNotExists bool         // T41：CREATE TABLE IF NOT EXISTS（表已存在时静默跳过）
@@ -316,6 +323,7 @@ type SelectStmt struct {
 	OrderBys  []OrderBy // M18-C：多列 ORDER BY（首列同步写入 OrderBy 保持既有单列路径兼容）
 	Limit     int // <=0 不限
 	Offset    int // <=0 不偏移（M12-2 分页）
+	ForUpdate bool // FOR UPDATE（MySQL TPC-C 语句语法；无行锁语义，仅吞掉保证可解析）
 }
 
 func (SelectStmt) stmt() {}
@@ -329,8 +337,9 @@ type OrderBy struct {
 
 // SetItem UPDATE 赋值项。
 type SetItem struct {
-	Col string
-	Val Value
+	Col  string
+	Val  Value // 字面量赋值（col = 1 / col = 'x' / col = ?）
+	Expr *Expr // 表达式赋值（col = col + 1 / col = a * b - 1），非空时优先于 Val
 }
 
 // UpdateStmt UPDATE。

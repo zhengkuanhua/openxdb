@@ -55,14 +55,49 @@ func parseDecimal(s string) (int64, string, error) {
 			i++
 		}
 	}
+	// 科学计数法：1.2E3 / 6.0E-4 / 1E+06（MySQL 兼容，Connector/J setDouble 内联输出）。
+	exp := 0
+	expNeg := false
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		i++
+		if i < len(s) && (s[i] == '+' || s[i] == '-') {
+			expNeg = s[i] == '-'
+			i++
+		}
+		if i >= len(s) || !isDigit(s[i]) {
+			return 0, "", &SQLError{Msg: "invalid DECIMAL: " + s}
+		}
+		for i < len(s) && isDigit(s[i]) {
+			exp = exp*10 + int(s[i]-'0')
+			i++
+		}
+		if expNeg {
+			exp = -exp
+		}
+	}
 	if i != len(s) {
 		return 0, "", &SQLError{Msg: "invalid DECIMAL: " + s}
 	}
-	for fracDigits < decScale {
-		frac *= 10
-		fracDigits++
+	// 定点换算：真实值 = digits × 10^(exp - fracDigits)；scaled = 真实值 × 10^decScale。
+	// digits = intPart 串 + frac 串拼接成的整数（如 "6.0" -> 60）。
+	digits := intPart
+	for k := 0; k < fracDigits; k++ {
+		digits *= 10
 	}
-	scaled := intPart*decUnit + frac
+	digits += frac
+	shift := decScale - fracDigits + exp
+	var scaled int64
+	if shift >= 0 {
+		scaled = digits
+		for k := 0; k < shift; k++ {
+			scaled *= 10
+		}
+	} else {
+		scaled = digits
+		for k := 0; k < -shift; k++ {
+			scaled /= 10
+		}
+	}
 	if neg {
 		scaled = -scaled
 	}
@@ -196,6 +231,9 @@ func compareDecInt(decScaled, i int64) int {
 // DATE 列接受 DATE 或合法 "YYYY-MM-DD" 文本；DECIMAL 列接受 DECIMAL/INT/合法数字文本；
 // BLOB 列接受 BLOB 或合法 hex 文本。
 func coerceValue(typ, name string, v Value) (Value, error) {
+	if v.Kind == "NULL" {
+		return v, nil
+	}
 	switch typ {
 	case "INT":
 		if v.Kind != "INT" {
@@ -212,10 +250,15 @@ func coerceValue(typ, name string, v Value) (Value, error) {
 		case "DATE":
 			return v, nil
 		case "TEXT":
-			if err := validateDate(v.S); err != nil {
+			s := v.S
+			// TIMESTAMP 文本（"YYYY-MM-DD HH:MM:SS"）取日期部分，兼容 TPC-C schema 映射
+			if len(s) > 10 && s[10] == ' ' {
+				s = s[:10]
+			}
+			if err := validateDate(s); err != nil {
 				return Value{}, &SQLError{Msg: "invalid DATE for column " + name + ": " + v.S}
 			}
-			return Value{Kind: "DATE", S: v.S}, nil
+			return Value{Kind: "DATE", S: s}, nil
 		}
 		return Value{}, &SQLError{Msg: "type mismatch for column: " + name}
 	case "DECIMAL":
@@ -275,6 +318,9 @@ func (v Value) String() string {
 	}
 	if v.Kind == "BLOB" {
 		return strings.ToUpper(v.S)
+	}
+	if v.Kind == "NULL" {
+		return "NULL"
 	}
 	return v.S
 }

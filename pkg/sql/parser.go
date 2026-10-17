@@ -811,7 +811,7 @@ func (p *parser) parseCreate() (Stmt, error) {
 			return nil, errf("expected SELECT after AS at %d", p.cur().pos)
 		}
 		stmt.Select = sel
-		return stmt, nil
+		return p.finishCreateTable(stmt)
 	}
 	if _, err := p.expect(tokLParen, "("); err != nil {
 		return nil, err
@@ -826,6 +826,15 @@ func (p *parser) parseCreate() (Stmt, error) {
 			return nil, err
 		}
 		typ := strings.ToUpper(typTok.text)
+		// TPC-C/MySQL DDL 兼容：INTEGER→INT、VARCHAR(n)/CHAR(n)→TEXT、TIMESTAMP→DATE
+		switch typ {
+		case "INTEGER":
+			typ = "INT"
+		case "VARCHAR", "CHAR":
+			typ = "TEXT"
+		case "TIMESTAMP":
+			typ = "DATE"
+		}
 		if typ != "INT" && typ != "TEXT" && typ != "STRING" &&
 			typ != "DATE" && typ != "DECIMAL" && typ != "BLOB" {
 			return nil, errf("unsupported column type %q at %d", typTok.text, typTok.pos)
@@ -833,18 +842,41 @@ func (p *parser) parseCreate() (Stmt, error) {
 		if typ == "STRING" {
 			typ = "TEXT"
 		}
-		stmt.Columns = append(stmt.Columns, ColumnDef{Name: col.text, Type: typ})
+		def := ColumnDef{Name: col.text, Type: typ}
+		// 类型精度参数：varchar(10)/char(2)/decimal(12,2)/int(11)——解析接受，暂不强制长度约束
+		if p.cur().kind == tokLParen {
+			p.next()
+			nTok, err := p.expect(tokNumber, "type precision")
+			if err != nil {
+				return nil, err
+			}
+			n, _ := parseInt10(nTok.text)
+			def.Params = append(def.Params, int(n))
+			if p.cur().kind == tokComma {
+				p.next()
+				mTok, err := p.expect(tokNumber, "type scale")
+				if err != nil {
+					return nil, err
+				}
+				m, _ := parseInt10(mTok.text)
+				def.Params = append(def.Params, int(m))
+			}
+			if _, err := p.expect(tokRParen, ")"); err != nil {
+				return nil, err
+			}
+		}
+		stmt.Columns = append(stmt.Columns, def)
 		switch p.cur().kind {
 		case tokComma:
 			p.next()
-			// 逗号后可以是表级 PRIMARY KEY (col) 或 FOREIGN KEY 约束
-			if p.cur().kind == tokKeyword && (p.cur().text == "PRIMARY" || p.cur().text == "FOREIGN" || p.cur().text == "UNIQUE") {
+			// 逗号后可以是表级 PRIMARY KEY (col) / FOREIGN KEY / UNIQUE KEY / KEY 约束（含 CONSTRAINT 前缀）
+			if p.isTableLevelStart() {
 				done, err := p.parseTableLevelTail(stmt)
 				if err != nil {
 					return nil, err
 				}
 				if done {
-					return stmt, nil
+					return p.finishCreateTable(stmt)
 				}
 				return nil, errf("expected ) at %d", p.cur().pos)
 			}
@@ -853,26 +885,45 @@ func (p *parser) parseCreate() (Stmt, error) {
 			if stmt.PK == "" && len(stmt.Columns) > 0 {
 				stmt.PK = stmt.Columns[0].Name
 			}
-			return stmt, nil
+			return p.finishCreateTable(stmt)
 		default:
 			// M18-C：列级 NOT NULL（仅语法接受；可空性由主键决定）。NOT/NULL 未注册
 			// 关键字，按 tokIdent 或 tokKeyword 均接受。
-			if (p.cur().kind == tokIdent || p.cur().kind == tokKeyword) && p.cur().text == "NOT" {
+			if (p.cur().kind == tokIdent || p.cur().kind == tokKeyword) && strings.EqualFold(p.cur().text, "NOT") {
 				p.next()
-				if (p.cur().kind != tokIdent && p.cur().kind != tokKeyword) || p.cur().text != "NULL" {
+				if (p.cur().kind != tokIdent && p.cur().kind != tokKeyword) || !strings.EqualFold(p.cur().text, "NULL") {
 					return nil, errf("expected NULL after NOT at %d, got %q", p.cur().pos, p.cur().text)
 				}
 				p.next()
+				// 列尾属性：AUTO_INCREMENT / PRIMARY KEY（如 hist_id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY）
+				for {
+					if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "AUTO_INCREMENT") {
+						def.AutoIncrement = true
+						p.next()
+						continue
+					}
+					if p.cur().kind == tokKeyword && p.cur().text == "PRIMARY" {
+						if err := p.expectKeyword("PRIMARY"); err != nil {
+							return nil, err
+						}
+						if err := p.expectKeyword("KEY"); err != nil {
+							return nil, err
+						}
+						stmt.PK = col.text
+						continue
+					}
+					break
+				}
 				switch p.cur().kind {
 				case tokComma:
 					p.next()
-					if p.cur().kind == tokKeyword && (p.cur().text == "PRIMARY" || p.cur().text == "FOREIGN" || p.cur().text == "UNIQUE") {
+					if p.isTableLevelStart() {
 						done, err := p.parseTableLevelTail(stmt)
 						if err != nil {
 							return nil, err
 						}
 						if done {
-							return stmt, nil
+							return p.finishCreateTable(stmt)
 						}
 						return nil, errf("expected ) at %d", p.cur().pos)
 					}
@@ -882,10 +933,38 @@ func (p *parser) parseCreate() (Stmt, error) {
 					if stmt.PK == "" && len(stmt.Columns) > 0 {
 						stmt.PK = stmt.Columns[0].Name
 					}
-					return stmt, nil
+					return p.finishCreateTable(stmt)
 				default:
 					return nil, errf("expected , or ) at %d, got %q", p.cur().pos, p.cur().text)
 				}
+			}
+			// 列尾可选属性：AUTO_INCREMENT（不带 NOT NULL 时也可出现，可再接 PRIMARY KEY）
+			for p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "AUTO_INCREMENT") {
+				def.AutoIncrement = true
+				p.next()
+			}
+			// 列尾收尾：AUTO_INCREMENT 后直接是逗号或右括号（如 TPC-C bmsql_history 的
+			// hist_id INTEGER AUTO_INCREMENT, 下一列；不带 NOT NULL 也无行内主键）。
+			switch p.cur().kind {
+			case tokComma:
+				p.next()
+				if p.isTableLevelStart() {
+					done, err := p.parseTableLevelTail(stmt)
+					if err != nil {
+						return nil, err
+					}
+					if done {
+						return p.finishCreateTable(stmt)
+					}
+					return nil, errf("expected ) at %d", p.cur().pos)
+				}
+				continue
+			case tokRParen:
+				p.next()
+				if stmt.PK == "" && len(stmt.Columns) > 0 {
+					stmt.PK = stmt.Columns[0].Name
+				}
+				return p.finishCreateTable(stmt)
 			}
 			// 行内主键：id INT PRIMARY KEY（等价于将该列设为主键）
 			if p.cur().kind == tokKeyword && p.cur().text == "PRIMARY" {
@@ -900,20 +979,20 @@ func (p *parser) parseCreate() (Stmt, error) {
 				case tokComma:
 					p.next()
 					// 行内主键后仍可跟表级 PRIMARY KEY (col) / FOREIGN KEY 约束
-					if p.cur().kind == tokKeyword && (p.cur().text == "PRIMARY" || p.cur().text == "FOREIGN" || p.cur().text == "UNIQUE") {
+					if p.isTableLevelStart() {
 						done, err := p.parseTableLevelTail(stmt)
 						if err != nil {
 							return nil, err
 						}
 						if done {
-							return stmt, nil
+							return p.finishCreateTable(stmt)
 						}
 						return nil, errf("expected ) at %d", p.cur().pos)
 					}
 					continue
 				case tokRParen:
 					p.next()
-					return stmt, nil
+					return p.finishCreateTable(stmt)
 				default:
 					return nil, errf("expected , or ) at %d, got %q", p.cur().pos, p.cur().text)
 				}
@@ -934,7 +1013,7 @@ func (p *parser) parseCreate() (Stmt, error) {
 					if stmt.PK == "" && len(stmt.Columns) > 0 {
 						stmt.PK = stmt.Columns[0].Name
 					}
-					return stmt, nil
+					return p.finishCreateTable(stmt)
 				default:
 					return nil, errf("expected , or ) at %d, got %q", p.cur().pos, p.cur().text)
 				}
@@ -971,6 +1050,21 @@ func (p *parser) parseCreateUser() (Stmt, error) {
 	return &CreateUserStmt{Name: nameTok.text, Password: pwdTok.text, IfNotExists: ifNot}, nil
 }
 
+// isTableLevelStart 判断当前 token 是否为表级约束起点
+// （PRIMARY/FOREIGN/UNIQUE/KEY 关键字，或未注册的 CONSTRAINT 标识符）。
+func (p *parser) isTableLevelStart() bool {
+	if p.cur().kind == tokKeyword {
+		switch p.cur().text {
+		case "PRIMARY", "FOREIGN", "UNIQUE", "KEY":
+			return true
+		}
+	}
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "CONSTRAINT") {
+		return true
+	}
+	return false
+}
+
 func (p *parser) parsePrimaryKey(stmt *CreateTableStmt) error {
 	if err := p.expectKeyword("PRIMARY"); err != nil {
 		return err
@@ -981,32 +1075,82 @@ func (p *parser) parsePrimaryKey(stmt *CreateTableStmt) error {
 	if _, err := p.expect(tokLParen, "("); err != nil {
 		return err
 	}
-	pkTok, err := p.expect(tokIdent, "primary key column")
-	if err != nil {
-		return err
+	var cols []string
+	for {
+		pkTok, err := p.expect(tokIdent, "primary key column")
+		if err != nil {
+			return err
+		}
+		cols = append(cols, pkTok.text)
+		if p.cur().kind == tokComma {
+			p.next()
+			continue
+		}
+		break
 	}
 	if _, err := p.expect(tokRParen, ")"); err != nil {
 		return err
 	}
 	// 校验列存在
-	found := false
-	for _, c := range stmt.Columns {
-		if c.Name == pkTok.text {
-			found = true
-			break
+	for _, col := range cols {
+		found := false
+		for _, c := range stmt.Columns {
+			if c.Name == col {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errf("primary key column %q not in column list", col)
 		}
 	}
-	if !found {
-		return errf("primary key column %q not in column list", pkTok.text)
+	stmt.PK = cols[0]
+	// 仅复合主键（多列）才写 PKCols；单列主键保持空，走 pkBytes 原路径（BLOB 主键需 hex 解码）。
+	if len(cols) > 1 {
+		stmt.PKCols = cols
 	}
-	stmt.PK = pkTok.text
 	return nil
 }
 
 // parseTableLevelTail 解析表级约束尾部（逗号分隔的 PRIMARY KEY / FOREIGN KEY）。
 // 调用时 cur 位于表级约束首关键字；循环直到消费右括号并返回 done=true。
+// finishCreateTable 统一 CREATE TABLE 收尾：吞 MySQL 表选项（ENGINE 等）并兜底主键。
+func (p *parser) finishCreateTable(stmt *CreateTableStmt) (*CreateTableStmt, error) {
+	if err := p.parseTableOptions(); err != nil {
+		return nil, err
+	}
+	if stmt.PK == "" && len(stmt.Columns) > 0 {
+		stmt.PK = stmt.Columns[0].Name
+	}
+	return stmt, nil
+}
+
+// parseTableOptions 吞掉 MySQL 建表表选项（CREATE TABLE ... ) ENGINE=InnoDB 等）。
+// OpenXDB 无存储引擎概念，仅保证可解析（BenchmarkSQL 官方 MySQL schema 必需）。
+// 通用形式：<key> [=] <value>，循环吞到语句结尾（; / EOF）交给 Parse 收尾。
+func (p *parser) parseTableOptions() error {
+	// MySQL 表选项区域允许 token：选项键/值（标识符、关键字、数字、字符串字面量）、
+	// 等号（ENGINE=InnoDB）与逗号（选项间分隔）。循环吞到语句终止符（; / EOF）为止。
+	for {
+		switch p.cur().kind {
+		case tokIdent, tokKeyword, tokNumber, tokString, tokEq, tokComma:
+			p.next()
+		default:
+			return nil
+		}
+	}
+}
+
 func (p *parser) parseTableLevelTail(stmt *CreateTableStmt) (bool, error) {
 	for {
+		// MySQL DDL 兼容：CONSTRAINT <name> 前缀（跳过约束名）
+		if (p.cur().kind == tokIdent || p.cur().kind == tokKeyword) && strings.EqualFold(p.cur().text, "CONSTRAINT") {
+			p.next()
+			if _, err := p.expectName("constraint name"); err != nil {
+				return false, err
+			}
+			continue
+		}
 		if p.cur().kind == tokKeyword && p.cur().text == "PRIMARY" {
 			if err := p.parsePrimaryKey(stmt); err != nil {
 				return false, err
@@ -1022,8 +1166,13 @@ func (p *parser) parseTableLevelTail(stmt *CreateTableStmt) (bool, error) {
 			if err := p.parseUniqueConstraint(stmt); err != nil {
 				return false, err
 			}
+		} else if p.cur().kind == tokKeyword && p.cur().text == "KEY" {
+			// TPC-C/MySQL DDL 兼容：KEY [<name>] (col,...) 普通（非唯一）二级索引。
+			if err := p.parseKeyConstraint(stmt); err != nil {
+				return false, err
+			}
 		} else {
-			return false, errf("expected PRIMARY KEY, FOREIGN KEY or UNIQUE at %d, got %q", p.cur().pos, p.cur().text)
+			return false, errf("expected PRIMARY KEY, FOREIGN KEY, UNIQUE or KEY at %d, got %q", p.cur().pos, p.cur().text)
 		}
 		if p.cur().kind == tokComma {
 			p.next()
@@ -1037,29 +1186,99 @@ func (p *parser) parseTableLevelTail(stmt *CreateTableStmt) (bool, error) {
 	}
 }
 
-// parseUniqueConstraint 表级唯一约束：UNIQUE (col) → IndexMeta（M18 information_schema.statistics）。
+// parseUniqueConstraint 表级唯一约束：UNIQUE [KEY [<name>]] (col,...) → IndexMeta
+// （M18 information_schema.statistics；TPC-C DDL 兼容多列与 UNIQUE KEY <name> 形式）。
 func (p *parser) parseUniqueConstraint(stmt *CreateTableStmt) error {
 	if err := p.expectKeyword("UNIQUE"); err != nil {
 		return err
 	}
+	// 可选 KEY 关键字与索引名
+	if p.cur().kind == tokKeyword && p.cur().text == "KEY" {
+		p.next()
+		if p.cur().kind == tokIdent {
+			p.next()
+		}
+	}
 	if _, err := p.expect(tokLParen, "("); err != nil {
 		return err
 	}
-	col, err := p.expect(tokIdent, "column name")
-	if err != nil {
-		return err
+	var cols []string
+	for {
+		col, err := p.expect(tokIdent, "column name")
+		if err != nil {
+			return err
+		}
+		cols = append(cols, col.text)
+		if p.cur().kind == tokComma {
+			p.next()
+			continue
+		}
+		break
 	}
 	if _, err := p.expect(tokRParen, ")"); err != nil {
 		return err
 	}
 	// 校验列存在（列定义必须先于表级约束）。
-	for _, c := range stmt.Columns {
-		if c.Name == col.text {
-			stmt.Indexes = append(stmt.Indexes, IndexMeta{Name: col.text, Col: col.text, Unique: true})
-			return nil
+	for _, col := range cols {
+		found := false
+		for _, c := range stmt.Columns {
+			if c.Name == col {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errf("unknown column in UNIQUE constraint: %s", col)
 		}
 	}
-	return errf("unknown column in UNIQUE constraint: %s", col.text)
+	stmt.Indexes = append(stmt.Indexes, IndexMeta{Name: cols[0], Col: cols[0], Cols: cols, Unique: true})
+	return nil
+}
+
+// parseKeyConstraint 表级普通索引：KEY [<name>] (col,...) → IndexMeta
+// （TPC-C/MySQL DDL 兼容；非唯一索引仅登记元数据，查询走全表扫描）。
+func (p *parser) parseKeyConstraint(stmt *CreateTableStmt) error {
+	if err := p.expectKeyword("KEY"); err != nil {
+		return err
+	}
+	// 可选索引名
+	if p.cur().kind == tokIdent {
+		p.next()
+	}
+	if _, err := p.expect(tokLParen, "("); err != nil {
+		return err
+	}
+	var cols []string
+	for {
+		col, err := p.expect(tokIdent, "column name")
+		if err != nil {
+			return err
+		}
+		cols = append(cols, col.text)
+		if p.cur().kind == tokComma {
+			p.next()
+			continue
+		}
+		break
+	}
+	if _, err := p.expect(tokRParen, ")"); err != nil {
+		return err
+	}
+	// 校验列存在（列定义必须先于表级约束）。
+	for _, col := range cols {
+		found := false
+		for _, c := range stmt.Columns {
+			if c.Name == col {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errf("unknown column in KEY constraint: %s", col)
+		}
+	}
+	stmt.Indexes = append(stmt.Indexes, IndexMeta{Name: cols[0], Col: cols[0], Cols: cols, Unique: false})
+	return nil
 }
 
 // parseForeignKey FOREIGN KEY (col,...) REFERENCES tbl (col,...) [ON DELETE ...]
@@ -1771,7 +1990,9 @@ func (p *parser) parseInsertInto(replace bool) (Stmt, error) {
 	return stmt, nil
 }
 
-// parseSetItems 解析逗号分隔的 SET 赋值项列表（col=value）。
+// parseSetItems 解析逗号分隔的 SET 赋值项列表（col=expr）。
+// 赋值右侧支持完整表达式（col = col + ? / col = a * b / col = 1），
+// 纯字面量/参数填 Val 保持旧执行路径，非字面量填 Expr。
 func (p *parser) parseSetItems() ([]SetItem, error) {
 	var sets []SetItem
 	for {
@@ -1782,11 +2003,17 @@ func (p *parser) parseSetItems() ([]SetItem, error) {
 		if _, err := p.expect(tokEq, "="); err != nil {
 			return nil, err
 		}
-		v, err := p.parseValue()
+		expr, err := p.parseExpr()
 		if err != nil {
 			return nil, err
 		}
-		sets = append(sets, SetItem{Col: colTok.text, Val: v})
+		item := SetItem{Col: colTok.text}
+		if expr.Op == "" && expr.Col == "" && expr.Ref == "" && expr.Val != nil {
+			item.Val = *expr.Val
+		} else {
+			item.Expr = expr
+		}
+		sets = append(sets, item)
 		if p.cur().kind == tokComma {
 			p.next()
 			continue
@@ -2016,6 +2243,16 @@ func (p *parser) parseSelect() (Stmt, error) {
 			stmt.Offset = int(m)
 		}
 	}
+	// FOR UPDATE（MySQL TPC-C 事务语句语法；OpenXDB 无行锁，仅吞掉保证可解析）
+	if p.cur().kind == tokKeyword && p.cur().text == "FOR" {
+		if err := p.expectKeyword("FOR"); err != nil {
+			return nil, err
+		}
+		if err := p.expectKeyword("UPDATE"); err != nil {
+			return nil, err
+		}
+		stmt.ForUpdate = true
+	}
 	return stmt, nil
 }
 
@@ -2205,8 +2442,8 @@ func (p *parser) parseSelectColumn() (SelectColumn, error) {
 		}
 		return sc, nil
 	}
-	// T40：数字 / ( / + / - 开头的算术表达式列（如 SELECT 1+2, (k+1)*2, -k）
-	if p.cur().kind == tokNumber || p.cur().kind == tokLParen || p.cur().kind == tokPlus || p.cur().kind == tokMinus {
+	// T40：数字 / 字符串 / ( / + / - 开头的算术表达式列（如 SELECT 1+2, (k+1)*2, -k, 'text'）
+	if p.cur().kind == tokNumber || p.cur().kind == tokString || p.cur().kind == tokLParen || p.cur().kind == tokPlus || p.cur().kind == tokMinus {
 		expr, err := p.parseExpr()
 		if err != nil {
 			return SelectColumn{}, err
@@ -2493,6 +2730,70 @@ func (p *parser) parseWindowSpec(sc *SelectColumn) error {
 	return nil
 }
 
+// tryParseTupleIn 尝试解析行值 IN：(col,...) IN ((v,...),(v,...))。
+// 成功返回 nil 并消费全部 token；失败返回错误（调用方回退 pos 后走常规括号表达式路径）。
+func (p *parser) tryParseTupleIn(c *Cond) error {
+	p.next() // 左括号
+	var cols []string
+	for {
+		col, err := p.expect(tokIdent, "column name")
+		if err != nil {
+			return err
+		}
+		cols = append(cols, col.text)
+		if p.cur().kind == tokComma {
+			p.next()
+			continue
+		}
+		break
+	}
+	if _, err := p.expect(tokRParen, ")"); err != nil {
+		return err
+	}
+	if p.cur().kind != tokKeyword || p.cur().text != "IN" {
+		return errf("expected IN after tuple at %d", p.cur().pos)
+	}
+	p.next()
+	if _, err := p.expect(tokLParen, "("); err != nil {
+		return err
+	}
+	var tuples [][]Value
+	for {
+		if _, err := p.expect(tokLParen, "("); err != nil {
+			return err
+		}
+		var vals []Value
+		for {
+			v, err := p.parseValue()
+			if err != nil {
+				return err
+			}
+			vals = append(vals, v)
+			if p.cur().kind == tokComma {
+				p.next()
+				continue
+			}
+			break
+		}
+		if _, err := p.expect(tokRParen, ")"); err != nil {
+			return err
+		}
+		tuples = append(tuples, vals)
+		if p.cur().kind == tokComma {
+			p.next()
+			continue
+		}
+		break
+	}
+	if _, err := p.expect(tokRParen, ")"); err != nil {
+		return err
+	}
+	c.Op = "TUPLE_IN"
+	c.TupleLeft = cols
+	c.TupleVals = tuples
+	return nil
+}
+
 func (p *parser) parseWhere() (Where, error) {
 	var w Where
 	for {
@@ -2513,6 +2814,15 @@ func (p *parser) parseWhere() (Where, error) {
 // parseCond 解析单个条件：左列（或 CASE 表达式）op 右值（支持 BETWEEN/IN/LIKE 与列引用右值）。
 func (p *parser) parseCond() (Cond, error) {
 	var c Cond
+	// TPC-C 兼容：行值 IN——(col1, col2) IN ((v1,v2),(v3,v4))。
+	// 仅当左括号内是"标识符,标识符,..."列列表且后随 IN 时进入本分支。
+	if p.cur().kind == tokLParen {
+		save := p.pos
+		if p.tryParseTupleIn(&c) == nil {
+			return c, nil
+		}
+		p.pos = save
+	}
 	// M12-3 分布式子查询：EXISTS (SELECT ...) 独立条件（无左操作数）。
 	if p.cur().kind == tokKeyword && p.cur().text == "EXISTS" {
 		p.next()
@@ -2773,6 +3083,12 @@ func (p *parser) parseValue() (Value, error) {
 		s := p.cur().text
 		p.next()
 		return StrVal(s), nil
+	case tokKeyword, tokIdent:
+		if strings.EqualFold(p.cur().text, "NULL") {
+			p.next()
+			return Value{Kind: "NULL"}, nil
+		}
+		return Value{}, errf("expected value at %d, got %q", p.cur().pos, p.cur().text)
 	case tokVar:
 		// M18-C：WHERE/值位置引用用户变量 @var（executor 在查询前替换为会话值）。
 		v := p.cur().text

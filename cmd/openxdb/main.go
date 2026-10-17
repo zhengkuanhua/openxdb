@@ -21,6 +21,7 @@ import (
 	"github.com/zhengkuanhua/openxdb/pkg/db"
 	"github.com/zhengkuanhua/openxdb/pkg/logx"
 	"github.com/zhengkuanhua/openxdb/pkg/metrics"
+	"github.com/zhengkuanhua/openxdb/pkg/mysqlproto"
 	"github.com/zhengkuanhua/openxdb/pkg/server"
 	"github.com/zhengkuanhua/openxdb/pkg/sql"
 	"github.com/zhengkuanhua/openxdb/pkg/storage/rocksdb"
@@ -141,7 +142,7 @@ func needDataDir(args []string) (string, error) {
 // serverKeys [server] 段白名单：启动参数 + 结构化日志/告警默认值。
 // 存储/网络/TLS/备份等现有配置项归 [sql] 段（白名单来自 sql.ConfigKeys）。
 var serverKeys = []string{
-	"data_dir", "port", "replica_port", "metrics_port", "shutdown_timeout",
+	"data_dir", "port", "replica_port", "metrics_port", "mysql_port", "shutdown_timeout",
 	"cluster_addr", "log_level", "alert_enabled", "alert_file", "alert_webhook", "alert_keep",
 }
 
@@ -317,6 +318,26 @@ func cmdStart(args []string) error {
 			return errors.New("invalid --metrics-port value: " + p)
 		}
 		metricsPort = n
+	}
+	// MySQL wire protocol 兼容端口（可选）：默认 0=关闭，保持既有行协议行为；
+	// 配置 [server] mysql_port 或 --mysql-port <n> 开启后，MySQL 客户端
+	//（mysql CLI / go-sql-driver / JDBC 等）可直接连接，共享同一 SQL 引擎。
+	mysqlPort := 0
+	if cfgFile != nil {
+		if v, ok := cfgFile.Get("server", "mysql_port"); ok {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 || n > 65535 {
+				return errors.New("invalid [server] mysql_port value: " + v)
+			}
+			mysqlPort = n
+		}
+	}
+	if p, ok := flagValue(args, "--mysql-port"); ok {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return errors.New("invalid --mysql-port value: " + p)
+		}
+		mysqlPort = n
 	}
 	// M16-2：--shutdown-timeout 命令行覆盖停机超时（秒），优先级高于
 	// 持久化配置 shutdown_timeout；不传时由 SQL 引擎按 内存>持久化>默认 取。
@@ -630,6 +651,37 @@ func cmdStart(args []string) error {
 		}()
 		fmt.Printf("metrics endpoint: http://127.0.0.1:%d/metrics\n", metricsPort)
 	}
+	// MySQL wire protocol 兼容监听（可选）：--mysql-port / [server] mysql_port>0
+	// 时启用。共享同一 SQL 引擎；鉴权映射到既有 AUTH 模型（--auth 开启时用
+	// Engine.AuthenticateUser 校验，未开启时放行且执行身份为 root）。TLS 配置
+	// 与主服务同源（--tls-cert/--tls-key 或持久化 intent），明文连接则走
+	// caching_sha2_password RSA 公钥加密路径。
+	if mysqlPort > 0 {
+		ms := mysqlproto.New(d.SQL)
+		if authOn {
+			ms.SetVerify(func(user, pass string) bool {
+				ok, err := d.SQL.AuthenticateUser(user, pass)
+				return err == nil && ok
+			})
+		}
+		if tlsCfg != nil {
+			ms.SetTLS(tlsCfg)
+		}
+		ms.Logf = func(format string, a ...any) {
+			logx.Default.Info("mysqlproto", "mysql_log", fmt.Sprintf(format, a...))
+		}
+		mysqlAddr := fmt.Sprintf(":%d", mysqlPort)
+		go func() {
+			if err := ms.Serve(mysqlAddr); err != nil {
+				fmt.Fprintf(os.Stderr, "openxdb: mysql protocol listener: %v\n", err)
+			}
+		}()
+		proto := "plaintext"
+		if tlsCfg != nil {
+			proto = "TLS"
+		}
+		fmt.Printf("mysql wire protocol listening on %s (%s, auth=%v)\n", mysqlAddr, proto, authOn)
+	}
 	// ---- M16-2 优雅停机装配 ----
 	// 停机流程：拒绝新连接/新事务 → drain 进行中事务（超时强制）→
 	// flush/关闭存储（txn/WAL/storage 由 db.Close 按序处理，退出码 0/1）。
@@ -800,6 +852,8 @@ Commands:
           [--replica-port <n>] 主节点复制端口（启用 M2 复制并生成 binlog）
           [--cluster-addr <addr>] 集群节点链路地址（启用 M4 节点握手/转发）
           [--metrics-port <n>] Prometheus /metrics 端口（默认 7789，0 禁用）
+          [--mysql-port <n>]  MySQL wire protocol 兼容监听端口（默认 0=关闭；
+                              开启后 mysql CLI / go-sql-driver 等可直接连接）
           [--shutdown-timeout <sec>] 优雅停机 drain 超时（默认取配置 shutdown_timeout，30s）
                               服务内发 SHUTDOWN [GRACEFUL] 或 Ctrl-C/SIGTERM 触发
           [--auth]            启用连接握手鉴权（AUTH <user> <password>）

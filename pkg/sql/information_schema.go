@@ -171,10 +171,18 @@ func buildInfoSchemaRows(t string, tabs []*TableMeta) [][]Value {
 			if tab.Name == "" {
 				continue
 			}
-			// 主键行
-			rows = append(rows, []Value{
-				StrVal(tab.Name), StrVal("PRIMARY"), IntVal(1), StrVal(tab.PK), IntVal(0),
-			})
+			// 主键行：单列主键 1 行；复合主键（PKCols）每列一行、SEQ_IN_INDEX 递增
+			if len(tab.PKCols) > 0 {
+				for i, col := range tab.PKCols {
+					rows = append(rows, []Value{
+						StrVal(tab.Name), StrVal("PRIMARY"), IntVal(int64(i + 1)), StrVal(col), IntVal(0),
+					})
+				}
+			} else {
+				rows = append(rows, []Value{
+					StrVal(tab.Name), StrVal("PRIMARY"), IntVal(1), StrVal(tab.PK), IntVal(0),
+				})
+			}
 			// 二级索引行（单列索引；SEQ_IN_INDEX 恒 1）
 			for _, ix := range tab.Indexes {
 				nonUnique := IntVal(1)
