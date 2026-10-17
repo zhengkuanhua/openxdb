@@ -758,8 +758,12 @@ func TestP1CreateInsertNewTypes(t *testing.T) {
 	if r[4].Kind != "TEXT" || r[4].S != "alice" {
 		t.Fatalf("note: got %+v", r[4])
 	}
-	// DECIMAL 小数位超限报错
-	mustErr(t, e, "INSERT INTO emp VALUES (3, '2024-01-01', 1.12345, '00', 'x')", "DECIMAL too many")
+	// DECIMAL 超精度小数自动四舍五入（MySQL 兼容，TPC-C 依赖此行为）
+	mustExec(t, e, "INSERT INTO emp VALUES (3, '2024-01-01', 1.12345, '00', 'x')")
+	rows3 := mustRows(t, e, "SELECT salary FROM emp WHERE id = 3")
+	if len(rows3) != 1 || rows3[0][0].S != "1.1235" {
+		t.Fatalf("decimal rounding: got %+v", rows3[0][0])
+	}
 	// DATE 非法值报错
 	mustErr(t, e, "INSERT INTO emp VALUES (3, '2024-02-30', 1.0, '00', 'x')", "invalid DATE")
 	mustErr(t, e, "INSERT INTO emp VALUES (3, '24-01-01', 1.0, '00', 'x')", "invalid DATE")
