@@ -21,8 +21,6 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
-          # 固定安装位置，避免默认装到 runner 临时目录（D:\a\_temp\...）导致后续步骤硬编码路径失效
-          location: C:\msys64
           update: true
           install: >-
             git
@@ -47,9 +45,16 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          # 从 setup-msys2 输出动态获取实际安装位置，避免硬编码路径失效
-          $env:MSYS2_ROOT = "${{ steps.msys2.outputs.msys2-location }}"
-          if ([string]::IsNullOrEmpty($env:MSYS2_ROOT)) { $env:MSYS2_ROOT = "C:/msys64" }
+          # 动态探测 MSYS2 UCRT64 实际安装位置（setup-msys2 输出不可靠时按候选路径兜底）
+          $candidates = @()
+          if ("${{ steps.msys2.outputs.msys2-location }}" -ne "") { $candidates += "${{ steps.msys2.outputs.msys2-location }}" }
+          if ($env:MINGW_PREFIX) { $candidates += $env:MINGW_PREFIX }
+          $candidates += "C:/msys64/msys64", "C:/msys64", "D:/a/_temp/setup-msys2"
+          $env:MSYS2_ROOT = $null
+          foreach ($c in $candidates) {
+            if (Test-Path "$c/ucrt64/bin/g++.exe") { $env:MSYS2_ROOT = $c; break }
+          }
+          if (-not $env:MSYS2_ROOT) { Write-Error "MSYS2 UCRT64 g++ not found (searched: $($candidates -join ', '))"; exit 1 }
           Write-Host "MSYS2 location: $env:MSYS2_ROOT"
           # 统一使用 MSYS2 UCRT64 工具链（RocksDB 静态库由其编译，避免与 runner 自带 MinGW 混用导致 libstdc++ 符号缺失）
           $env:CC = "$env:MSYS2_ROOT/ucrt64/bin/gcc.exe"
@@ -57,20 +62,28 @@ jobs:
           if (-not (Test-Path $env:CXX)) { Write-Error "MSYS2 UCRT64 g++ not found: $env:CXX"; exit 1 }
           & $env:CC --version | Select-Object -First 1
           go version
-          go env CC CXX CGO_LDFLAGS
-          Get-ChildItem "$env:MSYS2_ROOT/ucrt64/lib" -Filter "libstdc++*" | Select-Object Name
           $env:CGO_CFLAGS = "-IC:/rocksdb-src/include"
           $env:CGO_CXXFLAGS = "-IC:/rocksdb-src/include"
           $env:CGO_LDFLAGS = "-LC:/rocksdb-build -L$env:MSYS2_ROOT/ucrt64/lib -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -lstdc++ -lwinpthread -static"
-          go build -x ./cmd/openxdb 2>&1 | Select-String -Pattern "g\+\+.*-o|libstdc|librocksdb|get_once|undefined" -Context 0,0
+          go env CC CXX CGO_CFLAGS CGO_CXXFLAGS CGO_LDFLAGS
+          Get-ChildItem "$env:MSYS2_ROOT/ucrt64/lib" -Filter "libstdc++*" | Select-Object Name
+          go build -x ./cmd/openxdb 2>&1
           if ($LASTEXITCODE -eq 0) { go build ./... } else { exit $LASTEXITCODE }
 
       - name: Test
         shell: pwsh
         run: |
-          # 从 setup-msys2 输出动态获取实际安装位置，避免硬编码路径失效
-          $env:MSYS2_ROOT = "${{ steps.msys2.outputs.msys2-location }}"
-          if ([string]::IsNullOrEmpty($env:MSYS2_ROOT)) { $env:MSYS2_ROOT = "C:/msys64" }
+          # 动态探测 MSYS2 UCRT64 实际安装位置（setup-msys2 输出不可靠时按候选路径兜底）
+          $candidates = @()
+          if ("${{ steps.msys2.outputs.msys2-location }}" -ne "") { $candidates += "${{ steps.msys2.outputs.msys2-location }}" }
+          if ($env:MINGW_PREFIX) { $candidates += $env:MINGW_PREFIX }
+          $candidates += "C:/msys64/msys64", "C:/msys64", "D:/a/_temp/setup-msys2"
+          $env:MSYS2_ROOT = $null
+          foreach ($c in $candidates) {
+            if (Test-Path "$c/ucrt64/bin/g++.exe") { $env:MSYS2_ROOT = $c; break }
+          }
+          if (-not $env:MSYS2_ROOT) { Write-Error "MSYS2 UCRT64 g++ not found (searched: $($candidates -join ', '))"; exit 1 }
+          Write-Host "MSYS2 location: $env:MSYS2_ROOT"
           # 与 Build 步骤一致的 MSYS2 UCRT64 工具链
           $env:CC = "$env:MSYS2_ROOT/ucrt64/bin/gcc.exe"
           $env:CXX = "$env:MSYS2_ROOT/ucrt64/bin/g++.exe"
