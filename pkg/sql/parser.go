@@ -2339,12 +2339,19 @@ func (p *parser) parseJoin() (JoinClause, error) {
 	}
 	if p.cur().kind == tokKeyword && p.cur().text == "ON" {
 		p.next()
+		// 兼容 MySQL 的 ON (cond) 括号包裹写法（TPC-C JOIN 条件带括号）。
+		if p.cur().kind == tokLParen {
+			p.next()
+		}
 		for {
 			c, err := p.parseCond()
 			if err != nil {
 				return jc, err
 			}
 			jc.On = append(jc.On, c)
+			if p.cur().kind == tokRParen {
+				p.next()
+			}
 			if p.cur().kind == tokKeyword && p.cur().text == "AND" {
 				p.next()
 				continue

@@ -1916,7 +1916,7 @@ func (e *Executor) onDupUpdateOps(sess *Session, tx txn.Txn, tabs []*TableMeta, 
 		if set.Expr != nil {
 			v, err = evalSetExpr(meta, newVals, set.Expr)
 			if err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 		} else {
 			v = set.Val
@@ -2145,7 +2145,8 @@ func (e *Executor) resolveWhereVars(sess *Session, w *Where) error {
 func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
 	// 无 FROM 常量投影：SELECT 1 / SELECT 'x' / SELECT 1+2 / SELECT @var（M18-C / T45）。
 	// 兼容 mysql CLI 的 SELECT 1、Connector/J 连接探测等无表查询。
-	if s.From == "" {
+	// 注意：FROM 为子查询时 s.From 为空但 s.Subquery 非空，必须走正常执行路径。
+	if s.From == "" && s.Subquery == nil {
 		cols := make([]string, 0, len(s.Columns))
 		row := make([]Value, 0, len(s.Columns))
 		for _, sc := range s.Columns {
@@ -3829,10 +3830,28 @@ func (e *Executor) buildRow(meta *TableMeta, cols []string, vals []Value) ([]Val
 	}
 	for i, f := range filled {
 		if !f {
-			return nil, &SQLError{Msg: "missing value for column: " + meta.Columns[i].Name}
+			// MySQL 兼容：未显式赋值的列用类型默认值（INT→0、DECIMAL→0、TEXT→''、
+			// DATE→当前时间、BLOB→空字节），TPC-C history 插入依赖此行为。
+			out[i] = defaultColumnValue(meta.Columns[i])
 		}
 	}
 	return e.coerceRow(meta, out)
+}
+
+// defaultColumnValue 返回列类型的 MySQL 兼容默认值。
+func defaultColumnValue(c ColumnDef) Value {
+	switch c.Type {
+	case "INT":
+		return Value{Kind: "INT", I: 0}
+	case "DECIMAL":
+		return Value{Kind: "DECIMAL", I: 0, S: "0"}
+	case "DATE":
+		return Value{Kind: "DATE", S: time.Now().Format("2006-01-02 15:04:05")}
+	case "BLOB":
+		return StrVal("")
+	default: // TEXT
+		return StrVal("")
+	}
 }
 
 // coerceRow 按列类型做值类型强制（支持 INT/TEXT/DATE/DECIMAL/BLOB）。

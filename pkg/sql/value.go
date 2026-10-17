@@ -44,15 +44,30 @@ func parseDecimal(s string) (int64, string, error) {
 	}
 	frac := int64(0)
 	fracDigits := 0
+	roundChecked := false
+	roundUp := false
 	if i < len(s) && s[i] == '.' {
 		i++
 		for i < len(s) && isDigit(s[i]) {
-			if fracDigits >= decScale {
-				return 0, "", &SQLError{Msg: "DECIMAL too many fractional digits: " + s}
+			if fracDigits < decScale {
+				frac = frac*10 + int64(s[i]-'0')
+				fracDigits++
+			} else if !roundChecked {
+				// MySQL 兼容：超精度小数四舍五入（如 212.10000000000002 -> 212.1000），
+				// 只取被截断部分的首位判断是否进位。
+				roundChecked = true
+				if s[i] >= '5' {
+					roundUp = true
+				}
 			}
-			frac = frac*10 + int64(s[i]-'0')
-			fracDigits++
 			i++
+		}
+		if roundUp {
+			frac++
+			if frac >= decUnit {
+				frac = 0
+				intPart++
+			}
 		}
 	}
 	// 科学计数法：1.2E3 / 6.0E-4 / 1E+06（MySQL 兼容，Connector/J setDouble 内联输出）。
