@@ -237,7 +237,7 @@ func (e *Executor) execImport(sess *Session, s *ImportStmt) (*Result, error) {
 		}
 		// 文件内重复主键：跳过并计数（事务内已收集行对唯一性检查不可见，
 		// 用 seen 集合保证"同一批内后行不覆盖前行"）
-		bvals, err := e.buildRow(meta, nil, vals)
+		bvals, err := e.buildRow(meta, nil, vals, nil)
 		if err != nil {
 			if s.IgnoreErrors {
 				bad++

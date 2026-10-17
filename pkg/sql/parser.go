@@ -914,6 +914,9 @@ func (p *parser) parseCreate() (Stmt, error) {
 					}
 					break
 				}
+				// 回写：列尾属性（AUTO_INCREMENT 等）修改的是局部 def 副本，
+				// 必须同步回 stmt.Columns 中的列定义，否则属性丢失。
+				stmt.Columns[len(stmt.Columns)-1] = def
 				switch p.cur().kind {
 				case tokComma:
 					p.next()
@@ -942,6 +945,10 @@ func (p *parser) parseCreate() (Stmt, error) {
 			for p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "AUTO_INCREMENT") {
 				def.AutoIncrement = true
 				p.next()
+			}
+			if def.AutoIncrement {
+				// 回写：同上，AUTO_INCREMENT 修改的是局部副本，需同步回列定义。
+				stmt.Columns[len(stmt.Columns)-1] = def
 			}
 			// 列尾收尾：AUTO_INCREMENT 后直接是逗号或右括号（如 TPC-C bmsql_history 的
 			// hist_id INTEGER AUTO_INCREMENT, 下一列；不带 NOT NULL 也无行内主键）。

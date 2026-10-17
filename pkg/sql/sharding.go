@@ -81,6 +81,23 @@ func (e *Executor) rowRanges(meta *TableMeta) []storage.KeyRange {
 	return out
 }
 
+// pkPrefixRanges 主键前缀区间 [s{tid}{prefix}, s{tid}{prefix}0xff) 按 regions 展开的物理范围。
+// 前缀等值条件下剩余主键列编码首字节恒 < 0xff（INT/DECIMAL 定长 8B 首字节、
+// 变长列 2B 长度前缀首字节均不可能为 0xff），故该上界覆盖所有以 prefix 开头的行键；
+// 全主键等值时该区间恰好包含 prefix 对应单行，但调用方应优先走精确点查（Get）。
+func (e *Executor) pkPrefixRanges(meta *TableMeta, prefix []byte) []storage.KeyRange {
+	rs := e.regionsOf(meta)
+	out := make([]storage.KeyRange, 0, len(rs))
+	hi := append(append([]byte{}, prefix...), 0xff)
+	for _, rg := range rs {
+		out = append(out, storage.KeyRange{
+			Start: sharding.EncodeRegionKey(rg.RegionID, EncodeTableKey(meta.ID, prefix)),
+			End:   sharding.EncodeRegionKey(rg.RegionID, EncodeTableKey(meta.ID, hi)),
+		})
+	}
+	return out
+}
+
 // indexTableRanges 某索引整表物理区间（按 regions 展开）。
 // 索引键 i{tableID}{indexID}... 所在 region 由写入时行路由决定；
 // 对每个 region 扫描 [r{rid}i{tid}{idxID}*, r{rid}i{tid}{idxID+1}*) 覆盖该 region 全部索引键。

@@ -219,6 +219,49 @@ func pkBytesMulti(t *TableMeta, vals []Value) ([]byte, error) {
 	return buf, nil
 }
 
+// pkPrefixBytes 主键前缀字节编码：按 PKCols 顺序对给定的前缀列值逐列编码拼接，
+// 编码与 pkBytesMulti 完全一致（INT/DECIMAL 定长 8B，其余 2B 长度前缀），
+// 保证"主键列等值前缀 = 行键字节前缀"，可据此构造有序 Seek 范围。
+// 单列主键（PKCols 空）时退化为 pkBytes。
+func pkPrefixBytes(t *TableMeta, vals []Value) ([]byte, error) {
+	if len(t.PKCols) == 0 {
+		if len(vals) == 0 {
+			return nil, &SQLError{Msg: "no primary key value"}
+		}
+		return pkBytes(t, vals[0])
+	}
+	if len(vals) > len(t.PKCols) {
+		vals = vals[:len(t.PKCols)]
+	}
+	var buf []byte
+	for _, v := range vals {
+		var b []byte
+		switch v.Kind {
+		case "INT":
+			b = make([]byte, 8)
+			binary.BigEndian.PutUint64(b, uint64(v.I))
+		case "DECIMAL":
+			b = make([]byte, 8)
+			binary.BigEndian.PutUint64(b, uint64(v.I)^(1<<63))
+		case "BLOB":
+			raw, err := decodeHex(strings.ToUpper(v.S))
+			if err != nil {
+				return nil, err
+			}
+			b = raw
+		default:
+			b = []byte(v.S)
+		}
+		if v.Kind != "INT" && v.Kind != "DECIMAL" {
+			lb := make([]byte, 2)
+			binary.BigEndian.PutUint16(lb, uint16(len(b)))
+			buf = append(buf, lb...)
+		}
+		buf = append(buf, b...)
+	}
+	return buf, nil
+}
+
 // indexColValue 计算索引键值：单列走 idxBytes；复合索引（Cols 非空）按多列拼接编码。
 func indexColValue(t *TableMeta, idx *IndexMeta, row []Value) ([]byte, error) {
 	if len(idx.Cols) > 0 {

@@ -75,6 +75,11 @@ type Executor struct {
 	// binlogPath 为数据目录 binlog 文件路径（TO LSN 回放读取，M2 pkg/replication）。
 	st         storage.Storage
 	binlogPath string
+	// AUTO_INCREMENT 内存计数器：key=表名\x00列名 → 下一个待分配值。
+	// 首次遇到某表列时从现有数据扫 max+1 初始化，之后单调递增（回滚/失败
+	// 跳号，与 MySQL 语义一致；重启后重新扫 max 恢复）。
+	autoIncMu   sync.Mutex
+	autoIncNext map[string]int64
 	// T20：运维指标注入源（nil = 未装配，SHOW STATS 输出 0）。
 	// connSource 返回当前活跃 TCP 连接数（server 层会话计数）；
 	// binlogLSN 返回当前 binlog 最大位点（db 层注入，读取只读）。
@@ -1699,7 +1704,7 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 // 或 2PC 分组提交（M5）。dupSkip 语义同 insertRow。
 // M9 外键：插入前校验引用完整性（父表行存在且类型匹配）。
 func (e *Executor) insertRowOps(sess *Session, tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, dupSkip bool) ([]kvOp, bool, error) {
-	vals, err := e.buildRow(meta, cols, row)
+	vals, err := e.buildRow(meta, cols, row, tx)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1745,7 +1750,7 @@ func (e *Executor) insertRowOps(sess *Session, tx txn.Txn, tabs []*TableMeta, me
 //
 // pending 记录本语句已计划的最终行（用于语句内主键/唯一键重复判定）。
 func (e *Executor) insertRowUpsertOps(sess *Session, tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, onDup *OnDuplicateUpdate, replace bool, pending *[][]Value) ([]kvOp, int, error) {
-	vals, err := e.buildRow(meta, cols, row)
+	vals, err := e.buildRow(meta, cols, row, tx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -2234,19 +2239,17 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
 	}
 	var rows [][]Value
 	ordered := false // 结果是否已按 ORDER BY 升序（索引序）
-	// 点查优化：WHERE 仅含主键等值 → 直接 Get
-	if s.Where != nil && len(s.Where.Conds) == 1 {
-		c := s.Where.Conds[0]
-		if c.Col == meta.PK && c.Op == "=" {
-			pk, err := pkBytes(meta, c.Val)
+	// 主键等值/前缀快速路径：WHERE 命中主键列等值前缀（单列或复合前缀）
+	// → 精确点查 Get / 有序前缀 Seek，避免全表 JSON 扫描（TPC-C 复合主键关键路径）。
+	if plan, perr := e.pkCondPlan(meta, s.Where); perr != nil {
+		return nil, perr
+	} else if plan != nil {
+		if plan.full {
+			rid, err := e.locateRow(meta, plan.prefix)
 			if err != nil {
 				return nil, err
 			}
-			rid, err := e.locateRow(meta, pk)
-			if err != nil {
-				return nil, err
-			}
-			raw, err := e.getKVCluster(sess, tx, e.rowKeyAt(meta, rid, pk))
+			raw, err := e.getKVCluster(sess, tx, e.rowKeyAt(meta, rid, plan.prefix))
 			if err == nil {
 				row, err := decodeRow(meta, raw)
 				if err != nil {
@@ -2256,8 +2259,28 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
 			} else if err != storage.ErrNotFound {
 				return nil, err
 			}
-			return e.finishSelect(meta, s, rows, ordered)
+		} else {
+			// 前缀等值：有序 Seek 前缀区间（结果行少，仍需 WHERE 过滤确认边界）
+			pairs, err := e.scanMergedCluster(sess, tx, e.pkPrefixRanges(meta, plan.prefix))
+			if err != nil {
+				return nil, err
+			}
+			rows = make([][]Value, 0, len(pairs))
+			for _, kv := range pairs {
+				row, err := decodeRow(meta, kv.Value)
+				if err != nil {
+					return nil, err
+				}
+				ok, err := matchWhere(meta, row, s.Where)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					rows = append(rows, row)
+				}
+			}
 		}
+		return e.finishSelect(meta, s, rows, ordered)
 	}
 	// 二级索引优化：WHERE 命中索引列等值/范围
 	if rows, ordered, err = e.indexLookup(sess, tx, meta, s); err != nil {
@@ -2998,6 +3021,45 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 	if err != nil {
 		return nil, err
 	}
+	// 主键等值/前缀优化：单物理表（无 JOIN/子查询）且 WHERE 命中主键等值前缀时，
+	// 直接以点查/有序前缀 Seek 读取候选行集，替代全表扫描后过滤
+	// （TPC-C 聚合查询 COUNT/SUM 关键路径）。
+	if s.Subquery == nil && len(s.Joins) == 0 {
+		if meta := findTable(tabs, s.From); meta != nil {
+			if plan, perr := e.pkCondPlan(meta, s.Where); perr != nil {
+				return nil, perr
+			} else if plan != nil {
+				var pairs []storage.KVPair
+				if plan.full {
+					rid, err := e.locateRow(meta, plan.prefix)
+					if err != nil {
+						return nil, err
+					}
+					key := e.rowKeyAt(meta, rid, plan.prefix)
+					raw, err := e.getKVCluster(sess, tx, key)
+					if err == nil {
+						pairs = []storage.KVPair{{Key: key, Value: raw}}
+					} else if err != storage.ErrNotFound {
+						return nil, err
+					}
+				} else {
+					pairs, err = e.scanMergedCluster(sess, tx, e.pkPrefixRanges(meta, plan.prefix))
+					if err != nil {
+						return nil, err
+					}
+				}
+				pkRows := make([][]Value, 0, len(pairs))
+				for _, kv := range pairs {
+					row, err := decodeRow(meta, kv.Value)
+					if err != nil {
+						return nil, err
+					}
+					pkRows = append(pkRows, visibleRow(meta, row))
+				}
+				rel.Rows = pkRows
+			}
+		}
+	}
 	for i := range s.Joins {
 		jc := &s.Joins[i]
 		right, err := e.relFromTable(sess, tx, tabs, jc.Table, orAlias(jc.Table, jc.Alias), jc.Subquery, jc.Alias)
@@ -3586,25 +3648,27 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 	if meta == nil {
 		return nil, &SQLError{Msg: "table not exists: " + s.Table}
 	}
-	// 主键等值快速路径：WHERE 仅含主键等值条件时直接定位目标行，
-	// 避免单行 UPDATE 退化为全表扫描（与 execSelect 点查优化对称）。
+	// 主键等值/前缀快速路径：WHERE 命中主键列等值前缀（单列或复合前缀）
+	// → 精确点查 Get / 有序前缀 Seek，避免全表扫描（与 execSelect 对称）。
 	var pairs []storage.KVPair
-	if s.Where != nil && len(s.Where.Conds) == 1 {
-		c := s.Where.Conds[0]
-		if c.Col == meta.PK && c.Op == "=" {
-			pk, err := pkBytes(meta, c.Val)
+	if plan, perr := e.pkCondPlan(meta, s.Where); perr != nil {
+		return nil, perr
+	} else if plan != nil {
+		if plan.full {
+			rid, err := e.locateRow(meta, plan.prefix)
 			if err != nil {
 				return nil, err
 			}
-			rid, err := e.locateRow(meta, pk)
-			if err != nil {
-				return nil, err
-			}
-			key := e.rowKeyAt(meta, rid, pk)
+			key := e.rowKeyAt(meta, rid, plan.prefix)
 			raw, err := e.getKVCluster(sess, tx, key)
 			if err == nil {
 				pairs = []storage.KVPair{{Key: key, Value: raw}}
 			} else if err != storage.ErrNotFound {
+				return nil, err
+			}
+		} else {
+			pairs, err = e.scanMergedCluster(sess, tx, e.pkPrefixRanges(meta, plan.prefix))
+			if err != nil {
 				return nil, err
 			}
 		}
@@ -3738,10 +3802,37 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 	if meta == nil {
 		return nil, &SQLError{Msg: "table not exists: " + s.Table}
 	}
-	// 全表扫描 + 过滤（跨 region 展开后按内层键序合并）
-	pairs, err := e.scanMergedCluster(sess, tx, e.rowRanges(meta))
-	if err != nil {
-		return nil, err
+	// 主键等值/前缀快速路径：WHERE 命中主键列等值前缀（单列或复合前缀）
+	// → 精确点查 Get / 有序前缀 Seek，避免全表扫描（与 execSelect/execUpdate 对称）。
+	var pairs []storage.KVPair
+	if plan, perr := e.pkCondPlan(meta, s.Where); perr != nil {
+		return nil, perr
+	} else if plan != nil {
+		if plan.full {
+			rid, err := e.locateRow(meta, plan.prefix)
+			if err != nil {
+				return nil, err
+			}
+			key := e.rowKeyAt(meta, rid, plan.prefix)
+			raw, err := e.getKVCluster(sess, tx, key)
+			if err == nil {
+				pairs = []storage.KVPair{{Key: key, Value: raw}}
+			} else if err != storage.ErrNotFound {
+				return nil, err
+			}
+		} else {
+			pairs, err = e.scanMergedCluster(sess, tx, e.pkPrefixRanges(meta, plan.prefix))
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if pairs == nil {
+		// 全表扫描 + 过滤（跨 region 展开后按内层键序合并）
+		pairs, err = e.scanMergedCluster(sess, tx, e.rowRanges(meta))
+		if err != nil {
+			return nil, err
+		}
 	}
 	affected := 0
 	var ops []kvOp
@@ -3806,7 +3897,8 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 
 // ---- 辅助 ----
 
-func (e *Executor) buildRow(meta *TableMeta, cols []string, vals []Value) ([]Value, error) {
+func (e *Executor) buildRow(meta *TableMeta, cols []string, vals []Value, tx txn.Txn) ([]Value, error) {
+	fmt.Printf("[br-debug] table=%s cols=%v nvals=%d\n", meta.Name, cols, len(vals))
 	if len(cols) == 0 {
 		if len(vals) != len(meta.Columns) {
 			return nil, &SQLError{Msg: "column count mismatch"}
@@ -3830,12 +3922,56 @@ func (e *Executor) buildRow(meta *TableMeta, cols []string, vals []Value) ([]Val
 	}
 	for i, f := range filled {
 		if !f {
-			// MySQL 兼容：未显式赋值的列用类型默认值（INT→0、DECIMAL→0、TEXT→''、
-			// DATE→当前时间、BLOB→空字节），TPC-C history 插入依赖此行为。
-			out[i] = defaultColumnValue(meta.Columns[i])
+			// AUTO_INCREMENT 列缺省时分配自增值（MySQL 语义，TPC-C history.hist_id
+			// 依赖此行为）；普通列用类型默认值（INT→0、DECIMAL→0、TEXT→''、
+			// DATE→当前时间、BLOB→空字节）。
+			if meta.Columns[i].AutoIncrement {
+				id, err := e.autoIncValue(meta, meta.Columns[i].Name, tx)
+				if err != nil {
+					return nil, err
+				}
+				out[i] = IntVal(id)
+			} else {
+				out[i] = defaultColumnValue(meta.Columns[i])
+			}
 		}
 	}
 	return e.coerceRow(meta, out)
+}
+
+// autoIncValue 分配 AUTO_INCREMENT 列的下一个值。首次遇到该表列时扫现有数据
+// 取 max+1 作为初值，此后从内存计数器单调递增（并发安全）。
+func (e *Executor) autoIncValue(meta *TableMeta, col string, tx txn.Txn) (int64, error) {
+	key := meta.Name + "\x00" + col
+	e.autoIncMu.Lock()
+	defer e.autoIncMu.Unlock()
+	if e.autoIncNext == nil {
+		e.autoIncNext = make(map[string]int64)
+	}
+	if next, ok := e.autoIncNext[key]; ok {
+		e.autoIncNext[key] = next + 1
+		return next, nil
+	}
+	var max int64
+	if tx != nil {
+		pairs, err := e.scanMerged(tx, e.rowRanges(meta))
+		if err != nil {
+			return 0, err
+		}
+		idx := colIndex(meta, col)
+		for _, kv := range pairs {
+			row, err := decodeRow(meta, kv.Value)
+			if err != nil {
+				return 0, err
+			}
+			if v := row[idx]; v.Kind == "INT" && v.I > max {
+				max = v.I
+			}
+		}
+	}
+	next := max + 1
+	e.autoIncNext[key] = next + 1
+	return next, nil
 }
 
 // defaultColumnValue 返回列类型的 MySQL 兼容默认值。
@@ -3867,6 +4003,62 @@ func (e *Executor) coerceRow(meta *TableMeta, vals []Value) ([]Value, error) {
 }
 
 // pkOf 从行值提取主键字节（INT 定长 / TEXT 原字节；复合主键按 PKCols 多列编码）。
+// pkPlan 主键等值前缀计划：prefix 为主键字节前缀；full=true 表示覆盖全部主键列，
+// 此时 prefix 即完整行主键，可精确点查。
+type pkPlan struct {
+	prefix []byte
+	full   bool
+}
+
+// pkCondPlan 分析 WHERE：若包含按主键列顺序排列的连续等值前缀条件，
+// 返回主键字节前缀与是否覆盖全部主键列（full=true 可精确点查）。
+// 仅限简单 Col=字面量（无限定名/右列引用/CASE/表达式/元组），返回 nil 表示
+// 无可用主键等值条件（回退全表/索引路径）。
+func (e *Executor) pkCondPlan(meta *TableMeta, w *Where) (*pkPlan, error) {
+	if w == nil || len(w.Conds) == 0 {
+		return nil, nil
+	}
+	var pkCols []string
+	if len(meta.PKCols) > 0 {
+		pkCols = meta.PKCols
+	} else {
+		if meta.PK == "" {
+			return nil, nil
+		}
+		pkCols = []string{meta.PK}
+	}
+	vals := make(map[string]Value, len(pkCols))
+	for i := range w.Conds {
+		c := &w.Conds[i]
+		if c.Op != "=" || c.Ref != "" || c.RightRef != "" || c.LeftCase != nil || c.LeftExpr != nil || c.RightExpr != nil || len(c.TupleLeft) > 0 {
+			continue
+		}
+		for _, pc := range pkCols {
+			if c.Col == pc {
+				vals[pc] = c.Val
+				break
+			}
+		}
+	}
+	// 必须是 PKCols 的连续前缀（第 0..k-1 列全部有等值条件）才可安全走有序范围
+	prefixVals := make([]Value, 0, len(pkCols))
+	for _, pc := range pkCols {
+		v, ok := vals[pc]
+		if !ok {
+			break
+		}
+		prefixVals = append(prefixVals, v)
+	}
+	if len(prefixVals) == 0 {
+		return nil, nil
+	}
+	pb, err := pkPrefixBytes(meta, prefixVals)
+	if err != nil {
+		return nil, err
+	}
+	return &pkPlan{prefix: pb, full: len(prefixVals) == len(pkCols)}, nil
+}
+
 func (e *Executor) pkOf(meta *TableMeta, vals []Value) ([]byte, error) {
 	if len(meta.PKCols) > 0 {
 		return pkBytesMulti(meta, vals)
