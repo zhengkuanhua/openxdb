@@ -36,8 +36,10 @@ package cluster
 // 的可见性依据，恢复不清）。
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
+	"sort"
 	"net"
 	"time"
 
@@ -216,6 +218,56 @@ func VersionVisible(scanFn func(r storage.KeyRange, limit int) ([]storage.KVPair
 	last := rows[len(rows)-1].Key // 升序，最后一条 = 最大 commit_ts（ts 在键末尾）
 	ts := binary.BigEndian.Uint64(last[len(last)-8:])
 	return ts <= beginTS, nil
+}
+
+// BatchVersionVisible 批量判定 keys（任意序）在 begin_ts 快照下的可见性：
+// 一次扫描 [verRangeStart(minKey), verRangeEnd(maxKey)] 版本区域（按带前缀 key 序），
+// 按主键分组取最大 commit_ts，可见 ⟺ 无版本记录或 maxCommitTS <= beginTS。
+// 与逐行 VersionVisible 语义一致，但仅一次范围扫描，避免 N 次独立 Seek。
+func BatchVersionVisible(scanFn func(r storage.KeyRange, limit int) ([]storage.KVPair, error), keys [][]byte, beginTS uint64) ([]bool, error) {
+	vis := make([]bool, len(keys))
+	for i := range vis {
+		vis[i] = true
+	}
+	if beginTS == 0 || len(keys) == 0 {
+		return vis, nil
+	}
+	idx := make([]int, len(keys))
+	vs := make([][]byte, len(keys))
+	for i, k := range keys {
+		idx[i] = i
+		vs[i] = verRangeStart(k)
+	}
+	sort.Slice(idx, func(a, b int) bool { return bytes.Compare(vs[idx[a]], vs[idx[b]]) < 0 })
+	rows, err := scanFn(storage.KeyRange{Start: vs[idx[0]], End: verRangeEnd(keys[idx[len(keys)-1]])}, 0)
+	if err != nil {
+		return nil, err
+	}
+	ri := 0
+	for _, ki := range idx {
+		key := keys[ki]
+		maxTS := uint64(0)
+		hasVer := false
+		for ri < len(rows) {
+			rk := rows[ri].Key
+			keyEnd := len(rk) - 8
+			c := bytes.Compare(rk[len(verPrefix):keyEnd], key)
+			if c < 0 {
+				ri++
+				continue
+			}
+			if c > 0 {
+				break
+			}
+			maxTS = binary.BigEndian.Uint64(rk[keyEnd:])
+			hasVer = true
+			ri++
+		}
+		if hasVer && maxTS > beginTS {
+			vis[ki] = false
+		}
+	}
+	return vis, nil
 }
 
 // ---- 协调者侧：Manager / Client ----

@@ -88,7 +88,9 @@ func (e *Executor) rowRanges(meta *TableMeta) []storage.KeyRange {
 func (e *Executor) pkPrefixRanges(meta *TableMeta, prefix []byte) []storage.KeyRange {
 	rs := e.regionsOf(meta)
 	out := make([]storage.KeyRange, 0, len(rs))
-	hi := append(append([]byte{}, prefix...), 0xff)
+	// 上边界：prefix 后接 8 字节 0xff（覆盖 INT/DECIMAL 8B 定长后续主键列全部空间；
+	// 单字节 0xff 只覆盖后续列高字节 < 0xff 的行，INT 主键会漏扫大值导致范围近似全表）。
+	hi := append(append([]byte{}, prefix...), 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)
 	for _, rg := range rs {
 		out = append(out, storage.KeyRange{
 			Start: sharding.EncodeRegionKey(rg.RegionID, EncodeTableKey(meta.ID, prefix)),
@@ -96,6 +98,61 @@ func (e *Executor) pkPrefixRanges(meta *TableMeta, prefix []byte) []storage.KeyR
 		})
 	}
 	return out
+}
+
+// pkRangeRanges 主键等值前缀 + 末列字面量范围的物理区间：
+// [EncodeTableKey(tid, prefix+lo), EncodeTableKey(tid, prefix+hi)) 按 regions 展开。
+// 边界编码与 pkPrefixBytes 一致（INT/DECIMAL 定长 8B 大端保序）：
+//   下界含等号（>= v）=> start = prefix+enc(v)
+//   下界排他（> v）  => start = prefix+enc(v)+1（8B 大端递增，精确排除 v 行）
+//   上界含等号（<= v）=> end = prefix+enc(v)+1（开区间上界，恰好包含 v 行）
+//   上界排他（< v）  => end = prefix+enc(v)
+// 无边界时退化为 pkPrefixRanges 语义（prefix..prefix+0xff）。
+func (e *Executor) pkRangeRanges(meta *TableMeta, plan *pkPlan) []storage.KeyRange {
+	rs := e.regionsOf(meta)
+	out := make([]storage.KeyRange, 0, len(rs))
+	startInner := EncodeTableKey(meta.ID, plan.prefix)
+	endInner := EncodeTableKey(meta.ID, append(append([]byte{}, plan.prefix...), 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff))
+	if plan.rangeLo != nil {
+		if lb, err := pkPrefixBytes(meta, []Value{*plan.rangeLo}); err == nil {
+			if !plan.loIncl {
+				lb = incBytes8(lb)
+			}
+			startInner = EncodeTableKey(meta.ID, append(append([]byte{}, plan.prefix...), lb...))
+		}
+	}
+	if plan.rangeHi != nil {
+		if hb, err := pkPrefixBytes(meta, []Value{*plan.rangeHi}); err == nil {
+			if plan.hiIncl {
+				hb = incBytes8(hb)
+			}
+			endInner = EncodeTableKey(meta.ID, append(append([]byte{}, plan.prefix...), hb...))
+		}
+	}
+	for _, rg := range rs {
+		out = append(out, storage.KeyRange{
+			Start: sharding.EncodeRegionKey(rg.RegionID, startInner),
+			End:   sharding.EncodeRegionKey(rg.RegionID, endInner),
+		})
+	}
+	return out
+}
+
+// incBytes8 8 字节大端定长编码 +1（INT/DECIMAL 主键编码的下一有序值）。
+// 溢出（0xff*8 +1）时返回原值：排他下界退化为含等号（多读 v 行，由条件过滤），
+// 含等号上界退化为排他（少读 v 行，条件层补判兜底），语义均安全。
+func incBytes8(b []byte) []byte {
+	if len(b) != 8 {
+		return b
+	}
+	out := append([]byte{}, b...)
+	for i := 7; i >= 0; i-- {
+		out[i]++
+		if out[i] != 0 {
+			return out
+		}
+	}
+	return b
 }
 
 // indexTableRanges 某索引整表物理区间（按 regions 展开）。

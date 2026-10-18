@@ -22,8 +22,8 @@ import (
 // 依赖：TxnManager（本地 ACID + 快照隔离）；DDL/DML 默认以单语句隐式事务提交；
 // BEGIN 后进入会话级显式事务，后续语句复用同一事务直至 COMMIT/ROLLBACK。
 type Executor struct {
-	tm    txn.TxnManager
-	mu    sync.Mutex
+	tm txn.TxnManager
+	mu sync.Mutex
 	// T33 复制模式控制器（nil = 未装配，SET replication_* 返回明确错误）。
 	// 由 db.Open 注入（避免 sql 包依赖 db 包）；实现见 ReplicationModeSetter。
 	replCtl ReplicationModeSetter
@@ -64,12 +64,12 @@ type Executor struct {
 	// auditThreshold 慢审计阈值毫秒（<=0 不标记 slow）；auditRecords 内存环
 	// 缓冲（保留最近 auditMax 条，SHOW AUDITLOG 查询）；auditLog 落盘器
 	// （db/cmd 装配路径与开关后写入 data/audit.log）。
-	auditEnabled  bool
+	auditEnabled   bool
 	auditThreshold int64
-	auditRecords  []AuditRecord
-	auditMax      int
-	auditID       int64
-	auditLog      *AuditLog
+	auditRecords   []AuditRecord
+	auditMax       int
+	auditID        int64
+	auditLog       *AuditLog
 	// M8(BR)：备份/恢复环境（db.Open 装配注入）。
 	// st 为引擎级 Storage 引用：BACKUP 基于一致快照导出、RESTORE 物理写与 PITR 回放；
 	// binlogPath 为数据目录 binlog 文件路径（TO LSN 回放读取，M2 pkg/replication）。
@@ -119,7 +119,7 @@ type splitConfig struct {
 }
 
 func NewExecutor(tm txn.TxnManager) *Executor {
-e := &Executor{
+	e := &Executor{
 		tm:            tm,
 		globalSess:    &Session{prepared: map[string]string{}, userVars: map[string]Value{}},
 		router:        sharding.NewRouter(),
@@ -2241,10 +2241,11 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
 	ordered := false // 结果是否已按 ORDER BY 升序（索引序）
 	// 主键等值/前缀快速路径：WHERE 命中主键列等值前缀（单列或复合前缀）
 	// → 精确点查 Get / 有序前缀 Seek，避免全表 JSON 扫描（TPC-C 复合主键关键路径）。
-	if plan, perr := e.pkCondPlan(meta, s.Where); perr != nil {
+	if plan, perr := e.pkCondPlan(meta, s.Where, nil); perr != nil {
 		return nil, perr
 	} else if plan != nil {
 		if plan.full {
+			dbgLog("pkcond execSelect hit full=%v rangeCol=%q lo=%v hi=%v prefixlen=%d", plan.full, plan.rangeCol, plan.rangeLo, plan.rangeHi, len(plan.prefix))
 			rid, err := e.locateRow(meta, plan.prefix)
 			if err != nil {
 				return nil, err
@@ -2259,12 +2260,36 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
 			} else if err != storage.ErrNotFound {
 				return nil, err
 			}
-		} else {
-			// 前缀等值：有序 Seek 前缀区间（结果行少，仍需 WHERE 过滤确认边界）
-			pairs, err := e.scanMergedCluster(sess, tx, e.pkPrefixRanges(meta, plan.prefix))
+		} else if plan.rangeCol != "" && (plan.rangeLo != nil || plan.rangeHi != nil) {
+			// 主键前缀 + 末列字面量范围：走有序区间 Seek，避免按前缀扫整段
+			// （TPC-C STOCK_LEVEL bmsql_order_line 统计的关键路径）。
+			pairs, err := e.scanMergedCluster(sess, tx, e.pkRangeRanges(meta, plan))
 			if err != nil {
 				return nil, err
 			}
+			rows = make([][]Value, 0, len(pairs))
+			for _, kv := range pairs {
+				row, err := decodeRow(meta, kv.Value)
+				if err != nil {
+					return nil, err
+				}
+				ok, err := matchWhere(meta, row, s.Where)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					rows = append(rows, row)
+				}
+			}
+		} else {
+			// 前缀等值：有序 Seek 前缀区间（结果行少，仍需 WHERE 过滤确认边界）
+			pr := e.pkPrefixRanges(meta, plan.prefix)
+			dbgLog("pkprefix-prefix2244 table=%s nrange=%d start0=%x end0=%x", meta.Name, len(pr), pr[0].Start, pr[0].End)
+			pairs, err := e.scanMergedCluster(sess, tx, pr)
+			if err != nil {
+				return nil, err
+			}
+			dbgLog("pkprefix-prefix2244 table=%s got=%d", meta.Name, len(pairs))
 			rows = make([][]Value, 0, len(pairs))
 			for _, kv := range pairs {
 				row, err := decodeRow(meta, kv.Value)
@@ -2318,6 +2343,17 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
 			}
 		}
 	}
+	dbgLog("fullscan where-cols=%v", func() []string {
+		if s.Where == nil {
+			return nil
+		}
+		out := make([]string, 0, len(s.Where.Conds))
+		for i := range s.Where.Conds {
+			c := &s.Where.Conds[i]
+			out = append(out, c.Col+" "+c.Op+" "+c.Val.Kind)
+		}
+		return out
+	}())
 	return e.finishSelect(meta, s, rows, ordered)
 }
 
@@ -2724,6 +2760,7 @@ func (e *Executor) relFromScan(sess *Session, tx txn.Txn, meta *TableMeta, alias
 		}
 		rel.Rows = append(rel.Rows, visibleRow(meta, row))
 	}
+	dbgLog("pkprefix table=%s pairs=%d rows=%d", meta.Name, len(pairs), len(rel.Rows))
 	return rel, nil
 }
 
@@ -3017,17 +3054,57 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 			return e.execDistributedOrder(sess, tx, meta, s)
 		}
 	}
-	rel, err := e.relFromTable(sess, tx, tabs, s.From, orAlias(s.From, s.FromAlias), s.Subquery, s.SubAlias)
-	if err != nil {
-		return nil, err
-	}
-	// 主键等值/前缀优化：单物理表（无 JOIN/子查询）且 WHERE 命中主键等值前缀时，
-	// 直接以点查/有序前缀 Seek 读取候选行集，替代全表扫描后过滤
-	// （TPC-C 聚合查询 COUNT/SUM 关键路径）。
-	if s.Subquery == nil && len(s.Joins) == 0 {
+	alias := orAlias(s.From, s.FromAlias)
+	var rel *Rel
+	// IN 子查询物化缓存：pkCondPlan 前缀后主键列 IN 需要命中值做逐值点查；
+	// WHERE 过滤阶段复用同一缓存避免重复执行子查询。
+	var subCache map[*Cond]subqueryResult
+	// 主键等值/前缀优化：单物理表（无 JOIN）且 WHERE 命中主键等值前缀时，
+	// 直接以点查/有序前缀 Seek 读取候选行集构建 Rel，替代先全表物化再过滤
+	// （避免 10 万行 order_line/stock 全表白扫）。
+	// 允许 WHERE 含子查询：前缀只收窄候选行，子查询/其余条件仍由后续
+	// matchWhere 逐行评估（TPC-C STOCK_LEVEL 外层 s_w_id 前缀 + IN 子查询关键路径）。
+	if len(s.Joins) == 0 {
 		if meta := findTable(tabs, s.From); meta != nil {
-			if plan, perr := e.pkCondPlan(meta, s.Where); perr != nil {
+			// 先物化 IN 子查询（rel 为空时路由模式回退，后续 WHERE 过滤阶段再完整物化）
+			if s.Where != nil && len(s.Where.Conds) > 0 {
+				subCache, err = e.precomputeSubqueries(sess, tx, tabs, nil, s.Where)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if plan, perr := e.pkCondPlan(meta, s.Where, subCache); perr != nil {
 				return nil, perr
+			} else if len(plan.inVals) > 0 && plan.inCol != "" {
+				// 前缀 + 下一主键列 IN（字面量/子查询物化值）：逐值前缀点查，
+				// 消除全表扫描（TPC-C STOCK_LEVEL：s_w_id 前缀 + s_i_id IN(21值) → 21 次 seek）。
+				rel = &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(plan.inVals))}
+				for _, c := range visibleColumns(meta) {
+					rel.Cols = append(rel.Cols, alias+"."+c.Name)
+				}
+				for _, iv := range plan.inVals {
+					inPrefix, err := pkPrefixBytes(meta, append(append([]Value{}, plan.prefixVals...), iv))
+					if err != nil {
+						return nil, err
+					}
+					pairs, err := e.scanMergedCluster(sess, tx, e.pkPrefixRanges(meta, inPrefix))
+					if err != nil {
+						return nil, err
+					}
+					for _, kv := range pairs {
+						row, err := decodeRow(meta, kv.Value)
+						if err != nil {
+							return nil, err
+						}
+						ok, err := e.matchWhereRelCached(sess, tx, rel, row, s.Where, subCache)
+						if err != nil {
+							return nil, err
+						}
+						if ok {
+							rel.Rows = append(rel.Rows, visibleRow(meta, row))
+						}
+					}
+				}
 			} else if plan != nil {
 				var pairs []storage.KVPair
 				if plan.full {
@@ -3048,20 +3125,99 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 						return nil, err
 					}
 				}
-				pkRows := make([][]Value, 0, len(pairs))
+				rel = &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(pairs))}
+				for _, c := range visibleColumns(meta) {
+					rel.Cols = append(rel.Cols, alias+"."+c.Name)
+				}
 				for _, kv := range pairs {
 					row, err := decodeRow(meta, kv.Value)
 					if err != nil {
 						return nil, err
 					}
-					pkRows = append(pkRows, visibleRow(meta, row))
+					rel.Rows = append(rel.Rows, visibleRow(meta, row))
 				}
-				rel.Rows = pkRows
+			} else if plan.rangeCol != "" && (plan.rangeLo != nil || plan.rangeHi != nil) {
+				// 主键前缀 + 末列字面量范围：有序区间 Seek（与 2244 同语义）。
+				pairs, err := e.scanMergedCluster(sess, tx, e.pkRangeRanges(meta, plan))
+				if err != nil {
+					return nil, err
+				}
+				rel = &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(pairs))}
+				for _, c := range visibleColumns(meta) {
+					rel.Cols = append(rel.Cols, alias+"."+c.Name)
+				}
+				for _, kv := range pairs {
+					row, err := decodeRow(meta, kv.Value)
+					if err != nil {
+						return nil, err
+					}
+					ok, err := matchWhere(meta, row, s.Where)
+					if err != nil {
+						return nil, err
+					}
+					if ok {
+						rel.Rows = append(rel.Rows, visibleRow(meta, row))
+					}
+				}
+			} else {
+				// 主键前缀等值：有序 Seek 前缀区间（TPC-C STOCK_LEVEL 外层 stock
+				// 按 s_w_id 前缀裁剪 10 万→1 万行，避免 relFromTable 全表物化）。
+				pr := e.pkPrefixRanges(meta, plan.prefix)
+				dbgLog("pkprefix-prefix3063 table=%s nrange=%d start0=%x end0=%x", meta.Name, len(pr), pr[0].Start, pr[0].End)
+				pairs, err := e.scanMergedCluster(sess, tx, pr)
+				if err != nil {
+					return nil, err
+				}
+				dbgLog("pkprefix-prefix3063 table=%s got=%d", meta.Name, len(pairs))
+				rel = &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(pairs))}
+				for _, c := range visibleColumns(meta) {
+					rel.Cols = append(rel.Cols, alias+"."+c.Name)
+				}
+				for _, kv := range pairs {
+					row, err := decodeRow(meta, kv.Value)
+					if err != nil {
+						return nil, err
+					}
+					ok, err := matchWhere(meta, row, s.Where)
+					if err != nil {
+						return nil, err
+					}
+					if ok {
+						rel.Rows = append(rel.Rows, visibleRow(meta, row))
+					}
+				}
 			}
+		}
+	}
+	if rel == nil {
+		rel, err = e.relFromTable(sess, tx, tabs, s.From, alias, s.Subquery, s.SubAlias)
+		if err != nil {
+			return nil, err
 		}
 	}
 	for i := range s.Joins {
 		jc := &s.Joins[i]
+		// M12-4：物理表右端且 ON 满足主键点查/前缀范围路由时，跳过右表全量物化，
+		// 仅以列定义进入路由 JOIN（路由按区间/点查从存储扫描，避免 order_line
+		// 30 万行全表物化）；路由执行时类型不兼容回退在 joinRel 内补物化。
+		if jc.Subquery == nil && len(jc.On) > 0 {
+			if meta := findTable(tabs, jc.Table); meta != nil {
+				if _, ok := planJoinRoute(rel, jc, meta); ok {
+					rel, err = e.joinRel(sess, tx, tabs, rel, joinRightSchema(meta, orAlias(jc.Table, jc.Alias)), jc)
+					if err != nil {
+						return nil, err
+					}
+					continue
+				}
+				if _, ok := planJoinRange(rel, jc, meta); ok {
+					rel, err = e.joinRel(sess, tx, tabs, rel, joinRightSchema(meta, orAlias(jc.Table, jc.Alias)), jc)
+					if err != nil {
+						return nil, err
+					}
+					continue
+				}
+			}
+		}
 		right, err := e.relFromTable(sess, tx, tabs, jc.Table, orAlias(jc.Table, jc.Alias), jc.Subquery, jc.Alias)
 		if err != nil {
 			return nil, err
@@ -3075,9 +3231,12 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 	}
 	// WHERE 过滤（M12-3：子查询条件预计算一次，行级过滤复用缓存）
 	if s.Where != nil && len(s.Where.Conds) > 0 {
-		cache, err := e.precomputeSubqueries(sess, tx, tabs, rel, s.Where)
-		if err != nil {
-			return nil, err
+		cache := subCache
+		if cache == nil {
+			cache, err = e.precomputeSubqueries(sess, tx, tabs, rel, s.Where)
+			if err != nil {
+				return nil, err
+			}
 		}
 		filtered := make([][]Value, 0, len(rel.Rows))
 		for _, r := range rel.Rows {
@@ -3651,7 +3810,7 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 	// 主键等值/前缀快速路径：WHERE 命中主键列等值前缀（单列或复合前缀）
 	// → 精确点查 Get / 有序前缀 Seek，避免全表扫描（与 execSelect 对称）。
 	var pairs []storage.KVPair
-	if plan, perr := e.pkCondPlan(meta, s.Where); perr != nil {
+	if plan, perr := e.pkCondPlan(meta, s.Where, nil); perr != nil {
 		return nil, perr
 	} else if plan != nil {
 		if plan.full {
@@ -3805,7 +3964,7 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 	// 主键等值/前缀快速路径：WHERE 命中主键列等值前缀（单列或复合前缀）
 	// → 精确点查 Get / 有序前缀 Seek，避免全表扫描（与 execSelect/execUpdate 对称）。
 	var pairs []storage.KVPair
-	if plan, perr := e.pkCondPlan(meta, s.Where); perr != nil {
+	if plan, perr := e.pkCondPlan(meta, s.Where, nil); perr != nil {
 		return nil, perr
 	} else if plan != nil {
 		if plan.full {
@@ -4006,17 +4165,71 @@ func (e *Executor) coerceRow(meta *TableMeta, vals []Value) ([]Value, error) {
 // pkPlan 主键等值前缀计划：prefix 为主键字节前缀；full=true 表示覆盖全部主键列，
 // 此时 prefix 即完整行主键，可精确点查。
 type pkPlan struct {
-	prefix []byte
-	full   bool
+	prefix     []byte
+	prefixVals []Value // 等值前缀列值（用于 IN 逐值前缀扩展）
+	full       bool
+	rangeCol   string
+	rangeLo    *Value
+	rangeHi    *Value
+	loIncl     bool
+	hiIncl     bool
+	inCol      string  // 前缀后下一主键列的 IN 条件（字面量或子查询物化值）
+	inVals     []Value // IN 命中值列表
 }
 
 // pkCondPlan 分析 WHERE：若包含按主键列顺序排列的连续等值前缀条件，
 // 返回主键字节前缀与是否覆盖全部主键列（full=true 可精确点查）。
 // 仅限简单 Col=字面量（无限定名/右列引用/CASE/表达式/元组），返回 nil 表示
 // 无可用主键等值条件（回退全表/索引路径）。
-func (e *Executor) pkCondPlan(meta *TableMeta, w *Where) (*pkPlan, error) {
+// normalizePKVal 按列类型把字符串字面量归一化为数值（INT/DECIMAL 列 + STR 字面量），
+// 保证主键前缀/范围/IN 编码与行键编码一致；否则字符串 "1" 会按 TEXT 编码（2B 长度前缀）
+// 导致 seek 落空、命中 0 行（TPC-C 绑定参数以字符串下发时全表正确、点查全空）。
+func normalizePKVal(meta *TableMeta, col string, v Value) Value {
+	if v.Kind != "TEXT" {
+		return v
+	}
+	for _, c := range meta.Columns {
+		if c.Name != col {
+			continue
+		}
+		switch c.Type {
+		case "INT":
+			if i, err := strconv.ParseInt(strings.TrimSpace(v.S), 10, 64); err == nil {
+				return Value{Kind: "INT", I: i, S: v.S}
+			}
+		case "DECIMAL":
+			if i, err := strconv.ParseInt(strings.TrimSpace(v.S), 10, 64); err == nil {
+				return Value{Kind: "DECIMAL", I: i, S: v.S}
+			}
+		}
+		return v
+	}
+	return v
+}
+
+// pkColTypeIn 判断主键列类型是否属于给定 kinds（INT/DECIMAL 等值编码可保序）。
+func pkColTypeIn(meta *TableMeta, col string, kinds ...string) bool {
+	for _, c := range meta.Columns {
+		if c.Name != col {
+			continue
+		}
+		for _, k := range kinds {
+			if c.Type == k {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+func (e *Executor) pkCondPlan(meta *TableMeta, w *Where, subCache map[*Cond]subqueryResult) (*pkPlan, error) {
 	if w == nil || len(w.Conds) == 0 {
 		return nil, nil
+	}
+	for i := range w.Conds {
+		c := &w.Conds[i]
+		dbgLog("pkcond cond[%d] col=%q op=%q ref=%q rightref=%q val=%v", i, c.Col, c.Op, c.Ref, c.RightRef, c.Val)
 	}
 	var pkCols []string
 	if len(meta.PKCols) > 0 {
@@ -4030,12 +4243,12 @@ func (e *Executor) pkCondPlan(meta *TableMeta, w *Where) (*pkPlan, error) {
 	vals := make(map[string]Value, len(pkCols))
 	for i := range w.Conds {
 		c := &w.Conds[i]
-		if c.Op != "=" || c.Ref != "" || c.RightRef != "" || c.LeftCase != nil || c.LeftExpr != nil || c.RightExpr != nil || len(c.TupleLeft) > 0 {
+		if c.Op != "=" || c.Sub != nil || c.Ref != "" || c.RightRef != "" || c.LeftCase != nil || c.LeftExpr != nil || c.RightExpr != nil || len(c.TupleLeft) > 0 {
 			continue
 		}
 		for _, pc := range pkCols {
 			if c.Col == pc {
-				vals[pc] = c.Val
+				vals[pc] = normalizePKVal(meta, pc, c.Val)
 				break
 			}
 		}
@@ -4056,7 +4269,57 @@ func (e *Executor) pkCondPlan(meta *TableMeta, w *Where) (*pkPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &pkPlan{prefix: pb, full: len(prefixVals) == len(pkCols)}, nil
+	plan := &pkPlan{prefix: pb, prefixVals: prefixVals, full: len(prefixVals) == len(pkCols)}
+	// 前缀后下一主键列的 IN 条件（字面量或子查询物化值）：逐值前缀点查，
+	// 消除全表扫描（TPC-C STOCK_LEVEL：s_w_id 前缀 + s_i_id IN 子查询 → 21 次 seek）。
+	if len(prefixVals) < len(pkCols) {
+		rc := pkCols[len(prefixVals)]
+		for i := range w.Conds {
+			c := &w.Conds[i]
+			if c.Col != rc || c.Ref != "" || c.RightRef != "" || c.LeftCase != nil || c.LeftExpr != nil || c.RightExpr != nil || len(c.TupleLeft) > 0 || c.Op != "IN" {
+				continue
+			}
+			if c.Sub == nil && len(c.InList) > 0 {
+				nv := make([]Value, 0, len(c.InList))
+				for _, iv := range c.InList {
+					nv = append(nv, normalizePKVal(meta, rc, iv))
+				}
+				plan.inCol, plan.inVals = rc, nv
+			} else if c.Sub != nil && subCache != nil {
+				if r, ok := subCache[c]; ok && r.inSet != nil && len(r.inSet.vals) > 0 {
+					plan.inCol, plan.inVals = rc, r.inSet.vals
+				}
+			}
+		}
+	}
+	// 前缀后下一主键列的字面量范围条件：>= / > / <= / <（INT/DECIMAL 才能保序编码）
+	if len(prefixVals) < len(pkCols) {
+		rc := pkCols[len(prefixVals)]
+		if pkColTypeIn(meta, rc, "INT", "DECIMAL") {
+			for i := range w.Conds {
+				c := &w.Conds[i]
+				if c.Col != rc || c.Sub != nil || c.Ref != "" || c.RightRef != "" || c.LeftCase != nil || c.LeftExpr != nil || c.RightExpr != nil || len(c.TupleLeft) > 0 {
+					continue
+				}
+				switch c.Op {
+				case ">=":
+					v := normalizePKVal(meta, rc, c.Val)
+					plan.rangeCol, plan.rangeLo, plan.loIncl = rc, &v, true
+				case ">":
+					v := normalizePKVal(meta, rc, c.Val)
+					plan.rangeCol, plan.rangeLo, plan.loIncl = rc, &v, false
+				case "<=":
+					v := normalizePKVal(meta, rc, c.Val)
+					plan.rangeCol, plan.rangeHi, plan.hiIncl = rc, &v, true
+				case "<":
+					v := normalizePKVal(meta, rc, c.Val)
+					plan.rangeCol, plan.rangeHi, plan.hiIncl = rc, &v, false
+				}
+			}
+		}
+	}
+	dbgLog("pkcond plan full=%v rangeCol=%q lo=%v hi=%v prefixlen=%d", plan.full, plan.rangeCol, plan.rangeLo, plan.rangeHi, len(plan.prefix))
+	return plan, nil
 }
 
 func (e *Executor) pkOf(meta *TableMeta, vals []Value) ([]byte, error) {

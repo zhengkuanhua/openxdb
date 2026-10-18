@@ -43,11 +43,37 @@ type subqueryResult struct {
 
 // inSubquerySet IN 子查询结果第一列值集合。contains 用 compareVal 精比较，与
 // 单机 inSubquery 逐值语义零偏差（允许跨 Kind 宽松相等，如 INT 5 == TEXT "5"）。
+// 值较多时构建同 Kind 同值哈希索引加速精确命中（TPC-C STOCK_LEVEL：IN 列表
+// 数百项 × 仓库数万行 stock，线性扫描成为聚合瓶颈）；未精确命中仍走线性
+// compareVal 宽松比较兜底，语义不变。
 type inSubquerySet struct {
 	vals []Value
+	fast map[valueKey]struct{}
+}
+
+type valueKey struct {
+	kind string
+	i    int64
+	s    string
+}
+
+func newInSubquerySet(vals []Value) *inSubquerySet {
+	s := &inSubquerySet{vals: vals}
+	if len(vals) > 8 {
+		s.fast = make(map[valueKey]struct{}, len(vals))
+		for _, v := range vals {
+			s.fast[valueKey{kind: v.Kind, i: v.I, s: v.S}] = struct{}{}
+		}
+	}
+	return s
 }
 
 func (s *inSubquerySet) contains(v Value) bool {
+	if s.fast != nil {
+		if _, ok := s.fast[valueKey{kind: v.Kind, i: v.I, s: v.S}]; ok {
+			return true
+		}
+	}
 	for _, b := range s.vals {
 		if compareVal(v, b) == 0 {
 			return true
@@ -129,7 +155,7 @@ func (e *Executor) buildInSubquerySet(sess *Session, tx txn.Txn, tabs []*TableMe
 		}
 		vals = append(vals, r[0])
 	}
-	return &inSubquerySet{vals: vals}, nil
+	return newInSubquerySet(vals), nil
 }
 
 // inSubqueryRoutable 静态判定 IN 子查询是否可走路由模式：
@@ -160,6 +186,10 @@ func (e *Executor) inSubqueryRoutable(tabs []*TableMeta, sub *SelectStmt) (*Tabl
 // 归属 region，命中且满足子查询 WHERE 的值加入命中集合。键值类型不兼容时返回
 // errSubqueryUnroutable（调用方回退默认模式）。
 func (e *Executor) evalInSubqueryRouted(sess *Session, tx txn.Txn, metaS *TableMeta, rel *Rel, c *Cond) (*inSubquerySet, error) {
+	// rel 为空（提前物化场景）时回退默认模式，由调用方重新物化。
+	if rel == nil {
+		return nil, errSubqueryUnroutable
+	}
 	// 1. 收集主查询左列所有不同值（宽松 key 去重，避免重复点查）。
 	seen := map[string]bool{}
 	var vals []Value
@@ -262,8 +292,8 @@ func (e *Executor) matchWhereRelCached(sess *Session, tx txn.Txn, rel *Rel, row 
 	if w == nil || len(w.Conds) == 0 {
 		return true, nil
 	}
-	for _, c := range w.Conds {
-		ok, err := e.matchCondRelCached(sess, tx, rel, row, &c, cache)
+	for i := range w.Conds {
+		ok, err := e.matchCondRelCached(sess, tx, rel, row, &w.Conds[i], cache)
 		if err != nil {
 			return false, err
 		}

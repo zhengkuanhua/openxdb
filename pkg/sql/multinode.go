@@ -186,13 +186,17 @@ func (e *Executor) scanMergedVisible(tx txn.Txn, ranges []storage.KeyRange, begi
 	if beginTS == 0 {
 		return pairs, nil
 	}
+	keys := make([][]byte, len(pairs))
+	for i, kv := range pairs {
+		keys[i] = kv.Key
+	}
+	vis, verr := cluster.BatchVersionVisible(tx.Scan, keys, beginTS)
+	if verr != nil {
+		return nil, verr
+	}
 	out := make([]storage.KVPair, 0, len(pairs))
-	for _, kv := range pairs {
-		visible, verr := cluster.VersionVisible(tx.Scan, kv.Key, beginTS)
-		if verr != nil {
-			return nil, verr
-		}
-		if visible {
+	for i, kv := range pairs {
+		if vis[i] {
 			out = append(out, kv)
 		}
 	}
