@@ -171,6 +171,7 @@ func (e *Executor) getKVVisible(tx txn.Txn, key []byte, beginTS uint64) ([]byte,
 	if verr != nil {
 		return nil, verr
 	}
+	dbgLog("VIS key=%q beginTS=%d visible=%v vlen=%d", string(key), beginTS, visible, len(v))
 	if !visible {
 		return nil, storage.ErrNotFound
 	}

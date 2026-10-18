@@ -17,6 +17,8 @@ package sql
 
 import (
 	"fmt"
+	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +26,64 @@ import (
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
 	"github.com/zhengkuanhua/openxdb/pkg/txn"
 )
+
+// M17 协调者侧行锁：串行化同 key 的跨节点读改写（UPDATE col = col + x 类）。
+// 背景：2PC 写路径在协调者本地求值（读旧行 -> 计算新值 -> 以最终值 Put 到
+// 参与者），两个并发协调者事务若同时读到同一旧值，会各自算出相同新值、
+// 后者覆盖前者，造成丢更新。单机模式引擎事务自带行锁；分布式读改写由
+// 协调者进程内行锁串行化——后到事务等待前一事务 2PC 提交后再读，读到
+// 的是包含先前写的新值。
+// 限制：锁仅协调者进程内生效（当前验收为单协调者入口负载）；多协调者
+// 并发写同 key 需后续全局行锁服务。
+type rowLock struct {
+	ch  chan struct{}
+	ref int
+}
+
+var (
+	rowLockMu sync.Mutex
+	rowLocks  = make(map[string]*rowLock)
+)
+
+// lockRowKeys 按物理 key（或表级哨兵 key）获取互斥并返回解锁函数。
+// 多 key 按字典序获取避免死锁；单机模式（mgr == nil）为 no-op。
+func (e *Executor) lockRowKeys(keys ...string) func() {
+	dbgLog("LOCK enter mgr=%v n=%d keys=%q", e.mgr != nil, len(keys), keys)
+	if e.mgr == nil {
+		return func() {}
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		rowLockMu.Lock()
+		lk, ok := rowLocks[k]
+		if !ok {
+			lk = &rowLock{ch: make(chan struct{}, 1)}
+			rowLocks[k] = lk
+		}
+		lk.ref++
+		rowLockMu.Unlock()
+		dbgLog("LOCK want key=%q ref=%d", k, lk.ref)
+		lk.ch <- struct{}{} // 阻塞直至可获取（容量 1 即互斥量）
+		dbgLog("LOCK got key=%q", k)
+	}
+	return func() {
+		for _, k := range keys {
+			rowLockMu.Lock()
+			lk, ok := rowLocks[k]
+			if !ok {
+				rowLockMu.Unlock()
+				continue
+			}
+			lk.ref--
+			if lk.ref == 0 {
+				delete(rowLocks, k)
+			}
+			rowLockMu.Unlock()
+			<-lk.ch
+		}
+	}
+}
+
 
 // kvOp 物理键写操作（SQL 写路径的统一中间表示）。
 type kvOp struct {

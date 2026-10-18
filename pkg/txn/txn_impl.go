@@ -227,6 +227,27 @@ func (t *txnImpl) Scan(r storage.KeyRange, limit int) ([]storage.KVPair, error) 
 	return out, nil
 }
 
+// RefreshSnapshot 锁内刷新一致性快照（读改写读旧值前调用）：
+// 丢弃 BEGIN 时刻旧快照，重新固定为当前已提交视图，保证后拿锁事务
+// 能看到前序事务提交的数据（修复并发 UPDATE 丢更新：取号虽已延迟到
+// 锁内，但引擎快照若仍固定在 BEGIN（早于行锁）会读到旧值覆盖）。
+// 仅 autocommit 单语句路径使用；显式事务保持 BEGIN 快照语义，不得调用。
+func (t *txnImpl) RefreshSnapshot() error {
+	if t.state != TxnActive {
+		return ErrTxnClosed
+	}
+	snap, err := t.mgr.st.Snapshot()
+	if err != nil {
+		return err
+	}
+	old := t.snap
+	t.snap = snap
+	if old != nil {
+		old.Release()
+	}
+	return nil
+}
+
 func (t *txnImpl) dirtyContains(ks string) bool {
 	for i := len(t.ops) - 1; i >= 0; i-- {
 		if string(t.ops[i].key) == ks {

@@ -559,19 +559,10 @@ func (e *Executor) beginTx(sess *Session) error {
 	sess.curTx = tx
 	sess.inTx = true
 	sess.curTxID = e.newTxID()
-	if e.ts != nil {
-		// 事务起点刷新 TSO 缓存：丢弃残余预取批次，取权威节点当前序列
-		// 的新鲜号作为快照，避免批量缓存让 begin_ts 滞后于已提交事务。
-		e.ts.Reset()
-		ts, terr := e.ts.Get()
-		if terr != nil {
-			tx.Rollback()
-			return &SQLError{Msg: fmt.Sprintf("BEGIN_FAILED: tso unavailable: %v", terr)}
-		}
-		sess.curBeginTS = ts
-	} else {
-		sess.curBeginTS = 0
-	}
+	// M18：事务快照号延迟到首条读语句（锁内/执行路径）时取。
+	// BEGIN 阶段不再取号：隐式/显式事务并发时，取号顺序与行锁获取顺序
+	// 可能错位，导致后拿锁事务拿到更小 beginTS、读不到前序提交而覆盖写（丢更新）。
+	sess.curBeginTS = 0
 	return nil
 }
 
@@ -686,6 +677,16 @@ func (e *Executor) snapshotTS(sess *Session) uint64 {
 		return 0
 	}
 	if sess.inTx {
+		// M18：事务首条读语句时取快照号；Reset 丢弃残余预取批次，
+		// 保证取到权威序列当前新鲜号（与行锁顺序一致）。
+		if sess.curBeginTS == 0 {
+			e.ts.Reset()
+			ts, err := e.ts.Get()
+			if err != nil {
+				return 0
+			}
+			sess.curBeginTS = ts
+		}
 		return sess.curBeginTS
 	}
 	if sess.stmtBeginTS == 0 {
@@ -3075,7 +3076,7 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 			}
 			if plan, perr := e.pkCondPlan(meta, s.Where, subCache); perr != nil {
 				return nil, perr
-			} else if len(plan.inVals) > 0 && plan.inCol != "" {
+			} else if plan != nil && len(plan.inVals) > 0 && plan.inCol != "" {
 				// 前缀 + 下一主键列 IN（字面量/子查询物化值）：逐值前缀点查，
 				// 消除全表扫描（TPC-C STOCK_LEVEL：s_w_id 前缀 + s_i_id IN(21值) → 21 次 seek）。
 				rel = &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(plan.inVals))}
@@ -3136,7 +3137,7 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 					}
 					rel.Rows = append(rel.Rows, visibleRow(meta, row))
 				}
-			} else if plan.rangeCol != "" && (plan.rangeLo != nil || plan.rangeHi != nil) {
+			} else if plan != nil && plan.rangeCol != "" && (plan.rangeLo != nil || plan.rangeHi != nil) {
 				// 主键前缀 + 末列字面量范围：有序区间 Seek（与 2244 同语义）。
 				pairs, err := e.scanMergedCluster(sess, tx, e.pkRangeRanges(meta, plan))
 				if err != nil {
@@ -3159,7 +3160,7 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 						rel.Rows = append(rel.Rows, visibleRow(meta, row))
 					}
 				}
-			} else {
+			} else if plan != nil {
 				// 主键前缀等值：有序 Seek 前缀区间（TPC-C STOCK_LEVEL 外层 stock
 				// 按 s_w_id 前缀裁剪 10 万→1 万行，避免 relFromTable 全表物化）。
 				pr := e.pkPrefixRanges(meta, plan.prefix)
@@ -3819,6 +3820,18 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 				return nil, err
 			}
 			key := e.rowKeyAt(meta, rid, plan.prefix)
+			// M17：跨节点读改写串行化——读旧值前持锁，函数返回（2PC 提交后）释放。
+			dbgLog("UPD prelock sess.inTx=%v stmtBeginTS=%d", sess.inTx, sess.stmtBeginTS)
+			dbgLog("UPD full path key=%q plan.full=%v", string(key), plan.full)
+			defer e.lockRowKeys(string(key))()
+			// M18+ 修复：锁内刷新引擎快照，后拿锁事务读到前序已提交值（autocommit 单语句）。
+			if auto {
+				if r, ok := tx.(interface{ RefreshSnapshot() error }); ok {
+					if err := r.RefreshSnapshot(); err != nil {
+						return nil, err
+					}
+				}
+			}
 			raw, err := e.getKVCluster(sess, tx, key)
 			if err == nil {
 				pairs = []storage.KVPair{{Key: key, Value: raw}}
@@ -3826,6 +3839,15 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 				return nil, err
 			}
 		} else {
+			// 前缀多行无法预知行 key，按表级哨兵锁串行化（低频路径）。
+			defer e.lockRowKeys("__tbl__:" + meta.Name)()
+			if auto {
+				if r, ok := tx.(interface{ RefreshSnapshot() error }); ok {
+					if err := r.RefreshSnapshot(); err != nil {
+						return nil, err
+					}
+				}
+			}
 			pairs, err = e.scanMergedCluster(sess, tx, e.pkPrefixRanges(meta, plan.prefix))
 			if err != nil {
 				return nil, err
@@ -3833,7 +3855,16 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 		}
 	}
 	if pairs == nil {
-		// 全表扫描 + 过滤（跨 region 展开后按内层键序合并）
+		// 全表扫描 + 过滤（跨 region 展开后按内层键序合并）；同样持表级哨兵锁。
+		dbgLog("UPD fullscan path tbl=%s", meta.Name)
+		defer e.lockRowKeys("__tbl__:" + meta.Name)()
+		if auto {
+			if r, ok := tx.(interface{ RefreshSnapshot() error }); ok {
+				if err := r.RefreshSnapshot(); err != nil {
+					return nil, err
+				}
+			}
+		}
 		pairs, err = e.scanMergedCluster(sess, tx, e.rowRanges(meta))
 		if err != nil {
 			return nil, err
