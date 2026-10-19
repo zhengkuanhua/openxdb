@@ -58,9 +58,37 @@ func (m *txnManager) Recover() error {
 	defer m.mu.Unlock()
 	var applyErr error
 	var commits uint64
+	// 路由元数据键：m:regions 以落盘快照为准，WAL 重放不得覆盖。
+	// 根因：SplitTable/Failover 的 m:regions 写入会进入 WAL，崩溃重启后 Recover
+	// 重放会把历史/被污染的路由快照覆盖回 storage，造成"启动即漂移"。
+	metaRegionsKey := []byte("m:regions")
 	err := m.wal.Replay(func(e *wal.WalEntry) {
 		if e.State == wal.StateCommit && applyErr == nil {
 			commits++
+			if e.Batch != nil && (len(e.Batch.Puts) > 0 || len(e.Batch.Deletes) > 0) {
+				hasMeta := false
+				fb := &storage.WriteBatch{}
+				for _, p := range e.Batch.Puts {
+					if bytes.Equal(p.Key, metaRegionsKey) {
+						hasMeta = true
+						continue
+					}
+					fb.Puts = append(fb.Puts, p)
+				}
+				for _, d := range e.Batch.Deletes {
+					if bytes.Equal(d, metaRegionsKey) {
+						hasMeta = true
+						continue
+					}
+					fb.Deletes = append(fb.Deletes, d)
+				}
+				if hasMeta {
+					if len(fb.Puts) > 0 || len(fb.Deletes) > 0 {
+						applyErr = m.st.Write(fb)
+					}
+					return
+				}
+			}
 			applyErr = m.st.Write(e.Batch)
 		}
 	})

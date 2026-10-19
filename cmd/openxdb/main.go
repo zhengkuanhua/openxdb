@@ -367,6 +367,18 @@ func cmdStart(args []string) error {
 	if ca, ok := flagValue(args, "--cluster-addr"); ok {
 		clusterAddr = ca
 	}
+	// M8：中心化 TSO 发号节点（可选）。--tso-node <nodeID> 或 [server] tso_node
+	// 非空时启动后把本节点时间戳源切换为指向该节点的远程 TSO 客户端（需集群
+	// 模式且该节点已在注册表；取号时懒解析地址，未注册前不报错）。
+	tsoNode := ""
+	if cfgFile != nil {
+		if v, ok := cfgFile.Get("server", "tso_node"); ok {
+			tsoNode = v
+		}
+	}
+	if tn, ok := flagValue(args, "--tso-node"); ok {
+		tsoNode = tn
+	}
 	// 结构化日志级别与告警配置（[server] 段默认值）：db.Open 前的失败路径亦使用；
 	// [sql] 段与 CLI 覆盖在 db.Open 后装配（见下）。
 	if cfgFile != nil {
@@ -494,6 +506,14 @@ func cmdStart(args []string) error {
 		}
 		fmt.Printf("OpenXDB %s cluster node %s listening on %s (node id: %s)\n",
 			version, d.Cluster.SelfID, realAddr, d.Cluster.SelfID)
+	}
+	// M8：中心化 TSO（可选）。--tso-node 指向全局发号节点，其余节点挂载远程
+	// TSO 客户端（懒解析地址，未注册前首次取号返回错误，ADD NODE 后自动可用）。
+	if tsoNode != "" {
+		if err := d.SetTSONode(tsoNode, 0); err != nil {
+			return err
+		}
+		fmt.Printf("OpenXDB %s TSO source -> node %s (batch %d)\n", version, tsoNode, 64)
 	}
 	addr := fmt.Sprintf(":%d", port)
 	s := server.New(d.Txn)

@@ -91,6 +91,11 @@ type Manager struct {
 
 	// M6 节点离线回调（心跳 UP->DOWN 首次转换时异步触发一次）。
 	onDown func(nodeID string)
+
+	// everUp 记录本进程内曾成功收到过 PONG 的远端节点（启动竞态防护：
+	// 从未心跳成功的节点不参与离线判定与 failover，避免集群滚动启动时
+	// 误判未就绪节点 DOWN 导致 region 路由被自动重指派污染）。
+	everUp map[string]bool
 }
 
 // NewManager 创建集群管理器（selfID 必须非空）。
@@ -102,6 +107,7 @@ func NewManager(selfID string) *Manager {
 		SelfID:  selfID,
 		nodes:   map[string]*NodeInfo{},
 		clients: map[string]*Client{},
+		everUp:  map[string]bool{},
 	}
 }
 
@@ -245,7 +251,15 @@ func (m *Manager) MarkHeartbeat(id string, ts int64) {
 		if ts > n.LastSeen {
 			n.LastSeen = ts
 		}
+		m.everUp[id] = true
 	}
+}
+
+// EverUp 返回本进程内是否曾成功收到过该节点 PONG（启动竞态防护判定）。
+func (m *Manager) EverUp(id string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.everUp[id]
 }
 
 // MarkDown 标记节点离线。

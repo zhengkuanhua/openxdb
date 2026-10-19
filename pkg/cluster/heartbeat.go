@@ -55,6 +55,11 @@ func (h *heartbeatLoop) tick() {
 		if n.State == StateDown {
 			continue
 		}
+		// 启动竞态防护：本进程内从未成功收到过该节点 PONG 时，
+		// 不将其判为 DOWN（避免集群滚动启动时误触发 region 自动重指派）。
+		if !h.mgr.EverUp(n.ID) {
+			continue
+		}
 		if now-n.LastSeen > h.timeout.Milliseconds() {
 			h.mgr.MarkDown(n.ID)
 			// M6：UP->DOWN 首次转换时通知 SQL 层触发 region 自动重指派/读 failover

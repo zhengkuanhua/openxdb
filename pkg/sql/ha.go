@@ -97,8 +97,11 @@ func (e *Executor) failoverRegion(rg sharding.RegionInfo, downID string) error {
 			srcRows = append(srcRows, cluster.QueryRow{Key: kv.Key, Value: kv.Value})
 		}
 	}
-	if best < 0 {
-		return &SQLError{Msg: fmt.Sprintf("no live copy for region %d (node %s down)", rg.RegionID, downID)}
+	if best <= 0 {
+		// 存活节点上均无该 region 的真实数据（0 行也算无副本），
+		// 禁止把 region 重指派给任意节点并落盘——否则会污染权威路由
+		// （无数据 region 被标记归属某节点，后续 failover/迁移基于错误视图决策）。
+		return &SQLError{Msg: fmt.Sprintf("no live data copy for region %d (node %s down)", rg.RegionID, downID)}
 	}
 	// 数据已在目标节点本地：仅更新路由归属并落盘。
 	if target == e.selfID {
@@ -119,8 +122,16 @@ func (e *Executor) failoverRegion(rg sharding.RegionInfo, downID string) error {
 			regions[i].Node = target
 			regions[i].Local = false
 		} else if regions[i].Node == "" {
-			regions[i].Node = e.selfID
-			regions[i].Local = false
+			// 仅本地真正持有数据的 region 补记为本节点；未持有者保持未指派，
+			// 避免 Node=="" 但数据在别处的 region 被无条件补记污染为本地归属。
+			holds, err := e.regionHoldsLocal(regions[i])
+			if err != nil {
+				return err
+			}
+			if holds {
+				regions[i].Node = e.selfID
+				regions[i].Local = false
+			}
 		}
 	}
 	// 推送数据 + 路由视图到目标节点（目标节点同一 WriteBatch 写数据 + 学路由 + 落盘）

@@ -383,8 +383,16 @@ func (e *Executor) execAssignRegion(sess *Session, s *AssignRegionStmt) (*Result
 			regions[i].Node = s.NodeID
 			regions[i].Local = false
 		} else if regions[i].Node == "" {
-			regions[i].Node = e.selfID
-			regions[i].Local = false
+			// 仅本地真正持有数据的 region 补记为本节点；未持有者保持未指派，
+			// 避免 Node=="" 但数据在别处的 region 被无条件补记污染为本地归属。
+			holds, err := e.regionHoldsLocal(regions[i])
+			if err != nil {
+				return nil, err
+			}
+			if holds {
+				regions[i].Node = e.selfID
+				regions[i].Local = false
+			}
 		}
 	}
 	// 隐式 region 不在 AllRegions 中：显式追加到视图，使目标节点学到完整路由
@@ -470,6 +478,29 @@ func (e *Executor) persistNodes() error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// regionHoldsLocal 判断本节点物理键空间 [EncodeRegionKey(rid,StartKey), EncodeRegionKey(rid,EndKey))
+// 是否存在至少一个键（主表或索引行）。用于 Node=="" 补记 selfID 前的持有校验：
+// 仅本地真正持有数据的 region 才有资格补记为本节点，防止未持有 region（同源初始化
+// Node 全空 + 未收到 push 的远端 region）被无条件补记污染为本地归属。
+func (e *Executor) regionHoldsLocal(rg sharding.RegionInfo) (bool, error) {
+	start := sharding.EncodeRegionKey(rg.RegionID, rg.StartKey)
+	end := sharding.EncodeRegionKey(rg.RegionID, rg.EndKey)
+	if rg.EndKey == nil {
+		// 开放上界：半开区间覆盖全部 r{rid} 物理键（与 execAssignRegion 一致）
+		end = sharding.EncodeRegionKey(rg.RegionID+1, nil)
+	}
+	tx, err := e.tm.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	ps, err := tx.Scan(storage.KeyRange{Start: start, End: end}, 1)
+	if err != nil {
+		return false, err
+	}
+	return len(ps) > 0, nil
 }
 
 // ---- 输出辅助 ----

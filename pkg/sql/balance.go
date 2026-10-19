@@ -492,8 +492,16 @@ func (e *Executor) migrateRegion(rg sharding.RegionInfo, target string) error {
 			regions[i].Node = target
 			regions[i].Local = false
 		} else if regions[i].Node == "" {
-			regions[i].Node = e.selfID
-			regions[i].Local = false
+			// 仅本地真正持有数据的 region 补记为本节点；未持有者保持未指派，
+			// 避免 Node=="" 但数据在别处的 region 被无条件补记污染为本地归属。
+			holds, err := e.regionHoldsLocal(regions[i])
+			if err != nil {
+				return err
+			}
+			if holds {
+				regions[i].Node = e.selfID
+				regions[i].Local = false
+			}
 		}
 	}
 	rgView := rg
