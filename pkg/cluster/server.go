@@ -292,16 +292,31 @@ func (s *Server) applyPush(req *RegionPushReq) (RegionPushResp, error) {
 		batch.Puts = append(batch.Puts, storage.KVPair{Key: row.Key, Value: row.Value})
 	}
 	// 学习源节点路由视图（第一簇约定：源视图为权威）：
-	// 其余 region 按其归属记录（Node 非空直接学习；Node=="" 表示源节点本地持有，
-	// 目标节点需补记为 req.SrcID，保证转发可路由）。
+	// 其余 region 按其归属记录：Node 非空直接学习；Node=="" 表示源节点未持有
+	// （源侧已用 regionHoldsLocal 仅把本地持有者补记 selfID），目标节点不得无条件
+	// 补记 req.SrcID——仅本机真正持有数据的 region 保持本地视图，未持有者保持
+	// 未指派，避免 reintroduce region 漂移。
 	// 本次接收的 region 单独处理为本地（见下）。
 	for _, route := range req.Routes {
 		if route.RegionID == req.Region.RegionID {
 			continue // 本次接收 region 稍后单独落本地
 		}
 		if route.Node == "" {
-			route.Node = req.SrcID
-			route.Local = false
+			holds, err := s.regionHoldsLocal(route)
+			if err != nil {
+				return RegionPushResp{}, err
+			}
+			if holds {
+				// 本机物理持有该 region：保持本地视图（Node=="" 即本节点）
+				route.Node = ""
+				route.Local = true
+			} else if cur, ok := s.router.FindRegion(route.RegionID); ok && cur.Node != "" {
+				continue // 本机不持有且已有明确远端归属：保留原归属，不覆盖
+			} else {
+				// 本机不持有且无明确归属：保持未指派，不补记 SrcID
+				route.Node = ""
+				route.Local = false
+			}
 		}
 		if err := s.router.UpsertRegion(route); err != nil {
 			return RegionPushResp{}, err
@@ -326,6 +341,24 @@ func (s *Server) applyPush(req *RegionPushReq) (RegionPushResp, error) {
 		return RegionPushResp{}, err
 	}
 	return RegionPushResp{Rows: len(req.Rows)}, nil
+}
+
+// regionHoldsLocal 判断本机物理键空间 [EncodeRegionKey(rid,StartKey), EncodeRegionKey(rid,EndKey))
+// 是否存在至少一个键（主表或索引行）。用于接收远端路由视图时对 Node=="" 条目做持有校验：
+// 与 pkg/sql 的 regionHoldsLocal 同语义（cluster 包不反向依赖 sql 包，故本地等价实现），
+// 仅本机真正持有数据的 region 才有资格保持本地视图，未持有者保持未指派。
+func (s *Server) regionHoldsLocal(rg sharding.RegionInfo) (bool, error) {
+	start := sharding.EncodeRegionKey(rg.RegionID, rg.StartKey)
+	end := sharding.EncodeRegionKey(rg.RegionID, rg.EndKey)
+	if rg.EndKey == nil {
+		// 开放上界：半开区间覆盖全部 r{rid} 物理键（与 execAssignRegion 一致）
+		end = sharding.EncodeRegionKey(rg.RegionID+1, nil)
+	}
+	kvs, err := s.st.Scan(storage.KeyRange{Start: start, End: end}, 1)
+	if err != nil {
+		return false, err
+	}
+	return len(kvs) > 0, nil
 }
 
 // scanRange 区间扫描 [start, end)；end 为空表示无上界。
