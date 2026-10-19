@@ -444,6 +444,10 @@ func (d *DB) Close() error {
 	if d.SQL != nil {
 		d.SQL.StopAlertRules()
 	}
+	// P0：停止 2PC 后台补提交扫描，避免 Close 过程中并发读写存储/网络。
+	if d.SQL != nil {
+		d.SQL.StopCoordReplay()
+	}
 	if d.Follower != nil {
 		if err := d.Follower.Stop(); err != nil {
 			errs = append(errs, fmt.Errorf("db: close follower: %w", err))

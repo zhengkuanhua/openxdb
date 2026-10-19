@@ -109,7 +109,9 @@ type Executor struct {
 	// alert_rules.go）。NewExecutor 初始化；config.go 的 alert_rules* 键
 	// 热更新、cmd/main 启动装配与 SHOW ALERT RULES / SHOW ALERT STATUS
 	// 均读写此引擎。评估数据源为 metrics.Registry.Snapshot（e.m，同 Prometheus）。
-	alertRules *AlertRulesEngine
+	alertRules      *AlertRulesEngine
+	coordReplayStop chan struct{}
+	coordReplayDone chan struct{}
 }
 
 // splitConfig M7 自动分裂配置。

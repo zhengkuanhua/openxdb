@@ -24,6 +24,7 @@ import (
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
+	"github.com/zhengkuanhua/openxdb/pkg/storage"
 	"github.com/zhengkuanhua/openxdb/pkg/txn"
 )
 
@@ -83,7 +84,6 @@ func (e *Executor) lockRowKeys(keys ...string) func() {
 		}
 	}
 }
-
 
 // kvOp 物理键写操作（SQL 写路径的统一中间表示）。
 type kvOp struct {
@@ -258,14 +258,123 @@ func (e *Executor) exec2pcWrite(sess *Session, tx txn.Txn, ops []kvOp) error {
 	// 本地已提交：记录 committing（崩溃后恢复决策 commit）。
 	rec.State = cluster.CoordCommitting
 	_ = e.writeCoord(rec)
-	// 远端提交（幂等；网络失败返回不确定状态，重试 CommitTxn 安全）
+	// 远端提交（幂等；网络失败返回不确定状态，重试 CommitTxn 安全）。
+	// P0 治本修复：对同一 txID 有限次短退避重试，尽量在请求窗口内完成
+	// 全部参与者提交，避免过早返回 UNCERTAIN 诱发客户端以新事务重试、
+	// 远端对新 txID 无幂等保护而重复应用 +1。
 	for _, n := range prepared {
-		if err := e.mgr.CommitTxn(n, txID, commitTS); err != nil {
-			return &SQLError{Msg: fmt.Sprintf("TXN_COMMIT_UNCERTAIN: 2pc %s participant %s: %v (CommitTxn idempotent, retry safe)", txID, n, err)}
+		if err := e.commitWithRetry(n, txID, commitTS); err != nil {
+			return &SQLError{Msg: fmt.Sprintf("TXN_COMMIT_UNCERTAIN: 2pc %s participant %s: %v (retry exhausted; coord committing record kept, background replay will finish)", txID, n, err)}
 		}
 	}
 	_ = e.deleteCoord(txID)
 	return nil
+}
+
+// commitWithRetry 对同一参与者按同一 txID 幂等提交，失败后短退避重试
+// （50ms / 150ms / 450ms，最多 3 次）。参与者 commit2pc 以
+// committed2pcKey 去重，重试仅补发 COMMIT、绝不重复应用数据，安全。
+func (e *Executor) commitWithRetry(node, txID string, commitTS uint64) error {
+	err := e.mgr.CommitTxn(node, txID, commitTS)
+	if err == nil {
+		return nil
+	}
+	for i, delay := range []time.Duration{50 * time.Millisecond, 150 * time.Millisecond, 450 * time.Millisecond} {
+		time.Sleep(delay)
+		dbgLog("2PC COMMIT retry %d node=%s tx=%s after %v: %v", i+1, node, txID, delay, err)
+		if err = e.mgr.CommitTxn(node, txID, commitTS); err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+// ---- P0 后台补提交：committing 状态协调者记录周期扫描重放 ----
+// 协调者本地已提交、远端 COMMIT 未全部成功时 CoordRecord 保留在
+// committing 状态。除 exec2pcWrite 内短退避重试外，本扫描器周期性
+// 幂等重放未完成提交（CommitTxn 以 committed2pcKey 去重，安全），
+// 成功后清理记录，彻底消除"不确定窗口"残留。
+
+// StartCoordReplay 启动后台补提交扫描循环（db.StartCluster 在
+// RecoverCoordinated2PC 之后装配）。单机模式（mgr==nil）或未装配
+// storage 时 no-op；重复调用 no-op。
+func (e *Executor) StartCoordReplay(interval time.Duration) {
+	if e.mgr == nil || e.st == nil {
+		return
+	}
+	e.mu.Lock()
+	if e.coordReplayStop != nil {
+		e.mu.Unlock()
+		return
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	e.coordReplayStop = stop
+	e.coordReplayDone = done
+	e.mu.Unlock()
+	go e.coordReplayLoop(interval, stop, done)
+}
+
+// StopCoordReplay 停止后台补提交循环（db.Close 流程装配，避免关闭竞态）。
+func (e *Executor) StopCoordReplay() {
+	e.mu.Lock()
+	stop := e.coordReplayStop
+	done := e.coordReplayDone
+	e.coordReplayStop = nil
+	e.coordReplayDone = nil
+	e.mu.Unlock()
+	if stop == nil {
+		return
+	}
+	close(stop)
+	<-done
+}
+
+func (e *Executor) coordReplayLoop(interval time.Duration, stop, done chan struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			e.replayCommittingCoords()
+		}
+	}
+}
+
+// replayCommittingCoords 扫描本地 committing 状态协调者记录，对全部
+// 参与者按同 txID 幂等重放 COMMIT；全部成功后删除记录，任一失败保留
+// 记录供下轮扫描重试（与 RecoverCoordinated2PC 相同"决策不丢失"语义）。
+func (e *Executor) replayCommittingCoords() {
+	prefix := cluster.CoordPrefix()
+	rows, err := e.st.Scan(storage.KeyRange{Start: prefix, End: append(prefix, 0xff)}, -1)
+	if err != nil {
+		dbgLog("2PC coord replay scan failed: %v", err)
+		return
+	}
+	for _, kv := range rows {
+		var rec cluster.CoordRecord
+		if err := cluster.UnmarshalCoord(kv.Value, &rec); err != nil {
+			dbgLog("2PC coord replay unmarshal %s: %v", kv.Key, err)
+			continue
+		}
+		if rec.State != cluster.CoordCommitting {
+			continue
+		}
+		allOK := true
+		for _, p := range rec.Participants {
+			if err := e.commitWithRetry(p, rec.TxID, rec.CommitTS); err != nil {
+				dbgLog("2PC coord replay tx=%s node=%s failed: %v", rec.TxID, p, err)
+				allOK = false
+				break
+			}
+		}
+		if allOK {
+			_ = e.deleteCoord(rec.TxID)
+		}
+	}
 }
 
 // writeCoord 持久化协调者 prepare 记录（独立事务，M8 恢复依据）。

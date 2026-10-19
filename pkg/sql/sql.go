@@ -111,12 +111,21 @@ func (e *Engine) SetAutoBalance(enabled bool, interval time.Duration) {
 // StopAutoBalance 停止自动均衡循环（db.Close 装配，避免 Close 竞态）。
 func (e *Engine) StopAutoBalance() { e.ex.stopAutoBalance() }
 
+// StartCoordReplay 启动 2PC 后台补提交扫描循环（db.StartCluster 在
+// RecoverCoordinated2PC 之后装配）：周期幂等重放 committing 状态协调者
+// 记录，收尾"不确定窗口"未完成的远端 COMMIT。
+func (e *Engine) StartCoordReplay(interval time.Duration) { e.ex.StartCoordReplay(interval) }
+
+// StopCoordReplay 停止后台补提交循环（db.Close 装配，避免关闭竞态）。
+func (e *Engine) StopCoordReplay() { e.ex.StopCoordReplay() }
+
 // SetBackupEnv 注入备份/恢复环境（M8(BR)，db.Open 装配）。
 // st 为引擎级 Storage 引用（BACKUP 一致快照 / RESTORE 物理写 / PITR 回放）；
 // binlogPath 为数据目录 binlog 文件路径（可空字符串表示未启用）。
 func (e *Engine) SetBackupEnv(st storage.Storage, binlogPath string) {
 	e.ex.SetBackupEnv(st, binlogPath)
 }
+
 // SetBackupScheduleConfig 装配备份调度配置（BR 方向②，cmd/main start 装配）。
 // 全量覆盖：intervalSec 周期秒（0=关闭）、keep 保留份数（0=不清理）、
 // dir 备份输出目录、remoteURL 远程 HTTP PUT 目标（空=不上传）。
@@ -177,7 +186,9 @@ func (e *Engine) BackupNow() (string, error) { return e.ex.BackupNow() }
 func (e *Engine) SplitRegionNow(regionID uint64) error { return e.ex.splitRegionByID(regionID) }
 
 // BalanceNow 手动触发一次负载均衡（迁移过载本地 region 到最闲存活节点）。
-func (e *Engine) BalanceNow() (*Result, error) { return e.ex.execBalance(e.ex.globalSess, &BalanceStmt{}) }
+func (e *Engine) BalanceNow() (*Result, error) {
+	return e.ex.execBalance(e.ex.globalSess, &BalanceStmt{})
+}
 
 // Execute 解析并执行一条 SQL 语句。
 // 以超级用户（root）身份执行，向后兼容未接入鉴权的调用方（CLI/旧驱动）。

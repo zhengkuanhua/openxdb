@@ -39,8 +39,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"sort"
 	"net"
+	"sort"
 	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
@@ -115,6 +115,10 @@ func aborted2pcKey(txID string) []byte   { return []byte(key2pcAborted + txID) }
 
 // CoordKey 协调者 prepare 记录键（供 sql 包持久化/删除协调者状态）。
 func CoordKey(txID string) []byte { return []byte(key2pcCoord + txID) }
+
+// CoordPrefix 协调者 prepare 记录键前缀（供 sql 包后台补提交扫描
+// committing 状态记录时限定扫描区间）。
+func CoordPrefix() []byte { return []byte(key2pcCoord) }
 
 // CoordState 协调者 prepare 记录状态机。
 type CoordState string
