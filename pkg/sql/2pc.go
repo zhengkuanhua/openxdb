@@ -48,6 +48,8 @@ var (
 
 // lockRowKeys 按物理 key（或表级哨兵 key）获取互斥并返回解锁函数。
 // 多 key 按字典序获取避免死锁；单机模式（mgr == nil）为 no-op。
+// 注意：autocommit 语句在语句结束（2PC 提交后）解锁；显式事务写语句
+// 由 takeRowLocks 挂到会话，统一在 COMMIT/ROLLBACK 后释放（M19）。
 func (e *Executor) lockRowKeys(keys ...string) func() {
 	dbgLog("LOCK enter mgr=%v n=%d keys=%q", e.mgr != nil, len(keys), keys)
 	if e.mgr == nil {

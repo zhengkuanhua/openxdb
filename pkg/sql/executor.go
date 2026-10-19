@@ -545,6 +545,75 @@ func (e *Executor) SetBackupEnv(st storage.Storage, binlogPath string) {
 
 // ---- 会话级显式事务 ----
 
+// takeRowLocks 获取写路径行锁/表锁并返回语句级解锁函数。
+//   - autocommit：锁随语句结束释放（defer 生效，2PC 提交已完成）。
+//   - 显式事务：锁挂到会话由 COMMIT/ROLLBACK 统一释放（releaseHeldLocks），
+//     覆盖"读旧值→提交"全临界区，防止后事务在前事务未提交时读旧值覆盖写
+//     （并发显式事务丢更新）；同 key 防重入，事务内多次写同一行不自锁。
+func (e *Executor) takeRowLocks(sess *Session, keys ...string) func() {
+	if !sess.inTx {
+		return e.lockRowKeys(keys...)
+	}
+	e.mu.Lock()
+	if sess.heldLockKeys == nil {
+		sess.heldLockKeys = make(map[string]bool)
+	}
+	need := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if !sess.heldLockKeys[k] {
+			sess.heldLockKeys[k] = true
+			need = append(need, k)
+		}
+	}
+	e.mu.Unlock()
+	if len(need) == 0 {
+		return func() {}
+	}
+	unlock := e.lockRowKeys(need...)
+	e.mu.Lock()
+	sess.heldLocks = append(sess.heldLocks, unlock)
+	e.mu.Unlock()
+	return func() {} // 显式事务：语句结束不释放，事务结束时统一释放
+}
+
+// releaseHeldLocks 释放显式事务持有的写锁（事务提交/回滚完成后调用，
+// 保证等待者拿锁后能看到已提交数据）。
+func (e *Executor) releaseHeldLocks(sess *Session) {
+	e.mu.Lock()
+	locks := sess.heldLocks
+	sess.heldLocks = nil
+	sess.heldLockKeys = nil
+	e.mu.Unlock()
+	for _, u := range locks {
+		u()
+	}
+}
+
+// refreshWriteSnapshot 锁内"当前读"快照刷新：
+//   - 刷新引擎快照（RefreshSnapshot，读到最新已提交视图）；
+//   - 显式事务同时把事务快照号推进到权威序列当前号（Reset+Get），
+//     保证 VersionVisible 不再把前序已提交版本判为不可见。
+// 后拿锁事务由此读到前序事务提交的值，读改写不丢更新。
+func (e *Executor) refreshWriteSnapshot(sess *Session, tx txn.Txn) error {
+	if r, ok := tx.(interface{ RefreshSnapshot() error }); ok {
+		if err := r.RefreshSnapshot(); err != nil {
+			return err
+		}
+	}
+	if !sess.inTx || e.ts == nil {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ts.Reset()
+	ts, err := e.ts.Get()
+	if err != nil {
+		return err
+	}
+	sess.curBeginTS = ts
+	return nil
+}
+
 // beginTx 开启会话事务（已开启时报错）。
 func (e *Executor) beginTx(sess *Session) error {
 	e.mu.Lock()
@@ -587,8 +656,11 @@ func (e *Executor) commitTx(sess *Session) error {
 		e.ts.Reset()
 	}
 	if err := tx.Commit(); err != nil {
+		e.releaseHeldLocks(sess)
 		return err
 	}
+	// 提交完成后释放写锁：等待者拿锁后读到已提交数据，读改写不丢更新。
+	e.releaseHeldLocks(sess)
 	if e.m != nil {
 		e.m.IncCommit()
 	}
@@ -612,8 +684,11 @@ func (e *Executor) rollbackTx(sess *Session) error {
 		e.ts.Reset()
 	}
 	if err := tx.Rollback(); err != nil {
+		e.releaseHeldLocks(sess)
 		return err
 	}
+	// 回滚完成后释放写锁（等待者拿锁后仍读旧值，不破坏读改写正确性）。
+	e.releaseHeldLocks(sess)
 	if e.m != nil {
 		e.m.IncRollback()
 	}
@@ -630,6 +705,8 @@ func (e *Executor) resetSessionTxState(sess *Session) {
 	sess.curBeginTS = 0
 	sess.curTxID = ""
 	e.mu.Unlock()
+	// 临时提升事务若持过写锁（如 INSERT...SELECT 场景），一并释放避免泄漏。
+	e.releaseHeldLocks(sess)
 	if e.ts != nil {
 		e.ts.Reset()
 	}
@@ -3822,16 +3899,16 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 				return nil, err
 			}
 			key := e.rowKeyAt(meta, rid, plan.prefix)
-			// M17：跨节点读改写串行化——读旧值前持锁，函数返回（2PC 提交后）释放。
+			// M17：跨节点读改写串行化——读旧值前持锁；显式事务锁随事务
+			// COMMIT/ROLLBACK 释放（takeRowLocks），autocommit 随语句结束释放。
 			dbgLog("UPD prelock sess.inTx=%v stmtBeginTS=%d", sess.inTx, sess.stmtBeginTS)
 			dbgLog("UPD full path key=%q plan.full=%v", string(key), plan.full)
-			defer e.lockRowKeys(string(key))()
-			// M18+ 修复：锁内刷新引擎快照，后拿锁事务读到前序已提交值（autocommit 单语句）。
-			if auto {
-				if r, ok := tx.(interface{ RefreshSnapshot() error }); ok {
-					if err := r.RefreshSnapshot(); err != nil {
-						return nil, err
-					}
+			defer e.takeRowLocks(sess, string(key))()
+			// M18+/M19 修复：锁内当前读刷新（引擎快照 + 事务快照号），后拿锁
+			// 事务读到前序已提交值（autocommit 单语句与显式事务写语句均生效）。
+			if auto || sess.inTx {
+				if err := e.refreshWriteSnapshot(sess, tx); err != nil {
+					return nil, err
 				}
 			}
 			raw, err := e.getKVCluster(sess, tx, key)
@@ -3842,12 +3919,10 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 			}
 		} else {
 			// 前缀多行无法预知行 key，按表级哨兵锁串行化（低频路径）。
-			defer e.lockRowKeys("__tbl__:" + meta.Name)()
-			if auto {
-				if r, ok := tx.(interface{ RefreshSnapshot() error }); ok {
-					if err := r.RefreshSnapshot(); err != nil {
-						return nil, err
-					}
+			defer e.takeRowLocks(sess, "__tbl__:"+meta.Name)()
+			if auto || sess.inTx {
+				if err := e.refreshWriteSnapshot(sess, tx); err != nil {
+					return nil, err
 				}
 			}
 			pairs, err = e.scanMergedCluster(sess, tx, e.pkPrefixRanges(meta, plan.prefix))
@@ -3859,12 +3934,10 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 	if pairs == nil {
 		// 全表扫描 + 过滤（跨 region 展开后按内层键序合并）；同样持表级哨兵锁。
 		dbgLog("UPD fullscan path tbl=%s", meta.Name)
-		defer e.lockRowKeys("__tbl__:" + meta.Name)()
-		if auto {
-			if r, ok := tx.(interface{ RefreshSnapshot() error }); ok {
-				if err := r.RefreshSnapshot(); err != nil {
-					return nil, err
-				}
+		defer e.takeRowLocks(sess, "__tbl__:"+meta.Name)()
+		if auto || sess.inTx {
+			if err := e.refreshWriteSnapshot(sess, tx); err != nil {
+				return nil, err
 			}
 		}
 		pairs, err = e.scanMergedCluster(sess, tx, e.rowRanges(meta))

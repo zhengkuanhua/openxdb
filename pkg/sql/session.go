@@ -30,6 +30,12 @@ type Session struct {
 	// 随 QUERY_REQ 等集群帧跨节点传播（事务上下文），供参与者识别
 	// 写请求所属会话事务；空串表示无显式事务上下文（零回归）。
 	curTxID string
+	// M19 显式事务写锁：heldLocks 为事务内写语句（UPDATE）持有的行锁/表锁
+	// 解锁闭包，COMMIT/ROLLBACK 统一释放，覆盖"读旧值→提交"全临界区，
+	// 防止后事务在前事务未提交时读旧值覆盖写（丢更新）；heldLockKeys 记录
+	// 已持有的 key 防重入（事务内多次写同一行不自锁）。
+	heldLocks    []func()
+	heldLockKeys map[string]bool
 	// 递归防护深度：triggerDepth 防触发器无限递归；
 	// procDepth 防存储过程嵌套展开。
 	triggerDepth int
