@@ -593,6 +593,7 @@ func (e *Executor) releaseHeldLocks(sess *Session) {
 //   - 刷新引擎快照（RefreshSnapshot，读到最新已提交视图）；
 //   - 显式事务同时把事务快照号推进到权威序列当前号（Reset+Get），
 //     保证 VersionVisible 不再把前序已提交版本判为不可见。
+//
 // 后拿锁事务由此读到前序事务提交的值，读改写不丢更新。
 func (e *Executor) refreshWriteSnapshot(sess *Session, tx txn.Txn) error {
 	if r, ok := tx.(interface{ RefreshSnapshot() error }); ok {
@@ -2646,10 +2647,12 @@ func (e *Executor) finishSelectWindow(meta *TableMeta, s *SelectStmt, rows [][]V
 		}
 	}
 	cols := make([]string, 0, len(res.Columns))
+	colTypes := make([]string, 0, len(res.Columns))
 	for _, col := range visibleColumns(meta) {
 		cols = append(cols, col.Name)
+		colTypes = append(colTypes, col.Type)
 	}
-	rel := &Rel{Cols: cols, Rows: rows}
+	rel := &Rel{Cols: cols, Rows: rows, Types: colTypes}
 	winVals, err := computeWindows(rows, func(row []Value, col string) (Value, error) {
 		return rowValue(meta, row, col)
 	}, func(row []Value, e *Expr) (Value, error) {
@@ -2691,6 +2694,8 @@ func (e *Executor) doAgg(meta *TableMeta, s *SelectStmt, rows [][]Value) (*Resul
 	out := make([]Value, 0, len(s.Columns))
 	for _, c := range s.Columns {
 		res.Columns = append(res.Columns, c.Name)
+		res.ColTypes = append(res.ColTypes, aggResultType(meta, nil, rows, &c))
+		res.ColNullable = append(res.ColNullable, c.Agg != "COUNT" && len(rows) == 0)
 		v, err := aggColumn(meta, rows, &c)
 		if err != nil {
 			return nil, err
@@ -2701,15 +2706,47 @@ func (e *Executor) doAgg(meta *TableMeta, s *SelectStmt, rows [][]Value) (*Resul
 	return res, nil
 }
 
-// aggColumn 计算单列聚合值（COUNT/SUM/AVG；DECIMAL 保持精度，INT 走 int64）。
-func aggColumn(meta *TableMeta, rows [][]Value, c *SelectColumn) (Value, error) {
-	colType := ""
-	for _, m := range meta.Columns {
-		if m.Name == c.Col {
-			colType = m.Type
-			break
+// aggResultType 推断聚合列的结果类型："INT"/"DECIMAL"/"TEXT"/"BLOB"/""（未知）。
+// meta 非 nil 时优先查列定义（单表路径）；否则从首行操作数 Kind 推断（JOIN/子查询路径）。
+func aggResultType(meta *TableMeta, rel *Rel, rows [][]Value, c *SelectColumn) string {
+	if c.Agg == "COUNT" {
+		return "INT"
+	}
+	if meta != nil {
+		for _, m := range meta.Columns {
+			if m.Name == c.Col {
+				return m.Type
+			}
 		}
 	}
+	// meta 为空（JOIN/子查询/高级路径）或列不在 meta 时，优先从 Rel.Types 兜底
+	//（Rel 构造点已从物理表元数据/子查询 ColTypes 填充列类型，空结果集同样可用）。
+	if rel != nil && len(rel.Types) == len(rel.Cols) {
+		for i, cn := range rel.Cols {
+			if baseColName(cn) == baseColName(c.Col) && rel.Types[i] != "" {
+				return rel.Types[i]
+			}
+		}
+	}
+	if len(rows) > 0 {
+		if v, err := aggOperand(rel, rows[0], c); err == nil {
+			switch v.Kind {
+			case "INT":
+				return "INT"
+			case "DECIMAL":
+				return "DECIMAL"
+			case "BLOB":
+				return "BLOB"
+			case "TEXT":
+				return "TEXT"
+			}
+		}
+	}
+	return ""
+}
+
+// aggColumn 计算单列聚合值（COUNT/SUM/AVG；DECIMAL 保持精度，INT 走 int64）。
+func aggColumn(meta *TableMeta, rows [][]Value, c *SelectColumn) (Value, error) {
 	switch c.Agg {
 	case "COUNT":
 		return IntVal(int64(len(rows))), nil
@@ -2731,20 +2768,14 @@ func aggColumn(meta *TableMeta, rows [][]Value, c *SelectColumn) (Value, error) 
 				return Value{}, &SQLError{Msg: "aggregate on non-numeric column: " + c.Name}
 			}
 		}
+		if len(rows) == 0 {
+			return Value{Kind: "NULL"}, nil
+		}
 		if dec {
 			if c.Agg == "SUM" {
 				return decVal(dsum), nil
 			}
-			if len(rows) > 0 {
-				return decVal(dsum / int64(len(rows))), nil
-			}
-			return decVal(0), nil
-		}
-		if len(rows) == 0 {
-			if colType == "DECIMAL" {
-				return decVal(0), nil
-			}
-			return IntVal(0), nil
+			return decVal(dsum / int64(len(rows))), nil
 		}
 		if c.Agg == "SUM" {
 			return IntVal(isum), nil
@@ -2756,11 +2787,12 @@ func aggColumn(meta *TableMeta, rows [][]Value, c *SelectColumn) (Value, error) 
 
 // ---- P0 SELECT 增强引擎：JOIN / GROUP BY / FROM 子查询 / BETWEEN / IN ----
 
-// Rel 表示一个"关系"：列名序列 + 行集。
+// Rel 表示一个"关系"：列名序列 + 行集 + 列类型序列（与 Cols 对齐，空串=未知）。
 // 单表列名为 alias.col（限定形式）；子查询列名为 subAlias.col（子查询输出列名）。
 type Rel struct {
-	Cols []string
-	Rows [][]Value
+	Cols  []string
+	Rows  [][]Value
+	Types []string
 }
 
 // hasAdvancedSelect 判断 SELECT 是否走增强路径（保留旧单表路径的索引优化与既有行为）。
@@ -2809,10 +2841,15 @@ func (e *Executor) relFromTable(sess *Session, tx txn.Txn, tabs []*TableMeta, ta
 		if err != nil {
 			return nil, err
 		}
-		rel := &Rel{Cols: make([]string, 0, len(subRes.Columns)), Rows: subRes.Rows}
-		for _, c := range subRes.Columns {
+		rel := &Rel{Cols: make([]string, 0, len(subRes.Columns)), Rows: subRes.Rows, Types: make([]string, 0, len(subRes.Columns))}
+		for i, c := range subRes.Columns {
 			// 派生表列名 = 子查询别名 + 子查询输出列裸名（去掉内部限定前缀）
 			rel.Cols = append(rel.Cols, subAlias+"."+baseColName(c))
+			if i < len(subRes.ColTypes) {
+				rel.Types = append(rel.Types, subRes.ColTypes[i])
+			} else {
+				rel.Types = append(rel.Types, "")
+			}
 		}
 		return rel, nil
 	}
@@ -2829,9 +2866,10 @@ func (e *Executor) relFromScan(sess *Session, tx txn.Txn, meta *TableMeta, alias
 	if err != nil {
 		return nil, err
 	}
-	rel := &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(pairs))}
+	rel := &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(pairs)), Types: make([]string, 0, len(meta.Columns))}
 	for _, c := range visibleColumns(meta) {
 		rel.Cols = append(rel.Cols, alias+"."+c.Name)
+		rel.Types = append(rel.Types, c.Type)
 	}
 	for _, kv := range pairs {
 		row, err := decodeRow(meta, kv.Value)
@@ -2846,7 +2884,7 @@ func (e *Executor) relFromScan(sess *Session, tx txn.Txn, meta *TableMeta, alias
 
 // joinRels 拼接左右 Rel：INNER 仅保留匹配行；LEFT 保留左行并以空串值补右列。
 func joinRels(left, right *Rel, jc *JoinClause) (*Rel, error) {
-	out := &Rel{Cols: append(append([]string{}, left.Cols...), right.Cols...)}
+	out := &Rel{Cols: append(append([]string{}, left.Cols...), right.Cols...), Types: append(append([]string{}, left.Types...), right.Types...)}
 	for _, lr := range left.Rows {
 		matched := 0
 		for _, rr := range right.Rows {
@@ -3158,9 +3196,10 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 			} else if plan != nil && len(plan.inVals) > 0 && plan.inCol != "" {
 				// 前缀 + 下一主键列 IN（字面量/子查询物化值）：逐值前缀点查，
 				// 消除全表扫描（TPC-C STOCK_LEVEL：s_w_id 前缀 + s_i_id IN(21值) → 21 次 seek）。
-				rel = &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(plan.inVals))}
+				rel = &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(plan.inVals)), Types: make([]string, 0, len(meta.Columns))}
 				for _, c := range visibleColumns(meta) {
 					rel.Cols = append(rel.Cols, alias+"."+c.Name)
+					rel.Types = append(rel.Types, c.Type)
 				}
 				for _, iv := range plan.inVals {
 					inPrefix, err := pkPrefixBytes(meta, append(append([]Value{}, plan.prefixVals...), iv))
@@ -3205,9 +3244,10 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 						return nil, err
 					}
 				}
-				rel = &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(pairs))}
+				rel = &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(pairs)), Types: make([]string, 0, len(meta.Columns))}
 				for _, c := range visibleColumns(meta) {
 					rel.Cols = append(rel.Cols, alias+"."+c.Name)
+					rel.Types = append(rel.Types, c.Type)
 				}
 				for _, kv := range pairs {
 					row, err := decodeRow(meta, kv.Value)
@@ -3222,9 +3262,10 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 				if err != nil {
 					return nil, err
 				}
-				rel = &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(pairs))}
+				rel = &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(pairs)), Types: make([]string, 0, len(meta.Columns))}
 				for _, c := range visibleColumns(meta) {
 					rel.Cols = append(rel.Cols, alias+"."+c.Name)
+					rel.Types = append(rel.Types, c.Type)
 				}
 				for _, kv := range pairs {
 					row, err := decodeRow(meta, kv.Value)
@@ -3249,9 +3290,10 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 					return nil, err
 				}
 				dbgLog("pkprefix-prefix3063 table=%s got=%d", meta.Name, len(pairs))
-				rel = &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(pairs))}
+				rel = &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(pairs)), Types: make([]string, 0, len(meta.Columns))}
 				for _, c := range visibleColumns(meta) {
 					rel.Cols = append(rel.Cols, alias+"."+c.Name)
+					rel.Types = append(rel.Types, c.Type)
 				}
 				for _, kv := range pairs {
 					row, err := decodeRow(meta, kv.Value)
@@ -3415,7 +3457,7 @@ func aggValues(rel *Rel, rows [][]Value, c *SelectColumn) (Value, error) {
 		return IntVal(int64(len(rows))), nil
 	case "MAX", "MIN":
 		if len(rows) == 0 {
-			return IntVal(0), nil
+			return Value{Kind: "NULL"}, nil
 		}
 		best, err := aggOperand(rel, rows[0], c)
 		if err != nil {
@@ -3452,22 +3494,19 @@ func aggValues(rel *Rel, rows [][]Value, c *SelectColumn) (Value, error) {
 				return Value{}, &SQLError{Msg: "aggregate on non-numeric column: " + c.Name}
 			}
 		}
+		if len(rows) == 0 {
+			return Value{Kind: "NULL"}, nil
+		}
 		if dec {
 			if c.Agg == "SUM" {
 				return decVal(dsum), nil
 			}
-			if len(rows) > 0 {
-				return decVal(dsum / int64(len(rows))), nil
-			}
-			return decVal(0), nil
+			return decVal(dsum / int64(len(rows))), nil
 		}
 		if c.Agg == "SUM" {
 			return IntVal(isum), nil
 		}
-		if len(rows) > 0 {
-			return IntVal(isum / int64(len(rows))), nil
-		}
-		return IntVal(0), nil
+		return IntVal(isum / int64(len(rows))), nil
 	}
 	return Value{}, errf("unsupported aggregate %q", c.Agg)
 }
@@ -3635,6 +3674,8 @@ func (e *Executor) aggRel(s *SelectStmt, rel *Rel) (*Result, error) {
 	out := make([]Value, 0, len(s.Columns))
 	for _, c := range s.Columns {
 		res.Columns = append(res.Columns, c.Name)
+		res.ColTypes = append(res.ColTypes, aggResultType(nil, rel, rel.Rows, &c))
+		res.ColNullable = append(res.ColNullable, c.Agg != "COUNT" && len(rel.Rows) == 0)
 		v, err := aggValues(rel, rel.Rows, &c)
 		if err != nil {
 			return nil, err
@@ -3690,6 +3731,13 @@ func (e *Executor) groupRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel) 
 	res := &Result{}
 	for _, c := range s.Columns {
 		res.Columns = append(res.Columns, c.Name)
+		if c.Agg != "" {
+			// 分组聚合每组至少一行，结果不可空；类型从 rel 首行推断。
+			res.ColTypes = append(res.ColTypes, aggResultType(nil, rel, rel.Rows, &c))
+		} else {
+			res.ColTypes = append(res.ColTypes, "")
+		}
+		res.ColNullable = append(res.ColNullable, false)
 	}
 	for _, k := range order {
 		g := groups[k]

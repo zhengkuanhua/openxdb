@@ -80,10 +80,14 @@ func columnDefinition(name string, typ byte, charset uint16, length uint32, flag
 	return p
 }
 
-// textRow 构造文本协议数据行（每列 lenenc 字节串）。
+// textRow 构造文本协议数据行（每列 lenenc 字节串；NULL 列编码为 0xfb NULL marker）。
 func textRow(cols [][]byte) []byte {
 	p := make([]byte, 0, 16)
 	for _, c := range cols {
+		if c == nil {
+			p = append(p, 0xfb)
+			continue
+		}
 		p = appendLenencBytes(p, c)
 	}
 	return p
@@ -111,15 +115,34 @@ func binaryRow(values []sql.Value) []byte {
 	return p
 }
 
-// writeBinaryResultSet 写出 EXECUTE 二进制结果集：列数 → 每列定义 → EOF → 二进制行 → EOF。
-func (c *mysqlConn) writeBinaryResultSet(columns []string, rows [][]sql.Value) error {
+// mysqlTypeOf 将 sql 结果列类型映射为 MySQL 列类型码；未知返回 VarString。
+func mysqlTypeOf(t string) byte {
+	switch t {
+	case "INT":
+		return mysqlTypeLongLong
+	case "DECIMAL":
+		return mysqlTypeNewDecimal
+	case "BLOB":
+		return mysqlTypeBlob
+	default:
+		return mysqlTypeVarString
+	}
+}
+
+// writeBinaryResultSetTyped 写出 EXECUTE 二进制结果集：列数 → 每列定义 → EOF → 二进制行 → EOF。
+// colTypes 与 columns 平行；空串/缺省按 VarString 声明（flags 保持 0 允许 NULL，兼容历史行为）。
+func (c *mysqlConn) writeBinaryResultSetTyped(columns []string, colTypes []string, rows [][]sql.Value) error {
 	p := make([]byte, 0, 4)
 	p = appendLenencInt(p, uint64(len(columns)))
 	if err := c.pc.writePacket(p); err != nil {
 		return err
 	}
-	for _, col := range columns {
-		if err := c.pc.writePacket(columnDefinition(col, mysqlTypeVarString, charsetUTF8MB4, 1024, 0, 0)); err != nil {
+	for i, col := range columns {
+		var typ byte = mysqlTypeVarString
+		if i < len(colTypes) && colTypes[i] != "" {
+			typ = mysqlTypeOf(colTypes[i])
+		}
+		if err := c.pc.writePacket(columnDefinition(col, typ, charsetUTF8MB4, 1024, 0, 0)); err != nil {
 			return err
 		}
 	}
@@ -134,18 +157,25 @@ func (c *mysqlConn) writeBinaryResultSet(columns []string, rows [][]sql.Value) e
 	return c.pc.writePacket(eofPacket(c.status()))
 }
 
-// writeResultSet 写出文本结果集：列数 → 每列定义 → EOF → 每行 → EOF。
-// columns 为列名；rows 为每行各列已编码字节。
-func (c *mysqlConn) writeResultSet(columns []string, rows [][][]byte) error {
+// writeBinaryResultSet 写出 EXECUTE 二进制结果集（无列类型元数据，统一 VarString）。
+func (c *mysqlConn) writeBinaryResultSet(columns []string, rows [][]sql.Value) error {
+	return c.writeBinaryResultSetTyped(columns, nil, rows)
+}
+
+// writeResultSetTyped 写出文本结果集：列数 → 每列定义 → EOF → 每行 → EOF。
+// columns 为列名；colTypes 与 columns 平行（空串/缺省按 VarString）；rows 为每行各列已编码字节。
+func (c *mysqlConn) writeResultSetTyped(columns []string, colTypes []string, rows [][][]byte) error {
 	p := make([]byte, 0, 4)
 	p = appendLenencInt(p, uint64(len(columns)))
 	if err := c.pc.writePacket(p); err != nil {
 		return err
 	}
-	for _, col := range columns {
-		// 列类型推断：INT 由上层传入（OpenXDB Value 无列类型元数据，
-		// 统一按字符串声明为 VAR_STRING，客户端仍可正确展示）。
-		if err := c.pc.writePacket(columnDefinition(col, mysqlTypeVarString, charsetUTF8MB4, 1024, 0, 0)); err != nil {
+	for i, col := range columns {
+		var typ byte = mysqlTypeVarString
+		if i < len(colTypes) && colTypes[i] != "" {
+			typ = mysqlTypeOf(colTypes[i])
+		}
+		if err := c.pc.writePacket(columnDefinition(col, typ, charsetUTF8MB4, 1024, 0, 0)); err != nil {
 			return err
 		}
 	}
@@ -158,6 +188,11 @@ func (c *mysqlConn) writeResultSet(columns []string, rows [][][]byte) error {
 		}
 	}
 	return c.pc.writePacket(eofPacket(c.status()))
+}
+
+// writeResultSet 写出文本结果集：列数 → 每列定义 → EOF → 每行 → EOF（无列类型元数据，统一 VarString）。
+func (c *mysqlConn) writeResultSet(columns []string, rows [][][]byte) error {
+	return c.writeResultSetTyped(columns, nil, rows)
 }
 
 // writePrepareOK 构造并写出 COM_STMT_PREPARE_OK（0x00 header）。

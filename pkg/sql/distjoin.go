@@ -48,9 +48,10 @@ func planJoinRoute(left *Rel, jc *JoinClause, rmeta *TableMeta) (joinRoutePlan, 
 	}
 	// 右表列名集（别名限定，与 relFromScan 输出一致）。
 	alias := orAlias(jc.Table, jc.Alias)
-	right := &Rel{Cols: make([]string, 0, len(rmeta.Columns))}
+	right := &Rel{Cols: make([]string, 0, len(rmeta.Columns)), Types: make([]string, 0, len(rmeta.Columns))}
 	for _, c := range rmeta.Columns {
 		right.Cols = append(right.Cols, alias+"."+c.Name)
+		right.Types = append(right.Types, c.Type)
 	}
 	// 仅等值条件可路由；任一非等值 ON 条件回退全量 JOIN。
 	for _, c := range jc.On {
@@ -83,9 +84,10 @@ func planJoinRoute(left *Rel, jc *JoinClause, rmeta *TableMeta) (joinRoutePlan, 
 // execSelect 跳过右表全量扫描（如 order_line 30 万行），路由实现直接从存储
 // 区间/点查扫描；若路由执行回退 joinRels，再由 joinRel 补物化右表。
 func joinRightSchema(meta *TableMeta, alias string) *Rel {
-	rel := &Rel{Cols: make([]string, 0, len(meta.Columns))}
+	rel := &Rel{Cols: make([]string, 0, len(meta.Columns)), Types: make([]string, 0, len(meta.Columns))}
 	for _, c := range visibleColumns(meta) {
 		rel.Cols = append(rel.Cols, alias+"."+c.Name)
+		rel.Types = append(rel.Types, c.Type)
 	}
 	return rel
 }
@@ -164,7 +166,7 @@ func dbgLog(format string, args ...interface{}) {
 // 每左行至多命中 1 个右行（右主键唯一）；未命中 / 条件不满足时
 // INNER 丢弃该行、LEFT 以空值补右列，语义与 joinRels 一致。
 func (e *Executor) routedJoin(sess *Session, tx txn.Txn, left, right *Rel, rmeta *TableMeta, jc *JoinClause, plan joinRoutePlan) (*Rel, error) {
-	out := &Rel{Cols: append(append([]string{}, left.Cols...), right.Cols...)}
+	out := &Rel{Cols: append(append([]string{}, left.Cols...), right.Cols...), Types: append(append([]string{}, left.Types...), right.Types...)}
 	for _, lr := range left.Rows {
 		lv := lr[plan.leftIdx]
 		if !joinKeyCompatible(rmeta, lv) {
@@ -287,9 +289,10 @@ func planJoinRange(left *Rel, jc *JoinClause, rmeta *TableMeta) (joinRangePlan, 
 		return joinRangePlan{}, false
 	}
 	alias := orAlias(jc.Table, jc.Alias)
-	right := &Rel{Cols: make([]string, 0, len(rmeta.Columns))}
+	right := &Rel{Cols: make([]string, 0, len(rmeta.Columns)), Types: make([]string, 0, len(rmeta.Columns))}
 	for _, c := range rmeta.Columns {
 		right.Cols = append(right.Cols, alias+"."+c.Name)
+		right.Types = append(right.Types, c.Type)
 	}
 	// 定位范围列：PKCols 中第一个出现 > / >= / < / <= 条件的列。
 	rangeIdx := -1
@@ -423,7 +426,7 @@ func joinCondBound(left *Rel, lr []Value, c *Cond) (Value, error) {
 // 对每个左行求等值前缀与范围边界，构造有序物理区间扫描右表候选行，
 // 再以完整 ON 条件（matchJoinOn）行级校验，语义与 joinRels 一致。
 func (e *Executor) routedJoinRange(sess *Session, tx txn.Txn, left, right *Rel, rmeta *TableMeta, jc *JoinClause, plan joinRangePlan) (*Rel, error) {
-	out := &Rel{Cols: append(append([]string{}, left.Cols...), right.Cols...)}
+	out := &Rel{Cols: append(append([]string{}, left.Cols...), right.Cols...), Types: append(append([]string{}, left.Types...), right.Types...)}
 	for _, lr := range left.Rows {
 		vals := make([]Value, 0, len(plan.eqLeftIdx))
 		for i := range plan.eqLeftIdx {

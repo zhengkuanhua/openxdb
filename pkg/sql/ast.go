@@ -725,6 +725,8 @@ func (BalanceStmt) stmt() {}
 // Result 执行结果（面向协议层/CLI 输出）。
 type Result struct {
 	Columns      []string
+	ColTypes     []string // 平行于 Columns：列类型 "INT"/"DECIMAL"/"TEXT"/"BLOB"/"DATE"；空串=未知（协议层默认 VarString）
+	ColNullable  []bool   // 平行于 Columns：true=列可空（聚合空结果集等）；nil=全部按不可空处理
 	Rows         [][]Value
 	AffectedRows int
 }

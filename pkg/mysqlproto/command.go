@@ -175,11 +175,16 @@ func (c *mysqlConn) handleQuery(query string) error {
 		for _, r := range res.Rows {
 			row := make([][]byte, 0, len(r))
 			for _, v := range r {
+				if v.Kind == "NULL" {
+					// 文本协议 NULL 列：nil 由 textRow 编码为 0xfb NULL marker。
+					row = append(row, nil)
+					continue
+				}
 				row = append(row, []byte(v.String()))
 			}
 			rows = append(rows, row)
 		}
-		return c.writeResultSet(res.Columns, rows)
+		return c.writeResultSetTyped(res.Columns, res.ColTypes, rows)
 	}
 	return c.pc.writePacket(okPacket(uint64(res.AffectedRows), 0, c.status()))
 }
@@ -285,7 +290,7 @@ func (c *mysqlConn) handleStmtExecute(p []byte) error {
 		return c.pc.writePacket(okPacket(0, 0, c.status()))
 	}
 	if len(res.Columns) > 0 {
-		return c.writeBinaryResultSet(res.Columns, res.Rows)
+		return c.writeBinaryResultSetTyped(res.Columns, res.ColTypes, res.Rows)
 	}
 	return c.pc.writePacket(okPacket(uint64(res.AffectedRows), 0, c.status()))
 }
