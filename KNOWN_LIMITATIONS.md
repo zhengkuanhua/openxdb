@@ -2,6 +2,17 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_4a29eb5dcdd111f1b307525400393706
+    ReservedCode1: YtWrJY5X9ga7JOaUVWHvfrtfOs6/DmVKYPZqRM7TZBswg+vqfvgKAQs+bWEhiopH81vKtcBqQ57DUYMz1eThDRPUTeI2yo/d6EvqsEpz6ClNMNoRWRohmub6O4nTXhn/Nd+75LfhDIA1kKzyCPyGEKIj/3BEp51ofE10DcjBXlKsfk7uOxETjyzcNYU=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_4a29eb5dcdd111f1b307525400393706
+    ReservedCode2: YtWrJY5X9ga7JOaUVWHvfrtfOs6/DmVKYPZqRM7TZBswg+vqfvgKAQs+bWEhiopH81vKtcBqQ57DUYMz1eThDRPUTeI2yo/d6EvqsEpz6ClNMNoRWRohmub6O4nTXhn/Nd+75LfhDIA1kKzyCPyGEKIj/3BEp51ofE10DcjBXlKsfk7uOxETjyzcNYU=
+---
+
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
     ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_7e7b432cc91211f196f9525400248c00
     ReservedCode1: WhCXMgXbRb2HXDCj2bcNX2HOXocawQTWgIJKMrlGyVTEGQlHZiqnGXR5CqWo9lsxfNyvmLAan4sBjGWpRFGU21li/NsYOjAWLe/ahPQ7/ke6iG7/wORZSuFIYkFtRYQACl0R6NKX89zDYe35sAdwxT9ujKvixLBO/2Z+w6pexlriOw8NcMDc0cJtHLA=
     ContentPropagator: 001191440300708461136T1XGW3
@@ -21,9 +32,9 @@ AIGC:
 
 ### 1.1 SQL 为子集（非完整标准）
 
-- **限制描述**：OpenXDB 实现的是 SQL 子集，并非完整 SQL 标准。当前不支持 `HAVING` 子句；DDL/DML/查询能力以产品手册第 4 章 SQL 参考为准。更多 DDL 类型（如 `ALTER` 的列级扩展、`CREATE DATABASE` 等）未完整支持。
-- **影响**：迁移自 MySQL/PostgreSQL 等系统的存量 SQL 可能需要改写；依赖复杂分析查询（如 `HAVING` 过滤分组）的场景不可直接运行。
-- **建议**：迁移前对照 SQL 参考做语法兼容性评审；复杂分析需求可先用 `EXPLAIN` 与子查询/视图组合验证等价改写；后续版本将按 T39 SQL 能力差距评估逐步补齐。
+- **限制描述**：OpenXDB 实现的是 SQL 子集，并非完整 SQL 标准。当前 `HAVING` 子句、聚合表达式参数（如 `SUM(a+b)`）、`COUNT(DISTINCT expr)` 及 `GROUP BY` 后 `ORDER BY`/`LIMIT` 已支持（v1.2.0，详见 docs/T41_sql_having_groupby.md）；DDL/DML/查询能力以产品手册第 4 章 SQL 参考为准。更多 DDL 类型（如 `ALTER` 的列级扩展、`CREATE DATABASE` 等）未完整支持。
+- **影响**：迁移自 MySQL/PostgreSQL 等系统的存量 SQL 可能需要改写；依赖完整窗口（如多列窗口排序列）与子查询等高级分析场景仍受限。
+- **建议**：迁移前对照 SQL 参考做语法兼容性评审；复杂分析需求可先用 `EXPLAIN` 与子查询/视图组合验证等价改写。
 
 ### 1.2 MySQL wire protocol 兼容为子集（--mysql-port）
 
@@ -92,5 +103,6 @@ AIGC:
 
 ---
 
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

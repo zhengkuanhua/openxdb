@@ -1347,19 +1347,49 @@ func (p *parser) parseRefClause(fk ForeignKey) (ForeignKey, error) {
 	if _, err := p.expect(tokRParen, ")"); err != nil {
 		return fk, err
 	}
+	// P0-3：ON DELETE / ON UPDATE 动作子句（顺序任意、可各出现一次），
+	// 动作支持 CASCADE / RESTRICT / SET NULL；缺省 RESTRICT（NO ACTION 语义）。
 	fk.OnDelete = "RESTRICT"
-	if p.cur().kind == tokKeyword && p.cur().text == "ON" {
-		if err := p.expectKeyword("ON"); err != nil {
-			return fk, err
-		}
-		if err := p.expectKeyword("DELETE"); err != nil {
-			return fk, err
-		}
-		if p.cur().kind != tokKeyword || (p.cur().text != "CASCADE" && p.cur().text != "RESTRICT") {
-			return fk, errf("expected CASCADE or RESTRICT at %d, got %q", p.cur().pos, p.cur().text)
-		}
-		fk.OnDelete = p.cur().text
+	fk.OnUpdate = "RESTRICT"
+	seenDelete := false
+	seenUpdate := false
+	for p.cur().kind == tokKeyword && p.cur().text == "ON" {
 		p.next()
+		onDelete := true
+		if p.cur().kind == tokKeyword && p.cur().text == "DELETE" {
+			p.next()
+			if seenDelete {
+				return fk, errf("duplicate ON DELETE at %d", p.cur().pos)
+			}
+			seenDelete = true
+		} else if p.cur().kind == tokKeyword && p.cur().text == "UPDATE" {
+			p.next()
+			if seenUpdate {
+				return fk, errf("duplicate ON UPDATE at %d", p.cur().pos)
+			}
+			seenUpdate = true
+			onDelete = false
+		} else {
+			return fk, errf("expected DELETE or UPDATE after ON at %d, got %q", p.cur().pos, p.cur().text)
+		}
+		action := ""
+		if p.cur().kind == tokKeyword && (p.cur().text == "CASCADE" || p.cur().text == "RESTRICT") {
+			action = p.cur().text
+			p.next()
+		} else if p.cur().kind == tokKeyword && p.cur().text == "SET" {
+			p.next()
+			if err := p.expectKeyword("NULL"); err != nil {
+				return fk, err
+			}
+			action = "SET NULL"
+		} else {
+			return fk, errf("expected CASCADE, RESTRICT or SET NULL at %d, got %q", p.cur().pos, p.cur().text)
+		}
+		if onDelete {
+			fk.OnDelete = action
+		} else {
+			fk.OnUpdate = action
+		}
 	}
 	return fk, nil
 }
@@ -1596,34 +1626,36 @@ func (p *parser) parseCreateProcedure() (Stmt, error) {
 	// 可选参数列表：( [IN] <param> <TYPE> [, ...] )
 	if p.cur().kind == tokLParen {
 		p.next()
-		for {
-			if p.cur().kind == tokKeyword && p.cur().text == "IN" {
-				p.next()
+		if p.cur().kind != tokRParen {
+			for {
+				if p.cur().kind == tokKeyword && p.cur().text == "IN" {
+					p.next()
+				}
+				paramTok, err := p.expect(tokIdent, "parameter name")
+				if err != nil {
+					return nil, err
+				}
+				typTok, err := p.expect(tokIdent, "parameter type")
+				if err != nil {
+					return nil, err
+				}
+				typ := strings.ToUpper(typTok.text)
+				if typ == "STRING" {
+					typ = "TEXT"
+				}
+				if typ != "INT" && typ != "TEXT" {
+					return nil, errf("unsupported parameter type %q at %d (expected INT or TEXT)", typTok.text, typTok.pos)
+				}
+				stmt.Params = append(stmt.Params, ParamMeta{Name: paramTok.text, Type: typ})
+				if p.cur().kind == tokComma {
+					p.next()
+					continue
+				}
+				break
 			}
-			paramTok, err := p.expect(tokIdent, "parameter name")
-			if err != nil {
-				return nil, err
-			}
-			typTok, err := p.expect(tokIdent, "parameter type")
-			if err != nil {
-				return nil, err
-			}
-			typ := strings.ToUpper(typTok.text)
-			if typ == "STRING" {
-				typ = "TEXT"
-			}
-			if typ != "INT" && typ != "TEXT" {
-				return nil, errf("unsupported parameter type %q at %d (expected INT or TEXT)", typTok.text, typTok.pos)
-			}
-			stmt.Params = append(stmt.Params, ParamMeta{Name: paramTok.text, Type: typ})
-			if p.cur().kind == tokComma {
-				p.next()
-				continue
-			}
-			if _, err := p.expect(tokRParen, ")"); err != nil {
-				return nil, err
-			}
-			break
+		}
+		if _, err := p.expect(tokRParen, ")"); err != nil {
+			return nil, err
 		}
 	}
 	if err := p.expectKeyword("BEGIN"); err != nil {
@@ -1689,11 +1721,11 @@ func (p *parser) parseCall() (Stmt, error) {
 		p.next()
 		if p.cur().kind != tokRParen {
 			for {
-				v, err := p.parseValue()
+				arg, err := p.parseExpr()
 				if err != nil {
 					return nil, err
 				}
-				stmt.Args = append(stmt.Args, v)
+				stmt.Args = append(stmt.Args, arg)
 				if p.cur().kind == tokComma {
 					p.next()
 					continue
@@ -2181,6 +2213,15 @@ func (p *parser) parseSelect() (Stmt, error) {
 			break
 		}
 	}
+	// HAVING（P0-4）：可独立于 GROUP BY 使用（全局聚合过滤），条件作用于聚合结果。
+	if p.cur().kind == tokKeyword && p.cur().text == "HAVING" {
+		p.next()
+		h, err := p.parseHaving()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Having = &h
+	}
 	// ORDER BY
 	if p.cur().kind == tokKeyword && p.cur().text == "ORDER" {
 		if err := p.expectKeyword("ORDER"); err != nil {
@@ -2457,7 +2498,8 @@ func (p *parser) parseSelectColumn() (SelectColumn, error) {
 		return sc, nil
 	}
 	// T40：数字 / 字符串 / ( / + / - 开头的算术表达式列（如 SELECT 1+2, (k+1)*2, -k, 'text'）
-	if p.cur().kind == tokNumber || p.cur().kind == tokString || p.cur().kind == tokLParen || p.cur().kind == tokPlus || p.cur().kind == tokMinus {
+	// P0-3：NULL 已注册为关键字，作为表达式原子同样支持（SELECT NULL / SELECT -NULL）
+	if p.cur().kind == tokNumber || p.cur().kind == tokString || p.cur().kind == tokLParen || p.cur().kind == tokPlus || p.cur().kind == tokMinus || (p.cur().kind == tokKeyword && p.cur().text == "NULL") {
 		expr, err := p.parseExpr()
 		if err != nil {
 			return SelectColumn{}, err
@@ -2495,7 +2537,16 @@ func (p *parser) parseAggSelectColumn(upper string) (SelectColumn, error) {
 		return sc, nil
 	}
 	p.next() // (
+	// P0-4：聚合参数 DISTINCT（COUNT(DISTINCT col/expr) 等）。
+	distinct := false
+	if p.cur().kind == tokKeyword && p.cur().text == "DISTINCT" {
+		distinct = true
+		p.next()
+	}
 	if upper == "COUNT" && p.cur().kind == tokStar {
+		if distinct {
+			return SelectColumn{}, errf("COUNT(DISTINCT *) is not valid")
+		}
 		p.next()
 		if _, err := p.expect(tokRParen, ")"); err != nil {
 			return SelectColumn{}, err
@@ -2511,7 +2562,7 @@ func (p *parser) parseAggSelectColumn(upper string) (SelectColumn, error) {
 		}
 		return sc, nil
 	}
-	// 聚合参数：算术表达式（T40），纯列引用保持 Ref/Col。
+	// 聚合参数：算术表达式（T40），纯列引用保持 Ref/Col；DISTINCT 前缀（P0-4）。
 	arg, err := p.parseExpr()
 	if err != nil {
 		return SelectColumn{}, err
@@ -2519,8 +2570,12 @@ func (p *parser) parseAggSelectColumn(upper string) (SelectColumn, error) {
 	if _, err := p.expect(tokRParen, ")"); err != nil {
 		return SelectColumn{}, err
 	}
-	raw := upper + "(" + arg.Raw + ")"
-	sc := SelectColumn{Raw: raw, Agg: upper, Name: raw}
+	argRaw := arg.Raw
+	if distinct {
+		argRaw = "DISTINCT " + argRaw
+	}
+	raw := upper + "(" + argRaw + ")"
+	sc := SelectColumn{Raw: raw, Agg: upper, Name: raw, Distinct: distinct}
 	if arg.isPlainColumn() {
 		sc.Ref, sc.Col = arg.Ref, arg.Col
 	} else {
@@ -2670,6 +2725,14 @@ func (p *parser) parseExprPrimary() (*Expr, error) {
 		v := p.cur().text
 		p.next()
 		return &Expr{Val: &Value{Kind: "VAR", S: v}, Raw: v}, nil
+	case tokKeyword:
+		// P0-3：NULL 已注册为关键字（SET NULL），表达式层仍按字面量支持
+		if strings.EqualFold(p.cur().text, "NULL") {
+			p.next()
+			v := Value{Kind: "NULL"}
+			return &Expr{Val: &v, Raw: "NULL"}, nil
+		}
+		return nil, errf("expected expression at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	return nil, errf("expected expression at %d, got %q", p.cur().pos, p.cur().text)
 }
@@ -2689,8 +2752,9 @@ func (p *parser) parseSelectAlias(sc *SelectColumn) error {
 }
 
 // parseWindowSpec 解析 OVER 子句（M10 窗口函数）：
-// OVER ( [PARTITION BY col [, col ...]] [ORDER BY col [ASC|DESC]] )
-// 无显式框架，默认为 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW。
+// OVER ( [PARTITION BY col [, col ...]] [ORDER BY col [ASC|DESC]] [frame] )
+// frame 为 P0-5 显式窗口帧（ROWS|RANGE ...）；无显式框架，默认为
+// ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW。
 func (p *parser) parseWindowSpec(sc *SelectColumn) error {
 	if err := p.expectKeyword("OVER"); err != nil {
 		return err
@@ -2743,11 +2807,118 @@ func (p *parser) parseWindowSpec(sc *SelectColumn) error {
 		}
 		ws.OrderBy = ob
 	}
+	// P0-5：显式窗口帧 ROWS|RANGE ...
+	if p.cur().kind == tokKeyword && (p.cur().text == "ROWS" || p.cur().text == "RANGE") {
+		frame, err := p.parseWindowFrame()
+		if err != nil {
+			return err
+		}
+		ws.Frame = frame
+	}
 	if _, err := p.expect(tokRParen, ")"); err != nil {
 		return err
 	}
 	sc.Window = ws
 	return nil
+}
+
+// parseWindowFrame 解析显式窗口帧（P0-5）：
+//   ROWS|RANGE <frame-extent>
+//   frame-extent := <frame-bound> | BETWEEN <frame-bound> AND <frame-bound>
+//   frame-bound := UNBOUNDED PRECEDING | UNBOUNDED FOLLOWING
+//                | CURRENT ROW | n PRECEDING | n FOLLOWING
+// 单边界简写补齐另一端：UNBOUNDED PRECEDING / n PRECEDING / CURRENT ROW → 终点 CURRENT ROW；
+// UNBOUNDED FOLLOWING / n FOLLOWING → 起点 CURRENT ROW。
+func (p *parser) parseWindowFrame() (*WindowFrame, error) {
+	frameType := p.cur().text // ROWS 或 RANGE（关键字）
+	p.next()
+	f := &WindowFrame{Type: frameType}
+	var err error
+	if p.cur().kind == tokKeyword && p.cur().text == "BETWEEN" {
+		p.next()
+		f.Start, err = p.parseWindowFrameBound()
+		if err != nil {
+			return nil, err
+		}
+		if err := p.expectKeyword("AND"); err != nil {
+			return nil, err
+		}
+		f.End, err = p.parseWindowFrameBound()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		f.Start, err = p.parseWindowFrameBound()
+		if err != nil {
+			return nil, err
+		}
+		switch f.Start.Kind {
+		case "UNBOUNDED_PRECEDING", "PRECEDING", "CURRENT_ROW":
+			f.End = &WindowFrameBound{Kind: "CURRENT_ROW"}
+		case "FOLLOWING", "UNBOUNDED_FOLLOWING":
+			// ROWS n FOLLOWING / ROWS UNBOUNDED FOLLOWING 等价
+			// BETWEEN CURRENT ROW AND n/UNBOUNDED FOLLOWING。
+			endBound := f.Start
+			f.Start = &WindowFrameBound{Kind: "CURRENT_ROW"}
+			f.End = endBound
+		}
+	}
+	// 标准 SQL 边界方向限制：起点不能是 UNBOUNDED FOLLOWING，终点不能是 UNBOUNDED PRECEDING。
+	if f.Start.Kind == "UNBOUNDED_FOLLOWING" {
+		return nil, errf("UNBOUNDED FOLLOWING cannot be the window frame start at %d", p.cur().pos)
+	}
+	if f.End.Kind == "UNBOUNDED_PRECEDING" {
+		return nil, errf("UNBOUNDED PRECEDING cannot be the window frame end at %d", p.cur().pos)
+	}
+	return f, nil
+}
+
+// parseWindowFrameBound 解析单个帧边界。
+func (p *parser) parseWindowFrameBound() (*WindowFrameBound, error) {
+	if p.cur().kind == tokKeyword {
+		switch p.cur().text {
+		case "UNBOUNDED":
+			p.next()
+			switch {
+			case p.cur().kind == tokKeyword && p.cur().text == "PRECEDING":
+				p.next()
+				return &WindowFrameBound{Kind: "UNBOUNDED_PRECEDING"}, nil
+			case p.cur().kind == tokKeyword && p.cur().text == "FOLLOWING":
+				p.next()
+				return &WindowFrameBound{Kind: "UNBOUNDED_FOLLOWING"}, nil
+			}
+			return nil, errf("expected PRECEDING or FOLLOWING after UNBOUNDED at %d, got %q", p.cur().pos, p.cur().text)
+		case "CURRENT":
+			p.next()
+			if err := p.expectKeyword("ROW"); err != nil {
+				return nil, err
+			}
+			return &WindowFrameBound{Kind: "CURRENT_ROW"}, nil
+		}
+	}
+	if p.cur().kind == tokNumber {
+		n := p.cur().text
+		p.next()
+		var kind string
+		if p.cur().kind != tokKeyword {
+			return nil, errf("expected PRECEDING or FOLLOWING after frame offset at %d, got %q", p.cur().pos, p.cur().text)
+		}
+		switch p.cur().text {
+		case "PRECEDING":
+			kind = "PRECEDING"
+		case "FOLLOWING":
+			kind = "FOLLOWING"
+		default:
+			return nil, errf("expected PRECEDING or FOLLOWING after frame offset at %d, got %q", p.cur().pos, p.cur().text)
+		}
+		p.next()
+		iv, err := strconv.ParseInt(n, 10, 64)
+		if err != nil {
+			return nil, errf("invalid window frame offset %q", n)
+		}
+		return &WindowFrameBound{Kind: kind, Offset: iv}, nil
+	}
+	return nil, errf("expected UNBOUNDED | CURRENT ROW | n PRECEDING/FOLLOWING in window frame at %d, got %q", p.cur().pos, p.cur().text)
 }
 
 // tryParseTupleIn 尝试解析行值 IN：(col,...) IN ((v,...),(v,...))。
@@ -2829,6 +3000,155 @@ func (p *parser) parseWhere() (Where, error) {
 		break
 	}
 	return w, nil
+}
+
+// parseHaving 解析 HAVING 条件组（AND 组合，至少一个条件）。
+func (p *parser) parseHaving() (Where, error) {
+	var w Where
+	for {
+		c, err := p.parseHavingCond()
+		if err != nil {
+			return w, err
+		}
+		w.Conds = append(w.Conds, c)
+		if p.cur().kind == tokKeyword && p.cur().text == "AND" {
+			p.next()
+			continue
+		}
+		break
+	}
+	return w, nil
+}
+
+// parseHavingCond 解析 HAVING 单条件。左操作数优先识别聚合调用
+// （COUNT/SUM/AVG/MAX/MIN，支持表达式参数与 DISTINCT，如 HAVING SUM(a+b) > 5、
+// COUNT(DISTINCT grp) >= 2）；否则回落为普通条件（parseCond：
+// 列/算术表达式/CASE 左，支持 = != < > <= >= BETWEEN IN LIKE 与子查询）。
+func (p *parser) parseHavingCond() (Cond, error) {
+	var c Cond
+	if p.cur().kind == tokIdent {
+		up := strings.ToUpper(p.cur().text)
+		switch up {
+		case "COUNT", "SUM", "AVG", "MAX", "MIN", "ROW_NUMBER", "RANK", "DENSE_RANK":
+			if p.pos+1 < len(p.toks) && p.toks[p.pos+1].kind == tokLParen {
+				sc, err := p.parseAggSelectColumn(up)
+				if err != nil {
+					return c, err
+				}
+				if sc.Window != nil {
+					return c, errf("window function not allowed in HAVING: %s", sc.Raw)
+				}
+				c.LeftAgg = &sc
+				if err := p.parseHavingRight(&c); err != nil {
+					return c, err
+				}
+				return c, nil
+			}
+		}
+	}
+	return p.parseCond()
+}
+
+// parseHavingRight 解析 HAVING 聚合左操作数之后的运算符与右值
+// （= != < > <= >= BETWEEN IN LIKE；右值支持字面量/算术表达式/列引用）。
+func (p *parser) parseHavingRight(c *Cond) error {
+	switch p.cur().kind {
+	case tokEq:
+		c.Op = "="
+		p.next()
+	case tokNe:
+		c.Op = "!="
+		p.next()
+	case tokLt:
+		c.Op = "<"
+		p.next()
+	case tokGt:
+		c.Op = ">"
+		p.next()
+	case tokLe:
+		c.Op = "<="
+		p.next()
+	case tokGe:
+		c.Op = ">="
+		p.next()
+	case tokKeyword:
+		switch p.cur().text {
+		case "BETWEEN":
+			c.Op = "BETWEEN"
+			p.next()
+			v, err := p.parseValue()
+			if err != nil {
+				return err
+			}
+			c.Val = v
+			if err := p.expectKeyword("AND"); err != nil {
+				return err
+			}
+			v2, err := p.parseValue()
+			if err != nil {
+				return err
+			}
+			c.Val2 = v2
+			return nil
+		case "IN":
+			c.Op = "IN"
+			p.next()
+			if _, err := p.expect(tokLParen, "("); err != nil {
+				return err
+			}
+			for {
+				v, err := p.parseValue()
+				if err != nil {
+					return err
+				}
+				c.InList = append(c.InList, v)
+				if p.cur().kind == tokComma {
+					p.next()
+					continue
+				}
+				break
+			}
+			if _, err := p.expect(tokRParen, ")"); err != nil {
+				return err
+			}
+			return nil
+		case "LIKE":
+			c.Op = "LIKE"
+			p.next()
+			v, err := p.parseValue()
+			if err != nil {
+				return err
+			}
+			c.Val = v
+			return nil
+		default:
+			return errf("expected comparison operator at %d, got %q", p.cur().pos, p.cur().text)
+		}
+	default:
+		return errf("expected comparison operator at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	// 右值：字面量 / 算术表达式 / 列引用（与 parseCond 一致）。
+	if p.cur().kind == tokIdent || p.cur().kind == tokNumber ||
+		p.cur().kind == tokPlus || p.cur().kind == tokMinus || p.cur().kind == tokLParen {
+		rexpr, err := p.parseExpr()
+		if err != nil {
+			return err
+		}
+		if rexpr.isPlainColumn() {
+			c.RightRef = qualifiedName(rexpr.Ref, rexpr.Col)
+		} else if rexpr.isLiteral() {
+			c.Val = *rexpr.Val
+		} else {
+			c.RightExpr = rexpr
+		}
+		return nil
+	}
+	v, err := p.parseValue()
+	if err != nil {
+		return err
+	}
+	c.Val = v
+	return nil
 }
 
 // parseCond 解析单个条件：左列（或 CASE 表达式）op 右值（支持 BETWEEN/IN/LIKE 与列引用右值）。

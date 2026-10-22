@@ -255,17 +255,25 @@ func TestUpsertUpdateUniqueConflictErr(t *testing.T) {
 	}
 }
 
-// 外键 RESTRICT：ON DUPLICATE 更新被引用父行 → 拒绝且回滚。
+// 外键 RESTRICT（P0-3 语义）：ON DUPLICATE 更新被引用父行非主键列 → 放行
+// （RESTRICT 仅拦主键变化）；试图改主键列 → 拒绝且回滚。
 func TestUpsertOnDuplicateFKRestrict(t *testing.T) {
 	e := newEngine(t)
 	mustExec(t, e, "CREATE TABLE parent (id INT PRIMARY KEY, name TEXT)")
 	mustExec(t, e, "CREATE TABLE child (id INT PRIMARY KEY, pid INT, FOREIGN KEY (pid) REFERENCES parent(id))")
 	mustExec(t, e, "INSERT INTO parent (id, name) VALUES (1, 'a')")
 	mustExec(t, e, "INSERT INTO child (id, pid) VALUES (10, 1)")
-	mustErr(t, e, "INSERT INTO parent (id, name) VALUES (1, 'a2') ON DUPLICATE KEY UPDATE name='a2'", "foreign key constraint violated")
+	// 被引用父行更新非主键列：放行
+	mustExec(t, e, "INSERT INTO parent (id, name) VALUES (1, 'a2') ON DUPLICATE KEY UPDATE name='a2'")
 	rows := mustRows(t, e, "SELECT name FROM parent WHERE id = 1")
-	if len(rows) != 1 || rows[0][0].S != "a" {
-		t.Fatalf("fk restrict rollback: %+v", rows)
+	if len(rows) != 1 || rows[0][0].S != "a2" {
+		t.Fatalf("upsert non-pk update allowed: %+v", rows)
+	}
+	// 试图改主键列：拒绝且回滚
+	mustErr(t, e, "INSERT INTO parent (id, name) VALUES (1, 'a3') ON DUPLICATE KEY UPDATE id=2", "cannot update primary key column")
+	rows = mustRows(t, e, "SELECT name FROM parent WHERE id = 1")
+	if len(rows) != 1 || rows[0][0].S != "a2" {
+		t.Fatalf("upsert pk update rejected rollback: %+v", rows)
 	}
 }
 

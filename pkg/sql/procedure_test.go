@@ -176,9 +176,9 @@ func TestM15ProcedureRecursionGuard(t *testing.T) {
 	e := newEngine(t)
 	setupUsers(t, e)
 
-	// 过程体 CALL 自身：创建成功，调用时递归防护拒绝。
+	// 过程体 CALL 自身：创建成功；P0-2 放开递归，无限递归由深度上限（栈保护）拦截。
 	mustExec(t, e, "CREATE PROCEDURE p_rec BEGIN CALL p_rec; END")
-	mustErr(t, e, "CALL p_rec", "recursion not supported")
+	mustErr(t, e, "CALL p_rec", "recursion depth exceeded")
 }
 
 func TestM15ProcedureCoexistWithOthers(t *testing.T) {

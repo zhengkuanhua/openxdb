@@ -2,6 +2,17 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_4af21075cdd111f1898e525400248c00
+    ReservedCode1: x2s9rj4MGVZ1nA4POXhScN+hTOPZvsYpMMxDoSy+W4m+SSVYIdUpY4PP7SnOeGoeaigkY7tC1a9bRZv5joabyTPxMCBJjDEH6g3o/SL/AV7QSSJcm3hunepYhjygIA6d2i2uLqS/HjNUd7r4cORcYos6mq+i8ACPsI0+aigQj17w4y+F6k3BUG1RmwU=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_4af21075cdd111f1898e525400248c00
+    ReservedCode2: x2s9rj4MGVZ1nA4POXhScN+hTOPZvsYpMMxDoSy+W4m+SSVYIdUpY4PP7SnOeGoeaigkY7tC1a9bRZv5joabyTPxMCBJjDEH6g3o/SL/AV7QSSJcm3hunepYhjygIA6d2i2uLqS/HjNUd7r4cORcYos6mq+i8ACPsI0+aigQj17w4y+F6k3BUG1RmwU=
+---
+
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
     ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_7ba0af56c91211f196f9525400248c00
     ReservedCode1: /Hidy1UX3iuZHTta/OagDFGb64+9FitizuQSx7liNK2kEEziZI54iswdWMMuLMB54sbW3W20cPMaqdoxD4NAsMphaewTggGGYwypZTArzAQfgXBmefiZND4GXKkfplIla/gxWvywp25qwumuhKY4KBpvJj3tRU+u+rEPdilRgxGCTeTyWLryYiS285w=
     ContentPropagator: 001191440300708461136T1XGW3
@@ -402,8 +413,10 @@ SELECT name FROM users WHERE id IN (SELECT user_id FROM orders WHERE amount > 10
 WITH adult AS (SELECT id, name FROM users WHERE age >= 18)
 SELECT * FROM adult;
 
--- 窗口函数（M10）
+-- 窗口函数（M10；P0-5 起支持显式 ROWS/RANGE 帧）
 SELECT name, age, ROW_NUMBER() OVER (ORDER BY age) AS rn FROM users;
+SELECT name, age, SUM(age) OVER (ORDER BY age ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS move_sum FROM users;
+SELECT name, age, SUM(age) OVER (ORDER BY age RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS grp_sum FROM users;
 
 -- BETWEEN / IN / LIKE
 SELECT * FROM users WHERE age BETWEEN 25 AND 35;
@@ -770,7 +783,7 @@ openxdb stats [--addr 127.0.0.1:7788] [--interval 5] [--json]
 
 > 详细清单见 [KNOWN_LIMITATIONS.md](../KNOWN_LIMITATIONS.md)。以下为概要：
 
-1. **SQL 子集**：OpenXDB 实现的是 SQL 子集，并非完整 SQL 标准。不支持 `HAVING` 子句；DDL/DML/查询能力以[第 4 章](#4-sql-参考)为准。
+1. **SQL 子集**：OpenXDB 实现的是 SQL 子集，并非完整 SQL 标准。`HAVING` 子句、聚合表达式参数（如 `SUM(a+b)`）、`COUNT(DISTINCT expr)` 及 `GROUP BY` 后 `ORDER BY`/`LIMIT` 已支持（v1.2.0，详见 [T41_sql_having_groupby.md](T41_sql_having_groupby.md)）；DDL/DML/查询能力以[第 4 章](#4-sql-参考)为准。
 2. **MySQL wire protocol 兼容为子集（自 v1.1.0 起）**：默认使用自研二进制 TCP 协议；可通过 `openxdb start --mysql-port <port>` 启用 MySQL wire protocol 兼容监听，支持 MySQL CLI / go-sql-driver / JDBC 直连常用查询/DML/预处理语句；依赖完整 MySQL 生态扩展（binlog 复制、mysqldump 全部选项等）的工具仍不可直接复用。
 3. **全局会话锁性能边界**：当前会话层串行化全局锁是主要吞吐瓶颈（见[第 9 章](#9-性能基准)），高并发写入场景吞吐受限。
 4. **行协议限制**：不支持单元格内换行（多行文本参数会被驱动拒绝）；空单元格同时表示 NULL 与空字符串。
@@ -818,4 +831,5 @@ JDBC：`jdbc:openxdb://host:7788`；Python：`openxdb.connect("host", 7788)`。�
 ---
 
 *本文档由 OpenXDB 项目 README.md 与 docs/ 目录设计文档整理而成，v1.0.0。*
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

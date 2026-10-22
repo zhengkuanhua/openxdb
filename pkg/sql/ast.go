@@ -21,10 +21,10 @@ func StrVal(s string) Value { return Value{Kind: "TEXT", S: s} }
 
 // ColumnDef 列定义。
 type ColumnDef struct {
-	Name           string
-	Type           string // INT | TEXT | DATE | DECIMAL | BLOB
-	Params         []int  // 类型精度参数：varchar(10)→[10]、decimal(12,2)→[12,2]（仅解析接受，不强制长度）
-	AutoIncrement  bool   // AUTO_INCREMENT 列属性（MySQL DDL 兼容，仅登记）
+	Name          string
+	Type          string // INT | TEXT | DATE | DECIMAL | BLOB
+	Params        []int  // 类型精度参数：varchar(10)→[10]、decimal(12,2)→[12,2]（仅解析接受，不强制长度）
+	AutoIncrement bool   // AUTO_INCREMENT 列属性（MySQL DDL 兼容，仅登记）
 }
 
 // Cond 过滤条件：col op value（AND 组合，M1 不支持 OR）。
@@ -41,11 +41,12 @@ type Cond struct {
 	Sub      *SelectStmt     // IN 子查询（右值）
 	LeftCase *CaseWhenClause // 左操作数为 CASE 表达式（P2）
 	LeftExpr *Expr           // 左操作数为算术表达式（T40；与 Ref/Col/LeftCase 互斥）
+	LeftAgg  *SelectColumn   // 左操作数为聚合调用（P0-4 HAVING：COUNT/SUM/AVG/MAX/MIN）
 	// TPC-C 兼容：行值 IN——(col1, col2) IN ((v1,v2),(v3,v4))。
 	// Op == "TUPLE_IN" 时使用 TupleLeft + TupleVals，忽略 Col/Val/InList。
-	TupleLeft  []string // 左操作数列名列表
-	TupleVals  [][]Value // 右值元组列表
-	RightExpr *Expr          // 右操作数为算术表达式（T40；与 RightRef/Val/InList/Sub 互斥）
+	TupleLeft []string  // 左操作数列名列表
+	TupleVals [][]Value // 右值元组列表
+	RightExpr *Expr     // 右操作数为算术表达式（T40；与 RightRef/Val/InList/Sub 互斥）
 }
 
 // Where 条件组（全部 AND 语义）。
@@ -69,14 +70,16 @@ type CreateTableStmt struct {
 
 func (CreateTableStmt) stmt() {}
 
-// ForeignKey 外键约束定义（M9）。
+// ForeignKey 外键约束定义（M9，P0-3 扩展 ON UPDATE）。
 // Columns 为子表（本表）外键列，RefTable/RefColumns 为引用父表与父列；
-// OnDelete 取值 "CASCADE" / "RESTRICT"（默认 RESTRICT，即 NO ACTION 语义）。
+// OnDelete / OnUpdate 取值 "" / "CASCADE" / "RESTRICT" / "SET NULL"
+// （缺省即 RESTRICT，即 NO ACTION 语义）。
 type ForeignKey struct {
 	Columns    []string `json:"columns"`
 	RefTable   string   `json:"ref_table"`
 	RefColumns []string `json:"ref_columns"`
 	OnDelete   string   `json:"on_delete,omitempty"`
+	OnUpdate   string   `json:"on_update,omitempty"`
 }
 
 // DropTableStmt DROP TABLE。
@@ -253,16 +256,17 @@ type OnDuplicateUpdate struct {
 // Window 描述 PARTITION BY / ORDER BY；仅允许出现在 SELECT 列表，其它位置解析报错。
 // Expr 非空表示投影列或聚合参数为算术表达式（T40，忽略 Col/Ref 作普通列取值）。
 type SelectColumn struct {
-	Raw    string          // 原始文本（列名、*、COUNT(*)、SUM(x)、AVG(x)、CASE 表达式、算术表达式）
-	Agg    string          // "" | "COUNT" | "SUM" | "AVG" | "MAX" | "MIN" | "ROW_NUMBER" | "RANK" | "DENSE_RANK"
-	Ref    string          // 限定表名/别名（t.col 时非空；聚合参数亦可限定）
-	Col    string          // 聚合目标列 / 裸列名（COUNT 可为空）
-	Name   string          // 输出列名
-	Alias  string          // AS 别名（空 = 默认输出名）
-	Case   *CaseWhenClause // 非空 = 输出 CASE 表达式求值结果（忽略 Col）
-	Expr   *Expr           // 非空 = 投影/聚合参数为算术表达式（T40）
-	Window *WindowSpec     // 非空 = 窗口函数列（OVER 子句）
-	Var    string          // M18-C：用户变量引用（SELECT @var，含 @）
+	Raw      string          // 原始文本（列名、*、COUNT(*)、SUM(x)、AVG(x)、CASE 表达式、算术表达式）
+	Agg      string          // "" | "COUNT" | "SUM" | "AVG" | "MAX" | "MIN" | "ROW_NUMBER" | "RANK" | "DENSE_RANK"
+	Distinct bool            // P0-4：聚合参数 DISTINCT（COUNT(DISTINCT expr/col) 等）
+	Ref      string          // 限定表名/别名（t.col 时非空；聚合参数亦可限定）
+	Col      string          // 聚合目标列 / 裸列名（COUNT 可为空）
+	Name     string          // 输出列名
+	Alias    string          // AS 别名（空 = 默认输出名）
+	Case     *CaseWhenClause // 非空 = 输出 CASE 表达式求值结果（忽略 Col）
+	Expr     *Expr           // 非空 = 投影/聚合参数为算术表达式（T40）
+	Window   *WindowSpec     // 非空 = 窗口函数列（OVER 子句）
+	Var      string          // M18-C：用户变量引用（SELECT @var，含 @）
 }
 
 // Expr 算术表达式节点（T40）：二元算术（+ - * / %）与一元负号（NEG）。
@@ -300,11 +304,28 @@ type CTE struct {
 	Select *SelectStmt
 }
 
-// WindowSpec 窗口函数规格（M10）：OVER(PARTITION BY ... ORDER BY ...)。
+// WindowSpec 窗口函数规格（M10）：OVER(PARTITION BY ... ORDER BY ... [frame])。
 // 无显式框架，默认为 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW。
 type WindowSpec struct {
-	PartitionBy []string // 分区列（t.col / col）
-	OrderBy     *OrderBy // 窗口内排序（可为 nil）
+	PartitionBy []string      // 分区列（t.col / col）
+	OrderBy     *OrderBy      // 窗口内排序（可为 nil）
+	Frame       *WindowFrame  // P0-5：显式窗口帧（nil = 默认 ROWS UNBOUNDED PRECEDING..CURRENT ROW）
+}
+
+// WindowFrameBound 窗口帧边界（P0-5）。
+// Kind 取值："UNBOUNDED_PRECEDING" | "PRECEDING" | "CURRENT_ROW" | "FOLLOWING" | "UNBOUNDED_FOLLOWING"。
+// Offset 仅 PRECEDING / FOLLOWING 使用（n PRECEDING / n FOLLOWING）。
+type WindowFrameBound struct {
+	Kind   string
+	Offset int64
+}
+
+// WindowFrame 显式窗口帧（P0-5）：ROWS 或 RANGE 帧。
+// Start/End 均非空；单边界简写（如 ROWS UNBOUNDED PRECEDING）在解析时补齐另一端。
+type WindowFrame struct {
+	Type  string // "ROWS" | "RANGE"
+	Start *WindowFrameBound
+	End   *WindowFrameBound
 }
 
 // SelectStmt SELECT。
@@ -318,12 +339,13 @@ type SelectStmt struct {
 	SubAlias  string      // FROM 子查询别名（必填）
 	Joins     []JoinClause
 	Where     *Where
+	Having    *Where   // P0-4：HAVING 过滤条件（AND 组合，作用于分组/聚合结果）
 	GroupBy   []string // GROUP BY 列（t.col / col）
 	OrderBy   *OrderBy
 	OrderBys  []OrderBy // M18-C：多列 ORDER BY（首列同步写入 OrderBy 保持既有单列路径兼容）
-	Limit     int // <=0 不限
-	Offset    int // <=0 不偏移（M12-2 分页）
-	ForUpdate bool // FOR UPDATE（MySQL TPC-C 语句语法；无行锁语义，仅吞掉保证可解析）
+	Limit     int       // <=0 不限
+	Offset    int       // <=0 不偏移（M12-2 分页）
+	ForUpdate bool      // FOR UPDATE（MySQL TPC-C 语句语法；无行锁语义，仅吞掉保证可解析）
 }
 
 func (SelectStmt) stmt() {}
@@ -477,11 +499,12 @@ type DropProcedureStmt struct {
 
 func (DropProcedureStmt) stmt() {}
 
-// CallStmt CALL <name> [( <value> [, <value> ...] )]（M15-3）。
-// Args 为实参列表，与过程定义参数一一对应代入。
+// CallStmt CALL <name> [( <expr> [, <expr> ...] )]（M15-3 / P0-2）。
+// Args 为实参表达式列表（支持字面量、@var 引用及算术表达式，如 CALL p(@n - 1)），
+// 执行时求值为 Value 后与过程定义参数一一对应代入。
 type CallStmt struct {
 	Name string
-	Args []Value
+	Args []*Expr
 }
 
 func (CallStmt) stmt() {}
@@ -636,6 +659,7 @@ type ShowConfigStmt struct {
 }
 
 func (ShowConfigStmt) stmt() {}
+
 // ShowBackupStatusStmt SHOW BACKUP STATUS（BR 方向②）：输出备份调度配置
 // （周期/保留份数/目录/远程目标）与最近执行状态（下次执行/最近结果/错误）。
 type ShowBackupStatusStmt struct{}
@@ -675,7 +699,7 @@ func (ShowBinlogEventsStmt) stmt() {}
 type SetStmt struct {
 	Name    string
 	Value   string
-	Persist bool // M16-1：true 表示 SET PERSIST <key> = <value>
+	Persist bool   // M16-1：true 表示 SET PERSIST <key> = <value>
 	Var     string // M18-C：用户变量名（含 @），非空表示用户变量赋值
 	VarVal  Value  // M18-C：用户变量值
 }

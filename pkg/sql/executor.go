@@ -123,7 +123,7 @@ type splitConfig struct {
 func NewExecutor(tm txn.TxnManager) *Executor {
 	e := &Executor{
 		tm:            tm,
-		globalSess:    &Session{prepared: map[string]string{}, userVars: map[string]Value{}},
+		globalSess:    &Session{prepared: map[string]string{}, userVars: map[string]Value{}, pendingRemote: map[string][]kvOp{}},
 		router:        sharding.NewRouter(),
 		failoverDone:  map[string]bool{},
 		splitAcc:      map[uint64]int64{},
@@ -635,6 +635,10 @@ func (e *Executor) beginTx(sess *Session) error {
 	// BEGIN 阶段不再取号：隐式/显式事务并发时，取号顺序与行锁获取顺序
 	// 可能错位，导致后拿锁事务拿到更小 beginTS、读不到前序提交而覆盖写（丢更新）。
 	sess.curBeginTS = 0
+	// P0-1：防御清空上次事务遗留的 2PC 暂存（正常 COMMIT/ROLLBACK 已清空；
+	// 此处兜底异常残留，避免跨事务串扰）。
+	sess.pendingLocal = nil
+	sess.pendingRemote = map[string][]kvOp{}
 	return nil
 }
 
@@ -646,6 +650,10 @@ func (e *Executor) commitTx(sess *Session) error {
 		return &SQLError{Msg: "no active transaction"}
 	}
 	tx := sess.curTx
+	// P0-1：锁内取出事务快照号与远端 2PC 暂存标记（后续 execExplicitCommit2PC
+	// 在会话复位后执行，不能依赖会话字段）。
+	beginTS := sess.curBeginTS
+	hasRemote := len(sess.pendingRemote) > 0
 	sess.inTx = false
 	sess.curTx = nil
 	sess.curBeginTS = 0
@@ -656,7 +664,17 @@ func (e *Executor) commitTx(sess *Session) error {
 		// 的新鲜号，避免读到残余预取批次中的滞后时间戳。
 		e.ts.Reset()
 	}
-	if err := tx.Commit(); err != nil {
+	var err error
+	if hasRemote {
+		// P0-1：显式事务跨 region 写统一走 2PC 提交（延迟 PREPARE→COMMIT，
+		// 协调者记录/版本记录/后台重放与 autocommit 2PC 同一状态机）。
+		err = e.execExplicitCommit2PC(sess, tx, beginTS)
+	} else {
+		err = tx.Commit()
+	}
+	// 事务已关闭（无论成败），清空累积的 2PC 暂存，避免残留跨事务串扰。
+	e.clearPendingExplicit(sess)
+	if err != nil {
 		e.releaseHeldLocks(sess)
 		return err
 	}
@@ -680,6 +698,10 @@ func (e *Executor) rollbackTx(sess *Session) error {
 	sess.curTx = nil
 	sess.curBeginTS = 0
 	sess.curTxID = ""
+	// P0-1：远端写仅暂存未 PREPARE（PREPARE 发生在 COMMIT 时），
+	// 回滚直接丢弃，无需向参与者发 ABORT；本地写随 tx.Rollback 丢弃。
+	sess.pendingLocal = nil
+	sess.pendingRemote = map[string][]kvOp{}
 	e.mu.Unlock()
 	if e.ts != nil {
 		e.ts.Reset()
@@ -705,6 +727,9 @@ func (e *Executor) resetSessionTxState(sess *Session) {
 	sess.curTx = nil
 	sess.curBeginTS = 0
 	sess.curTxID = ""
+	// P0-1：同步清空显式事务 2PC 暂存（异常路径复位时防御）。
+	sess.pendingLocal = nil
+	sess.pendingRemote = map[string][]kvOp{}
 	e.mu.Unlock()
 	// 临时提升事务若持过写锁（如 INSERT...SELECT 场景），一并释放避免泄漏。
 	e.releaseHeldLocks(sess)
@@ -1417,12 +1442,13 @@ func (e *Executor) ddlCommit(sess *Session, tx txn.Txn, tabs []*TableMeta, ops [
 			return err
 		}
 	} else {
-		if e.hasRemoteOps(ops) {
-			return &SQLError{Msg: "distributed write inside explicit transaction not supported in M5 (autocommit 2PC only)"}
-		}
-		if err := applyOps(tx, ops); err != nil {
+		// P0-1：显式事务内跨 region 写支持——本地写立即进入会话事务缓冲，
+		// 远端写暂存（语句成功后再挂载，COMMIT 统一 2PC 提交）。
+		local, remote, err := e.splitExplicitOps(sess, tx, ops)
+		if err != nil {
 			return err
 		}
+		e.stagePendingExplicit(sess, local, remote)
 	}
 	return nil
 }
@@ -1674,6 +1700,9 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 // ---- DML ----
 
 func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
+	// P0-1：显式事务跨 region 写暂存（本地/远端分组；语句成功路径末尾挂载）。
+	var explLocal []kvOp
+	var explRemote map[string][]kvOp
 	// M18-C：information_schema 为只读虚拟目录，禁止 INSERT。
 	if isInfoSchemaName(s.Table) {
 		return nil, &SQLError{Msg: "cannot insert into information_schema"}
@@ -1758,11 +1787,10 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 		// 避免后续 maybeAutoSplit / AFTER 触发器通过 getTx 拿到已提交的 curTx。
 		e.resetSessionTxState(sess)
 	} else {
-		// 显式会话事务：仅支持本地 region 写（远端写 M5 返回明确错误）
-		if e.hasRemoteOps(ops) {
-			return nil, &SQLError{Msg: "distributed write inside explicit transaction not supported in M5 (autocommit 2PC only)"}
-		}
-		if err := applyOps(tx, ops); err != nil {
+		// P0-1：显式事务内跨 region 写支持——本地写立即进入会话事务缓冲，
+		// 远端写暂存（语句成功后再挂载，COMMIT 统一 2PC 提交）。
+		explLocal, explRemote, err = e.splitExplicitOps(sess, tx, ops)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -1777,6 +1805,9 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 			return nil, err
 		}
 	}
+	// P0-1：语句成功，挂载显式事务跨 region 写暂存（本地累积供恢复重放与
+	// 版本记录，远端按节点累积，COMMIT 统一 2PC；ROLLBACK 直接丢弃）。
+	e.stagePendingExplicit(sess, explLocal, explRemote)
 	return &Result{AffectedRows: affected}, nil
 }
 
@@ -2016,14 +2047,8 @@ func (e *Executor) onDupUpdateOps(sess *Session, tx txn.Txn, tabs []*TableMeta, 
 	if err := e.checkFKOnRow(sess, tx, tabs, meta, updated); err != nil {
 		return nil, 0, err
 	}
-	// 被更新行若被外键引用（作为父表）则禁止（ON UPDATE RESTRICT 语义）
-	referenced, err := e.fkParentReferenced(tx, tabs, meta, target)
-	if err != nil {
-		return nil, 0, err
-	}
-	if referenced {
-		return nil, 0, &SQLError{Msg: "foreign key constraint violated: " + meta.Name + " is referenced by child table (ON UPDATE not supported)"}
-	}
+	// P0-3：ON DUPLICATE KEY UPDATE 禁止改主键列（见上方校验），主键不变则
+	// 子表引用不受影响，被引用行更新非主键列直接放行，无需外键联动。
 	var ops []kvOp
 	if onDisk {
 		dops, err := e.delIndexKeyOps(meta, target, targetPK, rid)
@@ -2063,7 +2088,7 @@ func (e *Executor) replaceRowOps(sess *Session, tx txn.Txn, tabs []*TableMeta, m
 		}
 		if onDisk {
 			// 外键联动删除（CASCADE 子行等）
-			fops, err := e.collectFKDeleteOps(tx, tabs, meta, target)
+			fops, err := e.collectFKDeleteOps(sess, tx, tabs, meta, target)
 			if err != nil {
 				return nil, 0, err
 			}
@@ -2755,19 +2780,75 @@ func aggResultType(meta *TableMeta, rel *Rel, rows [][]Value, c *SelectColumn) s
 	return ""
 }
 
-// aggColumn 计算单列聚合值（COUNT/SUM/AVG；DECIMAL 保持精度，INT 走 int64）。
+// aggColumn 计算单列聚合值（COUNT/SUM/AVG/MAX/MIN；DECIMAL 保持精度，INT 走 int64）。
+// P0-4：COUNT(col/expr) 仅计非 NULL、支持 DISTINCT；SUM/AVG/MAX/MIN 跳过 NULL 并支持 DISTINCT。
 func aggColumn(meta *TableMeta, rows [][]Value, c *SelectColumn) (Value, error) {
-	switch c.Agg {
-	case "COUNT":
-		return IntVal(int64(len(rows))), nil
-	case "SUM", "AVG":
-		dec := false
-		var isum, dsum int64
+	if c.Agg == "COUNT" {
+		// COUNT(*)：无目标列时按行数计数。
+		if c.Col == "" {
+			return IntVal(int64(len(rows))), nil
+		}
+		seen := make(map[string]bool)
+		var cnt int64
 		for _, r := range rows {
 			v, err := rowValue(meta, r, c.Col)
 			if err != nil {
 				return Value{}, err
 			}
+			if v.Kind == "NULL" {
+				continue
+			}
+			if c.Distinct {
+				k := v.String()
+				if seen[k] {
+					continue
+				}
+				seen[k] = true
+			}
+			cnt++
+		}
+		return IntVal(cnt), nil
+	}
+	// MAX/MIN/SUM/AVG：收集非 NULL 操作数（DISTINCT 去重）。
+	vals := make([]Value, 0, len(rows))
+	seen := make(map[string]bool)
+	for _, r := range rows {
+		v, err := rowValue(meta, r, c.Col)
+		if err != nil {
+			return Value{}, err
+		}
+		if v.Kind == "NULL" {
+			continue
+		}
+		if c.Distinct {
+			k := v.String()
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+		}
+		vals = append(vals, v)
+	}
+	switch c.Agg {
+	case "MAX", "MIN":
+		if len(vals) == 0 {
+			return Value{Kind: "NULL"}, nil
+		}
+		best := vals[0]
+		for _, v := range vals[1:] {
+			cmp := compareVal(v, best)
+			if (c.Agg == "MAX" && cmp > 0) || (c.Agg == "MIN" && cmp < 0) {
+				best = v
+			}
+		}
+		return best, nil
+	case "SUM", "AVG":
+		if len(vals) == 0 {
+			return Value{Kind: "NULL"}, nil
+		}
+		dec := false
+		var isum, dsum int64
+		for _, v := range vals {
 			switch v.Kind {
 			case "INT":
 				isum += v.I
@@ -2778,19 +2859,16 @@ func aggColumn(meta *TableMeta, rows [][]Value, c *SelectColumn) (Value, error) 
 				return Value{}, &SQLError{Msg: "aggregate on non-numeric column: " + c.Name}
 			}
 		}
-		if len(rows) == 0 {
-			return Value{Kind: "NULL"}, nil
-		}
 		if dec {
 			if c.Agg == "SUM" {
 				return decVal(dsum), nil
 			}
-			return decVal(dsum / int64(len(rows))), nil
+			return decVal(dsum / int64(len(vals))), nil
 		}
 		if c.Agg == "SUM" {
 			return IntVal(isum), nil
 		}
-		return IntVal(isum / int64(len(rows))), nil
+		return IntVal(isum / int64(len(vals))), nil
 	}
 	return Value{}, &SQLError{Msg: "unknown aggregate: " + c.Agg}
 }
@@ -2807,7 +2885,7 @@ type Rel struct {
 
 // hasAdvancedSelect 判断 SELECT 是否走增强路径（保留旧单表路径的索引优化与既有行为）。
 func hasAdvancedSelect(s *SelectStmt) bool {
-	if s.Subquery != nil || len(s.Joins) > 0 || len(s.GroupBy) > 0 || s.Distinct {
+	if s.Subquery != nil || len(s.Joins) > 0 || len(s.GroupBy) > 0 || s.Distinct || s.Having != nil {
 		return true
 	}
 	if s.Where != nil {
@@ -3408,7 +3486,7 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 		return nil, &SQLError{Msg: "window function cannot be mixed with aggregate without GROUP BY"}
 	}
 	if hasAgg {
-		return e.aggRel(s, rel)
+		return e.aggRel(sess, tx, s, rel)
 	}
 	return e.finishRel(sess, tx, s, rel, rel.Rows)
 }
@@ -3466,23 +3544,62 @@ func aggOperand(rel *Rel, row []Value, c *SelectColumn) (Value, error) {
 }
 
 // aggValues 计算单列聚合值（COUNT/SUM/AVG/MAX/MIN）。
+// P0-4：支持表达式参数与 DISTINCT；COUNT(*) 计全部行，COUNT(expr/col) 仅计非 NULL；
+// MAX/MIN/SUM/AVG 跳过 NULL 操作数；DISTINCT 先对非 NULL 操作数去重。
 func aggValues(rel *Rel, rows [][]Value, c *SelectColumn) (Value, error) {
-	switch c.Agg {
-	case "COUNT":
-		return IntVal(int64(len(rows))), nil
-	case "MAX", "MIN":
-		if len(rows) == 0 {
-			return Value{Kind: "NULL"}, nil
+	if c.Agg == "COUNT" {
+		// COUNT(*)：无列引用也无表达式时按行数计数。
+		if c.Col == "" && c.Expr == nil {
+			return IntVal(int64(len(rows))), nil
 		}
-		best, err := aggOperand(rel, rows[0], c)
-		if err != nil {
-			return Value{}, err
-		}
-		for _, r := range rows[1:] {
+		seen := make(map[string]bool)
+		var cnt int64
+		for _, r := range rows {
 			v, err := aggOperand(rel, r, c)
 			if err != nil {
 				return Value{}, err
 			}
+			if v.Kind == "NULL" {
+				continue
+			}
+			if c.Distinct {
+				k := v.String()
+				if seen[k] {
+					continue
+				}
+				seen[k] = true
+			}
+			cnt++
+		}
+		return IntVal(cnt), nil
+	}
+	// MAX/MIN/SUM/AVG：收集非 NULL 操作数（DISTINCT 去重）。
+	vals := make([]Value, 0, len(rows))
+	seen := make(map[string]bool)
+	for _, r := range rows {
+		v, err := aggOperand(rel, r, c)
+		if err != nil {
+			return Value{}, err
+		}
+		if v.Kind == "NULL" {
+			continue
+		}
+		if c.Distinct {
+			k := v.String()
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+		}
+		vals = append(vals, v)
+	}
+	switch c.Agg {
+	case "MAX", "MIN":
+		if len(vals) == 0 {
+			return Value{Kind: "NULL"}, nil
+		}
+		best := vals[0]
+		for _, v := range vals[1:] {
 			cmp := compareVal(v, best)
 			if (c.Agg == "MAX" && cmp > 0) || (c.Agg == "MIN" && cmp < 0) {
 				best = v
@@ -3491,14 +3608,13 @@ func aggValues(rel *Rel, rows [][]Value, c *SelectColumn) (Value, error) {
 		return best, nil
 	case "SUM", "AVG":
 		// INT：int64 求和；DECIMAL：scaled int64 求和后保持精度。
+		if len(vals) == 0 {
+			return Value{Kind: "NULL"}, nil
+		}
 		dec := false
 		var isum int64
 		var dsum int64
-		for _, r := range rows {
-			v, err := aggOperand(rel, r, c)
-			if err != nil {
-				return Value{}, err
-			}
+		for _, v := range vals {
 			switch v.Kind {
 			case "INT":
 				isum += v.I
@@ -3509,19 +3625,16 @@ func aggValues(rel *Rel, rows [][]Value, c *SelectColumn) (Value, error) {
 				return Value{}, &SQLError{Msg: "aggregate on non-numeric column: " + c.Name}
 			}
 		}
-		if len(rows) == 0 {
-			return Value{Kind: "NULL"}, nil
-		}
 		if dec {
 			if c.Agg == "SUM" {
 				return decVal(dsum), nil
 			}
-			return decVal(dsum / int64(len(rows))), nil
+			return decVal(dsum / int64(len(vals))), nil
 		}
 		if c.Agg == "SUM" {
 			return IntVal(isum), nil
 		}
-		return IntVal(isum / int64(len(rows))), nil
+		return IntVal(isum / int64(len(vals))), nil
 	}
 	return Value{}, errf("unsupported aggregate %q (supported: COUNT, SUM, AVG, MAX, MIN)", c.Agg)
 }
@@ -3599,10 +3712,6 @@ func computeWindowCol(rows [][]Value, getter func(row []Value, col string) (Valu
 		// 组内逐行窗口值：rank 为 RANK（带 gap），dense 为 DENSE_RANK（连续编号）
 		rank := 1
 		dense := 1
-		var isum, dsum int64
-		var bestWin Value
-		dec := false
-		cnt := 0
 		for t, oi := range sorted {
 			if t > 0 && ws.OrderBy != nil {
 				if compareVal(keyMap[sorted[t]], keyMap[sorted[t-1]]) != 0 {
@@ -3618,61 +3727,16 @@ func computeWindowCol(rows [][]Value, getter func(row []Value, col string) (Valu
 				v = IntVal(int64(rank))
 			case "DENSE_RANK":
 				v = IntVal(int64(dense))
-			case "COUNT":
-				cnt++
-				v = IntVal(int64(cnt))
-			case "MAX", "MIN":
-				var av Value
-				var err error
-				if c.Expr != nil {
-					av, err = exprEval(rows[oi], c.Expr)
-				} else {
-					av, err = getter(rows[oi], c.Col)
-				}
+			case "COUNT", "MAX", "MIN", "SUM", "AVG":
+				// P0-5：窗口帧内聚合（显式 ROWS/RANGE 帧；无帧时默认
+				// ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW）。
+				span, err := windowFrameSpan(ws, sorted, t, keyMap, oi)
 				if err != nil {
 					return nil, err
 				}
-				if cnt == 0 {
-					bestWin = av
-				} else {
-					cmp := compareVal(av, bestWin)
-					if (c.Agg == "MAX" && cmp > 0) || (c.Agg == "MIN" && cmp < 0) {
-						bestWin = av
-					}
-				}
-				cnt++
-				v = bestWin
-			case "SUM", "AVG":
-				var av Value
-				var err error
-				if c.Expr != nil {
-					av, err = exprEval(rows[oi], c.Expr)
-				} else {
-					av, err = getter(rows[oi], c.Col)
-				}
+				v, err = aggWindowSpan(sorted, span, rows, getter, exprEval, c)
 				if err != nil {
 					return nil, err
-				}
-				switch av.Kind {
-				case "INT":
-					isum += av.I
-				case "DECIMAL":
-					dec = true
-					dsum += av.I
-				default:
-					return nil, &SQLError{Msg: "window aggregate on non-numeric column: " + c.Name}
-				}
-				cnt++
-				if c.Agg == "SUM" {
-					if dec {
-						v = decVal(dsum)
-					} else {
-						v = IntVal(isum)
-					}
-				} else if dec {
-					v = decVal(dsum / int64(cnt))
-				} else {
-					v = IntVal(isum / int64(cnt))
 				}
 			default:
 				return nil, errf("unsupported window function %q (supported: ROW_NUMBER, RANK, DENSE_RANK, COUNT, MAX, MIN, SUM, AVG)", c.Agg)
@@ -3683,8 +3747,254 @@ func computeWindowCol(rows [][]Value, getter func(row []Value, col string) (Valu
 	return vals, nil
 }
 
-// aggRel 全局聚合（无 GROUP BY）。
-func (e *Executor) aggRel(s *SelectStmt, rel *Rel) (*Result, error) {
+// windowFrameSpan 计算排序后位置 t 的窗口帧跨度（P0-5）。
+// 返回帧内 sorted 位置索引列表（按排序序升序）；空帧返回 nil。
+// 无显式帧：默认 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW。
+// ROWS 帧：按物理行窗口；RANGE 帧：按 ORDER BY 键值域窗口（无 ORDER BY 时整分区）。
+func windowFrameSpan(ws *WindowSpec, sorted []int, t int, keyMap map[int]Value, curRow int) ([]int, error) {
+	if ws.Frame == nil {
+		return intRange(0, t), nil
+	}
+	if ws.Frame.Type == "ROWS" {
+		s, e := windowFrameRowsBounds(ws.Frame, len(sorted), t)
+		if e < s {
+			return nil, nil // 空帧
+		}
+		return intRange(s, e), nil
+	}
+	// RANGE 帧
+	if ws.OrderBy == nil {
+		return intRange(0, len(sorted)-1), nil
+	}
+	cur := keyMap[curRow]
+	lo, hi, err := windowFrameKeyBounds(ws.Frame, cur)
+	if err != nil {
+		return nil, err
+	}
+	var span []int
+	for j := 0; j < len(sorted); j++ {
+		if keyInFrame(keyMap[sorted[j]], cur, lo, hi) {
+			span = append(span, j)
+		}
+	}
+	return span, nil
+}
+
+// intRange 返回 [s, e] 闭区间的整数序列。
+func intRange(s, e int) []int {
+	out := make([]int, 0, e-s+1)
+	for i := s; i <= e; i++ {
+		out = append(out, i)
+	}
+	return out
+}
+
+// windowFrameRowsBounds 计算 ROWS 帧在排序后位置 t 的行闭区间 [s, e]（空帧时 s > e）。
+// 边界含 UNBOUNDED PRECEDING/FOLLOWING、CURRENT ROW、n PRECEDING/FOLLOWING。
+func windowFrameRowsBounds(f *WindowFrame, n, t int) (int, int) {
+	s := 0
+	e := n - 1
+	switch f.Start.Kind {
+	case "UNBOUNDED_PRECEDING":
+		s = 0
+	case "PRECEDING":
+		s = t - int(f.Start.Offset)
+		if s < 0 {
+			s = 0
+		}
+	case "CURRENT_ROW":
+		s = t
+	case "FOLLOWING":
+		s = t + int(f.Start.Offset)
+		if s >= n {
+			s = n // 空帧标记（start > end）
+		}
+	}
+	switch f.End.Kind {
+	case "UNBOUNDED_FOLLOWING":
+		e = n - 1
+	case "FOLLOWING":
+		e = t + int(f.End.Offset)
+		if e >= n {
+			e = n - 1
+		}
+	case "CURRENT_ROW":
+		e = t
+	case "PRECEDING":
+		e = t - int(f.End.Offset)
+		if e < 0 {
+			e = -1 // 空帧标记（end < start）
+		}
+	}
+	return s, e
+}
+
+// windowFrameKeyBounds 返回 RANGE 帧在键值 cur 下的值域边界（lo/hi 为 nil 表示无界）。
+func windowFrameKeyBounds(f *WindowFrame, cur Value) (*Value, *Value, error) {
+	var lo, hi *Value
+	switch f.Start.Kind {
+	case "UNBOUNDED_PRECEDING":
+		lo = nil
+	case "PRECEDING":
+		v, err := rangeOffsetVal(cur, f.Start.Offset, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		lo = &v
+	case "CURRENT_ROW":
+		v := cur
+		lo = &v
+	case "FOLLOWING":
+		v, err := rangeOffsetVal(cur, f.Start.Offset, true)
+		if err != nil {
+			return nil, nil, err
+		}
+		lo = &v
+	}
+	switch f.End.Kind {
+	case "UNBOUNDED_FOLLOWING":
+		hi = nil
+	case "FOLLOWING":
+		v, err := rangeOffsetVal(cur, f.End.Offset, true)
+		if err != nil {
+			return nil, nil, err
+		}
+		hi = &v
+	case "CURRENT_ROW":
+		v := cur
+		hi = &v
+	case "PRECEDING":
+		v, err := rangeOffsetVal(cur, f.End.Offset, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		hi = &v
+	}
+	return lo, hi, nil
+}
+
+// rangeOffsetVal 对数值键加减偏移（RANGE n PRECEDING/FOLLOWING 值域）。
+func rangeOffsetVal(cur Value, offset int64, following bool) (Value, error) {
+	switch cur.Kind {
+	case "INT":
+		if following {
+			return IntVal(cur.I + offset), nil
+		}
+		return IntVal(cur.I - offset), nil
+	case "DECIMAL":
+		if following {
+			return decVal(cur.I + offset*decUnit), nil
+		}
+		return decVal(cur.I - offset*decUnit), nil
+	}
+	return Value{}, &SQLError{Msg: "RANGE frame with offset requires numeric ORDER BY key"}
+}
+
+// keyInFrame 判断排序键 k 是否位于 RANGE 帧值域（以当前行键 cur 为基准）。
+// NULL 键仅与 NULL 键同行同帧（等值 NULL 语义）；非 NULL 键帧内排除 NULL。
+func keyInFrame(k, cur Value, lo, hi *Value) bool {
+	if k.Kind == "NULL" || cur.Kind == "NULL" {
+		return k.Kind == "NULL" && cur.Kind == "NULL"
+	}
+	if lo != nil && compareVal(k, *lo) < 0 {
+		return false
+	}
+	if hi != nil && compareVal(k, *hi) > 0 {
+		return false
+	}
+	return true
+}
+
+// aggWindowSpan 在窗口帧内（span 为 sorted 位置索引）计算聚合值（P0-5）。
+// 语义对齐全局聚合：COUNT(*) 计全部帧内行、COUNT(expr/col) 跳过 NULL；
+// MAX/MIN/SUM/AVG 跳过 NULL 操作数；空帧：COUNT=0，其余为 NULL。
+func aggWindowSpan(sorted []int, span []int, rows [][]Value, getter func(row []Value, col string) (Value, error), exprEval func(row []Value, e *Expr) (Value, error), c *SelectColumn) (Value, error) {
+	if c.Agg == "COUNT" {
+		if c.Col == "" && c.Expr == nil {
+			return IntVal(int64(len(span))), nil
+		}
+		var cnt int64
+		for _, j := range span {
+			av, err := winOperand(rows[sorted[j]], getter, exprEval, c)
+			if err != nil {
+				return Value{}, err
+			}
+			if av.Kind == "NULL" {
+				continue
+			}
+			cnt++
+		}
+		return IntVal(cnt), nil
+	}
+	if len(span) == 0 {
+		return Value{Kind: "NULL"}, nil
+	}
+	var vals []Value
+	for _, j := range span {
+		av, err := winOperand(rows[sorted[j]], getter, exprEval, c)
+		if err != nil {
+			return Value{}, err
+		}
+		if av.Kind == "NULL" {
+			continue
+		}
+		vals = append(vals, av)
+	}
+	switch c.Agg {
+	case "MAX", "MIN":
+		if len(vals) == 0 {
+			return Value{Kind: "NULL"}, nil
+		}
+		best := vals[0]
+		for _, v := range vals[1:] {
+			cmp := compareVal(v, best)
+			if (c.Agg == "MAX" && cmp > 0) || (c.Agg == "MIN" && cmp < 0) {
+				best = v
+			}
+		}
+		return best, nil
+	case "SUM", "AVG":
+		if len(vals) == 0 {
+			return Value{Kind: "NULL"}, nil
+		}
+		dec := false
+		var isum, dsum int64
+		for _, v := range vals {
+			switch v.Kind {
+			case "INT":
+				isum += v.I
+			case "DECIMAL":
+				dec = true
+				dsum += v.I
+			default:
+				return Value{}, &SQLError{Msg: "window aggregate on non-numeric column: " + c.Name}
+			}
+		}
+		if c.Agg == "SUM" {
+			if dec {
+				return decVal(dsum), nil
+			}
+			return IntVal(isum), nil
+		}
+		if dec {
+			return decVal(dsum / int64(len(vals))), nil
+		}
+		return IntVal(isum / int64(len(vals))), nil
+	}
+	return Value{}, errf("unsupported window function %q", c.Agg)
+}
+
+// winOperand 取窗口聚合操作数：表达式参数优先，否则取列值。
+func winOperand(row []Value, getter func(row []Value, col string) (Value, error), exprEval func(row []Value, e *Expr) (Value, error), c *SelectColumn) (Value, error) {
+	if c.Expr != nil {
+		if exprEval == nil {
+			return Value{}, errf("window expression requires expression evaluator: " + c.Name)
+		}
+		return exprEval(row, c.Expr)
+	}
+	return getter(row, c.Col)
+}
+func (e *Executor) aggRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel) (*Result, error) {
 	res := &Result{}
 	out := make([]Value, 0, len(s.Columns))
 	for _, c := range s.Columns {
@@ -3698,6 +4008,24 @@ func (e *Executor) aggRel(s *SelectStmt, rel *Rel) (*Result, error) {
 		out = append(out, v)
 	}
 	res.Rows = append(res.Rows, out)
+	// P0-4：无 GROUP BY 的全局聚合 HAVING 过滤（条件引用聚合列/聚合别名，如 HAVING COUNT(*) > 0）。
+	if s.Having != nil {
+		hrel := &Rel{Cols: append([]string{}, res.Columns...)}
+		ok := true
+		for _, c := range s.Having.Conds {
+			m, err := e.havingMatch(sess, tx, rel, rel.Rows, hrel, out, &c)
+			if err != nil {
+				return nil, err
+			}
+			if !m {
+				ok = false
+				break
+			}
+		}
+		if !ok {
+			res.Rows = res.Rows[:0]
+		}
+	}
 	// T40 遗留：全局聚合结果同样应用 LIMIT/OFFSET（先 OFFSET 跳过、再 LIMIT 截断；LIMIT<=0 不截断）。
 	res.Rows = applyOffsetLimit(res.Rows, s.Offset, s.Limit)
 	return res, nil
@@ -3744,6 +4072,8 @@ func (e *Executor) groupRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel) 
 		groups[k].rows = append(groups[k].rows, r)
 	}
 	res := &Result{}
+	// P0-4：每组分组键列值（与 res.Rows 平行），供 HAVING 表达式/ORDER BY 引用未选列时使用。
+	groupKeyVals := make([][]Value, 0, len(order))
 	// P1-10：GROUP BY + 窗口函数组合。窗口列先占位，分组循环结束后
 	// 在分组结果行（输出行）上计算窗口值（分区/排序/聚合引用输出列名）。
 	var winCols []*SelectColumn
@@ -3821,6 +4151,12 @@ func (e *Executor) groupRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel) 
 			}
 			out = append(out, v)
 		}
+		// P0-4：收集分组键列值（与 res.Rows 平行，供 HAVING/ORDER BY 引用未选列）。
+		gkv := make([]Value, len(keys))
+		for i, ki := range keys {
+			gkv[i] = g.rows[0][ki]
+		}
+		groupKeyVals = append(groupKeyVals, gkv)
 		res.Rows = append(res.Rows, out)
 	}
 	// P1-10：窗口列在分组结果行上统一计算（分区/排序/聚合参数按输出列名解析），
@@ -3849,9 +4185,175 @@ func (e *Executor) groupRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel) 
 			}
 		}
 	}
+	// P0-4：HAVING 过滤分组结果（在窗口计算之后），随后 ORDER BY 排序，最后 LIMIT/OFFSET。
+	if s.Having != nil {
+		hrel := &Rel{Cols: append(append([]string{}, res.Columns...), s.GroupBy...)}
+		kept := res.Rows[:0]
+		keptKeys := groupKeyVals[:0]
+		for ri, row := range res.Rows {
+			ok := true
+			for _, c := range s.Having.Conds {
+				m, err := e.havingMatch(sess, tx, rel, groups[order[ri]].rows, hrel, append(row, groupKeyVals[ri]...), &c)
+				if err != nil {
+					return nil, err
+				}
+				if !m {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				kept = append(kept, row)
+				keptKeys = append(keptKeys, groupKeyVals[ri])
+			}
+		}
+		res.Rows = kept
+		groupKeyVals = keptKeys
+	}
+	if err := sortGroupResult(res, s, groupKeyVals); err != nil {
+		return nil, err
+	}
 	// T40 遗留：GROUP BY 分组完成后同样应用 LIMIT/OFFSET（先 OFFSET 跳过、再 LIMIT 截断；LIMIT<=0 不截断）。
 	res.Rows = applyOffsetLimit(res.Rows, s.Offset, s.Limit)
 	return res, nil
+}
+
+// havingMatch 求值 HAVING 单条件。左操作数可为聚合调用（LeftAgg，在组内原始行上聚合）、
+// 算术表达式或分组列（在 hrel/hrow 上求值）；右值/运算符与 matchCond 一致。
+// hrel 为虚拟关系：输出列 + GROUP BY 键列；hrow = 输出行 + 分组键值行。
+func (e *Executor) havingMatch(sess *Session, tx txn.Txn, rel *Rel, groupRows [][]Value, hrel *Rel, hrow []Value, c *Cond) (bool, error) {
+	if c.Op == "EXISTS" {
+		return false, &SQLError{Msg: "EXISTS not supported in HAVING"}
+	}
+	var a Value
+	var err error
+	if c.LeftAgg != nil {
+		a, err = aggValues(rel, groupRows, c.LeftAgg)
+		if err != nil {
+			return false, err
+		}
+	} else if c.LeftExpr != nil {
+		a, err = evalExprForRow(hrel, hrow, c.LeftExpr)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		q := qualifiedName(c.Ref, c.Col)
+		a, err = relValue(hrel, hrow, q)
+		if err != nil {
+			return false, &SQLError{Msg: "unknown column in HAVING: " + q}
+		}
+	}
+	if c.Sub != nil {
+		return false, &SQLError{Msg: "subquery in HAVING not supported"}
+	}
+	switch c.Op {
+	case "=", "!=", "<", ">", "<=", ">=":
+		if c.RightRef != "" {
+			b, err := relValue(hrel, hrow, c.RightRef)
+			if err != nil {
+				return false, err
+			}
+			return matchCond(a, c.Op, b), nil
+		}
+		if c.RightExpr != nil {
+			b, err := evalExprForRow(hrel, hrow, c.RightExpr)
+			if err != nil {
+				return false, err
+			}
+			return matchCond(a, c.Op, b), nil
+		}
+		return matchCond(a, c.Op, c.Val), nil
+	case "BETWEEN":
+		return compareVal(a, c.Val) >= 0 && compareVal(a, c.Val2) <= 0, nil
+	case "LIKE":
+		return likeMatch(a.String(), c.Val.String()), nil
+	case "IN":
+		for _, v := range c.InList {
+			if compareVal(a, v) == 0 {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	return false, &SQLError{Msg: "unsupported op in HAVING: " + c.Op}
+}
+
+// sortGroupResult 对 GROUP BY 分组结果排序（P0-4）。
+// 排序键先按输出列名解析，未选中的分组键列回落到 groupKeyVals；
+// 保持稳定排序（同键行维持分组首见顺序）。
+func sortGroupResult(res *Result, s *SelectStmt, groupKeyVals [][]Value) error {
+	if len(s.OrderBys) == 0 && s.OrderBy == nil {
+		return nil
+	}
+	obs := s.OrderBys
+	if len(obs) == 0 && s.OrderBy != nil {
+		obs = []OrderBy{*s.OrderBy}
+	}
+	colIdx := make(map[string]int, len(res.Columns))
+	for i, cn := range res.Columns {
+		if _, ok := colIdx[cn]; !ok {
+			colIdx[cn] = i
+		}
+	}
+	groupIdx := make(map[string]int, len(s.GroupBy)*2)
+	for i, g := range s.GroupBy {
+		if _, ok := groupIdx[g]; !ok {
+			groupIdx[g] = i
+		}
+		base := baseColName(g)
+		if _, ok := groupIdx[base]; !ok {
+			groupIdx[base] = i
+		}
+	}
+	type sortKey struct {
+		idx  int
+		desc bool
+	}
+	keys := make([]sortKey, 0, len(obs))
+	for _, ob := range obs {
+		q := qualifiedName(ob.Ref, ob.Col)
+		if i, ok := colIdx[q]; ok {
+			keys = append(keys, sortKey{idx: i, desc: ob.Desc})
+			continue
+		}
+		if i, ok := groupIdx[q]; ok {
+			keys = append(keys, sortKey{idx: -(i + 1), desc: ob.Desc}) // 负数索引 = 分组键列
+			continue
+		}
+		// 兼容：ORDER BY 裸名但输出列为限定名（或反之）。
+		base := baseColName(q)
+		if i, ok := colIdx[base]; ok {
+			keys = append(keys, sortKey{idx: i, desc: ob.Desc})
+			continue
+		}
+		if i, ok := groupIdx[base]; ok {
+			keys = append(keys, sortKey{idx: -(i + 1), desc: ob.Desc})
+			continue
+		}
+		return &SQLError{Msg: "unknown column in ORDER BY: " + q}
+	}
+	less := func(ri, rj int) bool {
+		for _, k := range keys {
+			var a, b Value
+			if k.idx >= 0 {
+				a, b = res.Rows[ri][k.idx], res.Rows[rj][k.idx]
+			} else {
+				gi := -k.idx - 1
+				a, b = groupKeyVals[ri][gi], groupKeyVals[rj][gi]
+			}
+			cmp := compareVal(a, b)
+			if cmp != 0 {
+				if k.desc {
+					return cmp > 0
+				}
+				return cmp < 0
+			}
+		}
+		return false
+	}
+	sort.SliceStable(res.Rows, less)
+	return nil
 }
 
 // inGroupBy 判断限定列名是否在 GROUP BY 列表（限定/裸名兼容）。
@@ -3874,6 +4376,30 @@ func inGroupBy(groups []string, qname string) bool {
 // finishRel 排序 / LIMIT / 投影（非聚合场景）。
 // SELECT * 输出列名为限定名（t.col），避免多表重名歧义。
 func (e *Executor) finishRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel, rows [][]Value) (*Result, error) {
+	// P0-4：无 GROUP BY/聚合的 HAVING 等价于行过滤（仅支持列/表达式条件；聚合调用报错）。
+	if s.Having != nil {
+		var filtered [][]Value
+		for _, r := range rows {
+			ok := true
+			for _, c := range s.Having.Conds {
+				if c.LeftAgg != nil {
+					return nil, &SQLError{Msg: "aggregate in HAVING requires GROUP BY or aggregate select"}
+				}
+				m, err := e.havingMatch(sess, tx, rel, nil, rel, r, &c)
+				if err != nil {
+					return nil, err
+				}
+				if !m {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				filtered = append(filtered, r)
+			}
+		}
+		rows = filtered
+	}
 	if s.OrderBy != nil {
 		ob := s.OrderBy
 		sort.SliceStable(rows, func(i, j int) bool {
@@ -3989,6 +4515,9 @@ func (e *Executor) finishRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel,
 }
 
 func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
+	// P0-1：显式事务跨 region 写暂存（本地/远端分组；语句成功路径末尾挂载）。
+	var explLocal []kvOp
+	var explRemote map[string][]kvOp
 	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
@@ -4081,21 +4610,14 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 		}
 		rid := ridOf(kv.Key)
 		pk := pkSuffixOf(meta, innerOf(kv.Key))
+		// P0-3：保留旧行副本，供主键变化时的 ON UPDATE 级联匹配子表引用。
+		oldRow := append([]Value{}, row...)
 		// 维护索引：先删旧索引键（收集 ops，暂不落事务缓冲）
 		dops, err := e.delIndexKeyOps(meta, row, pk, rid)
 		if err != nil {
 			return nil, err
 		}
 		ops = append(ops, dops...)
-		// M9 外键：父表被引用行禁止更新（ON UPDATE 动作未支持，RESTRICT 语义）。
-		// 基于旧行判断（SET 修改前），防止把被引用的主键改走。
-		referenced, err := e.fkParentReferenced(tx, tabs, meta, row)
-		if err != nil {
-			return nil, err
-		}
-		if referenced {
-			return nil, &SQLError{Msg: "foreign key constraint violated: " + meta.Name + " is referenced by child table (ON UPDATE not supported)"}
-		}
 		for _, set := range s.Sets {
 			idx := colIndex(meta, set.Col)
 			if idx < 0 {
@@ -4117,6 +4639,20 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 			}
 			row[idx] = v
 		}
+		// P0-3 外键：主键列值实际变化时按 ON UPDATE 动作联动引用子表
+		// （RESTRICT 报错阻止 / CASCADE 同步子行外键值 / SET NULL 置空）。
+		// 主键未变（仅改非主键列）不影响子表引用，直接放行。
+		newPK, err := e.pkOf(meta, row)
+		if err != nil {
+			return nil, err
+		}
+		if !bytes.Equal(pk, newPK) {
+			fops, err := e.collectFKUpdateOps(sess, tx, tabs, meta, oldRow, row)
+			if err != nil {
+				return nil, err
+			}
+			ops = append(ops, fops...)
+		}
 		// 更新后行须满足自身引用完整性。
 		if err := e.checkFKOnRow(sess, tx, tabs, meta, row); err != nil {
 			return nil, err
@@ -4125,7 +4661,18 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		ops = append(ops, kvOp{Key: kv.Key, Value: raw})
+		if bytes.Equal(pk, newPK) {
+			// 主键未变：原地写行
+			ops = append(ops, kvOp{Key: kv.Key, Value: raw})
+		} else {
+			// 主键变化：删旧行键、按新主键路由写新行键（行与索引同 region）
+			ops = append(ops, kvOp{Key: kv.Key, Delete: true})
+			rid, err = e.locateRow(meta, newPK)
+			if err != nil {
+				return nil, err
+			}
+			ops = append(ops, kvOp{Key: e.rowKeyAt(meta, rid, newPK), Value: raw})
+		}
 		// 记录语句内最终行（用于唯一索引语句内冲突判定）
 		e.dropPending(&pending, meta, pk)
 		e.replacePending(&pending, meta, pk, row)
@@ -4148,10 +4695,10 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 			return nil, err
 		}
 	} else {
-		if e.hasRemoteOps(ops) {
-			return nil, &SQLError{Msg: "distributed write inside explicit transaction not supported in M5 (autocommit 2PC only)"}
-		}
-		if err := applyOps(tx, ops); err != nil {
+		// P0-1：显式事务内跨 region 写支持——本地写立即进入会话事务缓冲，
+		// 远端写暂存（语句成功后再挂载，COMMIT 统一 2PC 提交）。
+		explLocal, explRemote, err = e.splitExplicitOps(sess, tx, ops)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -4165,10 +4712,16 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 			return nil, err
 		}
 	}
+	// P0-1：语句成功，挂载显式事务跨 region 写暂存（本地累积供恢复重放与
+	// 版本记录，远端按节点累积，COMMIT 统一 2PC；ROLLBACK 直接丢弃）。
+	e.stagePendingExplicit(sess, explLocal, explRemote)
 	return &Result{AffectedRows: affected}, nil
 }
 
 func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
+	// P0-1：显式事务跨 region 写暂存（本地/远端分组；语句成功路径末尾挂载）。
+	var explLocal []kvOp
+	var explRemote map[string][]kvOp
 	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
@@ -4237,9 +4790,9 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 			return nil, err
 		}
 		ops = append(ops, dops...)
-		// M9 外键：删除父表行时检查子表引用——RESTRICT 阻止删除，
-		// CASCADE 级联收集子行删除操作（含其索引清理）。
-		fkops, err := e.collectFKDeleteOps(tx, tabs, meta, row)
+		// M9/P0-3 外键：删除父表行时检查子表引用——RESTRICT 阻止删除，
+		// CASCADE 级联收集子行删除操作（含其索引清理），SET NULL 置空外键列。
+		fkops, err := e.collectFKDeleteOps(sess, tx, tabs, meta, row)
 		if err != nil {
 			return nil, err
 		}
@@ -4258,10 +4811,10 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 			return nil, err
 		}
 	} else {
-		if e.hasRemoteOps(ops) {
-			return nil, &SQLError{Msg: "distributed write inside explicit transaction not supported in M5 (autocommit 2PC only)"}
-		}
-		if err := applyOps(tx, ops); err != nil {
+		// P0-1：显式事务内跨 region 写支持——本地写立即进入会话事务缓冲，
+		// 远端写暂存（语句成功后再挂载，COMMIT 统一 2PC 提交）。
+		explLocal, explRemote, err = e.splitExplicitOps(sess, tx, ops)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -4275,6 +4828,9 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 			return nil, err
 		}
 	}
+	// P0-1：语句成功，挂载显式事务跨 region 写暂存（本地累积供恢复重放与
+	// 版本记录，远端按节点累积，COMMIT 统一 2PC；ROLLBACK 直接丢弃）。
+	e.stagePendingExplicit(sess, explLocal, explRemote)
 	return &Result{AffectedRows: affected}, nil
 }
 

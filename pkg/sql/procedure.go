@@ -13,6 +13,11 @@ import (
 // ProcedureMeta 定义于 ast.go（M15-3）。
 var proceduresKey = []byte("m:procedures")
 
+// maxProcDepth 存储过程递归/嵌套调用最大深度（P0-2）。
+// 放开 M15-3 的"禁止递归"限制：改为显式深度上限，配合每层独立 env 与
+// defer 递减保证栈安全；超限时报错（与事务/错误语义一致，调用方语句失败）。
+const maxProcDepth = 64
+
 // loadProcedures 读取存储过程目录。
 func loadProcedures(get func(key []byte) ([]byte, error)) ([]*ProcedureMeta, error) {
 	raw, err := get(proceduresKey)
@@ -47,9 +52,9 @@ func findProcedure(procs []*ProcedureMeta, name string) *ProcedureMeta {
 	return nil
 }
 
-// procedureBodySupported 存储过程体支持的语句集合（创建时白名单校验）。
-// 允许嵌套 CALL（跨过程调用），但执行时递归深度防护（procDepth>0）拒绝展开，
-// 避免无限递归。
+// procedureBodySupported 存储过程体支持的 SQL 语句（创建时白名单校验）。
+// 允许嵌套 CALL（跨过程调用 / 递归），执行时以 maxProcDepth 深度上限防护，
+// 避免无限递归撑爆调用栈。
 func procedureBodySupported(stmt Stmt) bool {
 	switch stmt.(type) {
 	case *InsertStmt, *UpdateStmt, *DeleteStmt, *SelectStmt, *CallStmt:
@@ -137,87 +142,6 @@ func replaceVars(src string, env map[string]Value, missingErr bool) (string, err
 	return tokensToString(toks), nil
 }
 
-// splitBodyStatements 把过程体（BEGIN ... END 之间的一段文本）按顶层分号
-// 切分为语句列表。识别 BEGIN 起始与收尾 END（最后一个非 EOF token），
-// 括号深度与 CASE ... END 内的分号不计入切分。
-func splitBodyStatements(body string) ([]string, error) {
-	src := "BEGIN " + body + " END"
-	toks, err := lex(src)
-	if err != nil {
-		return nil, err
-	}
-	// toks[0] 必为 BEGIN；最后一个非 EOF token 为收尾 END。
-	if len(toks) < 3 {
-		return nil, &SQLError{Msg: "invalid procedure body"}
-	}
-	var out []string
-	start := 1
-	parenDepth := 0
-	caseDepth := 0
-	for i := 1; i < len(toks)-1; i++ {
-		t := toks[i]
-		switch t.kind {
-		case tokLParen:
-			parenDepth++
-		case tokRParen:
-			parenDepth--
-		case tokKeyword:
-			if t.text == "CASE" {
-				caseDepth++
-			} else if t.text == "END" {
-				if caseDepth > 0 {
-					caseDepth--
-				} else if parenDepth == 0 {
-					// 收尾 END
-					if seg := strings.TrimSpace(tokensToString(toks[start:i])); seg != "" {
-						out = append(out, seg)
-					}
-					return out, nil
-				}
-			}
-		case tokSemicolon:
-			if parenDepth == 0 {
-				if seg := strings.TrimSpace(tokensToString(toks[start:i])); seg != "" {
-					out = append(out, seg)
-				}
-				start = i + 1
-			}
-		}
-	}
-	if seg := strings.TrimSpace(tokensToString(toks[start : len(toks)-1])); seg != "" {
-		out = append(out, seg)
-	}
-	return out, nil
-}
-
-// parseLocalSetTokens 解析局部变量赋值 SET @name = <literal>（M15-3）。
-// 仅支持字面量赋值（INT / DECIMAL / 字符串），不参与 execStmt 分发
-// （execSet 是会话变量语义，此处按过程局部作用域处理）。
-func parseLocalSetTokens(toks []token) (string, Value, error) {
-	// lex 结果末尾总带 tokEOF，先剥离再校验（SET @x = <lit> 共 4 个 token）。
-	if n := len(toks); n > 0 && toks[n-1].kind == tokEOF {
-		toks = toks[:n-1]
-	}
-	if len(toks) != 4 {
-		return "", Value{}, &SQLError{Msg: "invalid SET statement in procedure body"}
-	}
-	if toks[0].kind != tokKeyword || toks[0].text != "SET" {
-		return "", Value{}, &SQLError{Msg: "expected SET at start of statement"}
-	}
-	if toks[1].kind != tokVar {
-		return "", Value{}, &SQLError{Msg: "expected @variable after SET"}
-	}
-	if toks[2].kind != tokEq {
-		return "", Value{}, &SQLError{Msg: "expected = after @variable"}
-	}
-	name := toks[1].text[1:]
-	v, err := tokenToValue(toks[3])
-	if err != nil {
-		return "", Value{}, err
-	}
-	return name, v, nil
-}
-
 // tokenToValue 把字面量 token 还原为 Value。
 func tokenToValue(t token) (Value, error) {
 	switch t.kind {
@@ -240,46 +164,757 @@ func tokenToValue(t token) (Value, error) {
 	return Value{}, &SQLError{Msg: "expected literal value in procedure body"}
 }
 
-// validateProcedureBody 创建期预校验过程体：可切分为一条或多条语句，
-// 每条语句可解析且为受支持类型（INSERT / UPDATE / DELETE / SELECT /
-// 局部变量赋值 SET @x = <literal>）。@var 引用在执行期由实参/局部变量
-// 代入，此处以占位字面量替换后仅做语法/类型级校验。
+// ===== P0-2：存储过程控制流解释器 =====
+
+// procStmt 过程体语句节点。
+type procStmt interface{ procStmt() }
+
+// procSQL 普通 SQL 语句（INSERT/UPDATE/DELETE/SELECT），执行期变量代入后走标准路径。
+type procSQL struct{ raw string }
+
+func (procSQL) procStmt() {}
+
+// procCall 过程体内 CALL <proc>(<args...>)：实参为表达式 token，
+// 执行期用调用方环境求值后再进入被调过程（支持 @var 与裸参数名）。
+type procCall struct {
+	name string
+	args [][]token
+}
+
+func (procCall) procStmt() {}
+
+// procSet 局部变量赋值 SET @x = <expr> 或 SET @x := <expr>。
+type procSet struct {
+	name string
+	expr []token
+}
+
+func (procSet) procStmt() {}
+
+// procDeclare 局部变量声明 DECLARE @x [TYPE] [DEFAULT <expr>]。
+type procDeclare struct {
+	name    string
+	typ     string
+	init    []token
+	hasInit bool
+}
+
+func (procDeclare) procStmt() {}
+
+// procIf IF ... THEN ... [ELSIF ... THEN ...]* [ELSE ...] END IF。
+type procIf struct{ branches []procIfBranch }
+
+func (procIf) procStmt() {}
+
+type procIfBranch struct {
+	cond   []token
+	isElse bool
+	body   []procStmt
+}
+
+// procLoop LOOP ... END LOOP（无限循环，配合 EXIT/LEAVE）。
+type procLoop struct{ body []procStmt }
+
+func (procLoop) procStmt() {}
+
+// procWhile WHILE <cond> LOOP ... END LOOP / WHILE <cond> DO ... END WHILE。
+type procWhile struct {
+	cond []token
+	body []procStmt
+}
+
+func (procWhile) procStmt() {}
+
+// procFor FOR @i IN <from> .. <to> | <from> TO <to> LOOP ... END LOOP。
+type procFor struct {
+	name string
+	from []token
+	to   []token
+	body []procStmt
+}
+
+func (procFor) procStmt() {}
+
+// procCase CASE 语句：简单 CASE（base 非空）或搜索 CASE（base 为空）。
+type procCase struct {
+	base     []token
+	whens    []procCaseWhen
+	elseBody []procStmt
+	hasElse  bool
+}
+
+func (procCase) procStmt() {}
+
+type procCaseWhen struct {
+	cond []token
+	body []procStmt
+}
+
+// procExit EXIT [WHEN <cond>] / LEAVE [WHEN <cond>]：跳出当前循环。
+type procExit struct {
+	cond    []token
+	hasCond bool
+}
+
+func (procExit) procStmt() {}
+
+// procParser 过程体 token 流解析器。
+type procParser struct {
+	toks      []token
+	pos       int
+	loopDepth int // 当前解析嵌套的循环层数（校验 EXIT/LEAVE 位置）
+}
+
+func (p *procParser) eof() bool  { return p.pos >= len(p.toks) }
+func (p *procParser) cur() token {
+	if p.pos >= len(p.toks) {
+		return token{}
+	}
+	return p.toks[p.pos]
+}
+func (p *procParser) kw() string    { return strings.ToUpper(p.cur().text) }
+func (p *procParser) next()         { if p.pos < len(p.toks) { p.pos++ } }
+func (p *procParser) expect(s string) error {
+	if p.kw() != s {
+		return &SQLError{Msg: "expected " + s + " in procedure body, got " + p.cur().text}
+	}
+	p.next()
+	return nil
+}
+
+// procExprStopKW 表达式收集的固有边界关键字（不会出现在合法表达式中）。
+var procExprStopKW = map[string]bool{
+	"END": true, "ELSE": true, "ELSIF": true, "ELSEIF": true,
+	"WHEN": true, "THEN": true, "LOOP": true, "DO": true, "TO": true,
+}
+
+// collectUntil 收集表达式 token 直到分号（stopSemicolon=true）、固有边界关键字、
+// 附加 stop 关键字或连续 .. 处停止（不消费停止 token）。括号深度与 CASE ... END
+// 内的关键字不触发停止。
+func (p *procParser) collectUntil(stopSemicolon bool, extra ...string) ([]token, error) {
+	start := p.pos
+	parenDepth := 0
+	caseDepth := 0
+	for !p.eof() {
+		t := p.cur()
+		switch {
+		case t.kind == tokLParen:
+			parenDepth++
+		case t.kind == tokRParen:
+			parenDepth--
+		case t.kind == tokKeyword && t.text == "CASE":
+			caseDepth++
+		case t.kind == tokKeyword && t.text == "END":
+			if caseDepth > 0 {
+				caseDepth--
+			} else if parenDepth == 0 {
+				// 过程块结束 END：停止收集（不消费）
+				return p.toks[start:p.pos], nil
+			}
+		case t.kind == tokSemicolon:
+			if parenDepth == 0 && caseDepth == 0 {
+				return p.toks[start:p.pos], nil
+			}
+		default:
+			if parenDepth == 0 && caseDepth == 0 {
+				k := strings.ToUpper(t.text)
+				if procExprStopKW[k] {
+					return p.toks[start:p.pos], nil
+				}
+				for _, s := range extra {
+					if k == s {
+						return p.toks[start:p.pos], nil
+					}
+				}
+				if t.kind == tokDot && p.pos+1 < len(p.toks) && p.toks[p.pos+1].kind == tokDot {
+					return p.toks[start:p.pos], nil
+				}
+			}
+		}
+		p.next()
+	}
+	return p.toks[start:p.pos], nil
+}
+
+// parseProcedureBody 把过程体（BEGIN ... END 之间文本）解析为语句树。
+func parseProcedureBody(body string) ([]procStmt, error) {
+	toks, err := lex(body)
+	if err != nil {
+		return nil, err
+	}
+	p := &procParser{toks: toks}
+	stmts, err := p.parseSeq(nil)
+	if err != nil {
+		return nil, err
+	}
+	if !p.eof() {
+		return nil, &SQLError{Msg: "unexpected token in procedure body: " + p.cur().text}
+	}
+	return stmts, nil
+}
+
+// parseSeq 解析语句序列直到 EOF 或遇到 stops 中的关键字（不消费）。
+func (p *procParser) parseSeq(stops map[string]bool) ([]procStmt, error) {
+	var out []procStmt
+	for {
+		if p.eof() {
+			break
+		}
+		k := p.kw()
+		if stops != nil && stops[k] {
+			break
+		}
+		var s procStmt
+		var err error
+		switch k {
+		case "IF":
+			s, err = p.parseIf()
+		case "LOOP":
+			s, err = p.parseLoop()
+		case "WHILE":
+			s, err = p.parseWhile()
+		case "FOR":
+			s, err = p.parseFor()
+		case "CASE":
+			s, err = p.parseCase()
+		case "DECLARE":
+			s, err = p.parseDeclare()
+		case "SET":
+			s, err = p.parseSet()
+		case "EXIT", "LEAVE":
+			s, err = p.parseExit()
+		default:
+			s, err = p.parseSQL(stops)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if s != nil {
+			out = append(out, s)
+		}
+	}
+	return out, nil
+}
+
+// parseSQL 收集一条普通 SQL 语句（直到顶层分号 / 块结束关键字 / EOF）。
+// 括号深度与 CASE ... END 内的分号不计入切分；块结束关键字仅在深度 0 生效。
+// CALL 语句单独走 parseProcCall（实参支持表达式 token）。
+func (p *procParser) parseSQL(stops map[string]bool) (procStmt, error) {
+	if p.kw() == "CALL" {
+		return p.parseProcCall(stops)
+	}
+	start := p.pos
+	parenDepth := 0
+	caseDepth := 0
+	for !p.eof() {
+		t := p.cur()
+		switch {
+		case t.kind == tokLParen:
+			parenDepth++
+		case t.kind == tokRParen:
+			parenDepth--
+		case t.kind == tokKeyword && t.text == "CASE":
+			caseDepth++
+		case t.kind == tokKeyword && t.text == "END":
+			if caseDepth > 0 {
+				caseDepth--
+			} else if parenDepth == 0 && stops != nil && stops["END"] {
+				return p.finishSQL(start, parenDepth, caseDepth)
+			}
+		case t.kind == tokSemicolon:
+			if parenDepth == 0 && caseDepth == 0 {
+				return p.finishSQL(start, parenDepth, caseDepth)
+			}
+		default:
+			if parenDepth == 0 && caseDepth == 0 && stops != nil && stops[strings.ToUpper(t.text)] {
+				return p.finishSQL(start, parenDepth, caseDepth)
+			}
+		}
+		p.next()
+	}
+	return p.finishSQL(start, parenDepth, caseDepth)
+}
+
+// finishSQL 收尾一条普通 SQL 语句：重建文本并消费结束分号。
+func (p *procParser) finishSQL(start, parenDepth, caseDepth int) (procStmt, error) {
+	if parenDepth != 0 || caseDepth != 0 {
+		return nil, &SQLError{Msg: "unbalanced parentheses or CASE in procedure body"}
+	}
+	if p.pos == start {
+		return nil, nil
+	}
+	raw := strings.TrimSpace(tokensToString(p.toks[start:p.pos]))
+	if p.kw() == ";" {
+		p.next()
+	}
+	if raw == "" {
+		return nil, nil
+	}
+	return procSQL{raw: raw}, nil
+}
+
+// parseProcCall 解析 CALL <name> ( <arg>, ... ) ;：参数收集到顶层逗号/右括号。
+func (p *procParser) parseProcCall(stops map[string]bool) (procStmt, error) {
+	if err := p.expect("CALL"); err != nil {
+		return nil, err
+	}
+	nameTok := p.cur()
+	if nameTok.kind != tokIdent {
+		return nil, &SQLError{Msg: "expected procedure name after CALL in procedure body"}
+	}
+	p.next()
+	pc := &procCall{name: nameTok.text}
+	if p.kw() == "(" {
+		p.next()
+		if p.kw() != ")" {
+			for {
+				arg, err := p.collectProcCallArg()
+				if err != nil {
+					return nil, err
+				}
+				pc.args = append(pc.args, arg)
+				if p.kw() == "," {
+					p.next()
+					continue
+				}
+				break
+			}
+		}
+		if err := p.expect(")"); err != nil {
+			return nil, err
+		}
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return pc, nil
+}
+
+// collectProcCallArg 收集一个 CALL 实参表达式 token（直到顶层逗号/右括号）。
+func (p *procParser) collectProcCallArg() ([]token, error) {
+	start := p.pos
+	parenDepth := 0
+	for !p.eof() {
+		t := p.cur()
+		switch t.kind {
+		case tokLParen:
+			parenDepth++
+		case tokRParen:
+			if parenDepth == 0 {
+				return p.toks[start:p.pos], nil
+			}
+			parenDepth--
+		case tokComma:
+			if parenDepth == 0 {
+				return p.toks[start:p.pos], nil
+			}
+		}
+		p.next()
+	}
+	return nil, &SQLError{Msg: "unterminated CALL argument in procedure body"}
+}
+
+// parseIf 解析 IF/ELSIF/ELSE/END IF（也接受 ENDIF）。
+func (p *procParser) parseIf() (procStmt, error) {
+	p.next() // IF
+	var branches []procIfBranch
+	for {
+		cond, err := p.collectUntil(false, "THEN")
+		if err != nil {
+			return nil, err
+		}
+		if err := p.expect("THEN"); err != nil {
+			return nil, err
+		}
+		body, err := p.parseSeq(map[string]bool{"ELSIF": true, "ELSEIF": true, "ELSE": true, "END": true})
+		if err != nil {
+			return nil, err
+		}
+		branches = append(branches, procIfBranch{cond: cond, body: body})
+		k := p.kw()
+		if k == "ELSIF" || k == "ELSEIF" {
+			p.next()
+			continue
+		}
+		if k == "ELSE" {
+			p.next()
+			elseBody, err := p.parseSeq(map[string]bool{"END": true})
+			if err != nil {
+				return nil, err
+			}
+			branches = append(branches, procIfBranch{isElse: true, body: elseBody})
+			break
+		}
+		break
+	}
+	if err := p.expect("END"); err != nil {
+		return nil, err
+	}
+	if p.kw() == "IF" {
+		p.next()
+	} else if p.kw() == "ENDIF" {
+		p.next()
+	} else {
+		return nil, &SQLError{Msg: "expected END IF in procedure body"}
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return procIf{branches: branches}, nil
+}
+
+// parseLoop 解析 LOOP ... END LOOP。
+func (p *procParser) parseLoop() (procStmt, error) {
+	p.next() // LOOP
+	p.loopDepth++
+	body, err := p.parseSeq(map[string]bool{"END": true})
+	p.loopDepth--
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expect("END"); err != nil {
+		return nil, err
+	}
+	if err := p.expect("LOOP"); err != nil {
+		return nil, err
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return procLoop{body: body}, nil
+}
+
+// parseWhile 解析 WHILE <cond> LOOP ... END LOOP 或 WHILE <cond> DO ... END WHILE。
+func (p *procParser) parseWhile() (procStmt, error) {
+	p.next() // WHILE
+	cond, err := p.collectUntil(false, "LOOP", "DO")
+	if err != nil {
+		return nil, err
+	}
+	endKW := ""
+	k := p.kw()
+	if k == "LOOP" {
+		p.next()
+		endKW = "LOOP"
+	} else if k == "DO" {
+		p.next()
+		endKW = "WHILE"
+	} else {
+		return nil, &SQLError{Msg: "expected LOOP or DO after WHILE condition in procedure body"}
+	}
+	p.loopDepth++
+	body, err := p.parseSeq(map[string]bool{"END": true})
+	p.loopDepth--
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expect("END"); err != nil {
+		return nil, err
+	}
+	if err := p.expect(endKW); err != nil {
+		return nil, err
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return procWhile{cond: cond, body: body}, nil
+}
+
+// parseFor 解析 FOR @i IN <from> .. <to> LOOP ... END LOOP（也接受 TO 与 END FOR）。
+// 注：lexer 数字解析会把 `1..10` 视为非法小数，范围分隔符必须写作 `1 .. 10`（带空格）。
+func (p *procParser) parseFor() (procStmt, error) {
+	p.next() // FOR
+	if p.cur().kind != tokVar {
+		return nil, &SQLError{Msg: "expected @loop variable after FOR in procedure body"}
+	}
+	name := p.cur().text[1:]
+	p.next()
+	if err := p.expect("IN"); err != nil {
+		return nil, err
+	}
+	from, err := p.collectUntil(false, "TO")
+	if err != nil {
+		return nil, err
+	}
+	if p.kw() == "TO" {
+		p.next()
+	} else if p.cur().kind == tokDot {
+		p.next()
+		if p.cur().kind != tokDot {
+			return nil, &SQLError{Msg: "expected .. or TO in FOR range in procedure body"}
+		}
+		p.next()
+	} else {
+		return nil, &SQLError{Msg: "expected .. or TO in FOR range in procedure body"}
+	}
+	to, err := p.collectUntil(false, "LOOP")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expect("LOOP"); err != nil {
+		return nil, err
+	}
+	p.loopDepth++
+	body, err := p.parseSeq(map[string]bool{"END": true})
+	p.loopDepth--
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expect("END"); err != nil {
+		return nil, err
+	}
+	if p.kw() == "LOOP" {
+		p.next()
+	} else if p.kw() == "FOR" {
+		p.next()
+	} else {
+		return nil, &SQLError{Msg: "expected END LOOP after FOR body in procedure body"}
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return procFor{name: name, from: from, to: to, body: body}, nil
+}
+
+// parseCase 解析 CASE 语句：CASE <base> WHEN ... END CASE 或搜索 CASE WHEN ... END CASE。
+func (p *procParser) parseCase() (procStmt, error) {
+	p.next() // CASE
+	var base []token
+	var err error
+	if p.kw() != "WHEN" {
+		base, err = p.collectUntil(false, "WHEN")
+		if err != nil {
+			return nil, err
+		}
+	}
+	var whens []procCaseWhen
+	for {
+		if err := p.expect("WHEN"); err != nil {
+			return nil, err
+		}
+		cond, err := p.collectUntil(false, "THEN")
+		if err != nil {
+			return nil, err
+		}
+		if err := p.expect("THEN"); err != nil {
+			return nil, err
+		}
+		body, err := p.parseSeq(map[string]bool{"WHEN": true, "ELSE": true, "END": true})
+		if err != nil {
+			return nil, err
+		}
+		whens = append(whens, procCaseWhen{cond: cond, body: body})
+		if p.kw() == "WHEN" {
+			continue
+		}
+		break
+	}
+	var elseBody []procStmt
+	hasElse := false
+	if p.kw() == "ELSE" {
+		p.next()
+		elseBody, err = p.parseSeq(map[string]bool{"END": true})
+		if err != nil {
+			return nil, err
+		}
+		hasElse = true
+	}
+	if err := p.expect("END"); err != nil {
+		return nil, err
+	}
+	if err := p.expect("CASE"); err != nil {
+		return nil, err
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return procCase{base: base, whens: whens, elseBody: elseBody, hasElse: hasElse}, nil
+}
+
+// parseDeclare 解析 DECLARE @x [TYPE] [DEFAULT <expr>]。
+func (p *procParser) parseDeclare() (procStmt, error) {
+	p.next() // DECLARE
+	if p.cur().kind != tokVar {
+		return nil, &SQLError{Msg: "expected @variable after DECLARE in procedure body"}
+	}
+	name := p.cur().text[1:]
+	p.next()
+	st := procDeclare{name: name}
+	if p.kw() != "" && p.kw() != "DEFAULT" && p.kw() != "=" && p.kw() != ":=" && p.kw() != ";" {
+		st.typ = p.cur().text
+		p.next()
+	}
+	if p.kw() == "DEFAULT" {
+		p.next()
+		init, err := p.collectUntil(true)
+		if err != nil {
+			return nil, err
+		}
+		st.init = init
+		st.hasInit = true
+	} else if p.kw() == "=" || p.kw() == ":=" {
+		p.next()
+		init, err := p.collectUntil(true)
+		if err != nil {
+			return nil, err
+		}
+		st.init = init
+		st.hasInit = true
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return st, nil
+}
+
+// parseSet 解析 SET @x = <expr> 或 SET @x := <expr>（过程局部变量赋值）。
+func (p *procParser) parseSet() (procStmt, error) {
+	p.next() // SET
+	if p.cur().kind != tokVar {
+		return nil, &SQLError{Msg: "expected @variable after SET in procedure body"}
+	}
+	name := p.cur().text[1:]
+	p.next()
+	if p.kw() != "=" && p.kw() != ":=" {
+		return nil, &SQLError{Msg: "expected = or := after SET @variable in procedure body"}
+	}
+	p.next()
+	expr, err := p.collectUntil(true)
+	if err != nil {
+		return nil, err
+	}
+	if len(expr) == 0 {
+		return nil, &SQLError{Msg: "SET requires an expression in procedure body"}
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return procSet{name: name, expr: expr}, nil
+}
+
+// parseExit 解析 EXIT [WHEN <cond>] / LEAVE [WHEN <cond>]。
+func (p *procParser) parseExit() (procStmt, error) {
+	p.next() // EXIT / LEAVE
+	if p.loopDepth == 0 {
+		return nil, &SQLError{Msg: "EXIT/LEAVE outside loop in procedure body"}
+	}
+	st := procExit{}
+	if p.kw() == "WHEN" {
+		p.next()
+		cond, err := p.collectUntil(true)
+		if err != nil {
+			return nil, err
+		}
+		st.cond = cond
+		st.hasCond = true
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return st, nil
+}
+
+// validProcVarType 校验 DECLARE 变量类型白名单（宽松：INT/DECIMAL/TEXT/BOOLEAN 系列）。
+func validProcVarType(typ string) bool {
+	switch strings.ToUpper(typ) {
+	case "INT", "INTEGER", "TEXT", "DECIMAL", "BOOLEAN", "VARCHAR", "CHAR":
+		return true
+	}
+	return false
+}
+
+// validateProcedureBody 创建期预校验过程体：可解析为受支持的控制流 / SQL 语句树，
+// 每条普通 SQL 语句可解析且为受支持类型（INSERT / UPDATE / DELETE / SELECT /
+// CALL），DECLARE 类型合法，IF/WHILE/CASE 条件与 FOR 范围非空，EXIT 位于循环内。
+// @var 引用在执行期由实参/局部变量代入，此处以占位字面量替换后仅做语法/类型级校验。
 func validateProcedureBody(body string) error {
-	stmts, err := splitBodyStatements(body)
+	stmts, err := parseProcedureBody(body)
 	if err != nil {
 		return err
 	}
 	if len(stmts) == 0 {
 		return &SQLError{Msg: "procedure body required"}
 	}
-	for _, raw := range stmts {
-		toks, err := lex(raw)
-		if err != nil {
-			return err
-		}
-		if len(toks) >= 2 && toks[0].kind == tokKeyword && toks[0].text == "SET" && toks[1].kind == tokVar {
-			if _, _, err := parseLocalSetTokens(toks); err != nil {
+	return validateProcStmts(stmts)
+}
+
+// validateProcStmts 递归校验语句树。
+func validateProcStmts(stmts []procStmt) error {
+	for _, s := range stmts {
+		switch st := s.(type) {
+		case procSQL:
+			toks, err := lex(st.raw)
+			if err != nil {
 				return err
 			}
-			continue
-		}
-		// 收集本句引用的 @var，统一以占位字面量 1 代入后解析校验。
-		env := make(map[string]Value)
-		for _, t := range toks {
-			if t.kind == tokVar {
-				env[strings.ToLower(t.text[1:])] = IntVal(1)
+			env := make(map[string]Value)
+			for _, t := range toks {
+				if t.kind == tokVar {
+					env[strings.ToLower(t.text[1:])] = IntVal(1)
+				}
 			}
-		}
-		sub, err := replaceVars(raw, env, true)
-		if err != nil {
-			return err
-		}
-		stmt, err := Parse(sub)
-		if err != nil {
-			return err
-		}
-		if !procedureBodySupported(stmt) {
-			return &SQLError{Msg: "unsupported statement in procedure body"}
+			sub, err := replaceVars(st.raw, env, true)
+			if err != nil {
+				return err
+			}
+			stmt, err := Parse(sub)
+			if err != nil {
+				return err
+			}
+			if !procedureBodySupported(stmt) {
+				return &SQLError{Msg: "unsupported statement in procedure body"}
+			}
+		case *procCall:
+			if st.name == "" {
+				return &SQLError{Msg: "CALL procedure name required in procedure body"}
+			}
+		case procDeclare:
+			if st.typ != "" && !validProcVarType(st.typ) {
+				return &SQLError{Msg: "unsupported variable type: " + st.typ}
+			}
+		case procIf:
+			for _, br := range st.branches {
+				if !br.isElse && len(br.cond) == 0 {
+					return &SQLError{Msg: "IF condition required in procedure body"}
+				}
+				if err := validateProcStmts(br.body); err != nil {
+					return err
+				}
+			}
+		case procLoop:
+			if err := validateProcStmts(st.body); err != nil {
+				return err
+			}
+		case procWhile:
+			if len(st.cond) == 0 {
+				return &SQLError{Msg: "WHILE condition required in procedure body"}
+			}
+			if err := validateProcStmts(st.body); err != nil {
+				return err
+			}
+		case procFor:
+			if len(st.from) == 0 || len(st.to) == 0 {
+				return &SQLError{Msg: "FOR range required in procedure body"}
+			}
+			if err := validateProcStmts(st.body); err != nil {
+				return err
+			}
+		case procCase:
+			for _, w := range st.whens {
+				if len(w.cond) == 0 {
+					return &SQLError{Msg: "CASE WHEN condition required in procedure body"}
+				}
+				if err := validateProcStmts(w.body); err != nil {
+					return err
+				}
+			}
+			if st.hasElse {
+				if err := validateProcStmts(st.elseBody); err != nil {
+					return err
+				}
+			}
+		case procExit:
+			// EXIT/LEAVE 必须位于循环内，已在解析期校验。
 		}
 	}
 	return nil
@@ -408,13 +1043,14 @@ func (e *Executor) execShowProcedures(sess *Session, s *ShowProceduresStmt) (*Re
 	return res, nil
 }
 
-// execCall CALL <name> [( <value> [, <value> ...] )]（M15-3）。
-// 实参按位置一一对应代入 IN 参数（个数严格匹配；类型不强制，按字面量代入
-// 后由体语句自身类型规则校验）。体语句逐条执行：局部变量赋值 SET @x = <lit>
-// 更新本次调用的局部作用域；其余语句把 @var 引用替换为当前值后走标准
-// execStmt 路径（INSERT/UPDATE/DELETE 各自独立隐式事务提交，SELECT 执行
-// 但结果集不返回——CALL 返回固定 AffectedRows=1）。procDepth 递归防护：
-// 过程体再次 CALL 时不再展开，避免无限递归（文档化限制）。
+// execCall CALL <name> [( <expr> [, <expr> ...] )]（M15-3 / P0-2）。
+// 实参为表达式列表，逐项求值后按位置一一对应代入 IN 参数（个数严格匹配；
+// 类型不强制，按字面量代入后由体语句自身类型规则校验）。体语句经控制流
+// 解释器逐条执行：局部变量赋值（SET/:=）与 DECLARE 更新本次调用局部作用域；
+// 其余 SQL 语句把 @var 引用替换为当前值后走标准 execStmt 路径（INSERT/
+// UPDATE/DELETE 各自独立隐式事务提交，SELECT 执行但结果集不返回——CALL
+// 返回固定 AffectedRows=1）。procDepth 递归/嵌套防护：允许递归调用，但
+// 深度超过 maxProcDepth 时报错，避免无限递归撑爆调用栈。
 func (e *Executor) execCall(sess *Session, s *CallStmt) (*Result, error) {
 	if s.Name == "" {
 		return nil, &SQLError{Msg: "procedure name required"}
@@ -437,12 +1073,16 @@ func (e *Executor) execCall(sess *Session, s *CallStmt) (*Result, error) {
 	if len(s.Args) != len(proc.Params) {
 		return nil, &SQLError{Msg: "procedure " + s.Name + " expects " + strconv.Itoa(len(proc.Params)) + " argument(s), got " + strconv.Itoa(len(s.Args))}
 	}
-	if sess.procDepth > 0 {
-		return nil, &SQLError{Msg: "procedure recursion not supported: " + s.Name}
+	if sess.procDepth >= maxProcDepth {
+		return nil, &SQLError{Msg: "procedure recursion depth exceeded (max " + strconv.Itoa(maxProcDepth) + "): " + s.Name}
 	}
 	env := make(map[string]Value, len(proc.Params))
 	for i, pm := range proc.Params {
-		env[strings.ToLower(pm.Name)] = s.Args[i]
+		v, err := evalExprForRow(nil, nil, s.Args[i])
+		if err != nil {
+			return nil, &SQLError{Msg: "procedure " + s.Name + " argument " + strconv.Itoa(i+1) + ": " + err.Error()}
+		}
+		env[strings.ToLower(pm.Name)] = v
 	}
 	sess.procDepth++
 	defer func() { sess.procDepth-- }()
@@ -452,40 +1092,534 @@ func (e *Executor) execCall(sess *Session, s *CallStmt) (*Result, error) {
 	return &Result{AffectedRows: 1}, nil
 }
 
-// execProcedureBody 逐条执行过程体语句（M15-3 内部实现）。
+// execProcedureBody 按控制流解释器执行过程体语句（M15-3 / P0-2 内部实现）。
 func (e *Executor) execProcedureBody(sess *Session, body string, env map[string]Value) error {
-	stmts, err := splitBodyStatements(body)
+	stmts, err := parseProcedureBody(body)
 	if err != nil {
 		return err
 	}
-	for _, raw := range stmts {
-		toks, err := lex(raw)
+	r := &procRunner{e: e, sess: sess, env: env}
+	if _, err := r.run(stmts); err != nil {
+		return err
+	}
+	return nil
+}
+
+// procRunner 过程体执行上下文。
+type procRunner struct {
+	e    *Executor
+	sess *Session
+	env  map[string]Value
+}
+
+// run 顺序执行语句列表；返回 exited=true 表示 EXIT/LEAVE 触发（由循环层消费）。
+func (r *procRunner) run(stmts []procStmt) (bool, error) {
+	for _, s := range stmts {
+		exited, err := r.runStmt(s)
 		if err != nil {
-			return err
+			return false, err
 		}
-		// 局部变量赋值：SET @x = <literal>，更新本次调用局部作用域。
-		if len(toks) >= 2 && toks[0].kind == tokKeyword && toks[0].text == "SET" && toks[1].kind == tokVar {
-			name, val, err := parseLocalSetTokens(toks)
-			if err != nil {
-				return err
-			}
-			env[strings.ToLower(name)] = val
-			continue
+		if exited {
+			return true, nil
 		}
-		sub, err := replaceVars(raw, env, true)
+	}
+	return false, nil
+}
+
+// runStmt 执行单条过程语句；返回 exited=true 表示 EXIT/LEAVE 触发。
+func (r *procRunner) runStmt(s procStmt) (bool, error) {
+	switch st := s.(type) {
+	case procSQL:
+		sub, err := replaceVars(st.raw, r.env, true)
 		if err != nil {
-			return err
+			return false, err
 		}
 		stmt, err := Parse(sub)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if !procedureBodySupported(stmt) {
-			return &SQLError{Msg: "unsupported statement in procedure body"}
+			return false, &SQLError{Msg: "unsupported statement in procedure body"}
 		}
-		if _, err := e.execStmt(sess, stmt); err != nil {
-			return err
+		if _, err := r.e.execStmt(r.sess, stmt); err != nil {
+			return false, err
+		}
+		return false, nil
+	case *procCall:
+		call := &CallStmt{Name: st.name}
+		for _, argToks := range st.args {
+			v, err := evalProcExpr(argToks, r.env)
+			if err != nil {
+				return false, err
+			}
+			call.Args = append(call.Args, &Expr{Val: &v})
+		}
+		if _, err := r.e.execCall(r.sess, call); err != nil {
+			return false, err
+		}
+		return false, nil
+	case procSet:
+		v, err := evalProcExpr(st.expr, r.env)
+		if err != nil {
+			return false, err
+		}
+		r.env[strings.ToLower(st.name)] = v
+		return false, nil
+	case procDeclare:
+		if st.hasInit {
+			v, err := evalProcExpr(st.init, r.env)
+			if err != nil {
+				return false, err
+			}
+			r.env[strings.ToLower(st.name)] = v
+		} else {
+			r.env[strings.ToLower(st.name)] = procDefaultValue(st.typ)
+		}
+		return false, nil
+	case procIf:
+		for _, br := range st.branches {
+			if br.isElse {
+				continue
+			}
+			ok, err := evalProcCond(br.cond, r.env)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				return r.run(br.body)
+			}
+		}
+		for _, br := range st.branches {
+			if br.isElse {
+				return r.run(br.body)
+			}
+		}
+		return false, nil
+	case procLoop:
+		for {
+			exited, err := r.run(st.body)
+			if err != nil {
+				return false, err
+			}
+			if exited {
+				return false, nil
+			}
+		}
+	case procWhile:
+		for {
+			ok, err := evalProcCond(st.cond, r.env)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return false, nil
+			}
+			exited, err := r.run(st.body)
+			if err != nil {
+				return false, err
+			}
+			if exited {
+				return false, nil
+			}
+		}
+	case procFor:
+		fromV, err := evalProcExpr(st.from, r.env)
+		if err != nil {
+			return false, err
+		}
+		toV, err := evalProcExpr(st.to, r.env)
+		if err != nil {
+			return false, err
+		}
+		from, ok1 := procToInt(fromV)
+		to, ok2 := procToInt(toV)
+		if !ok1 || !ok2 {
+			return false, &SQLError{Msg: "FOR range must be integers in procedure body"}
+		}
+		key := strings.ToLower(st.name)
+		for i := from; i <= to; i++ {
+			r.env[key] = IntVal(i)
+			exited, err := r.run(st.body)
+			if err != nil {
+				return false, err
+			}
+			if exited {
+				return false, nil
+			}
+		}
+		return false, nil
+	case procCase:
+		var baseV Value
+		var err error
+		if len(st.base) > 0 {
+			baseV, err = evalProcExpr(st.base, r.env)
+			if err != nil {
+				return false, err
+			}
+		}
+		for _, w := range st.whens {
+			if len(st.base) > 0 {
+				wv, err := evalProcExpr(w.cond, r.env)
+				if err != nil {
+					return false, err
+				}
+				eq, err := procEqual(baseV, wv)
+				if err != nil {
+					return false, err
+				}
+				if eq {
+					return r.run(w.body)
+				}
+			} else {
+				ok, err := evalProcCond(w.cond, r.env)
+				if err != nil {
+					return false, err
+				}
+				if ok {
+					return r.run(w.body)
+				}
+			}
+		}
+		if st.hasElse {
+			return r.run(st.elseBody)
+		}
+		return false, nil
+	case procExit:
+		if !st.hasCond {
+			return true, nil
+		}
+		ok, err := evalProcCond(st.cond, r.env)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+		return false, nil
+	}
+	return false, &SQLError{Msg: "unsupported procedure statement"}
+}
+
+// ===== P0-2：过程表达式求值 =====
+
+// procExprParser 过程表达式递归下降解析器（支持字面量、@var、算术、
+// 比较、逻辑与括号，比较/逻辑返回 INT 0/1）。
+type procExprParser struct {
+	toks []token
+	pos  int
+	env  map[string]Value
+}
+
+func (p *procExprParser) eof() bool { return p.pos >= len(p.toks) }
+func (p *procExprParser) cur() token { return p.toks[p.pos] }
+func (p *procExprParser) kw() string { return strings.ToUpper(p.cur().text) }
+func (p *procExprParser) next() { if p.pos < len(p.toks) { p.pos++ } }
+
+// evalProcExpr 求值过程表达式。
+func evalProcExpr(toks []token, env map[string]Value) (Value, error) {
+	ep := &procExprParser{toks: toks, env: env}
+	v, err := ep.parseOr()
+	if err != nil {
+		return Value{}, err
+	}
+	if !ep.eof() {
+		return Value{}, &SQLError{Msg: "unexpected token in procedure expression: " + ep.cur().text}
+	}
+	return v, nil
+}
+
+// evalProcCond 求值过程条件（真值判定）。
+func evalProcCond(toks []token, env map[string]Value) (bool, error) {
+	if len(toks) == 0 {
+		return false, &SQLError{Msg: "empty condition in procedure body"}
+	}
+	v, err := evalProcExpr(toks, env)
+	if err != nil {
+		return false, err
+	}
+	return procTruthy(v), nil
+}
+
+func (p *procExprParser) parseOr() (Value, error) {
+	l, err := p.parseAnd()
+	if err != nil {
+		return Value{}, err
+	}
+	for !p.eof() && p.kw() == "OR" {
+		p.next()
+		r, err := p.parseAnd()
+		if err != nil {
+			return Value{}, err
+		}
+		if procTruthy(l) || procTruthy(r) {
+			l = IntVal(1)
+		} else {
+			l = IntVal(0)
 		}
 	}
-	return nil
+	return l, nil
+}
+
+func (p *procExprParser) parseAnd() (Value, error) {
+	l, err := p.parseNot()
+	if err != nil {
+		return Value{}, err
+	}
+	for !p.eof() && p.kw() == "AND" {
+		p.next()
+		r, err := p.parseNot()
+		if err != nil {
+			return Value{}, err
+		}
+		if procTruthy(l) && procTruthy(r) {
+			l = IntVal(1)
+		} else {
+			l = IntVal(0)
+		}
+	}
+	return l, nil
+}
+
+func (p *procExprParser) parseNot() (Value, error) {
+	if !p.eof() && p.kw() == "NOT" {
+		p.next()
+		v, err := p.parseNot()
+		if err != nil {
+			return Value{}, err
+		}
+		if procTruthy(v) {
+			return IntVal(0), nil
+		}
+		return IntVal(1), nil
+	}
+	return p.parseCmp()
+}
+
+func (p *procExprParser) parseCmp() (Value, error) {
+	l, err := p.parseAdd()
+	if err != nil {
+		return Value{}, err
+	}
+	if p.eof() {
+		return l, nil
+	}
+	k := p.kw()
+	if k == "=" || k == "!=" || k == "<" || k == ">" || k == "<=" || k == ">=" {
+		p.next()
+		r, err := p.parseAdd()
+		if err != nil {
+			return Value{}, err
+		}
+		return procCompareValue(l, r, k)
+	}
+	return l, nil
+}
+
+func (p *procExprParser) parseAdd() (Value, error) {
+	l, err := p.parseMul()
+	if err != nil {
+		return Value{}, err
+	}
+	for !p.eof() && (p.cur().kind == tokPlus || p.cur().kind == tokMinus) {
+		op := p.cur().text
+		p.next()
+		r, err := p.parseMul()
+		if err != nil {
+			return Value{}, err
+		}
+		l, err = evalArith(l, r, op)
+		if err != nil {
+			return Value{}, err
+		}
+	}
+	return l, nil
+}
+
+func (p *procExprParser) parseMul() (Value, error) {
+	l, err := p.parseUnary()
+	if err != nil {
+		return Value{}, err
+	}
+	for !p.eof() && (p.cur().kind == tokStar || p.cur().kind == tokSlash || p.cur().kind == tokMod) {
+		op := p.cur().text
+		p.next()
+		r, err := p.parseUnary()
+		if err != nil {
+			return Value{}, err
+		}
+		l, err = evalArith(l, r, op)
+		if err != nil {
+			return Value{}, err
+		}
+	}
+	return l, nil
+}
+
+func (p *procExprParser) parseUnary() (Value, error) {
+	if !p.eof() && p.cur().kind == tokMinus {
+		p.next()
+		v, err := p.parseUnary()
+		if err != nil {
+			return Value{}, err
+		}
+		switch v.Kind {
+		case "INT":
+			return IntVal(-v.I), nil
+		case "DECIMAL":
+			return decVal(-v.I), nil
+		}
+		return Value{}, &SQLError{Msg: "cannot apply unary minus to " + v.Kind + " value"}
+	}
+	return p.parsePrimary()
+}
+
+func (p *procExprParser) parsePrimary() (Value, error) {
+	if p.eof() {
+		return Value{}, &SQLError{Msg: "empty expression in procedure body"}
+	}
+	t := p.cur()
+	switch t.kind {
+	case tokNumber:
+		p.next()
+		return tokenToValue(t)
+	case tokString:
+		p.next()
+		return StrVal(t.text), nil
+	case tokVar:
+		p.next()
+		key := strings.ToLower(t.text[1:])
+		v, ok := p.env[key]
+		if !ok {
+			return Value{}, &SQLError{Msg: "unknown procedure variable: " + t.text}
+		}
+		return v, nil
+	case tokLParen:
+		p.next()
+		v, err := p.parseOr()
+		if err != nil {
+			return Value{}, err
+		}
+		if p.eof() || p.cur().kind != tokRParen {
+			return Value{}, &SQLError{Msg: "expected ) in procedure expression"}
+		}
+		p.next()
+		return v, nil
+	default:
+		k := strings.ToUpper(t.text)
+		if k == "TRUE" {
+			p.next()
+			return IntVal(1), nil
+		}
+		if k == "FALSE" {
+			p.next()
+			return IntVal(0), nil
+		}
+		// P0-2：裸参数名/局部变量名（过程体习惯风格）按小写查环境；
+		// 命中则作为其当前值参与运算（优先级低于关键字/运算符）。
+		if t.kind == tokIdent || t.kind == tokKeyword {
+			if v, ok := p.env[strings.ToLower(t.text)]; ok {
+				p.next()
+				return v, nil
+			}
+		}
+		return Value{}, &SQLError{Msg: "unexpected token in procedure expression: " + t.text}
+	}
+}
+
+// procTruthy 真值判定：INT/DECIMAL 按非零，其余按非空文本。
+func procTruthy(v Value) bool {
+	switch v.Kind {
+	case "INT":
+		return v.I != 0
+	case "DECIMAL":
+		return v.I != 0
+	default:
+		return v.S != ""
+	}
+}
+
+// procToInt 尝试把值转为整数（FOR 循环范围用）。
+func procToInt(v Value) (int64, bool) {
+	switch v.Kind {
+	case "INT":
+		return v.I, true
+	case "DECIMAL":
+		return v.I / decUnit, true
+	case "TEXT":
+		n, err := strconv.ParseInt(strings.TrimSpace(v.S), 10, 64)
+		return n, err == nil
+	}
+	return 0, false
+}
+
+// procDefaultValue DECLARE 未指定 DEFAULT 时的类型默认值。
+func procDefaultValue(typ string) Value {
+	switch strings.ToUpper(typ) {
+	case "TEXT", "VARCHAR", "CHAR", "DATE", "BLOB":
+		return StrVal("")
+	case "DECIMAL":
+		return Value{Kind: "DECIMAL", I: 0, S: "0"}
+	default: // INT / BOOLEAN / 未指定类型
+		return IntVal(0)
+	}
+}
+
+// procCompareValue 数值优先比较，返回 INT 0/1。
+func procCompareValue(a, b Value, op string) (Value, error) {
+	if a.Kind == "NULL" || b.Kind == "NULL" {
+		return IntVal(0), nil
+	}
+	var cmp int
+	if isNumericKind(a.Kind) && isNumericKind(b.Kind) {
+		switch {
+		case a.Kind == "DECIMAL" && b.Kind == "DECIMAL":
+			if a.I < b.I {
+				cmp = -1
+			} else if a.I > b.I {
+				cmp = 1
+			}
+		case a.Kind == "DECIMAL":
+			cmp = compareDecInt(a.I, b.I)
+		case b.Kind == "DECIMAL":
+			cmp = -compareDecInt(b.I, a.I)
+		default:
+			if a.I < b.I {
+				cmp = -1
+			} else if a.I > b.I {
+				cmp = 1
+			}
+		}
+	} else {
+		cmp = strings.Compare(a.S, b.S)
+	}
+	var ok bool
+	switch op {
+	case "=":
+		ok = cmp == 0
+	case "!=":
+		ok = cmp != 0
+	case "<":
+		ok = cmp < 0
+	case ">":
+		ok = cmp > 0
+	case "<=":
+		ok = cmp <= 0
+	case ">=":
+		ok = cmp >= 0
+	default:
+		return Value{}, &SQLError{Msg: "unsupported comparison operator: " + op}
+	}
+	if ok {
+		return IntVal(1), nil
+	}
+	return IntVal(0), nil
+}
+
+// procEqual CASE 简单匹配：相等判断。
+func procEqual(a, b Value) (bool, error) {
+	v, err := procCompareValue(a, b, "=")
+	if err != nil {
+		return false, err
+	}
+	return procTruthy(v), nil
 }

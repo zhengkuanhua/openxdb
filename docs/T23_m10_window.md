@@ -38,7 +38,7 @@ SELECT COUNT(*)       OVER (...) ...
      - `ROW_NUMBER`：组内序号 1..n；
      - `RANK`：排序键相同时并列同号，后续跳号（gap）；
      - `DENSE_RANK`：排序键并列同号但连续编号（无 gap）；
-     - `SUM/AVG/COUNT`：默认框架 `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`，按窗口序逐行累计；SUM/AVG 支持 INT/DECIMAL，对 TEXT 等非数值列报 `window aggregate on non-numeric column`；
+     - `SUM/AVG/COUNT/MAX/MIN`：无显式帧时默认框架 `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`，按窗口序逐行累计；SUM/AVG 支持 INT/DECIMAL，对 TEXT 等非数值列报 `window aggregate on non-numeric column`；
   4. `computeWindows` 按 SELECT 列表顺序批量计算全部窗口列，产出 `winVals[i][j]`。
 - 投影接入两条路径：
   - 单表路径 `finishSelect`：检测 `hasWindow`——与全局聚合混用报 `window function cannot be mixed with aggregate`，否则 `finishSelectWindow` 先投影普通列、再按行回填窗口值；
@@ -64,10 +64,27 @@ SELECT COUNT(*)       OVER (...) ...
 | `TestWindowIllegalPosition` | WHERE / GROUP BY / ORDER BY 中窗口函数报错 |
 | `TestWindowMixedAggregate` | 与 GROUP BY 混用、与全局聚合混用报错 |
 | `TestWindowNonNumericAgg` | 对 TEXT 列 SUM 报错 |
+| `TestWindowFrameRowsUnboundedPreceding` | 显式 ROWS UNBOUNDED PRECEDING 与默认帧一致 |
+| `TestWindowFrameRowsMovingSumAvg` | ROWS 1 PRECEDING..CURRENT ROW 移动 SUM/AVG |
+| `TestWindowFrameRowsCurrentToUnboundedFollowing` | ROWS CURRENT ROW..UNBOUNDED FOLLOWING 后缀和 |
+| `TestWindowFrameRowsSliding` | ROWS 2 PRECEDING..2 FOLLOWING 滑动窗口 |
+| `TestWindowFrameRowsSingleBound` | ROWS n PRECEDING/n FOLLOWING 单边界简写 |
+| `TestWindowFrameRowsBackwardEmpty` | 反向帧空帧：SUM/MAX/MIN/AVG 为 NULL、COUNT 为 0 |
+| `TestWindowFrameRankingUnaffected` | 排名函数忽略帧、帧语法合法 |
+| `TestWindowFrameRangeUnboundedPreceding` | RANGE UNBOUNDED PRECEDING 等值行整体纳入 |
+| `TestWindowFrameRangeCurrentRow` | RANGE CURRENT ROW 等值组聚合 |
+| `TestWindowFrameRangeOffset` | RANGE n PRECEDING/n FOLLOWING 值域语义 |
+| `TestWindowFrameRangeNoOrderBy` | RANGE 无 ORDER BY 退化整分区 |
+| `TestWindowFramePartitionRows` | 帧 + PARTITION BY 分区内独立计算 |
+| `TestWindowFrameMaxMin` | 帧内 MAX/MIN |
+| `TestWindowFrameExprParam` | 帧内表达式参数聚合 |
+| `TestWindowFrameWithGroupBy` | GROUP BY 输出行 + 帧 |
+| `TestWindowFrameParseErrors` | 非法帧边界/方向词报错 |
+| `TestWindowFrameRangeNonNumericOffset` | RANGE 偏移值域要求数值排序列 |
 
 ## 取舍说明
 - 排名函数（ROW_NUMBER/RANK/DENSE_RANK）**强制**要求 OVER；聚合函数（SUM/AVG/COUNT）OVER 可选——缺省即普通全局聚合，保持向后兼容；
-- 窗口默认框架固定为 `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`（逐行累计），暂不支持显式 `ROWS/RANGE` 框架与 `PRECEDING/FOLLOWING`，后续可扩展；
+- 显式窗口帧（P0-5 起支持）：`ROWS/RANGE` 帧支持 `UNBOUNDED PRECEDING/FOLLOWING`、`CURRENT ROW`、`n PRECEDING/FOLLOWING` 及单边界简写（`ROWS 2 PRECEDING` 等价 `BETWEEN 2 PRECEDING AND CURRENT ROW`）；`RANGE` 帧结合 ORDER BY 实现等值行/值域语义（偏移值域要求数值排序列），无 ORDER BY 时退化整分区；聚合函数（SUM/AVG/COUNT/MAX/MIN）按帧求值，排名函数忽略帧仅作用于聚合；空帧（end < start）聚合返回 NULL/COUNT=0。无显式帧时默认 `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`（逐行累计）；
 - 窗口 ORDER BY 当前支持单列；多列窗口排序列为后续扩展点；
 - 窗口函数限定 SELECT 列表（解析层拦截）；与 GROUP BY 混用自 P1-10 起支持（窗口在分组聚合结果行上计算），M10 阶段"明确拒绝"的限制已解除；
 - PARTITION BY / ORDER BY 支持限定列名（`alias.col`），JOIN 场景可正确取值。

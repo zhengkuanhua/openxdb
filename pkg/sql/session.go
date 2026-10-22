@@ -36,6 +36,14 @@ type Session struct {
 	// 已持有的 key 防重入（事务内多次写同一行不自锁）。
 	heldLocks    []func()
 	heldLockKeys map[string]bool
+	// P0-1 显式事务跨 region 写（2PC 暂存）：pendingLocal 累积事务内全部
+	// 本地写 ops（供 COMMIT 时 CoordRecord.LocalOps 恢复重放与版本记录登记）；
+	// pendingRemote 按归属节点分组累积远端写 ops，COMMIT 时统一 PREPARE→
+	// COMMIT，ROLLBACK 时直接丢弃（未 PREPARE 前远端无任何状态）。
+	// 仅显式事务内写语句成功路径末尾挂载，事务结束（COMMIT/ROLLBACK/
+	// 会话复位）统一清空。
+	pendingLocal  []kvOp
+	pendingRemote map[string][]kvOp
 	// 递归防护深度：triggerDepth 防触发器无限递归；
 	// procDepth 防存储过程嵌套展开。
 	triggerDepth int

@@ -21,6 +21,7 @@ const (
 	tokComma     // ,
 	tokSemicolon // ;
 	tokEq        // =
+	tokAssign    // :=（P0-2 存储过程局部变量赋值风格）
 	tokNe        // !=
 	tokLt        // <
 	tokGt        // >
@@ -48,6 +49,8 @@ var keywords = map[string]bool{
 	"SET": true, "DELETE": true, "AND": true, "INDEX": true, "ON": true,
 	"JOIN": true, "INNER": true, "LEFT": true, "OUTER": true,
 	"GROUP": true, "BETWEEN": true, "IN": true, "AS": true,
+	// P0-4：HAVING 子句（GROUP BY 后过滤）
+	"HAVING": true,
 	"BEGIN": true, "COMMIT": true, "ROLLBACK": true,
 	"EXPORT": true, "IMPORT": true, "TO": true,
 	// M18：prepared statement + 生态导出 FORMAT
@@ -63,8 +66,8 @@ var keywords = map[string]bool{
 	"BACKUP": true, "RESTORE": true, "LSN": true,
 	// M9：在线 DDL（ALTER TABLE）
 	"ALTER": true, "COLUMN": true, "RENAME": true,
-	// M9：外键约束（FOREIGN KEY / REFERENCES / ON DELETE CASCADE|RESTRICT）
-	"FOREIGN": true, "REFERENCES": true, "CASCADE": true, "RESTRICT": true,
+	// M9：外键约束（FOREIGN KEY / REFERENCES / ON DELETE|ON UPDATE CASCADE|RESTRICT|SET NULL）
+	"FOREIGN": true, "REFERENCES": true, "CASCADE": true, "RESTRICT": true, "NULL": true,
 	// M9：视图（CREATE VIEW / DROP VIEW / SHOW VIEWS）
 	"VIEW": true, "VIEWS": true,
 	// M15：物化视图（CREATE/REFRESH/DROP MATERIALIZED VIEW [CONCURRENTLY]）
@@ -77,6 +80,8 @@ var keywords = map[string]bool{
 	// M10：SQL 兼容性增强簇（CTE / 窗口函数 / UPSERT）
 	"WITH": true, "OVER": true, "PARTITION": true,
 	"REPLACE": true, "DUPLICATE": true, "UNIQUE": true,
+	// P0-5：显式窗口帧（ROWS/RANGE、UNBOUNDED PRECEDING/FOLLOWING、CURRENT ROW、n PRECEDING/FOLLOWING）
+	"ROWS": true, "RANGE": true, "UNBOUNDED": true, "PRECEDING": true, "FOLLOWING": true, "CURRENT": true,
 	// M11：用户管理（CREATE/DROP/ALTER USER ... IDENTIFIED BY ...）
 	"USER": true, "IDENTIFIED": true,
 	// M11：权限模型（GRANT/REVOKE ... ON ... TO/FROM ...）
@@ -147,6 +152,8 @@ func lex(sql string) ([]token, error) {
 			l.skipToLineEnd()
 		case c == '%':
 			l.emit(tokMod, "%", 1)
+		case c == ':' && l.peek(1) == '=':
+			l.emit(tokAssign, ":=", 2)
 		case c == '=':
 			l.emit(tokEq, "=", 1)
 		case c == '!':
