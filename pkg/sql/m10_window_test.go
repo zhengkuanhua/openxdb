@@ -183,8 +183,13 @@ func TestWindowIllegalPosition(t *testing.T) {
 func TestWindowMixedAggregate(t *testing.T) {
 	e := newEngine(t)
 	setupEmp(t, e)
-	// 窗口函数与 GROUP BY 混用
-	mustErr(t, e, "SELECT dept, ROW_NUMBER() OVER () FROM emp GROUP BY dept", "not supported with GROUP BY")
+	// P1-10：窗口函数与 GROUP BY 组合已支持，窗口在分组聚合结果上计算。
+	// 分组结果两行（eng/ops），无分区无排序时 ROW_NUMBER 保持行序 1..N。
+	rows := mustRows(t, e, "SELECT dept, ROW_NUMBER() OVER () FROM emp GROUP BY dept ORDER BY dept")
+	if len(rows) != 2 || rows[0][0].String() != "eng" || rows[0][1].I != 1 ||
+		rows[1][0].String() != "ops" || rows[1][1].I != 2 {
+		t.Fatalf("window with group by: got %+v", rows)
+	}
 	// 窗口函数与全局聚合混用
 	mustErr(t, e, "SELECT COUNT(*), ROW_NUMBER() OVER () FROM emp", "cannot be mixed with aggregate")
 }

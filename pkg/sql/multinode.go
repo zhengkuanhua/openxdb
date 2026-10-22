@@ -180,6 +180,7 @@ func (e *Executor) getKVVisible(tx txn.Txn, key []byte, beginTS uint64) ([]byte,
 
 // scanMergedVisible 本地合并扫描 + M8 快照版本过滤：begin_ts=0 时不过滤。
 func (e *Executor) scanMergedVisible(tx txn.Txn, ranges []storage.KeyRange, beginTS uint64) ([]storage.KVPair, error) {
+	dbgLog("SMV enter ranges=%d beginTS=%d mgr=%v", len(ranges), beginTS, e.mgr != nil)
 	pairs, err := e.scanMerged(tx, ranges)
 	if err != nil {
 		return nil, err
@@ -402,6 +403,12 @@ func (e *Executor) execAssignRegion(sess *Session, s *AssignRegionStmt) (*Result
 	regions = append(regions, rgView)
 	// 推送数据 + 路由视图到目标节点（目标节点在同一 WriteBatch 内写数据 + 学习路由 + 落盘）
 	if err := e.mgr.PushRegion(s.NodeID, rg, rows, regions, e.selfID); err != nil {
+		return nil, err
+	}
+	// 路由变更全网广播：向其余所有已注册节点增量同步本次变更条目（纯路由，无数据），
+	// 避免其他节点残留旧归属导致写落错节点 / 读转发落空；
+	// 仅广播被指派 region 条目，避免全量视图扩散本机残留漂移。
+	if err := e.mgr.BroadcastRegions([]sharding.RegionInfo{rgView}, nil, e.selfID); err != nil {
 		return nil, err
 	}
 	// 更新本节点路由归属并落盘

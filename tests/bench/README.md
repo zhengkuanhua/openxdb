@@ -28,7 +28,7 @@ RocksDB CGO 编译/运行依赖环境变量（`CGO_CFLAGS`/`CGO_LDFLAGS`），�
 ```
 
 脚本会探测 `C:\rocksdb-src` / `C:\rocksdb-build` 或
-`%USERPROFILE%\AppData\Local\OpenXDBTools\rocksdb-*` 路径并注入环境变量。
+`D:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-*` 路径并注入环境变量。
 
 ## SQL 层基准（tests/bench/sql_bench）
 

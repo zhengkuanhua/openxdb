@@ -36,11 +36,14 @@ type mysqlConn struct {
 	user   string
 	sess   *sql.Session
 
-	stmts      map[uint32]string // stmt id → SQL 文本
-	stmtTypes  map[uint32][]byte  // stmt id → PREPARE 时登记的参数类型（每参数 2 字节）
+	stmts      map[uint32]string            // stmt id → SQL 文本
+	stmtTypes  map[uint32][]byte             // stmt id → PREPARE 时登记的参数类型（每参数 2 字节）
+	longData   map[uint32]map[uint16][]byte  // stmt id → 参数序号 → COM_STMT_SEND_LONG_DATA 累积数据
 	nextStmtID uint32
 	inTx       bool
 	autoCommit bool // MySQL 兼容：SET autocommit=0 后进入隐式事务模式
+	// srv 持有服务器引用：COM_CHANGE_USER 重新认证时复用 authenticate 流程。
+	srv *MySQLServer
 }
 
 // serveCommands 进入命令循环，直到连接关闭或致命错误。
@@ -92,13 +95,13 @@ func (c *mysqlConn) serveCommands() error {
 		case comStmtReset:
 			c.handleStmtReset(payload[1:])
 		case comStmtSendLongData:
-			// 长数据暂不支持：忽略（后续 EXECUTE 不带该参数）。
+			c.handleStmtSendLongData(payload[1:])
 		case comSetOption:
 			if err := c.pc.writePacket(eofPacket(c.status())); err != nil {
 				return err
 			}
 		case comChangeUser:
-			if err := c.pc.writePacket(errPacket(fmt.Errorf("OpenXDB: COM_CHANGE_USER not supported"))); err != nil {
+			if err := c.handleChangeUser(payload[1:]); err != nil {
 				return err
 			}
 		default:
@@ -118,6 +121,91 @@ func (c *mysqlConn) execTrace(sqlText string) (*sql.Result, error) {
 		return res, err
 	}
 	return c.engine.ExecuteAsSession(sqlText, c.user, c.sess)
+}
+
+// handleChangeUser COM_CHANGE_USER：重新认证并切换用户。
+// 认证成功后按 MySQL 语义重置连接状态（新会话、清空预处理语句与长参数）。
+func (c *mysqlConn) handleChangeUser(p []byte) error {
+	user, authResp, db, charset, plugin, err := parseChangeUserPayload(p)
+	if err != nil {
+		return c.pc.writePacket(errPacket(err))
+	}
+	// 免鉴权模式（verify 未装配）：直接切换用户。
+	if c.srv == nil || c.srv.verify == nil {
+		c.applyNewUser(user)
+		return c.pc.writePacket(okPacket(0, 0, c.status()))
+	}
+	hr := &handshakeResponse{
+		capability: capProtocol41 | capSecureConnection | capPluginAuth | capPluginAuthLenenc,
+		username:   user,
+		authResp:   authResp,
+		database:   db,
+		charset:    charset,
+		pluginName: plugin,
+	}
+	if err := c.srv.authenticate(c, hr); err != nil {
+		// 认证失败：保持原用户与连接状态不变。
+		return c.pc.writePacket(errPacket(err))
+	}
+	c.applyNewUser(user)
+	return c.pc.writePacket(okPacket(0, 0, c.status()))
+}
+
+// applyNewUser 切换用户并重置连接级状态（MySQL COM_CHANGE_USER 语义）。
+func (c *mysqlConn) applyNewUser(user string) {
+	c.user = user
+	c.sess = c.engine.NewSession()
+	c.stmts = map[uint32]string{}
+	c.stmtTypes = map[uint32][]byte{}
+	c.longData = map[uint32]map[uint16][]byte{}
+	c.inTx = false
+	c.autoCommit = true
+}
+
+// parseChangeUserPayload 解析 COM_CHANGE_USER 负载：
+// user\0 | auth-response(lenenc) | db\0 | charset(1) | plugin\0。
+// auth-response 在无 lenenc 能力时按 1 字节长度前缀兼容解析。
+func parseChangeUserPayload(p []byte) (user string, authResp []byte, db string, charset byte, plugin string, err error) {
+	user, off, err := readNulString(p, 0)
+	if err != nil {
+		return "", nil, "", 0, "", fmt.Errorf("OpenXDB: change user parse username: %w", err)
+	}
+	if off < len(p) {
+		if p[off] < 0xfb {
+			// 1 字节长度前缀（兼容无 CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA 客户端）。
+			n := int(p[off])
+			off++
+			if off+n > len(p) {
+				return "", nil, "", 0, "", io.ErrUnexpectedEOF
+			}
+			authResp = p[off : off+n]
+			off += n
+		} else {
+			var n int
+			authResp, n, err = readLenencBytes(p, off)
+			if err != nil {
+				return "", nil, "", 0, "", fmt.Errorf("OpenXDB: change user parse auth: %w", err)
+			}
+			off = n
+		}
+	}
+	if off < len(p) {
+		db, off, err = readNulString(p, off)
+		if err != nil {
+			return "", nil, "", 0, "", fmt.Errorf("OpenXDB: change user parse db: %w", err)
+		}
+	}
+	if off < len(p) {
+		charset = p[off]
+		off++
+	}
+	if off < len(p) {
+		plugin, _, err = readNulString(p, off)
+		if err != nil {
+			return "", nil, "", 0, "", fmt.Errorf("OpenXDB: change user parse plugin: %w", err)
+		}
+	}
+	return user, authResp, db, charset, plugin, nil
 }
 
 // handleQuery 执行 COM_QUERY：有列则文本结果集，否则 OK 包。
@@ -219,7 +307,32 @@ func (c *mysqlConn) handleStmtReset(p []byte) error {
 		return nil
 	}
 	_ = binary.LittleEndian.Uint32(p[0:4])
+	// MySQL 语义：RESET 清除 long data 与已绑定参数。
+	delete(c.longData, binary.LittleEndian.Uint32(p[0:4]))
 	return c.pc.writePacket(okPacket(0, 0, c.status()))
+}
+
+// handleStmtSendLongData COM_STMT_SEND_LONG_DATA：接收预处理语句长参数分块，
+// 数据按 (stmt, param) 累积追加，EXECUTE 时整体作为参数值（协议无响应）。
+func (c *mysqlConn) handleStmtSendLongData(p []byte) {
+	if len(p) < 6 {
+		return
+	}
+	id := binary.LittleEndian.Uint32(p[0:4])
+	paramID := binary.LittleEndian.Uint16(p[4:6])
+	if _, ok := c.stmts[id]; !ok {
+		// 未知语句：按 MySQL 行为静默丢弃。
+		return
+	}
+	if c.longData == nil {
+		c.longData = make(map[uint32]map[uint16][]byte)
+	}
+	if c.longData[id] == nil {
+		c.longData[id] = make(map[uint16][]byte)
+	}
+	buf := c.longData[id][paramID]
+	buf = append(buf, p[6:]...)
+	c.longData[id][paramID] = buf
 }
 
 // handleStmtExecute COM_STMT_EXECUTE：解析二进制参数、展开占位符并执行。
@@ -261,7 +374,11 @@ func (c *mysqlConn) handleStmtExecute(p []byte) error {
 				return c.pc.writePacket(errPacket(fmt.Errorf("OpenXDB: statement %d types not registered", id)))
 			}
 		}
-		args, err := parseBinaryParams(p, off, numParams, nullBitmap, types)
+		var ld map[uint16][]byte
+		if c.longData != nil {
+			ld = c.longData[id]
+		}
+		args, err := parseBinaryParams(p, off, numParams, nullBitmap, types, ld)
 		if err != nil {
 			if os.Getenv("OPENXDB_DEBUG_WIRE") != "" {
 				fmt.Printf("[wire] EXECUTE FAIL id=%d sql=%s hex=%x err=%v\n", id, sqlText, p, err)
@@ -269,6 +386,8 @@ func (c *mysqlConn) handleStmtExecute(p []byte) error {
 			return c.pc.writePacket(errPacket(err))
 		}
 		sqlText = expandPlaceholders(sqlText, args)
+		// MySQL 语义：EXECUTE 后清除 long data 缓冲，客户端需重新发送。
+		delete(c.longData, id)
 	}
 	// MySQL autocommit=0 隐式事务：DML/DDL 前自动开启会话事务。
 	if !c.autoCommit && !c.inTx && isImplicitTxTrigger(sqlText) {
@@ -298,12 +417,21 @@ func (c *mysqlConn) handleStmtExecute(p []byte) error {
 // ---- 参数解析与占位符展开 ----
 
 // parseBinaryParams 解析 COM_STMT_EXECUTE 二进制参数值为 SQL 文本字面量。
-func parseBinaryParams(p []byte, off, n int, nullBitmap, types []byte) ([]string, error) {
+// longData 为 COM_STMT_SEND_LONG_DATA 累积的参数缓冲：命中时 EXECUTE 包中不携带
+// 该参数值，直接使用累积数据（MySQL 协议语义）。
+func parseBinaryParams(p []byte, off, n int, nullBitmap, types []byte, longData map[uint16][]byte) ([]string, error) {
 	args := make([]string, 0, n)
 	for i := 0; i < n; i++ {
 		if nullBitmap[i/8]&(1<<(uint(i)%8)) != 0 {
 			args = append(args, "NULL")
 			continue
+		}
+		// 长参数：客户端 EXECUTE 不携带值字节，用累积缓冲整体作为参数值。
+		if longData != nil {
+			if buf, ok := longData[uint16(i)]; ok {
+				args = append(args, quoteString(string(buf)))
+				continue
+			}
 		}
 		typ := types[i*2]
 		unsigned := types[i*2+1] == 0x80
@@ -358,22 +486,41 @@ func parseBinaryParams(p []byte, off, n int, nullBitmap, types []byte) ([]string
 				args = append(args, fmt.Sprintf("%g", math.Float64frombits(binary.LittleEndian.Uint64(p[off:off+8]))))
 			}
 			off += size
-		case typ == 15 || typ == 245 || typ == 246 || typ == 252 || typ == 253 || typ == 254:
-			// STRING/VARCHAR/BLOB/DECIMAL：lenenc 字符串。
+		case typ == 0 || typ == 15 || typ == 245 || typ == 246 || typ == 249 || typ == 250 || typ == 251 || typ == 252 || typ == 253 || typ == 254 || typ == 255:
+			// DECIMAL/STRING/VARCHAR/JSON/TINY/MEDIUM/LONG BLOB/BLOB/GEOMETRY：lenenc 字符串。
 			b, n2, err := readLenencBytes(p, off)
 			if err != nil {
 				return nil, fmt.Errorf("OpenXDB: param %d string truncated", i)
 			}
 			off = n2
 			args = append(args, quoteString(string(b)))
-		case typ == 10 || typ == 7 || typ == 12:
-			// DATE/DATETIME/TIMESTAMP：二进制日期结构。
+		case typ == 10 || typ == 14:
+			// DATE/NEWDATE：二进制日期结构（4 字节）。
+			lit, n2, err := parseBinaryDate(p, off, 10)
+			if err != nil {
+				return nil, err
+			}
+			off = n2
+			args = append(args, lit)
+		case typ == 7 || typ == 12:
+			// DATETIME/TIMESTAMP：二进制日期结构。
 			lit, n2, err := parseBinaryDate(p, off, int(typ))
 			if err != nil {
 				return nil, err
 			}
 			off = n2
 			args = append(args, lit)
+		case typ == 11:
+			// TIME：二进制时间结构（0/8/12 字节）。
+			lit, n2, err := parseBinaryTime(p, off)
+			if err != nil {
+				return nil, err
+			}
+			off = n2
+			args = append(args, lit)
+		case typ == 6:
+			// NULL 类型：null bitmap 未置位时同样视为 NULL。
+			args = append(args, "NULL")
 		default:
 			return nil, fmt.Errorf("OpenXDB: unsupported param type %d", typ)
 		}
@@ -414,6 +561,43 @@ func parseBinaryDate(p []byte, off, typ int) (string, int, error) {
 		s += fmt.Sprintf(".%06d", micro)
 	}
 	return s + "'", off + length, nil
+}
+
+// parseBinaryTime 解析二进制时间结构为 SQL 字面量。
+// 结构：length(1) + days(4, 有符号) + hour(1) + minute(1) + second(1) [+ micro(4)]。
+// length：0（零时间）；8（无微秒）；12（含微秒）。days 为负表示负时间。
+func parseBinaryTime(p []byte, off int) (string, int, error) {
+	if off >= len(p) {
+		return "", off, fmt.Errorf("OpenXDB: time param truncated")
+	}
+	length := int(p[off])
+	off++
+	if length == 0 {
+		return "'00:00:00'", off, nil
+	}
+	if length != 8 && length != 12 {
+		return "", off, fmt.Errorf("OpenXDB: bad time param length %d", length)
+	}
+	if off+length > len(p) {
+		return "", off, fmt.Errorf("OpenXDB: time param truncated")
+	}
+	days := int32(binary.LittleEndian.Uint32(p[off : off+4]))
+	hour := int(p[off+4])
+	min := int(p[off+5])
+	sec := int(p[off+6])
+	sign := ""
+	totalHours := int(days)*24 + hour
+	if days < 0 {
+		sign = "-"
+		// days 为负：hour/min/sec 仍为正的绝对值部分。
+		totalHours = -int(days)*24 - hour
+	}
+	s := fmt.Sprintf("'%s%d:%02d:%02d", sign, totalHours, min, sec)
+	if length == 12 {
+		micro := int(p[off+7]) | int(p[off+8])<<8 | int(p[off+9])<<16 | int(p[off+10])<<24
+		s += fmt.Sprintf(".%06d", micro)
+	}
+	return s + "'", off + length - 1, nil
 }
 
 // quoteString 转义字符串为 SQL 单引号字面量。

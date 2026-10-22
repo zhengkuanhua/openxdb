@@ -283,9 +283,13 @@ func (s *Server) handlePut(conn net.Conn, payload []byte) {
 // applyPush 执行数据装载：目标节点将 region 数据与路由原子写入本机。
 // region 元信息以"本节点"视图落盘（Node=""、Local=true），
 // 数据写入物理键空间原样保留（含 region 前缀），覆盖式装载幂等。
+// SyncOnly=true 时降级为纯路由同步（applyRouteSync），不写数据。
 func (s *Server) applyPush(req *RegionPushReq) (RegionPushResp, error) {
 	if s.router == nil {
 		return RegionPushResp{}, errors.New("cluster: router not injected")
+	}
+	if req.SyncOnly {
+		return s.applyRouteSync(req)
 	}
 	batch := &storage.WriteBatch{}
 	for _, row := range req.Rows {
@@ -341,6 +345,56 @@ func (s *Server) applyPush(req *RegionPushReq) (RegionPushResp, error) {
 		return RegionPushResp{}, err
 	}
 	return RegionPushResp{Rows: len(req.Rows)}, nil
+}
+
+// applyRouteSync 纯路由同步（SyncOnly=true）：路由变更全网广播的接收端。
+// 1) 先删除 DeleteIDs 路由（SPLIT 广播移除旧 region，幂等）；
+// 2) 按源权威视图学习 Routes：Node 非空直接学习；Node=="" 沿用持有校验语义
+//    （本机持有→保持本地视图；不持有且已有远端归属→保留原归属；否则未指派）；
+// 3) 落盘 m:regions。
+// 不写数据、不把 req.Region 落本地（本机未持有该 region，不得标记为本地）。
+func (s *Server) applyRouteSync(req *RegionPushReq) (RegionPushResp, error) {
+	if s.router == nil {
+		return RegionPushResp{}, errors.New("cluster: router not injected")
+	}
+	for _, rid := range req.DeleteIDs {
+		if err := s.router.DeleteRegion(rid); err != nil {
+			return RegionPushResp{}, err
+		}
+	}
+	for _, route := range req.Routes {
+		if route.Node == "" {
+			holds, err := s.regionHoldsLocal(route)
+			if err != nil {
+				return RegionPushResp{}, err
+			}
+			if holds {
+				// 本机物理持有该 region：保持本地视图（Node=="" 即本节点）
+				route.Node = ""
+				route.Local = true
+			} else if cur, ok := s.router.FindRegion(route.RegionID); ok && cur.Node != "" {
+				continue // 本机不持有且已有明确远端归属：保留原归属，不覆盖
+			} else {
+				// 本机不持有且无明确归属：保持未指派，不补记 SrcID
+				route.Node = ""
+				route.Local = false
+			}
+		}
+		if err := s.router.UpsertRegion(route); err != nil {
+			return RegionPushResp{}, err
+		}
+	}
+	seq, regions := s.router.Dump()
+	metaRaw, err := sharding.MarshalMeta(seq, regions)
+	if err != nil {
+		return RegionPushResp{}, err
+	}
+	batch := &storage.WriteBatch{}
+	batch.Puts = append(batch.Puts, storage.KVPair{Key: sharding.MetaRegionsKey(), Value: metaRaw})
+	if err := s.st.Write(batch); err != nil {
+		return RegionPushResp{}, err
+	}
+	return RegionPushResp{}, nil
 }
 
 // regionHoldsLocal 判断本机物理键空间 [EncodeRegionKey(rid,StartKey), EncodeRegionKey(rid,EndKey))

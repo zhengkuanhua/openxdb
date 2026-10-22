@@ -15,6 +15,7 @@ AIGC:
 - 范围: `pkg/sql`（lexer / parser / ast / executor / value）
 - 结论先行：**聚合函数部分支持（COUNT/SUM/AVG），MAX/MIN 未实现；算术表达式完全不支持（词法层缺失）；SELECT DISTINCT 完全不支持（全链路无实现）**。三类缺失均可修复，算术表达式工作量最大，DISTINCT 与 MAX/MIN 工作量最小。
 - 依据：源码走查（`pkg/sql/*.go`）+ 既有测试（`sql_test.go` / `m10_window_test.go` / `matview_test.go`）+ E5 基准压测实测（`docs/experiments/E5_standard_bench_alignment.md`）。本报告只做评估，不实施代码修改。
+- 后续状态：本文档为 v0.27.0-alpha 时点评估快照；所列缺口已由后续版本实现——MAX/MIN、算术表达式、SELECT DISTINCT 均随 v1.1.0 前 T40/P1 系列落地（测试见 pkg/sql/t40_sql_test.go、p1_10_edge_test.go）。
 
 ---
 

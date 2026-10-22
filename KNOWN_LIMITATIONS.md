@@ -25,11 +25,11 @@ AIGC:
 - **影响**：迁移自 MySQL/PostgreSQL 等系统的存量 SQL 可能需要改写；依赖复杂分析查询（如 `HAVING` 过滤分组）的场景不可直接运行。
 - **建议**：迁移前对照 SQL 参考做语法兼容性评审；复杂分析需求可先用 `EXPLAIN` 与子查询/视图组合验证等价改写；后续版本将按 T39 SQL 能力差距评估逐步补齐。
 
-### 1.2 无 MySQL wire protocol 兼容（自研二进制协议）
+### 1.2 MySQL wire protocol 兼容为子集（--mysql-port）
 
-- **限制描述**：OpenXDB 使用自研二进制 TCP 协议（`pkg/server`），**不是** MySQL wire protocol。MySQL 官方客户端、标准 sysbench、官方 mysqldump 等 MySQL 生态工具无法直接连接。
-- **影响**：MySQL 生态监控、备份、管理工具链不可直接复用；E5 基准采用 Python PEP 249 驱动等价实测，而非标准 sysbench/TPC-C 工具直连。
-- **建议**：使用内置 REPL（`openxdb repl`）或随仓库交付的 JDBC / Python 驱动（支持 `?` 占位符、TLS 参数）；需要标准工具的场景请使用驱动包装层或适配层。
+- **限制描述**：OpenXDB 默认使用自研二进制 TCP 协议（`pkg/server`）；自 v1.1.0 起可通过 `openxdb start --mysql-port <port>` 启用 **MySQL wire protocol 兼容监听**（`pkg/mysqlproto`），支持 MySQL 官方客户端、go-sql-driver/mysql、JDBC（MySQL 方言）驱动直接连接，覆盖常用查询/DML/预处理语句（含 COM_CHANGE_USER、COM_STMT_SEND_LONG_DATA、常用参数类型映射）等能力。协议兼容为常用能力子集，依赖完整 MySQL 协议扩展（如 binlog 复制、mysqldump 全部选项）的场景不受支持。
+- **影响**：MySQL 生态监控、备份、管理工具链中依赖完整协议扩展的场景仍不可直接复用；E5 基准采用 Python PEP 249 驱动等价实测，而非标准 sysbench/TPC-C 工具直连。
+- **建议**：标准 MySQL 客户端与驱动场景使用 `openxdb start --mysql-port <port>` 直连；需要完整生态工具链的场景请使用驱动包装层或适配层，或使用内置 REPL（`openxdb repl`）与随仓库交付的 JDBC / Python 驱动。
 
 ### 1.3 存储过程/触发器为受限子集
 

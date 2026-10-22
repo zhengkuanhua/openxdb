@@ -347,3 +347,72 @@ func TestM14XHexLiteral(t *testing.T) {
 		t.Errorf("0x hex uppercase: %q", tb.Rows[1][1].Raw)
 	}
 }
+
+// TestM14TypeMappingExtended 扩展类型映射：SERIAL/浮点别名/空间类型/UNSIGNED 修饰符/NCHAR。
+func TestM14TypeMappingExtended(t *testing.T) {
+	d := parse(t, `CREATE TABLE t (
+  a SERIAL, b FLOAT4, c FLOAT8, d DOUBLE PRECISION, e INT UNSIGNED,
+  f BIGINT UNSIGNED ZEROFILL, g POINT, h LINESTRING, i POLYGON,
+  j MULTIPOINT, k MULTILINESTRING, l MULTIPOLYGON, m GEOMETRYCOLLECTION,
+  n GEOMETRY, o NCHAR(10), p NVARCHAR(20)
+);`)
+	tb := d.Tables[0]
+	want := []string{"INT", "DECIMAL", "DECIMAL", "DECIMAL", "INT", "INT",
+		"TEXT", "TEXT", "TEXT", "TEXT", "TEXT", "TEXT", "TEXT", "TEXT", "TEXT", "TEXT"}
+	if len(tb.Columns) != len(want) {
+		t.Fatalf("column count: want %d, got %d", len(want), len(tb.Columns))
+	}
+	for i, w := range want {
+		if tb.Columns[i].Type != w {
+			t.Errorf("col %s: want %s, got %s", tb.Columns[i].Name, w, tb.Columns[i].Type)
+		}
+	}
+}
+
+// TestM14BitLiteral 位字面量 b''/B'' 转十进制数字。
+func TestM14BitLiteral(t *testing.T) {
+	d := parse(t, "CREATE TABLE t (id INT, bits BIT(8)); INSERT INTO t VALUES (1, b'1010'), (2, B'11111111'), (3, b'');")
+	tb := d.Tables[0]
+	if len(tb.Rows) != 3 {
+		t.Fatalf("rows: want 3, got %d", len(tb.Rows))
+	}
+	if tb.Rows[0][1].Raw != "10" {
+		t.Errorf("b'1010': %q", tb.Rows[0][1].Raw)
+	}
+	if tb.Rows[1][1].Raw != "255" {
+		t.Errorf("B'11111111': %q", tb.Rows[1][1].Raw)
+	}
+	if tb.Rows[2][1].Raw != "0" {
+		t.Errorf("empty bit literal: %q", tb.Rows[2][1].Raw)
+	}
+}
+
+// TestM14IntroducerLiteral 字符集引导符字面量（_binary/_utf8mb4 等）。
+func TestM14IntroducerLiteral(t *testing.T) {
+	d := parse(t, "CREATE TABLE t (id INT, s TEXT, b BLOB); INSERT INTO t VALUES (1, _utf8mb4'你好', _binary'raw-bytes');")
+	tb := d.Tables[0]
+	if len(tb.Rows) != 1 {
+		t.Fatalf("rows: want 1, got %d", len(tb.Rows))
+	}
+	if tb.Rows[0][1].Raw != "你好" {
+		t.Errorf("_utf8mb4 string: %q", tb.Rows[0][1].Raw)
+	}
+	if tb.Rows[0][2].Raw != "raw-bytes" {
+		t.Errorf("_binary string: %q", tb.Rows[0][2].Raw)
+	}
+}
+
+// TestM14ScientificNumber 科学计数法数字字面量。
+func TestM14ScientificNumber(t *testing.T) {
+	d := parse(t, "CREATE TABLE t (id INT, f DOUBLE); INSERT INTO t VALUES (1, 1e5), (2, 1.5E-3), (3, 2E+06), (4, -1.2e-2);")
+	tb := d.Tables[0]
+	if len(tb.Rows) != 4 {
+		t.Fatalf("rows: want 4, got %d", len(tb.Rows))
+	}
+	want := []string{"1e5", "1.5E-3", "2E+06", "-1.2e-2"}
+	for i, w := range want {
+		if tb.Rows[i][1].Raw != w {
+			t.Errorf("row %d scientific: want %q, got %q", i, w, tb.Rows[i][1].Raw)
+		}
+	}
+}

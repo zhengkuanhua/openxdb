@@ -37,9 +37,9 @@ $certPem = Join-Path $WorkRoot 'cert.pem'
 $keyPem  = Join-Path $WorkRoot 'key.pem'
 $ops     = Join-Path $WorkRoot '_ops.py'
 
-$env:CGO_CFLAGS   = '-IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include'
-$env:CGO_CXXFLAGS = '-IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include'
-$env:CGO_LDFLAGS  = '-LC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-build -lrocksdb -lm'
+$env:CGO_CFLAGS   = '-ID:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-11.8.1\include'
+$env:CGO_CXXFLAGS = '-ID:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-11.8.1\include'
+$env:CGO_LDFLAGS  = '-LD:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-build -lrocksdb -lm'
 
 function Log($m) { Write-Host ("[{0}] {1}" -f (Get-Date -Format HH:mm:ss), $m) }
 $script:FAILED = 0

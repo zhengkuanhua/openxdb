@@ -39,7 +39,7 @@ OpenXDB 是一个**从零自研**的单机/分布式关系型数据库内核，�
 
 ### 1.1 定位边界
 
-- OpenXDB 使用**自研二进制 TCP 协议**（`pkg/server`），**不是 MySQL wire protocol**，因此无法直接兼容 MySQL 生态工具（如标准 sysbench、mysqldump 之外的 binlog 工具等）。
+- OpenXDB 默认使用**自研二进制 TCP 协议**（`pkg/server`）；自 v1.1.0 起可通过 `openxdb start --mysql-port <port>` 启用 **MySQL wire protocol 兼容监听**（`pkg/mysqlproto`），支持 MySQL CLI / go-sql-driver / JDBC 驱动直接连接（详见[第 2 章](#2-快速开始)与[第 5 章](#5-客户端驱动)）；依赖完整 MySQL 生态扩展（如 binlog 复制工具）的场景仍不可直接复用。
 - 性能定位为**单机端侧基准**：当前内核实现了完整功能链路，性能优化仍在持续进行，实测吞吐数据见[第 9 章](#9-性能基准)。
 - 不将 TiDB、TDSQL、MySQL 等作为对标对象，OpenXDB 是一个独立实现的内核，用于学习、实验与端侧场景。
 
@@ -149,6 +149,9 @@ openxdb repl --data-dir ./data
 # TCP server（默认端口 7788）
 openxdb start --data-dir ./data [--port 7788]
 
+# 可选：启用 MySQL wire protocol 兼容监听（mysql CLI / go-sql-driver / JDBC 直连）
+openxdb start --data-dir ./data --mysql-port 3306
+
 # 运维检查
 openxdb doctor --data-dir ./data [--addr 127.0.0.1:7788] [--json]
 openxdb stats [--addr 127.0.0.1:7788] [--interval 5] [--json]
@@ -230,6 +233,7 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -DataDir C:\openxdb\
 | `openxdb init --data-dir <dir>` | 初始化数据目录 |
 | `openxdb repl --data-dir <dir>` | 本地交互式 REPL |
 | `openxdb start --data-dir <dir> [--port 7788]` | 启动 TCP server（默认端口 7788） |
+| `openxdb start --data-dir <dir> [--mysql-port 3306]` | 可选启用 MySQL wire protocol 兼容监听（MySQL CLI / go-sql-driver / JDBC 直连，见[5.1](#51-通用协议说明)） |
 | `openxdb start --cluster-addr <addr>` | 以集群模式启动（节点 ID 由 `--node-id` 指定或自动生成） |
 | `openxdb doctor` | 健康检查（退出码 0=通过 / 1=警告 / 2=错误） |
 | `openxdb stats` | 实时指标查看 |
@@ -534,7 +538,7 @@ SELECT * FROM information_schema.statistics;
 
 ## 5. 客户端驱动
 
-OpenXDB 提供 JDBC 与 Python 两套标准客户端驱动（T19），均基于自研二进制 TCP 协议（`pkg/server`），**不是 MySQL wire protocol**。
+OpenXDB 提供 JDBC 与 Python 两套标准客户端驱动（T19），均基于自研二进制 TCP 协议（`pkg/server`）；自 v1.1.0 起同时提供 **MySQL wire protocol 兼容监听**（`--mysql-port`，`pkg/mysqlproto`），供 MySQL 官方客户端、go-sql-driver/mysql、JDBC（MySQL 方言）等生态工具直接连接。
 
 ### 5.1 通用协议说明
 
@@ -543,6 +547,7 @@ OpenXDB 提供 JDBC 与 Python 两套标准客户端驱动（T19），均基于�
 - 空单元格统一映射为 NULL。
 - 多行文本不支持（参数化字符串值中 `\n` / `\r` 会被驱动拒绝）。
 - 参数化：服务端协议无 prepared statement 二进制参数通道，两驱动均在客户端安全转义 `?` 占位符。
+- MySQL wire protocol 兼容（`--mysql-port`）：支持握手认证、查询/DML、预处理语句（COM_STMT_PREPARE / COM_STMT_EXECUTE / COM_STMT_SEND_LONG_DATA）、COM_CHANGE_USER 等常用命令；`mysql -h127.0.0.1 -P3306 -uroot`、go-sql-driver/mysql、MySQL JDBC 均可直连。能力边界见 KNOWN_LIMITATIONS.md 1.2 节。
 
 ### 5.2 JDBC 驱动
 
@@ -736,7 +741,7 @@ openxdb stats [--addr 127.0.0.1:7788] [--interval 5] [--json]
 
 ## 9. 性能基准
 
-> 来源：E5 标准基准对齐实验（`docs/experiments/E5_standard_bench_alignment.md`）。由于 OpenXDB 使用自研协议（非 MySQL wire protocol），标准 sysbench/TPC-C 官方工具无法直接接入，采用 **Python PEP 249 驱动等价**方案实测。性能定位为**单机端侧基准**。
+> 来源：E5 标准基准对齐实验（`docs/experiments/E5_standard_bench_alignment.md`）。E5 实测时采用 **Python PEP 249 驱动等价**方案（OpenXDB 的 MySQL wire protocol 兼容监听自 v1.1.0 起通过 `--mysql-port` 提供，标准 sysbench/TPC-C 官方工具直连能力见对应版本说明）。性能定位为**单机端侧基准**。
 
 ### 9.1 sysbench OLTP（8 线程 × 60s，Python 驱动自研协议）
 
@@ -763,10 +768,10 @@ openxdb stats [--addr 127.0.0.1:7788] [--interval 5] [--json]
 
 ## 10. 已知限制与边界
 
-> 详细清单见 KNOWN_LIMITATIONS.md（待建）。以下为概要：
+> 详细清单见 [KNOWN_LIMITATIONS.md](../KNOWN_LIMITATIONS.md)。以下为概要：
 
 1. **SQL 子集**：OpenXDB 实现的是 SQL 子集，并非完整 SQL 标准。不支持 `HAVING` 子句；DDL/DML/查询能力以[第 4 章](#4-sql-参考)为准。
-2. **非 MySQL wire protocol**：使用自研二进制 TCP 协议，无法直接兼容 MySQL 生态工具（标准 sysbench、官方 mysqldump 客户端等）。
+2. **MySQL wire protocol 兼容为子集（自 v1.1.0 起）**：默认使用自研二进制 TCP 协议；可通过 `openxdb start --mysql-port <port>` 启用 MySQL wire protocol 兼容监听，支持 MySQL CLI / go-sql-driver / JDBC 直连常用查询/DML/预处理语句；依赖完整 MySQL 生态扩展（binlog 复制、mysqldump 全部选项等）的工具仍不可直接复用。
 3. **全局会话锁性能边界**：当前会话层串行化全局锁是主要吞吐瓶颈（见[第 9 章](#9-性能基准)），高并发写入场景吞吐受限。
 4. **行协议限制**：不支持单元格内换行（多行文本参数会被驱动拒绝）；空单元格同时表示 NULL 与空字符串。
 5. **类型与精度**：DECIMAL 内部规范化为固定 4 位小数；JSON 导出中 DECIMAL 经 `strconv.ParseFloat` 近似（或保留字符串）。
@@ -798,8 +803,8 @@ openxdb stats [--addr 127.0.0.1:7788] [--interval 5] [--json]
 ### Q6：驱动如何连接？
 JDBC：`jdbc:openxdb://host:7788`；Python：`openxdb.connect("host", 7788)`。两驱动均基于自研协议，参数化使用 `?` 占位符（客户端侧安全转义）。TLS 场景在 JDBC 配置证书校验模式、Python 传入 TLS 连接参数。
 
-### Q7：为什么不能用 MySQL 客户端连接？
-OpenXDB 使用自研二进制 TCP 协议（`pkg/server`），不是 MySQL wire protocol，因此 MySQL 官方客户端无法直接连接。请使用内置 REPL（`openxdb repl`）或 JDBC / Python 驱动。
+### Q7：如何用 MySQL 客户端连接？
+默认端口（7788）为自研二进制 TCP 协议，MySQL 官方客户端无法直接连接；请使用内置 REPL（`openxdb repl`）或 JDBC / Python 驱动。自 v1.1.0 起，可通过 `openxdb start --mysql-port 3306` 启用 **MySQL wire protocol 兼容监听**，即可使用 `mysql -h127.0.0.1 -P3306 -uroot` 或 go-sql-driver / MySQL JDBC 直连。
 
 ### Q8：如何查看慢查询？
 `SET slow_query_threshold = <ms>` 设置阈值（默认 100ms），执行语句后 `SHOW SLOWQUERIES` 查看最近记录；`SET slow_query_log = on` 开启落盘（默认 `<数据目录>/slow.log`）。

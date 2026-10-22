@@ -200,10 +200,10 @@ stderr 日志:  D:\openxdb-data\deploy.stderr.log
 ## 6. 验收环境（本机 CGO 工具链）
 
 ```
-PATH:            C:\Users\27756\AppData\Local\OpenXDBTools\mingw64\bin
-CGO_CFLAGS:      -IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include
-CGO_CXXFLAGS:    -IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include
-CGO_LDFLAGS:     -LC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-build -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -static
+PATH:            D:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\mingw64\bin
+CGO_CFLAGS:      -ID:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-11.8.1\include
+CGO_CXXFLAGS:    -ID:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-11.8.1\include
+CGO_LDFLAGS:     -LD:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-build -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -static
 ```
 
 注意：`shell_executor` 跑 go 命令会吞输出，须用 `python_executor` 的 `subprocess.run(capture_output=True)` 拿完整结果；pytest 使用 `py -m pytest`。

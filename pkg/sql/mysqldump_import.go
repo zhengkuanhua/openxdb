@@ -2,7 +2,6 @@ package sql
 
 import (
 	"strconv"
-	"strings"
 
 	"github.com/zhengkuanhua/openxdb/pkg/import"
 	"github.com/zhengkuanhua/openxdb/pkg/txn"
@@ -197,7 +196,7 @@ func (e *Executor) applyImportOps(tx txn.Txn, ops []kvOp) error {
 //   - TEXT：字符串原样（NULL → 空串）
 //   - DATE：校验 YYYY-MM-DD（NULL → 1970-01-01）
 //   - DECIMAL：parseDecimal 规范化（NULL → 0.0000）
-//   - BLOB：大写 hex（NULL → 空串）
+//   - BLOB：解析层规范化文本（hex 字面量统一大写，普通字符串原样）（NULL → 空串）
 //
 // OpenXDB 无 NULL 语义，NULL 统一映射为列类型零值（文档 T27 说明）。
 func dumpRowValues(t *mysqldump.Table, r []mysqldump.Value) ([]Value, error) {
@@ -247,7 +246,8 @@ func dumpRowValues(t *mysqldump.Table, r []mysqldump.Value) ([]Value, error) {
 			}
 			vals[i] = Value{Kind: "DECIMAL", I: scaled, S: canon}
 		case "BLOB":
-			vals[i] = Value{Kind: "BLOB", S: strings.ToUpper(cell.Raw)}
+			// 解析层已把 hex 字面量（X''/0x）统一为大写文本；普通字符串按原样存储。
+			vals[i] = Value{Kind: "BLOB", S: cell.Raw}
 		default:
 			return nil, &SQLError{Msg: "import failed: unsupported column type: " + c.Type}
 		}

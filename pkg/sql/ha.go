@@ -113,7 +113,14 @@ func (e *Executor) failoverRegion(rg sharding.RegionInfo, downID string) error {
 		if err := e.router.SetRegionNode(rg.RegionID, e.selfID); err != nil {
 			return err
 		}
-		return e.persistRegions()
+		if err := e.persistRegions(); err != nil {
+			return err
+		}
+		// 路由变更全网广播：仅同步本次重指派条目，避免全量视图扩散残留漂移。
+		changed := rg
+		changed.Node = e.selfID
+		changed.Local = false
+		return e.broadcastRegionView([]sharding.RegionInfo{changed}, nil)
 	}
 	// 构建权威路由视图（显式化本地归属；本次 region 归属目标节点）。
 	regions := e.router.AllRegions()
@@ -141,7 +148,41 @@ func (e *Executor) failoverRegion(rg sharding.RegionInfo, downID string) error {
 	if err := e.router.SetRegionNode(rg.RegionID, target); err != nil {
 		return err
 	}
-	return e.persistRegions()
+	if err := e.persistRegions(); err != nil {
+		return err
+	}
+	// 路由变更全网广播：仅同步本次重指派条目，避免全量视图扩散残留漂移。
+	changed := rg
+	changed.Node = target
+	changed.Local = false
+	return e.broadcastRegionView([]sharding.RegionInfo{changed}, nil)
+}
+
+// broadcastRegionView 将本次路由变更条目增量广播到所有已注册远端节点（纯路由同步）。
+// 路由变更（ASSIGN/SPLIT/failover/migrate）后调用，使各节点视图收敛一致；
+// routes 只含本次变更的 region 条目（禁止传全量视图，否则会把本机残留漂移
+// 扩散到全网）；deleteIDs 用于 SPLIT 广播移除旧 region。
+// 条目内 Node=="" 且本机真正持有数据的 region 补记为本节点，
+// 使其他节点学到明确远端归属，避免 Node=="" 语义污染。
+func (e *Executor) broadcastRegionView(routes []sharding.RegionInfo, deleteIDs []storage.ID) error {
+	if e.mgr == nil || !e.mgr.HasRemoteNodes() {
+		return nil
+	}
+	out := make([]sharding.RegionInfo, 0, len(routes))
+	for i := range routes {
+		if routes[i].Node == "" {
+			holds, err := e.regionHoldsLocal(routes[i])
+			if err != nil {
+				return err
+			}
+			if holds {
+				routes[i].Node = e.selfID
+				routes[i].Local = false
+			}
+		}
+		out = append(out, routes[i])
+	}
+	return e.mgr.BroadcastRegions(out, deleteIDs, e.selfID)
 }
 
 // scanRegionRows 扫描 region 键空间 [start, end) 在指定节点上的全量物理行。

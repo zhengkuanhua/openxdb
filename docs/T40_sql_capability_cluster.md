@@ -14,6 +14,7 @@ AIGC:
 版本：v0.28.0-alpha
 日期：2026-10-15
 前置：T39 能力缺口评估（docs/T39_sql_capability_gap_assessment.md）
+后续状态：本文档三类缺口（MAX/MIN、算术表达式、SELECT DISTINCT）均已实现并合入 v1.1.0 前版本（测试见 pkg/sql/t40_sql_test.go 等）。
 
 ## 总览
 

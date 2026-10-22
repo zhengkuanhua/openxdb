@@ -208,3 +208,66 @@ func TestM14ImportDumpParser(t *testing.T) {
 		t.Fatal("want syntax error: MYSQLDUMP without FROM")
 	}
 }
+
+// TestM14ImportDumpExtendedTypes 扩展类型与字面量端到端导入：
+// 位字面量/字符集引导符/科学计数法/SERIAL/UNSIGNED/空间类型。
+func TestM14ImportDumpExtendedTypes(t *testing.T) {
+	e := newEngine(t)
+	p := writeDump(t, `CREATE TABLE t (
+  id INT PRIMARY KEY,
+  flag BIT(8),
+  big BIGINT UNSIGNED,
+  seq SERIAL,
+  loc POINT,
+  raw BLOB,
+  note TEXT,
+  ratio DOUBLE
+) ENGINE=InnoDB;
+INSERT INTO t VALUES (1, b'1010', 9999999999, 100, 'POINT(1 2)', _binary'rawdata', _utf8mb4'你好', 1.5E-3);
+INSERT INTO t VALUES (2, B'11111111', 42, 200, NULL, X'00FF', '科学 1e5 数值', 2E+06);
+`)
+	res := mustExec(t, e, "IMPORT MYSQLDUMP FROM '"+p+"'")
+	tables, inserted, skipped, errors, batches := importRows(t, res)
+	if tables != 1 || inserted != 2 || skipped != 0 || errors != 0 || batches != 1 {
+		t.Fatalf("stats: tables=%d inserted=%d skipped=%d errors=%d batches=%d", tables, inserted, skipped, errors, batches)
+	}
+	// id=1：BIT 位字面量转十进制、UNSIGNED BIGINT、SERIAL、空间文本、引导符字符串、科学计数法 DECIMAL
+	if v := mustSelectVal(t, e, "SELECT flag FROM t WHERE id=1", 0); v.S != "10" {
+		t.Fatalf("id=1 flag: %+v", v)
+	}
+	if v := mustSelectVal(t, e, "SELECT big FROM t WHERE id=1", 0); v.Kind != "INT" || v.I != 9999999999 {
+		t.Fatalf("id=1 big: %+v", v)
+	}
+	if v := mustSelectVal(t, e, "SELECT seq FROM t WHERE id=1", 0); v.Kind != "INT" || v.I != 100 {
+		t.Fatalf("id=1 seq: %+v", v)
+	}
+	if v := mustSelectVal(t, e, "SELECT loc FROM t WHERE id=1", 0); v.S != "POINT(1 2)" {
+		t.Fatalf("id=1 loc: %+v", v)
+	}
+	// BLOB 列统一承载大写 hex 文本：_binary'rawdata' 大小写被规范化（encodeRow 层设计）
+	if v := mustSelectVal(t, e, "SELECT raw FROM t WHERE id=1", 0); v.S != "RAWDATA" {
+		t.Fatalf("id=1 raw: %+v", v)
+	}
+	if v := mustSelectVal(t, e, "SELECT note FROM t WHERE id=1", 0); v.S != "你好" {
+		t.Fatalf("id=1 note: %+v", v)
+	}
+	if v := mustSelectVal(t, e, "SELECT ratio FROM t WHERE id=1", 0); v.S != "0.0015" {
+		t.Fatalf("id=1 ratio: %+v", v)
+	}
+	// id=2：大写位字面量、hex BLOB、科学计数法 DECIMAL、NULL 空间列
+	if v := mustSelectVal(t, e, "SELECT flag FROM t WHERE id=2", 0); v.S != "255" {
+		t.Fatalf("id=2 flag: %+v", v)
+	}
+	if v := mustSelectVal(t, e, "SELECT raw FROM t WHERE id=2", 0); v.S != "00FF" {
+		t.Fatalf("id=2 raw: %+v", v)
+	}
+	if v := mustSelectVal(t, e, "SELECT note FROM t WHERE id=2", 0); v.S != "科学 1e5 数值" {
+		t.Fatalf("id=2 note: %+v", v)
+	}
+	if v := mustSelectVal(t, e, "SELECT ratio FROM t WHERE id=2", 0); v.S != "2000000.0000" {
+		t.Fatalf("id=2 ratio: %+v", v)
+	}
+	if v := mustSelectVal(t, e, "SELECT loc FROM t WHERE id=2", 0); v.S != "" {
+		t.Fatalf("id=2 NULL loc: %+v", v)
+	}
+}

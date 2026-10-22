@@ -113,13 +113,15 @@ func (s *MySQLServer) handleConn(conn net.Conn) {
 		}
 	}
 	c := &mysqlConn{
-		pc:     pc,
-		engine: s.engine,
-		user:   user,
-		sess:   s.engine.NewSession(),
-		stmts:     map[uint32]string{},
-		stmtTypes: map[uint32][]byte{},
+		pc:         pc,
+		engine:     s.engine,
+		user:       user,
+		sess:       s.engine.NewSession(),
+		stmts:      map[uint32]string{},
+		stmtTypes:  map[uint32][]byte{},
+		longData:   map[uint32]map[uint16][]byte{},
 		autoCommit: true,
+		srv:        s,
 	}
 	if err := c.serveCommands(); err != nil {
 		if s.Logf != nil {

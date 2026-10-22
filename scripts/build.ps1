@@ -7,7 +7,7 @@
 # 探测顺序（未显式指定时）:
 #   1. 环境变量 ROCKSDB_SRC / ROCKSDB_BUILD
 #   2. C:\rocksdb-src / C:\rocksdb-build（CI 约定路径）
-#   3. $env:USERPROFILE\AppData\Local\OpenXDBTools\rocksdb-* / rocksdb-build
+#   3. D:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-* / rocksdb-build
 param(
     [string]$RocksSrcDir = "",
     [string]$RocksBuildDir = "",
@@ -24,7 +24,7 @@ function Resolve-RocksDirs {
         if ($env:ROCKSDB_SRC) { $Src = $env:ROCKSDB_SRC }
         elseif (Test-Path "C:\rocksdb-src") { $Src = "C:\rocksdb-src" }
         else {
-            $cand = Get-ChildItem "$env:USERPROFILE\AppData\Local\OpenXDBTools" -Directory -ErrorAction SilentlyContinue |
+            $cand = Get-ChildItem "D:\AI项目\OpenXDB开源数据库开发\OpenXDBTools" -Directory -ErrorAction SilentlyContinue |
                 Where-Object { $_.Name -like "rocksdb-*" } | Select-Object -First 1
             if ($cand) { $Src = $cand.FullName }
         }
@@ -33,7 +33,7 @@ function Resolve-RocksDirs {
         if ($env:ROCKSDB_BUILD) { $Build = $env:ROCKSDB_BUILD }
         elseif (Test-Path "C:\rocksdb-build") { $Build = "C:\rocksdb-build" }
         else {
-            $cand = "$env:USERPROFILE\AppData\Local\OpenXDBTools\rocksdb-build"
+            $cand = "D:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-build"
             if (Test-Path $cand) { $Build = $cand }
         }
     }

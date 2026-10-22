@@ -201,7 +201,21 @@ func (e *Executor) splitRegion(meta *TableMeta, rg sharding.RegionInfo) error {
 	if err := tx.Put(metaRegionsKey, raw); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// 路由变更全网广播：SPLIT 产生的新 region 划分向所有已注册节点增量同步，
+	// 并删除旧 region 路由，避免各节点视图不一致导致路由错乱；
+	// 仅广播本次新增的两个 region 条目，避免全量视图扩散残留漂移。
+	newID1 := storage.ID(seq - 1)
+	newID2 := storage.ID(seq)
+	var changed []sharding.RegionInfo
+	for _, r := range newRs {
+		if r.RegionID == newID1 || r.RegionID == newID2 {
+			changed = append(changed, r)
+		}
+	}
+	return e.broadcastRegionView(changed, []storage.ID{rg.RegionID})
 }
 
 // execSplitRegion SPLIT REGION <regionID>：手动分裂入口（沿数据中点）。
@@ -521,5 +535,9 @@ func (e *Executor) migrateRegion(rg sharding.RegionInfo, target string) error {
 	if err := e.persistRegions(); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// 路由变更全网广播：仅同步本次迁移条目，避免全量视图扩散残留漂移。
+	return e.broadcastRegionView([]sharding.RegionInfo{rgView}, nil)
 }

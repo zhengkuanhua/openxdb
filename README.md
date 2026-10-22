@@ -58,6 +58,7 @@ go build ./...
 ```sh
 openxdb init --data-dir ./data    # 初始化数据目录
 openxdb start --data-dir ./data   # 启动 TCP 服务（默认端口 7788）
+openxdb start --data-dir ./data --mysql-port 3306   # 可选：启用 MySQL wire protocol 兼容监听（mysql CLI / go-sql-driver / JDBC 直连）
 openxdb repl --data-dir ./data    # 或直接进入本地 REPL
 ```
 
@@ -107,7 +108,7 @@ SELECT name FROM users WHERE age >= 25 AND age < 35 ORDER BY age;
 ## 架构总览
 
 ```
-Protocol / CLI (REPL · TCP server · JDBC/Python 驱动)
+Protocol / CLI (REPL · TCP server · JDBC/Python 驱动 · MySQL wire protocol 兼容监听 --mysql-port)
         │
         ▼
      SQL 层 (Parser / Executor / Catalog / Index)
@@ -329,7 +330,7 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 - `E2_rocksdb_fsync_bench.md` — RocksDB fsync sync-write benchmark (WAL sync=true, group-commit batch 1/10/100/1000) — see [E2 experiment](docs/experiments/E2_rocksdb_fsync_bench.md)
 - `E3_sql_oltp_bench.md` — SQL OLTP mixed-load end-to-end benchmark (8:2 / 5:5, incl. 6.2 TPS root-cause diagnosis & tuning) — see [E3 experiment](docs/experiments/E3_sql_oltp_bench.md)
 - `E4_stability.md` — long-run stability & durability validation (6-min trend + restart check) — see [E4 experiment](docs/experiments/E4_stability.md)
-- `E5_standard_bench_alignment.md` — standard sysbench OLTP / TPC-C small-warehouse bench alignment (Python-driver equivalence due to non-wire protocol, real measured: OLTP read 1.73 TPS / write 0.93 / read-write 1.32, TPC-C tpmC 13.50, 0 errors) — see [E5 experiment](docs/experiments/E5_standard_bench_alignment.md)
+- `E5_standard_bench_alignment.md` — standard sysbench OLTP / TPC-C small-warehouse bench alignment (Python-driver equivalence for E5 bench; MySQL wire protocol compatible listener available since v1.1.0 via `--mysql-port`, real measured: OLTP read 1.73 TPS / write 0.93 / read-write 1.32, TPC-C tpmC 13.50, 0 errors) — see [E5 experiment](docs/experiments/E5_standard_bench_alignment.md)
 
 ## Roadmap
 
@@ -342,7 +343,7 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 - [x] E2 fsync engine benchmark: sync write 747k TPS seq / 198k rand (batch=1000), group-commit batch sweep 181x vs per-key fsync — see [E2 experiment](docs/experiments/E2_rocksdb_fsync_bench.md)
 - [x] E3 SQL OLTP end-to-end benchmark: 256.3 TPS (8:2) / 605.4 TPS (5:5), 0 errors after cgo MultiGet fix — see [E3 experiment](docs/experiments/E3_sql_oltp_bench.md)
 - [x] E4 stability & durability: 6-min mixed load 307-385 TPS no degradation, restart COUNT(*) == 150466, probes HIT — see [E4 experiment](docs/experiments/E4_stability.md)
-- [x] E5 standard bench alignment: standard sysbench/TPC-C unavailable (non-wire protocol) → Python PEP 249 driver equivalence; real measured OLTP read 1.73 TPS/QPS 24.27, write 0.93/QPS 3.73, read-write 1.32/QPS 23.70 (8 threads × 60s), TPC-C 5-warehouse tpmC 13.50 / TPM 32.50, 0 errors (8 threads × 120s); fixed shared-session concurrency bug + arithmetic-expression/DISTINCT/DECIMAL-precision workarounds — see [E5 experiment](docs/experiments/E5_standard_bench_alignment.md)
+- [x] E5 standard bench alignment: standard sysbench/TPC-C direct attach not used for E5 (bench via Python PEP 249 driver equivalence; MySQL wire protocol compatible listener available since v1.1.0 via `--mysql-port`); real measured OLTP read 1.73 TPS/QPS 24.27, write 0.93/QPS 3.73, read-write 1.32/QPS 23.70 (8 threads × 60s), TPC-C 5-warehouse tpmC 13.50 / TPM 32.50, 0 errors (8 threads × 120s); fixed shared-session concurrency bug + arithmetic-expression/DISTINCT/DECIMAL-precision workarounds — see [E5 experiment](docs/experiments/E5_standard_bench_alignment.md)
 - [x] W4 ADR + storage engine selection write-up — see [ADR-004](docs/W4_adr_engine_selection.md) and [why RocksDB](docs/blog_why_openxdb_rocksdb.md)
 - [x] B2 batched commits on the write path (group commit / batch fsync) — see [B2 design](docs/B2_group_commit.md)
 - [x] P0 SQL enhancements: JOIN / GROUP BY / FROM+IN subqueries / BETWEEN / session transactions (BEGIN/COMMIT/ROLLBACK) — see [T8 design](docs/T8_p0_sql_enhancements.md)

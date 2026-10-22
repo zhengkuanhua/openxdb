@@ -2267,8 +2267,18 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
 				if err != nil {
 					return nil, err
 				}
+			case sc.Agg != "":
+				// P1-10：无 FROM 的聚合/窗口函数区分报错（窗口函数必须带 OVER 且需要行上下文）。
+				if sc.Window != nil {
+					return nil, &SQLError{Msg: "window function without FROM: " + sc.Raw}
+				}
+				return nil, &SQLError{Msg: "aggregate function without FROM: " + sc.Raw}
+			case sc.Ref != "" || sc.Col != "":
+				// P1-10：无 FROM 的纯列引用（SELECT t.col / SELECT col）给出语义化报错，
+				// 不再落入笼统 unsupported constant select column。
+				return nil, &SQLError{Msg: "column reference without FROM: " + sc.Raw}
 			default:
-				return nil, &SQLError{Msg: "unsupported constant select column: " + sc.Raw}
+				return nil, &SQLError{Msg: "unsupported select column: " + sc.Raw}
 			}
 			row = append(row, v)
 		}
@@ -3025,8 +3035,11 @@ func evalExprForRow(rel *Rel, row []Value, e *Expr) (Value, error) {
 			return IntVal(-v.I), nil
 		case "DECIMAL":
 			return decVal(-v.I), nil
+		case "NULL":
+			// P1-10：SQL 语义 -NULL = NULL。
+			return v, nil
 		default:
-			return Value{}, &SQLError{Msg: "unsupported operand for unary minus: " + v.Kind}
+			return Value{}, &SQLError{Msg: "cannot apply unary minus to " + v.Kind + " value: " + v.String()}
 		}
 	}
 	l, err := evalExprForRow(rel, row, e.Left)
@@ -3066,8 +3079,11 @@ func evalSetExpr(meta *TableMeta, row []Value, e *Expr) (Value, error) {
 			return IntVal(-v.I), nil
 		case "DECIMAL":
 			return decVal(-v.I), nil
+		case "NULL":
+			// P1-10：SQL 语义 -NULL = NULL。
+			return v, nil
 		default:
-			return Value{}, &SQLError{Msg: "unsupported operand for unary minus: " + v.Kind}
+			return Value{}, &SQLError{Msg: "cannot apply unary minus to " + v.Kind + " value: " + v.String()}
 		}
 	}
 	l, err := evalSetExpr(meta, row, e.Left)
@@ -3384,9 +3400,8 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 		}
 	}
 	if len(s.GroupBy) > 0 {
-		if hasWindow {
-			return nil, &SQLError{Msg: "window function not supported with GROUP BY"}
-		}
+		// P1-10：窗口函数与 GROUP BY 组合合法（窗口在分组聚合结果上计算），
+		// 由 groupRel 统一投影并在分组结果行上计算窗口值。
 		return e.groupRel(sess, tx, s, rel)
 	}
 	if hasAgg && hasWindow {
@@ -3508,7 +3523,7 @@ func aggValues(rel *Rel, rows [][]Value, c *SelectColumn) (Value, error) {
 		}
 		return IntVal(isum / int64(len(rows))), nil
 	}
-	return Value{}, errf("unsupported aggregate %q", c.Agg)
+	return Value{}, errf("unsupported aggregate %q (supported: COUNT, SUM, AVG, MAX, MIN)", c.Agg)
 }
 
 // computeWindows 计算所有窗口列在 rows 上的逐行值（M10 窗口函数）。
@@ -3660,7 +3675,7 @@ func computeWindowCol(rows [][]Value, getter func(row []Value, col string) (Valu
 					v = IntVal(isum / int64(cnt))
 				}
 			default:
-				return nil, errf("unsupported window function %q", c.Agg)
+				return nil, errf("unsupported window function %q (supported: ROW_NUMBER, RANK, DENSE_RANK, COUNT, MAX, MIN, SUM, AVG)", c.Agg)
 			}
 			vals[oi] = v
 		}
@@ -3729,11 +3744,34 @@ func (e *Executor) groupRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel) 
 		groups[k].rows = append(groups[k].rows, r)
 	}
 	res := &Result{}
-	for _, c := range s.Columns {
+	// P1-10：GROUP BY + 窗口函数组合。窗口列先占位，分组循环结束后
+	// 在分组结果行（输出行）上计算窗口值（分区/排序/聚合引用输出列名）。
+	var winCols []*SelectColumn
+	winIdx := make(map[int]int) // 输出列位置 -> winCols 索引
+	for i := range s.Columns {
+		c := &s.Columns[i]
 		res.Columns = append(res.Columns, c.Name)
+		if c.Window != nil {
+			// 窗口聚合参数为算术表达式时无法在分组输出行上求值（原始行已折叠），给出语义化报错。
+			if c.Expr != nil {
+				return nil, &SQLError{Msg: "window expression not supported with GROUP BY: " + c.Raw}
+			}
+			winCols = append(winCols, c)
+			winIdx[len(res.Columns)-1] = len(winCols) - 1
+			switch c.Agg {
+			case "ROW_NUMBER", "RANK", "DENSE_RANK", "COUNT":
+				res.ColTypes = append(res.ColTypes, "INT")
+			case "SUM", "AVG", "MAX", "MIN":
+				res.ColTypes = append(res.ColTypes, aggResultType(nil, rel, rel.Rows, c))
+			default:
+				res.ColTypes = append(res.ColTypes, "")
+			}
+			res.ColNullable = append(res.ColNullable, false)
+			continue
+		}
 		if c.Agg != "" {
 			// 分组聚合每组至少一行，结果不可空；类型从 rel 首行推断。
-			res.ColTypes = append(res.ColTypes, aggResultType(nil, rel, rel.Rows, &c))
+			res.ColTypes = append(res.ColTypes, aggResultType(nil, rel, rel.Rows, c))
 		} else {
 			res.ColTypes = append(res.ColTypes, "")
 		}
@@ -3742,7 +3780,13 @@ func (e *Executor) groupRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel) 
 	for _, k := range order {
 		g := groups[k]
 		out := make([]Value, 0, len(s.Columns))
-		for _, c := range s.Columns {
+		for i := range s.Columns {
+			c := &s.Columns[i]
+			if c.Window != nil {
+				// 窗口列占位，待全部分组行生成后统一计算。
+				out = append(out, Value{Kind: "NULL"})
+				continue
+			}
 			if c.Case != nil {
 				v, err := e.evalCaseRel(sess, tx, rel, g.rows[0], c.Case)
 				if err != nil {
@@ -3771,13 +3815,39 @@ func (e *Executor) groupRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel) 
 				out = append(out, g.rows[0][idx])
 				continue
 			}
-			v, err := aggValues(rel, g.rows, &c)
+			v, err := aggValues(rel, g.rows, c)
 			if err != nil {
 				return nil, err
 			}
 			out = append(out, v)
 		}
 		res.Rows = append(res.Rows, out)
+	}
+	// P1-10：窗口列在分组结果行上统一计算（分区/排序/聚合参数按输出列名解析），
+	// 计算完成后替换占位值；LIMIT/OFFSET 在窗口计算之后应用，与 MySQL 语义一致。
+	if len(winCols) > 0 {
+		colIdx := make(map[string]int, len(res.Columns))
+		for i, cn := range res.Columns {
+			if _, ok := colIdx[cn]; !ok {
+				colIdx[cn] = i
+			}
+		}
+		getter := func(row []Value, col string) (Value, error) {
+			idx, ok := colIdx[col]
+			if !ok {
+				return Value{}, &SQLError{Msg: "unknown column in window: " + col}
+			}
+			return row[idx], nil
+		}
+		winVals, err := computeWindows(res.Rows, getter, nil, winCols)
+		if err != nil {
+			return nil, err
+		}
+		for ri := range res.Rows {
+			for ci, wj := range winIdx {
+				res.Rows[ri][ci] = winVals[ri][wj]
+			}
+		}
 	}
 	// T40 遗留：GROUP BY 分组完成后同样应用 LIMIT/OFFSET（先 OFFSET 跳过、再 LIMIT 截断；LIMIT<=0 不截断）。
 	res.Rows = applyOffsetLimit(res.Rows, s.Offset, s.Limit)

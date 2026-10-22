@@ -52,9 +52,9 @@ function Invoke-Init {
 function Invoke-Build {
     if ($SkipBuild) { Write-Host '[build] skipped'; return }
     Write-Host '[build] go build ./... (CGO with RocksDB 11.8.1) ...'
-    $env:CGO_CFLAGS = '-IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include'
-    $env:CGO_CXXFLAGS = '-IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include'
-    $env:CGO_LDFLAGS = '-LC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-build -lrocksdb -lm'
+    $env:CGO_CFLAGS = '-ID:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-11.8.1\include'
+    $env:CGO_CXXFLAGS = '-ID:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-11.8.1\include'
+    $env:CGO_LDFLAGS = '-LD:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-build -lrocksdb -lm'
     Remove-Item Env:CGO_ENABLED -ErrorAction SilentlyContinue
     Push-Location $Root
     try {

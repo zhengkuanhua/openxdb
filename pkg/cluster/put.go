@@ -15,6 +15,7 @@ import (
 	"errors"
 
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
+	"github.com/zhengkuanhua/openxdb/pkg/storage"
 )
 
 const (
@@ -27,10 +28,12 @@ const (
 // 目标节点据此学习"其余 region 归属哪个节点"，保证双节点路由视图完整、
 // 任一端发起的跨节点查询都能正确展开（第一簇约定：源视图为权威）。
 type RegionPushReq struct {
-	SrcID  string                `json:"src_id,omitempty"` // 源节点 NodeID（补记 Node=="" 归属用）
-	Region sharding.RegionInfo   `json:"region"`
-	Rows   []QueryRow            `json:"rows"`
-	Routes []sharding.RegionInfo `json:"routes,omitempty"`
+	SrcID     string                `json:"src_id,omitempty"` // 源节点 NodeID（补记 Node=="" 归属用）
+	Region    sharding.RegionInfo   `json:"region"`
+	Rows      []QueryRow            `json:"rows"`
+	Routes    []sharding.RegionInfo `json:"routes,omitempty"`
+	SyncOnly  bool                  `json:"sync_only,omitempty"` // true=纯路由同步：不写数据、不把 Region 落本地
+	DeleteIDs []storage.ID          `json:"delete_ids,omitempty"` // SPLIT 广播：接收端先删除这些 region 路由
 }
 
 // RegionPushResp REGION_PUSH_OK 载荷。
@@ -81,6 +84,62 @@ func (c *Client) pushRegion(rg sharding.RegionInfo, rows []QueryRow, routes []sh
 	}
 	if resp.Err != "" {
 		return errors.New("cluster: push failed: " + resp.Err)
+	}
+	return nil
+}
+
+// BroadcastRegions 将路由视图增量同步到所有已注册远端节点（不含本节点）。
+// 路由变更（ASSIGN/SPLIT/failover）后调用，使各节点视图收敛一致；
+// deleteIDs 用于 SPLIT 广播：接收端先删除旧 region 路由再学习新划分。
+// 广播失败返回首个错误（尽力而为，单节点失败不阻断其余节点同步）。
+func (m *Manager) BroadcastRegions(routes []sharding.RegionInfo, deleteIDs []storage.ID, srcID string) error {
+	var firstErr error
+	for _, n := range m.ListNodes() {
+		if n.ID == m.SelfID {
+			continue
+		}
+		if err := m.clientFor(n.ID).syncRegionRoutes(routes, deleteIDs, srcID); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+// syncRegionRoutes 短连接发送 REGION_PUSH(SyncOnly=true) 并读取 REGION_PUSH_OK。
+// 只同步路由视图（Routes 为源节点权威视图；DeleteIDs 先删后学），
+// 不携带数据、不把 req.Region 落本地，接收端仅更新路由表并落盘 m:regions。
+func (c *Client) syncRegionRoutes(routes []sharding.RegionInfo, deleteIDs []storage.ID, srcID string) error {
+	addr, err := c.mgr.NodeAddr(c.nodeID)
+	if err != nil {
+		return err
+	}
+	conn, err := dial(addr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	payload, err := marshalJSON(RegionPushReq{SrcID: srcID, SyncOnly: true, DeleteIDs: deleteIDs, Routes: routes})
+	if err != nil {
+		return err
+	}
+	if err := writeFrame(conn, msgRegionPush, payload); err != nil {
+		return err
+	}
+	typ, raw, err := readFrame(conn)
+	if err != nil {
+		return err
+	}
+	if typ != msgRegionPushOK {
+		return errors.New("cluster: unexpected route sync reply")
+	}
+	var resp RegionPushResp
+	if err := unmarshalJSON(raw, &resp); err != nil {
+		return err
+	}
+	if resp.Err != "" {
+		return errors.New("cluster: route sync failed: " + resp.Err)
 	}
 	return nil
 }

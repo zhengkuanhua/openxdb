@@ -64,11 +64,11 @@ ok  github.com/openxdb/openxdb/pkg/storage/rocksdb  1.414s
 RocksDB 头文件/静态库路径通过 CGO 环境变量注入，代码不绑死绝对路径：
 
 ```powershell
-$env:Path = 'C:\Users\27756\AppData\Local\OpenXDBTools\mingw64\bin;C:\Users\27756\AppData\Local\OpenXDBTools\go\bin;' + $env:Path
+$env:Path = 'D:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\mingw64\bin;D:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\go\bin;' + $env:Path
 $env:CGO_ENABLED = '1'
-$env:CGO_CFLAGS   = '-IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include'
-$env:CGO_CXXFLAGS = '-IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include'
-$env:CGO_LDFLAGS  = '-LC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-build -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -static-libgcc -static-libstdc++'
+$env:CGO_CFLAGS   = '-ID:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-11.8.1\include'
+$env:CGO_CXXFLAGS = '-ID:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-11.8.1\include'
+$env:CGO_LDFLAGS  = '-LD:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-build -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -static-libgcc -static-libstdc++'
 go test ./pkg/... -v
 ```
 

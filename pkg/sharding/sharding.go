@@ -14,6 +14,9 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"runtime"
 	"sort"
 	"sync"
 
@@ -224,6 +227,11 @@ func (r *Router) SetRegionNode(regionID storage.ID, node string) error {
 	for i := range r.regions {
 		if r.regions[i].RegionID == regionID {
 			r.regions[i].Node = node
+			if node != "" && os.Getenv("OPENXDB_TRACE_REGION") != "" {
+				_, file, line, _ := runtime.Caller(1)
+				_, file2, line2, _ := runtime.Caller(2)
+				fmt.Fprintf(os.Stderr, "TRACE SetRegionNode rid=%d node=%s via %s:%d <- %s:%d\n", regionID, node, file, line, file2, line2)
+			}
 			return nil
 		}
 	}
@@ -282,6 +290,20 @@ func (r *Router) RemoveTable(tableID storage.ID) {
 		}
 	}
 	r.regions = kept
+}
+
+// DeleteRegion 删除单个显式 region 元数据（SPLIT 分裂后移除旧 region 路由）。
+// 找不到返回 nil（幂等：接收端可能从未持有该 region，不应报错阻断同步）。
+func (r *Router) DeleteRegion(regionID storage.ID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.regions {
+		if r.regions[i].RegionID == regionID {
+			r.regions = append(r.regions[:i], r.regions[i+1:]...)
+			return nil
+		}
+	}
+	return nil
 }
 
 // sortLocked 按 (TableID, StartKey) 升序排序；nil StartKey 视为表起始（-inf）排最前。

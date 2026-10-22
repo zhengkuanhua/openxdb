@@ -43,7 +43,7 @@ SELECT COUNT(*)       OVER (...) ...
 - 投影接入两条路径：
   - 单表路径 `finishSelect`：检测 `hasWindow`——与全局聚合混用报 `window function cannot be mixed with aggregate`，否则 `finishSelectWindow` 先投影普通列、再按行回填窗口值；
   - 关系路径 `finishRel`：收集窗口列后调用 `computeWindows`（getter 用 `relValue` 取限定名 `alias.col`），随后统一输出行。
-- 聚合检测修正：`execSelectRel` 的 `hasAgg` 检测**排除**窗口列（窗口列不再误入全局聚合分支）；`GROUP BY` 与窗口函数混用报 `window function not supported with GROUP BY`。
+- 聚合检测修正：`execSelectRel` 的 `hasAgg` 检测**排除**窗口列（窗口列不再误入全局聚合分支）；`GROUP BY` 与窗口函数混用自 P1-10 起合法（窗口在分组聚合结果上计算，见 pkg/sql/p1_10_edge_test.go）。
 
 ## 测试（pkg/sql/m10_window_test.go）
 
@@ -69,7 +69,7 @@ SELECT COUNT(*)       OVER (...) ...
 - 排名函数（ROW_NUMBER/RANK/DENSE_RANK）**强制**要求 OVER；聚合函数（SUM/AVG/COUNT）OVER 可选——缺省即普通全局聚合，保持向后兼容；
 - 窗口默认框架固定为 `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`（逐行累计），暂不支持显式 `ROWS/RANGE` 框架与 `PRECEDING/FOLLOWING`，后续可扩展；
 - 窗口 ORDER BY 当前支持单列；多列窗口排序列为后续扩展点；
-- 窗口函数限定 SELECT 列表（解析层拦截），与 GROUP BY 混用明确拒绝（窗口作用于分组后结果集的语义留待后续实现）；
+- 窗口函数限定 SELECT 列表（解析层拦截）；与 GROUP BY 混用自 P1-10 起支持（窗口在分组聚合结果行上计算），M10 阶段"明确拒绝"的限制已解除；
 - PARTITION BY / ORDER BY 支持限定列名（`alias.col`），JOIN 场景可正确取值。
 
 ## README 勾选

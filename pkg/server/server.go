@@ -657,6 +657,7 @@ func (s *Server) ServeListener(ln net.Listener) error {
 // serveConn 单个 TCP 连接的处理协程：进入时连接计数 +1，退出时 -1。
 func (s *Server) serveConn(c net.Conn) {
 	defer c.Close()
+	logx.DefaultAlerts.Alert("network", "debug_serveconn", fmt.Sprintf("serveConn accepted %s", c.RemoteAddr().String()))
 	atomic.AddInt64(&s.conns, 1)
 	defer atomic.AddInt64(&s.conns, -1)
 	// 每连接独立会话（含独立 SQL 会话：跨连接 SQL 并行执行；显式事务

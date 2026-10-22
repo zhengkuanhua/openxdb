@@ -763,10 +763,10 @@ See [section 6.1](#61-backup--restore-br).
 
 ## 10. Known Limitations & Boundaries
 
-> For the full list see KNOWN_LIMITATIONS.md (to be created). Summary:
+> For the full list see [KNOWN_LIMITATIONS.md](../KNOWN_LIMITATIONS.md). Summary:
 
 1. **SQL subset**: OpenXDB implements a SQL subset, not the full SQL standard. The `HAVING` clause is not supported; DDL/DML/query capabilities are as defined in [Chapter 4](#4-sql-reference).
-2. **Not MySQL wire protocol**: uses a self-developed binary TCP protocol, so MySQL ecosystem tools (standard sysbench, official mysqldump client, etc.) cannot directly connect.
+2. **MySQL wire protocol compatibility is a subset (since v1.1.0)**: uses a self-developed binary TCP protocol by default; MySQL wire protocol compatible listening can be enabled via `openxdb start --mysql-port <port>`, supporting direct connections from MySQL CLI / go-sql-driver / JDBC for common queries/DML/prepared statements; tools relying on the full MySQL ecosystem (binlog replication, all mysqldump options, etc.) are still not directly reusable.
 3. **Global session-lock performance boundary**: the current serialized global session lock is the primary throughput bottleneck (see [Chapter 9](#9-performance-benchmark)); high-concurrency write throughput is limited.
 4. **Line protocol limits**: cell newlines are unsupported (multi-line parameter strings are rejected by drivers); empty cells represent both NULL and empty string.
 5. **Types & precision**: DECIMAL is normalized to fixed 4 decimal places internally; in JSON export DECIMAL is approximated via `strconv.ParseFloat` (or kept as a string).

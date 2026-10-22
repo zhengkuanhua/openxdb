@@ -8,9 +8,9 @@
 
 ```powershell
 # CGO 编译环境（RocksDB 11.8.1）
-$env:CGO_CFLAGS   = '-IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include'
-$env:CGO_CXXFLAGS = '-IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include'
-$env:CGO_LDFLAGS  = '-LC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-build -lrocksdb -lm'
+$env:CGO_CFLAGS   = '-ID:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-11.8.1\include'
+$env:CGO_CXXFLAGS = '-ID:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-11.8.1\include'
+$env:CGO_LDFLAGS  = '-LD:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-build -lrocksdb -lm'
 ```
 
 > 注意：严禁添加 `-lstdc++` / `-lz` 等链接项，否则破坏既有编译约束。

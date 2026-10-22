@@ -2651,6 +2651,12 @@ func (p *parser) parseExprPrimary() (*Expr, error) {
 		sub.Raw = "(" + sub.Raw + ")"
 		return sub, nil
 	case tokIdent:
+		// P1-10：NULL 字面量（lexer 未注册关键字，按标识符落入此处）。
+		if strings.EqualFold(p.cur().text, "NULL") {
+			p.next()
+			v := Value{Kind: "NULL"}
+			return &Expr{Val: &v, Raw: "NULL"}, nil
+		}
 		ref, col, err := p.parseColumnRef()
 		if err != nil {
 			return nil, err

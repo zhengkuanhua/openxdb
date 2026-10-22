@@ -10,8 +10,9 @@
 //     忽略）、类型参数（VARCHAR(255)/DECIMAL(10,2)/ENUM(...)）、NOT NULL/DEFAULT/
 //     AUTO_INCREMENT/COMMENT 等可忽略子句、表级 ENGINE=/DEFAULT CHARSET= 子句；
 //   - 多值 INSERT（INSERT INTO t VALUES (...),(...)）、显式列名列表、INSERT IGNORE；
-//   - 值字面量：NULL、数字（含负数/小数）、单双引号字符串（反斜杠转义还原）、
-//     0x 十六进制（BLOB）、TRUE/FALSE；
+//   - 值字面量：NULL、数字（含负数/小数/科学计数法）、单双引号字符串（反斜杠转义还原）、
+//     0x/X'' 十六进制（BLOB）、b''/B'' 位字面量（转十进制）、TRUE/FALSE、
+//     字符集引导符（_binary'..' / _utf8mb4'..' 等）；
 //   - DROP TABLE IF EXISTS（记录表名，供导入方重建语义）；
 //   - SET/LOCK TABLES/UNLOCK TABLES 与 /*!...*/ 版本化注释等辅助语句整体跳过。
 package mysqldump
@@ -20,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -527,14 +529,19 @@ func parseColumnDef(seg string) (*Column, error) {
 // mapType 把 MySQL 列类型映射到 OpenXDB 列类型。
 func mapType(t string) (string, error) {
 	switch strings.ToUpper(t) {
-	case "INT", "INTEGER", "TINYINT", "SMALLINT", "MEDIUMINT", "BIGINT", "BOOL", "BOOLEAN":
+	case "INT", "INTEGER", "TINYINT", "SMALLINT", "MEDIUMINT", "BIGINT",
+		"BOOL", "BOOLEAN", "SERIAL":
+		// SERIAL 是 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT UNIQUE 的 MySQL 别名
 		return "INT", nil
-	case "DECIMAL", "NUMERIC", "FLOAT", "DOUBLE", "REAL", "FIXED":
+	case "DECIMAL", "NUMERIC", "FLOAT", "DOUBLE", "REAL", "FIXED", "FLOAT4", "FLOAT8":
+		// FLOAT4=FLOAT、FLOAT8=DOUBLE 的 MySQL 别名
 		return "DECIMAL", nil
 	case "DATE":
 		return "DATE", nil
 	case "CHAR", "VARCHAR", "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT",
-		"ENUM", "SET", "JSON", "DATETIME", "TIMESTAMP", "TIME", "YEAR", "BIT", "GEOMETRY":
+		"ENUM", "SET", "JSON", "DATETIME", "TIMESTAMP", "TIME", "YEAR", "BIT", "GEOMETRY",
+		"POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING",
+		"MULTIPOLYGON", "GEOMETRYCOLLECTION", "NCHAR", "NVARCHAR":
 		return "TEXT", nil
 	case "BINARY", "VARBINARY", "TINYBLOB", "BLOB", "MEDIUMBLOB", "LONGBLOB":
 		return "BLOB", nil
@@ -705,6 +712,17 @@ func parseValue(s string) (Value, error) {
 	if u == "FALSE" {
 		return Value{Raw: "0"}, nil
 	}
+	// 字符集引导符：_binary'..' / _utf8mb4'..' 等（mysqldump 导出二进制/多字节列常见）。
+	// 引导符与字面量之间不允许空白，剥离后递归解析剩余字面量。
+	if s[0] == '_' && len(s) > 2 {
+		j := 1
+		for j < len(s) && s[j] != '\'' && s[j] != '"' {
+			j++
+		}
+		if j < len(s) && j > 1 {
+			return parseValue(s[j:])
+		}
+	}
 	if s[0] == '\'' || s[0] == '"' {
 		raw, err := unquoteString(s)
 		if err != nil {
@@ -720,6 +738,24 @@ func parseValue(s string) (Value, error) {
 			}
 		}
 		return Value{Raw: hex}, nil
+	}
+	// 位字面量：b'0101' / B'11111111'（BIT 列与数字上下文常用，转十进制）。
+	if len(s) >= 3 && (s[0] == 'b' || s[0] == 'B') && s[1] == '\'' && s[len(s)-1] == '\'' {
+		bits := s[2 : len(s)-1]
+		for i := 0; i < len(bits); i++ {
+			if bits[i] != '0' && bits[i] != '1' {
+				return Value{}, fmt.Errorf("invalid bit literal: %s", s)
+			}
+		}
+		n := uint64(0)
+		if bits != "" {
+			v, err := strconv.ParseUint(bits, 2, 64)
+			if err != nil {
+				return Value{}, fmt.Errorf("invalid bit literal: %s", s)
+			}
+			n = v
+		}
+		return Value{Raw: strconv.FormatUint(n, 10)}, nil
 	}
 	if len(s) >= 2 && (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
 		hex := strings.ToUpper(s[2:])
@@ -799,6 +835,22 @@ func isNumber(s string) bool {
 		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
 			i++
 		}
+	}
+	// 科学计数法：1e5 / 1.5E-3 / 2E+06
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		j := i + 1
+		if j < len(s) && (s[j] == '+' || s[j] == '-') {
+			j++
+		}
+		expDigits := 0
+		for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+			j++
+			expDigits++
+		}
+		if expDigits == 0 {
+			return false
+		}
+		i = j
 	}
 	return i == len(s)
 }

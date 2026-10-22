@@ -68,7 +68,7 @@ type WAL interface {
 
 ## 5. 已知限制与下一步
 
-1. **组提交未实现**：当前每 Append 一次 fsync，事务并发提交时 TPS 会受 fsync 延迟限制；后续 B2 写路径基准若未达标，加入批量缓冲 + 定时 flush（组提交窗口）。
+1. **组提交（P0-4 已实现）**：早期版本每 Append 一次 fsync，事务并发提交时 TPS 受 fsync 延迟限制；P0-4 起默认启用 WAL 组提交（Append 仅写缓冲并快速分配 LSN，持久化由 txn 提交路径 SyncUpTo 合并 fsync），B2 写路径基准已验证达标。
 2. **与事务层集成**：T3 TxnManager 将调用 WAL：BEGIN 无日志、写操作先 Append Prepare、Commit 前 Append Commit、崩溃恢复时 Replay 将未 Commit 的 Prepare 回滚（Rollback 记录用于已显式回滚的标注）。
 3. **Truncate 非原子**：Windows 场景为「写临时文件 → 删旧 → rename」，崩溃于中间态时会遗留 .tmp（Open 时忽略即可）；Linux 可换 renameat2 RENAME_EXCHANGE 做原子替换（暂不需要）。
 4. 未做多 WAL 文件分段（WAL segment 切换与归档），M2 复制阶段再引入。

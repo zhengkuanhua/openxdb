@@ -144,10 +144,10 @@ ok  github.com/zhengkuanhua/openxdb/pkg/wal
 构建环境（Windows）：注入 RocksDB 静态库环境后 `go build ./...`、`go test ./...`：
 
 ```
-CGO_CFLAGS   = -IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include
+CGO_CFLAGS   = -ID:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-11.8.1\include
 CGO_CXXFLAGS = 同上
-CGO_LDFLAGS  = -LC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-build -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -static
-PATH         += C:\Users\27756\AppData\Local\OpenXDBTools\mingw64\bin
+CGO_LDFLAGS  = -LD:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-build -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -static
+PATH         += D:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\mingw64\bin
 ```
 
 ## 6. 验收对照

@@ -122,8 +122,8 @@ OpenXDB 自研二进制协议（非 MySQL wire protocol），标准 sysbench（`
 
 ```powershell
 # 1. 编译最新二进制（先设 CGO 环境）
-# CGO_CFLAGS/CGO_CXXFLAGS=-IC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-11.8.1\include
-# CGO_LDFLAGS=-LC:\Users\27756\AppData\Local\OpenXDBTools\rocksdb-build -lrocksdb -lm
+# CGO_CFLAGS/CGO_CXXFLAGS=-ID:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-11.8.1\include
+# CGO_LDFLAGS=-LD:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-build -lrocksdb -lm
 go build ./...
 
 # 2. 一键编排：init + start + prepare + 跑基准 + 停止
