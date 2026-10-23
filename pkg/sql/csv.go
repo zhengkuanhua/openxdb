@@ -14,13 +14,24 @@ import (
 //   EXPORT TABLE t [(col, ...)] TO 'path'   — 导出表（或列子集）为 CSV
 //   IMPORT INTO t FROM 'path'               — 从 CSV 导入建行（覆盖式增量）
 //
-// CSV 规范（RFC 4180 风格）：
+// CSV 规范（RFC 4180 风格，P2-11 修订）：
 //   - UTF-8 文本；首行为表头（列名，与表定义顺序一致）；后续每行为一条记录。
-//   - 字段含逗号/双引号/换行时以双引号包裹，内部双引号翻倍（""）。
-//   - INT 为十进制整数；DATE 为 YYYY-MM-DD；DECIMAL 为十进制数（≤4 位小数，规范化后保留 4 位）；
-//     BLOB 为大写十六进制文本；TEXT 原样。
+//   - 字段含逗号/双引号/换行时以双引号包裹，内部双引号翻倍（""）；换行随引号字段原样保留
+//     （RFC 4180 多行字段，由 encoding/csv 保证）。
+//   - NULL 编码为 \N（MySQL LOAD DATA 兼容）；TEXT 空串编码为空字段（与 NULL 明确区分）。
+//   - 字面字符串 "\N" 导出为 "\\N"，导入时还原为 "\N"，避免与 NULL 标记二义。
+//   - INT 为十进制整数；DATE 为 YYYY-MM-DD；DECIMAL 为十进制数（导出为规范化 4 位小数，
+//     导入仅接受 ≤4 位小数，超精度报错——行协议数据保真，不做静默四舍五入；
+//     SQL INSERT 路径仍按 MySQL 兼容四舍五入）；BLOB 为大写十六进制文本；TEXT 原样。
 //
 // 导入语义：主键重复的行跳过（不覆盖、不报错）；任一行的列数/类型非法则整体报错回滚（原子导入）。
+
+// P2-11 行协议 NULL 标记：NULL 单元格 = \N（单个反斜杠 + N）；
+// 字面字符串 "\N" 以 \\N（两个反斜杠 + N）转义，导入时还原。
+const (
+	nullToken      = "\\N"
+	escapedNullTok = "\\\\N"
+)
 
 // execExport 导出表（或指定列）为 CSV 文件。
 func (e *Executor) execExport(sess *Session, s *ExportStmt) (*Result, error) {
@@ -112,8 +123,15 @@ func (e *Executor) execExport(sess *Session, s *ExportStmt) (*Result, error) {
 	return &Result{Columns: cols, AffectedRows: len(rows)}, nil
 }
 
-// csvValue 值 → CSV 字段文本（BLOB 输出大写 hex，其余用规范化字符串）。
+// csvValue 值 → CSV 字段文本（P2-11：NULL 编码为 \N；字面 "\N" 转义为 "\\N"；
+// BLOB 输出大写 hex，其余用规范化字符串）。
 func csvValue(v Value) string {
+	if v.Kind == "NULL" {
+		return nullToken
+	}
+	if v.Kind == "TEXT" && v.S == nullToken {
+		return escapedNullTok
+	}
 	if v.Kind == "BLOB" {
 		return strings.ToUpper(v.S)
 	}
@@ -288,8 +306,13 @@ func (e *Executor) execImport(sess *Session, s *ImportStmt) (*Result, error) {
 	return &Result{Columns: []string{"inserted", "skipped", "errors", "batches"}, AffectedRows: inserted, Rows: [][]Value{{IntVal(int64(inserted)), IntVal(int64(skipped)), IntVal(int64(bad)), IntVal(int64(batches))}}}, nil
 }
 
-// parseCell CSV 字段 → 列类型值。
+// parseCell CSV 字段 → 列类型值（P2-11 修订）。
+// 所有类型统一识别 \N 为 NULL；TEXT 单元格 \\N 还原为字面 "\N"；
+// DECIMAL 导入拒绝超过 4 位小数（数据保真，不静默四舍五入）。
 func parseCell(typ, cell string) (Value, error) {
+	if cell == nullToken {
+		return Value{Kind: "NULL"}, nil
+	}
 	switch typ {
 	case "INT":
 		n, err := strconv.ParseInt(strings.TrimSpace(cell), 10, 64)
@@ -298,6 +321,9 @@ func parseCell(typ, cell string) (Value, error) {
 		}
 		return IntVal(n), nil
 	case "TEXT":
+		if cell == escapedNullTok {
+			return StrVal(nullToken), nil
+		}
 		return StrVal(cell), nil
 	case "DATE":
 		if err := validateDate(cell); err != nil {
@@ -305,7 +331,11 @@ func parseCell(typ, cell string) (Value, error) {
 		}
 		return Value{Kind: "DATE", S: cell}, nil
 	case "DECIMAL":
-		scaled, canon, err := parseDecimal(strings.TrimSpace(cell))
+		trimmed := strings.TrimSpace(cell)
+		if decimalFracDigits(trimmed) > decScale {
+			return Value{}, &SQLError{Msg: "import failed: DECIMAL exceeds " + strconv.Itoa(decScale) + " decimal places: " + cell}
+		}
+		scaled, canon, err := parseDecimal(trimmed)
 		if err != nil {
 			return Value{}, &SQLError{Msg: "import failed: invalid DECIMAL: " + cell}
 		}
@@ -318,4 +348,46 @@ func parseCell(typ, cell string) (Value, error) {
 		return Value{Kind: "BLOB", S: encodeHex(raw)}, nil
 	}
 	return Value{}, &SQLError{Msg: "unsupported column type: " + typ}
+}
+
+// decimalFracDigits 返回十进制文本按定点展开后的实际小数位数（含科学计数法换算）。
+// 例："123.45" -> 2、"123.4500" -> 4、"1.2E3" -> 0、"6.0E-4" -> 5、"1E+06" -> 0。
+func decimalFracDigits(s string) int {
+	i := 0
+	n := len(s)
+	if i < n && (s[i] == '+' || s[i] == '-') {
+		i++
+	}
+	for i < n && isDigit(s[i]) {
+		i++
+	}
+	frac := 0
+	if i < n && s[i] == '.' {
+		i++
+		for i < n && isDigit(s[i]) {
+			frac++
+			i++
+		}
+	}
+	exp := 0
+	expNeg := false
+	if i < n && (s[i] == 'e' || s[i] == 'E') {
+		i++
+		if i < n && (s[i] == '+' || s[i] == '-') {
+			expNeg = s[i] == '-'
+			i++
+		}
+		for i < n && isDigit(s[i]) {
+			exp = exp*10 + int(s[i]-'0')
+			i++
+		}
+		if expNeg {
+			exp = -exp
+		}
+	}
+	digits := frac - exp
+	if digits < 0 {
+		digits = 0
+	}
+	return digits
 }

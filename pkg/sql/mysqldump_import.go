@@ -2,6 +2,7 @@ package sql
 
 import (
 	"strconv"
+	"sync"
 
 	"github.com/zhengkuanhua/openxdb/pkg/import"
 	"github.com/zhengkuanhua/openxdb/pkg/txn"
@@ -17,19 +18,29 @@ import (
 //  4. 主键冲突行始终跳过计数（导入语义，与 CSV 导入一致）；
 //     IgnoreErrors 时坏行/建表错误/执行错误跳过计数，否则首个错误即回滚。
 //
+// P2-12：CONCURRENCY k>1（且 BATCH>0）时启用表级并行导入（execImportDumpParallel）：
+// DDL（DROP+CREATE）串行单事务原子提交后，各表数据由独立会话/独立事务并发灌入，
+// 表内仍按 BATCH 分批提交；并行导入在显式事务内调用会报错（无法保证外层原子性）。
+//
 // 返回 Result：Columns=[tables, inserted, skipped, errors, batches]。
 func (e *Executor) execImportDump(sess *Session, s *ImportStmt) (*Result, error) {
+	if s.Format == "MYSQLDUMP" && s.Concurrency > 1 {
+		if s.Batch <= 0 {
+			return nil, &SQLError{Msg: "CONCURRENCY requires BATCH (atomic import cannot be parallelized)"}
+		}
+		return e.execImportDumpParallel(sess, s)
+	}
 	dump, err := mysqldump.ParseFile(s.Path, mysqldump.Options{IgnoreErrors: s.IgnoreErrors})
 	if err != nil {
 		return nil, &SQLError{Msg: "import failed: " + err.Error()}
 	}
 	// 导入事务：已在显式会话事务中则复用（不自行提交）；否则自开并控制提交（BATCH 按批）。
 	outer := false
-	e.mu.Lock()
+	sess.mu.Lock()
 	if !sess.inTx {
 		outer = true
 	}
-	e.mu.Unlock()
+	sess.mu.Unlock()
 	if outer {
 		if err := e.beginTx(sess); err != nil {
 			return nil, err
@@ -181,6 +192,254 @@ func (e *Executor) execImportDump(sess *Session, s *ImportStmt) (*Result, error)
 		AffectedRows: inserted,
 		Rows:         [][]Value{{IntVal(int64(tables)), IntVal(int64(inserted)), IntVal(int64(skipped)), IntVal(int64(bad)), IntVal(int64(batches))}},
 	}, nil
+}
+
+// execImportDumpParallel P2-12：mysqldump 表级并行导入（CONCURRENCY k>1 且 BATCH>0）。
+//
+// 并行策略：
+//   - DDL（DROP + CREATE）串行执行并单事务原子提交：表目录（metaKey）是全局共享键，
+//     并行写会互相覆盖，必须串行；DDL 提交后各表结构对全部 worker 可见。
+//   - INSERT 阶段按表分发到 worker 池：每个 worker 使用独立 Session（NewSession）与
+//     独立存储事务并发灌入，快照隔离保证并行安全；表内仍按 BATCH 分批提交，
+//     与串行 BATCH 模式"部分完成可恢复"语义一致。
+//   - 错误处理：IgnoreErrors 时坏行/建表错误计数跳过；否则任一表内错误停止该表
+//     （已提交批次保留），整体返回首个错误并明确报告部分完成统计。
+//   - 显式会话事务内调用报错：worker 独立提交会破坏外层事务原子性，禁止混用。
+//
+// 返回 Result：Columns=[tables, inserted, skipped, errors, batches]。
+func (e *Executor) execImportDumpParallel(sess *Session, s *ImportStmt) (*Result, error) {
+	// 显式事务内禁止并行导入（外层原子性无法保证）。
+	sess.mu.Lock()
+	inTx := sess.inTx
+	sess.mu.Unlock()
+	if inTx {
+		return nil, &SQLError{Msg: "CONCURRENCY import cannot run inside an explicit transaction"}
+	}
+	dump, err := mysqldump.ParseFile(s.Path, mysqldump.Options{IgnoreErrors: s.IgnoreErrors})
+	if err != nil {
+		return nil, &SQLError{Msg: "import failed: " + err.Error()}
+	}
+
+	// ---- 阶段 1（串行）：DDL 单事务原子提交 ----
+	if err := e.beginTx(sess); err != nil {
+		return nil, err
+	}
+	tables, badDDL := 0, 0
+	for _, dn := range dump.Drops {
+		if _, err := e.execDropTable(sess, &DropTableStmt{Name: dn, IfExists: true}); err != nil {
+			if !s.IgnoreErrors {
+				_ = e.rollbackTx(sess)
+				return nil, err
+			}
+			badDDL++
+		}
+	}
+	// 记录成功建表的表（按 dump 顺序，供并行灌入）。
+	type tblTask struct {
+		idx int
+		t   *mysqldump.Table
+	}
+	var tasks []tblTask
+	for i, t := range dump.Tables {
+		if len(t.Columns) == 0 {
+			continue
+		}
+		cols := make([]ColumnDef, len(t.Columns))
+		pk := ""
+		for j, c := range t.Columns {
+			cols[j] = ColumnDef{Name: c.Name, Type: c.Type}
+			if c.Primary && pk == "" {
+				pk = c.Name
+			}
+		}
+		if _, err := e.execCreateTable(sess, &CreateTableStmt{Name: t.Name, Columns: cols, PK: pk}); err != nil {
+			if !s.IgnoreErrors {
+				_ = e.rollbackTx(sess)
+				return nil, err
+			}
+			badDDL++
+			continue
+		}
+		tables++
+		tasks = append(tasks, tblTask{idx: i, t: t})
+	}
+	if err := e.commitTx(sess); err != nil {
+		return nil, err
+	}
+
+	// ---- 阶段 2（并行）：各表独立会话/独立事务并发灌入 ----
+	if len(tasks) == 0 {
+		batches := 1 // 空导入也计为一次事务（无数据，与串行一致）
+		return &Result{
+			Columns:      []string{"tables", "inserted", "skipped", "errors", "batches"},
+			AffectedRows: 0,
+			Rows:         [][]Value{{IntVal(int64(tables)), IntVal(0), IntVal(0), IntVal(int64(badDDL)), IntVal(int64(batches))}},
+		}, nil
+	}
+	conc := s.Concurrency
+	if conc > len(tasks) {
+		conc = len(tasks)
+	}
+	type tblStat struct {
+		inserted, skipped, bad, batches int64
+		err                              error
+	}
+	stats := make([]tblStat, len(tasks))
+	ch := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < conc; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range ch {
+				tk := tasks[idx]
+				ws := e.NewSession()
+				if err := e.beginTx(ws); err != nil {
+					stats[idx].err = err
+					continue
+				}
+				ins, skp, bad, bat, terr := e.importDumpTableRows(ws, tk.t, s.Batch, s.IgnoreErrors)
+				stats[idx].inserted, stats[idx].skipped, stats[idx].bad, stats[idx].batches = ins, skp, bad, bat
+				stats[idx].err = terr
+				// 表数据已按批提交；清残余事务（无未提交数据，仅回滚空事务）
+				_ = e.rollbackTx(ws)
+			}
+		}()
+	}
+	for i := range tasks {
+		ch <- i
+	}
+	close(ch)
+	wg.Wait()
+
+	// ---- 汇总：按表顺序合并统计，返回首个错误（部分完成状态明确报告） ----
+	var firstErr error
+	var inserted, skipped, bad, batches int64
+	for i := range tasks {
+		st := stats[i]
+		inserted += st.inserted
+		skipped += st.skipped
+		bad += st.bad
+		batches += st.batches
+		if st.err != nil && firstErr == nil {
+			firstErr = st.err
+		}
+	}
+	bad += int64(badDDL)
+	if batches == 0 {
+		batches = 1 // 无数据行时仍计一次事务
+	}
+	if firstErr != nil {
+		return &Result{
+			Columns:      []string{"tables", "inserted", "skipped", "errors", "batches"},
+			AffectedRows: int(inserted),
+			Rows:         [][]Value{{IntVal(int64(tables)), IntVal(inserted), IntVal(skipped), IntVal(bad), IntVal(batches)}},
+		}, firstErr
+	}
+	return &Result{
+		Columns:      []string{"tables", "inserted", "skipped", "errors", "batches"},
+		AffectedRows: int(inserted),
+		Rows:         [][]Value{{IntVal(int64(tables)), IntVal(inserted), IntVal(skipped), IntVal(bad), IntVal(batches)}},
+	}, nil
+}
+
+// importDumpTableRows P2-12：单表数据灌入（并行导入 worker 专用）。
+// 调用方须已通过 beginTx 为 ws 开启事务；表内逐行 INSERT，达到 batch 行时
+// applyImportOps 落盘并 flush（commitTx + beginTx）开启新事务继续；返回统计与首个错误。
+func (e *Executor) importDumpTableRows(ws *Session, t *mysqldump.Table, batch int, ignore bool) (inserted, skipped, bad, batches int64, retErr error) {
+	tx, err := e.getTx(ws)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	tabs, err := loadTables(tx.Get)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	meta := findTable(tabs, t.Name)
+	if meta == nil {
+		return 0, 0, 0, 0, &SQLError{Msg: "table not exists after create: " + t.Name}
+	}
+	var ops []kvOp
+	seen := make(map[string]bool)
+	// flush 仅 BATCH 模式启用（并行入口已保证 batch>0）
+	flush := func() error {
+		if err := e.commitTx(ws); err != nil {
+			return err
+		}
+		if err := e.beginTx(ws); err != nil {
+			return err
+		}
+		batches++
+		return nil
+	}
+	for _, r := range t.Rows {
+		vals, verr := dumpRowValues(t, r)
+		if verr != nil {
+			if !ignore {
+				return inserted, skipped, bad, batches, verr
+			}
+			bad++
+			continue
+		}
+		pk, perr := e.pkOf(meta, vals)
+		if perr != nil {
+			if !ignore {
+				return inserted, skipped, bad, batches, perr
+			}
+			bad++
+			continue
+		}
+		if seen[string(pk)] {
+			skipped++
+			continue
+		}
+		seen[string(pk)] = true
+		rops, ok, oerr := e.insertRowOps(ws, tx, tabs, meta, nil, vals, true)
+		if oerr != nil {
+			if !ignore {
+				return inserted, skipped, bad, batches, oerr
+			}
+			bad++
+			continue
+		}
+		if !ok {
+			skipped++
+			continue
+		}
+		ops = append(ops, rops...)
+		inserted++
+		if len(ops) >= batch {
+			if err := e.applyImportOps(tx, ops); err != nil {
+				return inserted, skipped, bad, batches, err
+			}
+			ops = nil
+			if err := flush(); err != nil {
+				return inserted, skipped, bad, batches, err
+			}
+			// flush 已开启新事务，重新取 tx/tabs/meta
+			tx, err = e.getTx(ws)
+			if err != nil {
+				return inserted, skipped, bad, batches, err
+			}
+			tabs, err = loadTables(tx.Get)
+			if err != nil {
+				return inserted, skipped, bad, batches, err
+			}
+			meta = findTable(tabs, t.Name)
+			if meta == nil {
+				return inserted, skipped, bad, batches, &SQLError{Msg: "table not exists after batch: " + t.Name}
+			}
+		}
+	}
+	if len(ops) > 0 {
+		if err := e.applyImportOps(tx, ops); err != nil {
+			return inserted, skipped, bad, batches, err
+		}
+		if err := flush(); err != nil {
+			return inserted, skipped, bad, batches, err
+		}
+	}
+	return inserted, skipped, bad, batches, nil
 }
 
 // applyImportOps 应用一批导入写入（模拟显式事务内仅支持本地 region 写，与显式事务一致）。

@@ -230,6 +230,177 @@ func TestBRConcurrentBackupConsistency(t *testing.T) {
 	}
 }
 
+// ---- P2-12 备份导出并行化测试（BACKUP ... CONCURRENCY k）----
+
+// TestP2BackupParallelRoundTrip 并行备份-恢复全等：多表 + 二级索引 + 显式
+// region 划分（多分片展开），CONCURRENCY 4 备份后 RESTORE，行集/二级索引/
+// region 路由与旧版串行语义完全一致。
+func TestP2BackupParallelRoundTrip(t *testing.T) {
+	d, _ := openNode(t, "node-a")
+	defer d.Close()
+	backupPath := t.TempDir() + "/snap.bak"
+
+	mustSQL(t, d, "CREATE TABLE users (id INT, name TEXT, age INT, PRIMARY KEY (id))")
+	mustSQL(t, d, "CREATE INDEX idx_age ON users (age)")
+	mustSQL(t, d, "CREATE TABLE orders (id INT, uid INT, amount INT, PRIMARY KEY (id))")
+	for i := 1; i <= 20; i++ {
+		mustSQL(t, d, fmt.Sprintf("INSERT INTO users (id, name, age) VALUES (%d, 'u%d', %d)", i, i, 20+i))
+		mustSQL(t, d, fmt.Sprintf("INSERT INTO orders (id, uid, amount) VALUES (%d, %d, %d)", i, i%7+1, i*10))
+	}
+	// 显式 region：users 2 区、orders 3 区（多分片工作单元展开）。
+	if err := d.SQL.SplitTable("users", [][]byte{splitBoundary(8)}); err != nil {
+		t.Fatalf("SplitTable users: %v", err)
+	}
+	if err := d.SQL.SplitTable("orders", [][]byte{splitBoundary(5), splitBoundary(12)}); err != nil {
+		t.Fatalf("SplitTable orders: %v", err)
+	}
+
+	backRes := mustSQL(t, d, "BACKUP TO '"+backupPath+"' CONCURRENCY 4")
+	backRows := backRes.Rows[0][2].I
+	if backRows != 40 {
+		t.Fatalf("backup rows: want 40, got %d", backRows)
+	}
+
+	// 备份点之后发生变更：写新数据 + DROP 表。
+	mustSQL(t, d, "INSERT INTO users (id, name, age) VALUES (99, 'u99', 99)")
+	mustSQL(t, d, "DROP TABLE orders")
+
+	mustSQL(t, d, "RESTORE FROM '"+backupPath+"'")
+	wantIDs(t, d, "SELECT id FROM users ORDER BY id", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
+	wantIDs(t, d, "SELECT id FROM orders ORDER BY id", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
+
+	// 二级索引重建可用。
+	res := mustSQL(t, d, "SELECT id FROM users WHERE age = 23")
+	if len(res.Rows) != 1 || res.Rows[0][0].I != 3 {
+		t.Fatalf("index query after parallel backup restore: %+v", res.Rows)
+	}
+	// region 路由恢复：users 2 区、orders 3 区且均为显式。
+	regions, err := d.SQL.ListRegions("users")
+	if err != nil || len(regions) != 2 {
+		t.Fatalf("users regions after restore: want 2, got %d err=%v", len(regions), err)
+	}
+	for _, rg := range regions {
+		if !rg.Explicit {
+			t.Fatalf("users region %d not explicit: %+v", rg.RegionID, rg)
+		}
+	}
+	regions, err = d.SQL.ListRegions("orders")
+	if err != nil || len(regions) != 3 {
+		t.Fatalf("orders regions after restore: want 3, got %d err=%v", len(regions), err)
+	}
+}
+
+// TestP2BackupConcurrencySyntax BACKUP CONCURRENCY 语法与参数校验。
+func TestP2BackupConcurrencySyntax(t *testing.T) {
+	d, _ := openNode(t, "node-a")
+	defer d.Close()
+	mustSQL(t, d, "CREATE TABLE t (id INT, PRIMARY KEY (id))")
+	mustSQL(t, d, "INSERT INTO t (id) VALUES (1)")
+
+	mustSQL(t, d, "BACKUP TO '"+t.TempDir()+"/a.bak' CONCURRENCY 1")
+	mustSQL(t, d, "BACKUP TO '"+t.TempDir()+"/b.bak' CONCURRENCY 8")
+
+	if _, err := d.SQL.Execute("BACKUP TO '" + t.TempDir() + "/c.bak' CONCURRENCY 0"); err == nil {
+		t.Fatalf("CONCURRENCY 0 must fail")
+	}
+	if _, err := d.SQL.Execute("BACKUP TO '" + t.TempDir() + "/d.bak' CONCURRENCY abc"); err == nil {
+		t.Fatalf("CONCURRENCY abc must fail")
+	}
+}
+
+// TestP2BackupParallelPerfAndEquivalence 并行 vs 串行：同数据量分别以
+// CONCURRENCY 1（默认串行）与 CONCURRENCY 4 备份，两产物均可完整恢复且
+// 行数一致；记录耗时对比（不硬断言并行更快，避免 CI 抖动）。
+func TestP2BackupParallelPerfAndEquivalence(t *testing.T) {
+	d, _ := openNode(t, "node-a")
+	defer d.Close()
+	mustSQL(t, d, "CREATE TABLE t1 (id INT, v TEXT, PRIMARY KEY (id))")
+	mustSQL(t, d, "CREATE TABLE t2 (id INT, v TEXT, PRIMARY KEY (id))")
+	mustSQL(t, d, "CREATE TABLE t3 (id INT, v TEXT, PRIMARY KEY (id))")
+	for i := 1; i <= 2000; i++ {
+		mustSQL(t, d, fmt.Sprintf("INSERT INTO t1 (id, v) VALUES (%d, 'x%d')", i, i))
+		mustSQL(t, d, fmt.Sprintf("INSERT INTO t2 (id, v) VALUES (%d, 'x%d')", i, i))
+		mustSQL(t, d, fmt.Sprintf("INSERT INTO t3 (id, v) VALUES (%d, 'x%d')", i, i))
+	}
+	// 每表 4 region：分片数 12 > 并发 4，真实并发展开。
+	for _, tbl := range []string{"t1", "t2", "t3"} {
+		if err := d.SQL.SplitTable(tbl, [][]byte{splitBoundary(500), splitBoundary(1000), splitBoundary(1500)}); err != nil {
+			t.Fatalf("SplitTable %s: %v", tbl, err)
+		}
+	}
+	serialPath := t.TempDir() + "/serial.bak"
+	parPath := t.TempDir() + "/par.bak"
+
+	start := time.Now()
+	mustSQL(t, d, "BACKUP TO '"+serialPath+"'")
+	serialDur := time.Since(start)
+	start = time.Now()
+	mustSQL(t, d, "BACKUP TO '"+parPath+"' CONCURRENCY 4")
+	parDur := time.Since(start)
+	t.Logf("serial backup: %v; parallel(4): %v; speedup %.2fx", serialDur, parDur, float64(serialDur)/float64(parDur))
+
+	// 两产物均可完整恢复且行数一致。
+	mustSQL(t, d, "RESTORE FROM '"+serialPath+"'")
+	countRes := mustSQL(t, d, "SELECT COUNT(*) FROM t1")
+	if countRes.Rows[0][0].I != 2000 {
+		t.Fatalf("restore serial: t1 rows want 2000, got %d", countRes.Rows[0][0].I)
+	}
+	mustSQL(t, d, "RESTORE FROM '"+parPath+"'")
+	countRes = mustSQL(t, d, "SELECT COUNT(*) FROM t1")
+	if countRes.Rows[0][0].I != 2000 {
+		t.Fatalf("restore parallel: t1 rows want 2000, got %d", countRes.Rows[0][0].I)
+	}
+	countRes = mustSQL(t, d, "SELECT COUNT(*) FROM t3")
+	if countRes.Rows[0][0].I != 2000 {
+		t.Fatalf("restore parallel: t3 rows want 2000, got %d", countRes.Rows[0][0].I)
+	}
+}
+
+// TestP2BackupParallelConcurrentWriteConsistency 并发写入期间执行并行备份：
+// 快照一致性（无半提交行），恢复后行集精确等于备份点快照。
+func TestP2BackupParallelConcurrentWriteConsistency(t *testing.T) {
+	d, _ := openNode(t, "node-a")
+	defer d.Close()
+	backupPath := t.TempDir() + "/snap.bak"
+
+	mustSQL(t, d, "CREATE TABLE t (id INT, v TEXT, PRIMARY KEY (id))")
+	for i := 1; i <= 5; i++ {
+		mustSQL(t, d, fmt.Sprintf("INSERT INTO t (id, v) VALUES (%d, 'v%d')", i, i))
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 6; i <= 200; i++ {
+			_, err := d.SQL.Execute(fmt.Sprintf("INSERT INTO t (id, v) VALUES (%d, 'v%d')", i, i))
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// 写入进行中执行并行备份（一致快照，多 worker 共享）。
+	time.Sleep(20 * time.Millisecond)
+	backRes := mustSQL(t, d, "BACKUP TO '"+backupPath+"' CONCURRENCY 4")
+	backRows := backRes.Rows[0][2].I
+	if backRows < 5 || backRows > 200 {
+		t.Fatalf("parallel backup rows during concurrent write: %d", backRows)
+	}
+	wg.Wait()
+
+	mustSQL(t, d, "RESTORE FROM '"+backupPath+"'")
+	countRes := mustSQL(t, d, "SELECT COUNT(*) FROM t")
+	if countRes.Rows[0][0].I != backRows {
+		t.Fatalf("restored rows %d != backup snapshot rows %d", countRes.Rows[0][0].I, backRows)
+	}
+	// 快照一致性：主键无空洞（无半提交行）。
+	distinctRes := mustSQL(t, d, "SELECT COUNT(DISTINCT id) FROM t")
+	if distinctRes.Rows[0][0].I != backRows {
+		t.Fatalf("distinct ids %d != restored rows %d", distinctRes.Rows[0][0].I, backRows)
+	}
+}
+
 func containsAny(s string, subs ...string) bool {
 	for _, sub := range subs {
 		if len(sub) > 0 && (len(s) >= len(sub)) && indexOf(s, sub) >= 0 {

@@ -18,14 +18,14 @@ type fakeTxn struct {
 	rollbackErr error
 }
 
-func (f *fakeTxn) ID() uint64                            { return 1 }
-func (f *fakeTxn) Get(key []byte) ([]byte, error)        { return nil, storage.ErrNotFound }
-func (f *fakeTxn) MGet(keys [][]byte) (map[string][]byte, error) { return nil, nil }
+func (f *fakeTxn) ID() uint64                                                   { return 1 }
+func (f *fakeTxn) Get(key []byte) ([]byte, error)                               { return nil, storage.ErrNotFound }
+func (f *fakeTxn) MGet(keys [][]byte) (map[string][]byte, error)                { return nil, nil }
 func (f *fakeTxn) Scan(r storage.KeyRange, limit int) ([]storage.KVPair, error) { return nil, nil }
-func (f *fakeTxn) Put(key, value []byte) error           { return nil }
-func (f *fakeTxn) Delete(key []byte) error               { return nil }
-func (f *fakeTxn) Commit() error                         { return f.commitErr }
-func (f *fakeTxn) Rollback() error                       { return f.rollbackErr }
+func (f *fakeTxn) Put(key, value []byte) error                                  { return nil }
+func (f *fakeTxn) Delete(key []byte) error                                      { return nil }
+func (f *fakeTxn) Commit() error                                                { return f.commitErr }
+func (f *fakeTxn) Rollback() error                                              { return f.rollbackErr }
 
 // TestM13MetricsSQLAndSlow 注入指标后：execTimed 每次执行计 SQL、
 // recordSlow 命中计慢查询（低开销路径不落盘也可计数）。
@@ -65,26 +65,26 @@ func TestM13MetricsTxnCommitRollback(t *testing.T) {
 	e.SetMetrics(m)
 
 	// 成功提交
-	e.mu.Lock()
+	e.globalSess.mu.Lock()
 	e.globalSess.inTx = true
 	e.globalSess.curTx = &fakeTxn{}
-	e.mu.Unlock()
+	e.globalSess.mu.Unlock()
 	if err := e.commitTx(e.globalSess); err != nil {
 		t.Fatalf("commitTx: %v", err)
 	}
 	// 成功回滚
-	e.mu.Lock()
+	e.globalSess.mu.Lock()
 	e.globalSess.inTx = true
 	e.globalSess.curTx = &fakeTxn{}
-	e.mu.Unlock()
+	e.globalSess.mu.Unlock()
 	if err := e.rollbackTx(e.globalSess); err != nil {
 		t.Fatalf("rollbackTx: %v", err)
 	}
 	// 提交失败不计数
-	e.mu.Lock()
+	e.globalSess.mu.Lock()
 	e.globalSess.inTx = true
 	e.globalSess.curTx = &fakeTxn{commitErr: errFake}
-	e.mu.Unlock()
+	e.globalSess.mu.Unlock()
 	if err := e.commitTx(e.globalSess); err == nil {
 		t.Fatal("want commit error")
 	}
@@ -127,10 +127,10 @@ func TestM13MetricsNilSafety(t *testing.T) {
 	e.incRemote()
 	e.recordSlow(SlowQueryRecord{SQL: "x"})
 	_, _ = e.execTimed(e.globalSess, "root", "SELECT 1", nil, func() (*Result, error) { return &Result{}, nil })
-	e.mu.Lock()
+	e.globalSess.mu.Lock()
 	e.globalSess.inTx = true
 	e.globalSess.curTx = &fakeTxn{}
-	e.mu.Unlock()
+	e.globalSess.mu.Unlock()
 	_ = e.commitTx(e.globalSess)
 	_ = e.rollbackTx(e.globalSess)
 	_ = e.MetricsRegionStats()

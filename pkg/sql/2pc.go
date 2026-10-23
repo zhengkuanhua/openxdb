@@ -71,8 +71,9 @@ func (e *Executor) lockRowKeys(keys ...string) func() {
 			rowLocks[k] = lk
 		}
 		lk.ref++
+		ref := lk.ref // 锁内取值供锁外日志，避免与其它 goroutine 的 ref++ 竞争
 		rowLockMu.Unlock()
-		dbgLog("LOCK want key=%q ref=%d", k, lk.ref)
+		dbgLog("LOCK want key=%q ref=%d", k, ref)
 		lk.ch <- struct{}{} // 阻塞直至可获取（容量 1 即互斥量）
 		dbgLog("LOCK got key=%q", k)
 	}
@@ -469,8 +470,8 @@ func (e *Executor) splitExplicitOps(sess *Session, tx txn.Txn, ops []kvOp) ([]kv
 // 本地累积供 COMMIT 恢复重放与版本记录（挂载前会话事务缓冲已含这些键，
 // 提交时本地 Txn 直接落盘）；远端按节点合并。显式事务外调用为空操作。
 func (e *Executor) stagePendingExplicit(sess *Session, local []kvOp, remote map[string][]kvOp) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
 	if !sess.inTx {
 		return
 	}
@@ -483,8 +484,8 @@ func (e *Executor) stagePendingExplicit(sess *Session, local []kvOp, remote map[
 // clearPendingExplicit 清空会话显式事务 2PC 暂存（COMMIT/ROLLBACK 后调用，
 // 防御会话复位残留）。
 func (e *Executor) clearPendingExplicit(sess *Session) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
 	sess.pendingLocal = nil
 	sess.pendingRemote = map[string][]kvOp{}
 }

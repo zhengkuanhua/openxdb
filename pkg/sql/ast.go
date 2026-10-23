@@ -564,12 +564,15 @@ func (DeallocateStmt) stmt() {}
 
 // ImportStmt 从 CSV 导入建行（IMPORT INTO t FROM 'path' [BATCH n] [IGNORE ERRORS]）。
 // Batch>0 时逐批提交（每 n 行一批）；IgnoreErrors 时坏行计数跳过不整体回滚。
+// Concurrency>1（仅 MYSQLDUMP + BATCH 模式，P2-12）时启用表级并行导入：
+// 每张表独立会话/独立事务并发灌入，保持 BATCH 的"部分完成可恢复"语义。
 type ImportStmt struct {
 	Format       string // ""=CSV（IMPORT INTO t FROM 'path'）；"MYSQLDUMP"=mysqldump 兼容导入
 	Table        string
 	Path         string
 	Batch        int
 	IgnoreErrors bool
+	Concurrency  int // P2-12：mysqldump 表级并行导入并发度（0/1=串行）
 }
 
 func (ImportStmt) stmt() {}
@@ -702,6 +705,10 @@ type SetStmt struct {
 	Persist bool   // M16-1：true 表示 SET PERSIST <key> = <value>
 	Var     string // M18-C：用户变量名（含 @），非空表示用户变量赋值
 	VarVal  Value  // M18-C：用户变量值
+	// P2-13：SET [SESSION] TRANSACTION ISOLATION LEVEL <level>。
+	IsoSet   bool     // true 表示事务隔离级别设置语句（此时忽略 Name/Value/Var）
+	IsoScope string   // "SESSION"（会话级默认）或 ""（语句级，仅影响下一事务）
+	IsoLevel IsoLevel // 目标隔离级别
 }
 
 func (SetStmt) stmt() {}
@@ -730,7 +737,13 @@ type BalanceStmt struct{}
 
 // ---- M8(BR)：备份/恢复（BACKUP/RESTORE+PITR）----
 // BackupStmt BACKUP TO '<path>'：基于一致快照生成完整逻辑备份文件。
-type BackupStmt struct{ Path string }
+// BackupStmt BACKUP TO '<path>' [CONCURRENCY <k>]：
+// CONCURRENCY k（k>=1）指定备份数据段分片并行扫描的并发度；
+// 未指定时使用默认自动并发度（min(GOMAXPROCS, 4)）。
+type BackupStmt struct {
+	Path        string
+	Concurrency int
+}
 
 func (BackupStmt) stmt() {}
 

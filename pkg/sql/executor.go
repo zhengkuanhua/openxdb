@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/big"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,6 +41,9 @@ type Executor struct {
 	// 快照版本与会话状态见 Session（显式事务 curBeginTS / autocommit
 	// 语句 stmtBeginTS）。
 	ts tso.Source
+	// P2-13 Serializable 提交冲突检测注册表（NewExecutor 初始化；
+	// 仅 Serializable 显式事务使用，其他路径零触发）。
+	serial *serialRegistry
 	// M6 故障转移状态：自动重指派互斥 + 已处理 down 节点去重。
 	failoverMu   sync.Mutex
 	failoverDone map[string]bool
@@ -112,6 +116,10 @@ type Executor struct {
 	alertRules      *AlertRulesEngine
 	coordReplayStop chan struct{}
 	coordReplayDone chan struct{}
+	// P2-12 备份导出分片并行扫描并发度：BACKUP ... CONCURRENCY k 设置；
+	// <=0 表示未显式指定，backupCore 使用默认自动并发度
+	// （min(GOMAXPROCS, 4)，见 backup.go）。
+	backupConcurrency int
 }
 
 // splitConfig M7 自动分裂配置。
@@ -124,6 +132,7 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 	e := &Executor{
 		tm:            tm,
 		globalSess:    &Session{prepared: map[string]string{}, userVars: map[string]Value{}, pendingRemote: map[string][]kvOp{}},
+		serial:        newSerialRegistry(), // P2-13：Serializable 提交冲突检测注册表
 		router:        sharding.NewRouter(),
 		failoverDone:  map[string]bool{},
 		splitAcc:      map[uint64]int64{},
@@ -554,7 +563,7 @@ func (e *Executor) takeRowLocks(sess *Session, keys ...string) func() {
 	if !sess.inTx {
 		return e.lockRowKeys(keys...)
 	}
-	e.mu.Lock()
+	sess.mu.Lock()
 	if sess.heldLockKeys == nil {
 		sess.heldLockKeys = make(map[string]bool)
 	}
@@ -565,25 +574,25 @@ func (e *Executor) takeRowLocks(sess *Session, keys ...string) func() {
 			need = append(need, k)
 		}
 	}
-	e.mu.Unlock()
+	sess.mu.Unlock()
 	if len(need) == 0 {
 		return func() {}
 	}
 	unlock := e.lockRowKeys(need...)
-	e.mu.Lock()
+	sess.mu.Lock()
 	sess.heldLocks = append(sess.heldLocks, unlock)
-	e.mu.Unlock()
+	sess.mu.Unlock()
 	return func() {} // 显式事务：语句结束不释放，事务结束时统一释放
 }
 
 // releaseHeldLocks 释放显式事务持有的写锁（事务提交/回滚完成后调用，
 // 保证等待者拿锁后能看到已提交数据）。
 func (e *Executor) releaseHeldLocks(sess *Session) {
-	e.mu.Lock()
+	sess.mu.Lock()
 	locks := sess.heldLocks
 	sess.heldLocks = nil
 	sess.heldLockKeys = nil
-	e.mu.Unlock()
+	sess.mu.Unlock()
 	for _, u := range locks {
 		u()
 	}
@@ -604,8 +613,8 @@ func (e *Executor) refreshWriteSnapshot(sess *Session, tx txn.Txn) error {
 	if !sess.inTx || e.ts == nil {
 		return nil
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
 	e.ts.Reset()
 	ts, err := e.ts.Get()
 	if err != nil {
@@ -617,8 +626,8 @@ func (e *Executor) refreshWriteSnapshot(sess *Session, tx txn.Txn) error {
 
 // beginTx 开启会话事务（已开启时报错）。
 func (e *Executor) beginTx(sess *Session) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
 	if sess.inTx {
 		return &SQLError{Msg: "transaction already started"}
 	}
@@ -639,14 +648,33 @@ func (e *Executor) beginTx(sess *Session) error {
 	// 此处兜底异常残留，避免跨事务串扰）。
 	sess.pendingLocal = nil
 	sess.pendingRemote = map[string][]kvOp{}
+	// P2-13：事务隔离级别：默认会话级（SET SESSION TRANSACTION
+	// ISOLATION LEVEL）；语句级设置（SET TRANSACTION ISOLATION LEVEL）
+	// 仅影响下一事务，BEGIN 时消费并复位。
+	iso := sess.isolation
+	if sess.nextTxIsoSet {
+		iso = sess.nextTxIso
+		sess.nextTxIsoSet = false
+	}
+	sess.txIso = iso
+	if iso == IsoSerializable {
+		if st, ok := tx.(interface {
+			EnableSerializable()
+			ReadSet() map[string]bool
+			WriteSet() map[string]bool
+		}); ok {
+			st.EnableSerializable()
+			e.serial.register(tx.ID(), st.ReadSet(), st.WriteSet())
+		}
+	}
 	return nil
 }
 
 // commitTx 提交会话事务（未开启时报错）。
 func (e *Executor) commitTx(sess *Session) error {
-	e.mu.Lock()
+	sess.mu.Lock()
 	if !sess.inTx {
-		e.mu.Unlock()
+		sess.mu.Unlock()
 		return &SQLError{Msg: "no active transaction"}
 	}
 	tx := sess.curTx
@@ -654,15 +682,36 @@ func (e *Executor) commitTx(sess *Session) error {
 	// 在会话复位后执行，不能依赖会话字段）。
 	beginTS := sess.curBeginTS
 	hasRemote := len(sess.pendingRemote) > 0
+	// P2-13：锁内取出 Serializable 检查所需信息（事务 ID / 隔离级别），
+	// 提交后会话复位（txIso 复位为默认，事务结束即失效）。
+	txID := tx.ID()
+	txIso := sess.txIso
+	sess.txIso = IsoSnapshot
 	sess.inTx = false
 	sess.curTx = nil
 	sess.curBeginTS = 0
 	sess.curTxID = ""
-	e.mu.Unlock()
+	sess.mu.Unlock()
 	if e.ts != nil {
 		// 事务结束后刷新 TSO 缓存：后续新事务/新语句取权威当前序列
 		// 的新鲜号，避免读到残余预取批次中的滞后时间戳。
 		e.ts.Reset()
+	}
+	// P2-13：Serializable 提交前冲突检测（storage.ErrConflict 语义）。
+	// 冲突视为提交失败：回滚事务、释放行锁并返回错误（事务未生效）。
+	if txIso == IsoSerializable {
+		if st, ok := tx.(interface {
+			ReadSet() map[string]bool
+			WriteSet() map[string]bool
+		}); ok {
+			extra := e.serialExtraWriteKeys(sess)
+			extraRead := e.serialRemoteReadKeys(sess)
+			if err := e.serial.checkAndCommit(txID, st.ReadSet(), st.WriteSet(), extra, extraRead); err != nil {
+				_ = tx.Rollback()
+				e.releaseHeldLocks(sess)
+				return err
+			}
+		}
 	}
 	var err error
 	if hasRemote {
@@ -686,14 +735,41 @@ func (e *Executor) commitTx(sess *Session) error {
 	return nil
 }
 
+// serialExtraWriteKeys 收集 2PC 远端暂存写的 key（P2-13）：远端写的行锁
+// 由目标节点持有，协调者侧 registry 无法感知，需显式纳入已提交写集，
+// 保证后续 Serializable 事务读到这些 key 的旧值时能触发冲突。
+func (e *Executor) serialExtraWriteKeys(sess *Session) map[string]bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	extra := map[string]bool{}
+	for _, ops := range sess.pendingRemote {
+		for _, op := range ops {
+			extra[string(op.Key)] = true
+		}
+	}
+	return extra
+}
+
+// serialRemoteReadKeys 取走 Serializable 分布式远端读集（提交检测用，
+// 取走后清零避免跨事务串扰）。
+func (e *Executor) serialRemoteReadKeys(sess *Session) map[string]bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	extra := sess.serialRemoteReads
+	sess.serialRemoteReads = nil
+	return extra
+}
+
 // rollbackTx 回滚会话事务（未开启时报错）。
 func (e *Executor) rollbackTx(sess *Session) error {
-	e.mu.Lock()
+	sess.mu.Lock()
 	if !sess.inTx {
-		e.mu.Unlock()
+		sess.mu.Unlock()
 		return &SQLError{Msg: "no active transaction"}
 	}
 	tx := sess.curTx
+	// P2-13：事务结束（回滚）复位隔离级别并注销 Serializable 注册。
+	sess.txIso = IsoSnapshot
 	sess.inTx = false
 	sess.curTx = nil
 	sess.curBeginTS = 0
@@ -702,10 +778,12 @@ func (e *Executor) rollbackTx(sess *Session) error {
 	// 回滚直接丢弃，无需向参与者发 ABORT；本地写随 tx.Rollback 丢弃。
 	sess.pendingLocal = nil
 	sess.pendingRemote = map[string][]kvOp{}
-	e.mu.Unlock()
+	sess.serialRemoteReads = nil
+	sess.mu.Unlock()
 	if e.ts != nil {
 		e.ts.Reset()
 	}
+	e.serial.unregister(tx.ID())
 	if err := tx.Rollback(); err != nil {
 		e.releaseHeldLocks(sess)
 		return err
@@ -722,7 +800,12 @@ func (e *Executor) rollbackTx(sess *Session) error {
 // autocommit 下临时提升的显式事务，其事务句柄已由 exec2pcWrite 提交或
 // defer Rollback 处理，此处仅清理会话残留，避免 inTx/curTx 泄漏影响后续语句）。
 func (e *Executor) resetSessionTxState(sess *Session) {
-	e.mu.Lock()
+	sess.mu.Lock()
+	// P2-13：异常复位时注销 Serializable 注册（已提交路径已注销）。
+	if sess.inTx && sess.curTx != nil {
+		e.serial.unregister(sess.curTx.ID())
+	}
+	sess.txIso = IsoSnapshot
 	sess.inTx = false
 	sess.curTx = nil
 	sess.curBeginTS = 0
@@ -730,7 +813,9 @@ func (e *Executor) resetSessionTxState(sess *Session) {
 	// P0-1：同步清空显式事务 2PC 暂存（异常路径复位时防御）。
 	sess.pendingLocal = nil
 	sess.pendingRemote = map[string][]kvOp{}
-	e.mu.Unlock()
+	// P2-13：异常复位清空 Serializable 远端读集累积。
+	sess.serialRemoteReads = nil
+	sess.mu.Unlock()
 	// 临时提升事务若持过写锁（如 INSERT...SELECT 场景），一并释放避免泄漏。
 	e.releaseHeldLocks(sess)
 	if e.ts != nil {
@@ -741,17 +826,18 @@ func (e *Executor) resetSessionTxState(sess *Session) {
 // SetTSO 注入全局时间戳源（M8：db.Open/StartCluster 装配）。
 // nil 表示不启用快照隔离（单机旧路径零回归）。
 func (e *Executor) SetTSO(src tso.Source) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	// e.ts 仅启动装配期调用（db.Open/StartCluster），装配后不变；
+	// 读取侧（snapshotTS/tsoGet/backup/2pc）均无锁直读，这里同样不加锁。
 	e.ts = src
+	// globalSess 字段由会话锁保护（与语句路径一致）。
+	e.globalSess.mu.Lock()
 	e.globalSess.stmtBeginTS = 0
+	e.globalSess.mu.Unlock()
 }
 
 // tsoGet 从装配的时间戳源取号；未装配返回 0（旧路径）。
 func (e *Executor) tsoGet() (uint64, error) {
-	e.mu.Lock()
-	ts := e.ts
-	e.mu.Unlock()
+	ts := e.ts // e.ts 装配后不变，无锁直读
 	if ts == nil {
 		return 0, nil
 	}
@@ -761,8 +847,8 @@ func (e *Executor) tsoGet() (uint64, error) {
 // txContextID 返回当前语句所属会话事务 ID（M18-A 事务上下文）：
 // 显式事务内返回 BEGIN 时生成的事务 ID；autocommit 返回空串（不携带）。
 func (e *Executor) txContextID(sess *Session) string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
 	if sess.inTx {
 		return sess.curTxID
 	}
@@ -776,8 +862,8 @@ func (e *Executor) txContextID(sess *Session) string {
 //
 // 取号失败（如远程 TSO 不可达）退回 0：读不过滤、尽力而为，不阻塞语句。
 func (e *Executor) snapshotTS(sess *Session) uint64 {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
 	if e.ts == nil {
 		return 0
 	}
@@ -807,8 +893,8 @@ func (e *Executor) snapshotTS(sess *Session) uint64 {
 // resetStmtSnapshot 在每条语句执行入口重置 autocommit 语句快照，
 // 保证每条语句拥有独立快照（显式事务内不重置）。
 func (e *Executor) resetStmtSnapshot(sess *Session) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
 	if !sess.inTx {
 		sess.stmtBeginTS = 0
 	}
@@ -816,8 +902,8 @@ func (e *Executor) resetStmtSnapshot(sess *Session) {
 
 // getTx 获取当前语句的事务：会话事务内复用 curTx；否则新建临时事务。
 func (e *Executor) getTx(sess *Session) (txn.Txn, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
 	if sess.inTx {
 		return sess.curTx, nil
 	}
@@ -826,8 +912,8 @@ func (e *Executor) getTx(sess *Session) (txn.Txn, error) {
 
 // autocommit 判断当前语句是否以隐式事务提交（不在显式事务中时为 true）。
 func (e *Executor) autocommit(sess *Session) bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
 	return !sess.inTx
 }
 
@@ -4837,7 +4923,9 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 // ---- 辅助 ----
 
 func (e *Executor) buildRow(meta *TableMeta, cols []string, vals []Value, tx txn.Txn) ([]Value, error) {
-	fmt.Printf("[br-debug] table=%s cols=%v nvals=%d\n", meta.Name, cols, len(vals))
+	if os.Getenv("OPENXDB_BR_DEBUG") != "" {
+		fmt.Printf("[br-debug] table=%s cols=%v nvals=%d\n", meta.Name, cols, len(vals))
+	}
 	if len(cols) == 0 {
 		if len(vals) != len(meta.Columns) {
 			return nil, &SQLError{Msg: "column count mismatch"}
@@ -5833,6 +5921,17 @@ func (e *Executor) execSet(sess *Session, s *SetStmt) (*Result, error) {
 	// M18-C：SET @var = value 用户变量赋值（会话级）。
 	if s.Var != "" {
 		sess.userVars[s.Var] = s.VarVal
+		return &Result{Columns: []string{"variable", "value"}}, nil
+	}
+	// P2-13：SET [SESSION] TRANSACTION ISOLATION LEVEL <level>。
+	// SESSION 级改会话默认（新事务生效）；语句级仅影响下一事务（BEGIN 消费）。
+	if s.IsoSet {
+		if s.IsoScope == "SESSION" {
+			sess.isolation = s.IsoLevel
+		} else {
+			sess.nextTxIso = s.IsoLevel
+			sess.nextTxIsoSet = true
+		}
 		return &Result{Columns: []string{"variable", "value"}}, nil
 	}
 	spec := lookupConfigSpec(s.Name)

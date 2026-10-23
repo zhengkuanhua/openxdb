@@ -147,6 +147,12 @@ type txnImpl struct {
 	ops   []opEntry // 事务内操作序列（按时间序，read-your-writes 判定依据）
 	snap  storage.Snapshot
 	state TxnState
+	// P2-13 Serializable 冲突检测：EnableSerializable 开启后记录
+	// 读集（Get/MGet/Scan 命中的 key）与写集（Put/Delete 的 key），
+	// 提交时由协调者做 rw-antidependency 检测。
+	serEnabled bool
+	readSet    map[string]bool
+	writeSet   map[string]bool
 }
 
 type opEntry struct {
@@ -160,6 +166,10 @@ func (t *txnImpl) ID() uint64 { return t.id }
 func (t *txnImpl) Get(key []byte) ([]byte, error) {
 	if t.state != TxnActive {
 		return nil, ErrTxnClosed
+	}
+	// P2-13：Serializable 读集记录（含读不存在，供 phantom 检测）。
+	if t.serEnabled {
+		t.readSet[string(key)] = true
 	}
 	// read-your-writes：按操作时间序反向扫描，最近一次操作决定结果
 	for i := len(t.ops) - 1; i >= 0; i-- {
@@ -179,6 +189,12 @@ func (t *txnImpl) Get(key []byte) ([]byte, error) {
 func (t *txnImpl) MGet(keys [][]byte) (map[string][]byte, error) {
 	if t.state != TxnActive {
 		return nil, ErrTxnClosed
+	}
+	// P2-13：Serializable 读集记录（含读不存在，供 phantom 检测）。
+	if t.serEnabled {
+		for _, key := range keys {
+			t.readSet[string(key)] = true
+		}
 	}
 	got := make(map[string][]byte, len(keys))
 	missing := make([][]byte, 0, len(keys))
@@ -248,6 +264,12 @@ func (t *txnImpl) Scan(r storage.KeyRange, limit int) ([]storage.KVPair, error) 
 			merged[ks] = storage.KVPair{Key: o.key, Value: o.value}
 		}
 	}
+	// P2-13：Serializable 读集记录（范围读返回的键均纳入，供 phantom 检测）。
+	if t.serEnabled {
+		for ks := range merged {
+			t.readSet[ks] = true
+		}
+	}
 	// 3) 升序输出 + limit
 	keys := make([][]byte, 0, len(merged))
 	for _, kv := range merged {
@@ -259,6 +281,12 @@ func (t *txnImpl) Scan(r storage.KeyRange, limit int) ([]storage.KVPair, error) 
 		out = append(out, merged[string(k)])
 		if limit > 0 && len(out) >= limit {
 			break
+		}
+	}
+	// P2-13：Serializable 读集记录（以实际返回行为准；limit 截断的未读行不记）。
+	if t.serEnabled {
+		for _, kv := range out {
+			t.readSet[string(kv.Key)] = true
 		}
 	}
 	return out, nil
@@ -310,6 +338,10 @@ func (t *txnImpl) Put(key, value []byte) error {
 	if t.state != TxnActive {
 		return ErrTxnClosed
 	}
+	// P2-13：Serializable 写集记录。
+	if t.serEnabled {
+		t.writeSet[string(key)] = true
+	}
 	t.batch.Puts = append(t.batch.Puts, storage.KVPair{Key: key, Value: value})
 	t.ops = append(t.ops, opEntry{key: key, value: value})
 	return nil
@@ -319,10 +351,32 @@ func (t *txnImpl) Delete(key []byte) error {
 	if t.state != TxnActive {
 		return ErrTxnClosed
 	}
+	// P2-13：Serializable 写集记录。
+	if t.serEnabled {
+		t.writeSet[string(key)] = true
+	}
 	t.batch.Deletes = append(t.batch.Deletes, key)
 	t.ops = append(t.ops, opEntry{isDelete: true, key: key})
 	return nil
 }
+
+// EnableSerializable 开启 Serializable 读/写集记录（P2-13）。
+// 由协调者（executor.beginTx）在事务注册前调用；未开启时零开销。
+func (t *txnImpl) EnableSerializable() {
+	t.serEnabled = true
+	if t.readSet == nil {
+		t.readSet = map[string]bool{}
+	}
+	if t.writeSet == nil {
+		t.writeSet = map[string]bool{}
+	}
+}
+
+// ReadSet 返回 Serializable 读集（协调者提交检测用；仅 EnableSerializable 后非空）。
+func (t *txnImpl) ReadSet() map[string]bool { return t.readSet }
+
+// WriteSet 返回 Serializable 写集（协调者提交检测用；仅 EnableSerializable 后非空）。
+func (t *txnImpl) WriteSet() map[string]bool { return t.writeSet }
 
 // Commit：WAL 先行 → 存储原子应用 → 释放快照。
 // B2 组提交流水线：①锁内 Append 分配 LSN（WAL 顺序 = 锁获取顺序 = 提交顺序）；

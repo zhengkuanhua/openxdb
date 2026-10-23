@@ -90,7 +90,19 @@ func (e *Executor) getKVCluster(sess *Session, tx txn.Txn, key []byte) ([]byte, 
 		return e.getKVVisible(tx, key, bs)
 	}
 	e.incRemote()
-	return e.mgr.GetRemote(node, key, bs, e.txContextID(sess))
+	v, err := e.mgr.GetRemote(node, key, bs, e.txContextID(sess))
+	if sess.txIso == IsoSerializable {
+		// P2-13：远端点查行 key 纳入 Serializable 读集（txn 层不可见）。
+		// 无论成败均记录：读不存在（phantom）也要参与检测——后续插入
+		// 该 key 的事务提交后本事务提交即冲突。
+		sess.mu.Lock()
+		if sess.serialRemoteReads == nil {
+			sess.serialRemoteReads = map[string]bool{}
+		}
+		sess.serialRemoteReads[string(key)] = true
+		sess.mu.Unlock()
+	}
+	return v, err
 }
 
 // mgetKVCluster 集群感知批量点查：本地键一次批量读（tx.MGet，减少 cgo 往返），
@@ -238,6 +250,17 @@ func (e *Executor) scanMergedCluster(sess *Session, tx txn.Txn, ranges []storage
 				pairs = make([]storage.KVPair, 0, len(rows))
 				for _, row := range rows {
 					pairs = append(pairs, storage.KVPair{Key: row.Key, Value: row.Value})
+				}
+				// P2-13：远端范围扫描返回的行 key 纳入 Serializable 读集。
+				if sess.txIso == IsoSerializable && len(rows) > 0 {
+					sess.mu.Lock()
+					if sess.serialRemoteReads == nil {
+						sess.serialRemoteReads = map[string]bool{}
+					}
+					for _, row := range rows {
+						sess.serialRemoteReads[string(row.Key)] = true
+					}
+					sess.mu.Unlock()
 				}
 				// 单远端区间内按内层键序（与 scanMerged 一致）
 				sort.Slice(pairs, func(i, j int) bool {

@@ -160,6 +160,17 @@ func (p *parser) parseSet() (Stmt, error) {
 		s.Persist = true
 		p.next()
 	}
+	// P2-13：SET [SESSION] TRANSACTION ISOLATION LEVEL <level>
+	// （SESSION 为会话级默认；不带 SESSION 为语句级，仅影响下一事务）。
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "TRANSACTION") {
+		return p.parseSetIsolation(s, false)
+	}
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "SESSION") &&
+		p.pos+1 < len(p.toks) && p.toks[p.pos+1].kind == tokIdent &&
+		strings.EqualFold(p.toks[p.pos+1].text, "TRANSACTION") {
+		p.next() // 消费 SESSION
+		return p.parseSetIsolation(s, true)
+	}
 	// M18-C：SET @var = value 用户变量赋值（值可为数字/字符串/标识符）
 	if p.cur().kind == tokVar {
 		s.Var = p.cur().text
@@ -212,6 +223,70 @@ func (p *parser) parseSet() (Stmt, error) {
 		return nil, errf("expected value at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	return s, nil
+}
+
+// parseSetIsolation 解析 SET [SESSION] TRANSACTION ISOLATION LEVEL <level>
+// （P2-13）。sessionScope==true 表示会话级默认；否则为语句级（仅影响下一事务）。
+func (p *parser) parseSetIsolation(s *SetStmt, sessionScope bool) (Stmt, error) {
+	if err := p.expectIdentFold("TRANSACTION"); err != nil {
+		return nil, err
+	}
+	if err := p.expectIdentFold("ISOLATION"); err != nil {
+		return nil, err
+	}
+	if err := p.expectIdentFold("LEVEL"); err != nil {
+		return nil, err
+	}
+	lvl, err := p.parseIsoLevel()
+	if err != nil {
+		return nil, err
+	}
+	s.IsoSet = true
+	s.IsoLevel = lvl
+	if sessionScope {
+		s.IsoScope = "SESSION"
+	}
+	return s, nil
+}
+
+// expectIdentFold 消费一个与 want 大小写无关的标识符 token（非关键字，
+// 用于 TRANSACTION / ISOLATION / LEVEL 等未列入关键字表的词）。
+func (p *parser) expectIdentFold(want string) error {
+	if p.cur().kind != tokIdent || !strings.EqualFold(p.cur().text, want) {
+		return errf("expected %s at %d, got %q", want, p.cur().pos, p.cur().text)
+	}
+	p.next()
+	return nil
+}
+
+// parseIsoLevel 解析隔离级别字面量：
+// SERIALIZABLE | REPEATABLE READ | READ COMMITTED | READ UNCOMMITTED（不支持）。
+func (p *parser) parseIsoLevel() (IsoLevel, error) {
+	if p.cur().kind != tokIdent {
+		return 0, errf("expected isolation level at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	switch strings.ToUpper(p.cur().text) {
+	case "SERIALIZABLE":
+		p.next()
+		return IsoSerializable, nil
+	case "REPEATABLE":
+		p.next()
+		if err := p.expectIdentFold("READ"); err != nil {
+			return 0, err
+		}
+		return IsoSnapshot, nil
+	case "READ":
+		p.next()
+		if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "UNCOMMITTED") {
+			return 0, errf("unsupported isolation level READ UNCOMMITTED at %d", p.cur().pos)
+		}
+		if err := p.expectIdentFold("COMMITTED"); err != nil {
+			return 0, err
+		}
+		return IsoReadCommitted, nil
+	default:
+		return 0, errf("unsupported isolation level %q at %d", p.cur().text, p.cur().pos)
+	}
 }
 
 // parseAlter ALTER TABLE（M9 在线 DDL）：
@@ -371,7 +446,21 @@ func (p *parser) parseBackup() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &BackupStmt{Path: pathTok.text}, nil
+	s := &BackupStmt{Path: pathTok.text}
+	// P2-12：可选 CONCURRENCY <k>（k>=1）指定分片并行扫描并发度。
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "CONCURRENCY") {
+		p.next()
+		kTok, err := p.expect(tokNumber, "concurrency number")
+		if err != nil {
+			return nil, err
+		}
+		k, err := strconv.Atoi(kTok.text)
+		if err != nil || k < 1 {
+			return nil, errf("invalid concurrency %q: must be integer >= 1", kTok.text)
+		}
+		s.Concurrency = k
+	}
+	return s, nil
 }
 
 // parseRestore RESTORE FROM '<path>' [TO LSN <n>]：
@@ -3836,7 +3925,8 @@ func (p *parser) parseImport() (Stmt, error) {
 		stmt.Table = nameTok.text
 		stmt.Path = pathTok.text
 	}
-	// 可选后缀：BATCH <n>（逐批提交行数）/ IGNORE ERRORS（坏行计数跳过）
+	// 可选后缀：BATCH <n>（逐批提交行数）/ IGNORE ERRORS（坏行计数跳过）/
+	// CONCURRENCY <k>（P2-12：仅 MYSQLDUMP 支持表级并行导入并发度，CSV 单表无意义）
 	for p.cur().kind == tokIdent {
 		switch strings.ToUpper(p.cur().text) {
 		case "BATCH":
@@ -3850,6 +3940,20 @@ func (p *parser) parseImport() (Stmt, error) {
 				return nil, &SQLError{Msg: "invalid BATCH count: " + nTok.text}
 			}
 			stmt.Batch = int(n)
+		case "CONCURRENCY":
+			p.next()
+			if stmt.Format != "MYSQLDUMP" {
+				return nil, &SQLError{Msg: "CONCURRENCY is only supported for IMPORT MYSQLDUMP"}
+			}
+			nTok, err := p.expect(tokNumber, "concurrency level")
+			if err != nil {
+				return nil, err
+			}
+			n, err := strconv.ParseInt(nTok.text, 10, 64)
+			if err != nil || n <= 0 {
+				return nil, &SQLError{Msg: "invalid CONCURRENCY level: " + nTok.text}
+			}
+			stmt.Concurrency = int(n)
 		case "IGNORE":
 			p.next()
 			if p.cur().kind != tokIdent || !strings.EqualFold(p.cur().text, "ERRORS") {

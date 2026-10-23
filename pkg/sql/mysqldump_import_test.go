@@ -3,6 +3,7 @@ package sql_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/zhengkuanhua/openxdb/pkg/sql"
@@ -270,4 +271,162 @@ INSERT INTO t VALUES (2, B'11111111', 42, 200, NULL, X'00FF', '科学 1e5 数值
 	if v := mustSelectVal(t, e, "SELECT loc FROM t WHERE id=2", 0); v.S != "" {
 		t.Fatalf("id=2 NULL loc: %+v", v)
 	}
+}
+
+// ---- P2-12 备份/导入并行化：mysqldump 表级并行导入（CONCURRENCY）----
+
+// parallelDump 构造多表 dump：3 表 × 每表 6 行。
+func parallelDump() string {
+	return "-- MySQL dump 10.13\n" +
+		"DROP TABLE IF EXISTS ta;\n" +
+		"CREATE TABLE ta (id INT PRIMARY KEY, v TEXT);\n" +
+		"INSERT INTO ta VALUES (1,'a1'),(2,'a2'),(3,'a3'),(4,'a4'),(5,'a5'),(6,'a6');\n" +
+		"DROP TABLE IF EXISTS tb;\n" +
+		"CREATE TABLE tb (id INT PRIMARY KEY, v TEXT);\n" +
+		"INSERT INTO tb VALUES (1,'b1'),(2,'b2'),(3,'b3'),(4,'b4'),(5,'b5'),(6,'b6');\n" +
+		"DROP TABLE IF EXISTS tc;\n" +
+		"CREATE TABLE tc (id INT PRIMARY KEY, v TEXT);\n" +
+		"INSERT INTO tc VALUES (1,'c1'),(2,'c2'),(3,'c3'),(4,'c4'),(5,'c5'),(6,'c6');\n"
+}
+
+// TestP2ImportDumpParallelMultiTable 多表并行导入：3 表并发灌入，统计与数据正确。
+func TestP2ImportDumpParallelMultiTable(t *testing.T) {
+	e := newEngine(t)
+	p := writeDump(t, parallelDump())
+	res := mustExec(t, e, "IMPORT MYSQLDUMP FROM '"+p+"' BATCH 2 CONCURRENCY 4")
+	tables, inserted, skipped, errors, batches := importRows(t, res)
+	if tables != 3 || inserted != 18 || skipped != 0 || errors != 0 {
+		t.Fatalf("stats: tables=%d inserted=%d skipped=%d errors=%d batches=%d", tables, inserted, skipped, errors, batches)
+	}
+	// 每表 6 行按 BATCH 2 分 3 批（3 表共 9 批）
+	if batches != 9 {
+		t.Fatalf("batches: want 9, got %d", batches)
+	}
+	for _, tc := range []struct{ tbl, want string }{
+		{"ta", "a6"}, {"tb", "b6"}, {"tc", "c6"},
+	} {
+		if v := mustSelectVal(t, e, "SELECT v FROM "+tc.tbl+" WHERE id=6", 0); v.S != tc.want {
+			t.Fatalf("%s.id=6: want %s, got %+v", tc.tbl, tc.want, v)
+		}
+	}
+}
+
+// TestP2ImportDumpParallelConsistent 并行与串行导入结果一致（行集全等）。
+func TestP2ImportDumpParallelConsistent(t *testing.T) {
+	ser := newEngine(t)
+	p := writeDump(t, parallelDump())
+	mustExec(t, ser, "IMPORT MYSQLDUMP FROM '"+p+"' BATCH 2")
+	par := newEngine(t)
+	res := mustExec(t, par, "IMPORT MYSQLDUMP FROM '"+p+"' BATCH 2 CONCURRENCY 8")
+	if _, inserted, skipped, errors, _ := importRows(t, res); inserted != 18 || skipped != 0 || errors != 0 {
+		t.Fatalf("parallel stats: inserted=%d skipped=%d errors=%d", inserted, skipped, errors)
+	}
+	for _, tbl := range []string{"ta", "tb", "tc"} {
+		want := mustRows(t, ser, "SELECT id, v FROM "+tbl+" ORDER BY id")
+		got := mustRows(t, par, "SELECT id, v FROM "+tbl+" ORDER BY id")
+		if len(want) != len(got) {
+			t.Fatalf("%s rows: want %d, got %d", tbl, len(want), len(got))
+		}
+		for i := range want {
+			if want[i][0].I != got[i][0].I || want[i][1].S != got[i][1].S {
+				t.Fatalf("%s row %d: want %+v, got %+v", tbl, i, want[i], got[i])
+			}
+		}
+	}
+}
+
+// TestP2ImportDumpParallelStrictError 严格模式：坏行导致该表批次回滚并停止，整体返回错误并报告部分完成。
+// 表 ta 灌入成功（批次已提交保留），表 tb 含坏行的批次整批回滚且该表停止，表 tc 未处理（错误优先返回）。
+func TestP2ImportDumpParallelStrictError(t *testing.T) {
+	e := newEngine(t)
+	p := writeDump(t, "CREATE TABLE ta (id INT PRIMARY KEY, v TEXT);\n"+
+		"INSERT INTO ta VALUES (1,'a1'),(2,'a2'),(3,'a3'),(4,'a4'),(5,'a5'),(6,'a6');\n"+
+		"CREATE TABLE tb (id INT PRIMARY KEY, v TEXT);\n"+
+		"INSERT INTO tb VALUES (1,'b1'),('oops','bad'),(3,'b3');\n"+
+		"CREATE TABLE tc (id INT PRIMARY KEY, v TEXT);\n"+
+		"INSERT INTO tc VALUES (1,'c1');\n")
+	res, err := e.Execute("IMPORT MYSQLDUMP FROM '" + p + "' BATCH 2 CONCURRENCY 3")
+	if err == nil {
+		t.Fatalf("want strict error, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid INT") {
+		t.Fatalf("want invalid INT error, got %v", err)
+	}
+	if res == nil {
+		t.Fatalf("want partial stats, got nil result")
+	}
+	// 部分完成：3 表全部 CREATE 成功；ta 数据完整（6 行已提交），tb 批次回滚（无行），tc 未灌入
+	tables, inserted, skipped, errors, _ := importRows(t, res)
+	if tables != 3 || inserted < 6 || skipped != 0 || errors != 0 {
+		t.Fatalf("partial stats: tables=%d inserted=%d skipped=%d errors=%d", tables, inserted, skipped, errors)
+	}
+	if v := mustSelectVal(t, e, "SELECT v FROM ta WHERE id=6", 0); v.S != "a6" {
+		t.Fatalf("ta.id=6 preserved: %+v", v)
+	}
+	// tb 含坏行的批次整体回滚，表停止
+	if rows := mustRows(t, e, "SELECT id FROM tb"); len(rows) != 0 {
+		t.Fatalf("tb should be empty (batch rolled back), got %d rows", len(rows))
+	}
+	// tc 已提交的数据保留（错误优先返回，不强制回滚其他 worker 的已完成批次）
+	if rows := mustRows(t, e, "SELECT id FROM tc"); len(rows) > 1 {
+		t.Fatalf("tc rows: want <=1, got %d", len(rows))
+	}
+}
+
+// TestP2ImportDumpParallelIgnoreErrors IgnoreErrors 模式：坏行计数跳过，全部表完成。
+func TestP2ImportDumpParallelIgnoreErrors(t *testing.T) {
+	e := newEngine(t)
+	p := writeDump(t, "CREATE TABLE ta (id INT PRIMARY KEY, v TEXT);\n"+
+		"INSERT INTO ta VALUES (1,'a1'),(2,'a2'),(3,'a3');\n"+
+		"CREATE TABLE tb (id INT PRIMARY KEY, v TEXT);\n"+
+		"INSERT INTO tb VALUES (1,'b1'),('oops','bad'),(3,'b3');\n")
+	res := mustExec(t, e, "IMPORT MYSQLDUMP FROM '"+p+"' BATCH 2 CONCURRENCY 4 IGNORE ERRORS")
+	tables, inserted, skipped, errors, _ := importRows(t, res)
+	if tables != 2 || inserted != 5 || skipped != 0 || errors != 1 {
+		t.Fatalf("stats: tables=%d inserted=%d skipped=%d errors=%d", tables, inserted, skipped, errors)
+	}
+	if v := mustSelectVal(t, e, "SELECT v FROM tb WHERE id=3", 0); v.S != "b3" {
+		t.Fatalf("tb.id=3: %+v", v)
+	}
+}
+
+// TestP2ImportDumpParallelDuplicateRows 文件内重复主键在并行导入下同样计数跳过。
+func TestP2ImportDumpParallelDuplicateRows(t *testing.T) {
+	e := newEngine(t)
+	p := writeDump(t, "CREATE TABLE t (id INT PRIMARY KEY, v TEXT);\n"+
+		"INSERT INTO t VALUES (1,'a'),(1,'dup'),(2,'b');\n")
+	res := mustExec(t, e, "IMPORT MYSQLDUMP FROM '"+p+"' BATCH 2 CONCURRENCY 4")
+	tables, inserted, skipped, errors, _ := importRows(t, res)
+	if tables != 1 || inserted != 2 || skipped != 1 || errors != 0 {
+		t.Fatalf("stats: tables=%d inserted=%d skipped=%d errors=%d", tables, inserted, skipped, errors)
+	}
+}
+
+// TestP2ImportDumpParallelRequiresBatch CONCURRENCY>1 且无 BATCH：拒绝并行（原子性不可破坏）。
+func TestP2ImportDumpParallelRequiresBatch(t *testing.T) {
+	e := newEngine(t)
+	p := writeDump(t, parallelDump())
+	mustErr(t, e, "IMPORT MYSQLDUMP FROM '"+p+"' CONCURRENCY 2", "CONCURRENCY requires BATCH")
+}
+
+// TestP2ImportDumpParallelNoExplicitTx 显式事务内禁止并行导入。
+func TestP2ImportDumpParallelNoExplicitTx(t *testing.T) {
+	e := newEngine(t)
+	p := writeDump(t, parallelDump())
+	mustExec(t, e, "BEGIN")
+	mustErr(t, e, "IMPORT MYSQLDUMP FROM '"+p+"' BATCH 2 CONCURRENCY 2", "cannot run inside an explicit transaction")
+	mustExec(t, e, "ROLLBACK")
+}
+
+// TestP2ImportDumpConcurrencySyntax CONCURRENCY 仅 MYSQLDUMP 接受；CSV 导入拒绝。
+func TestP2ImportDumpConcurrencySyntax(t *testing.T) {
+	e := newEngine(t)
+	p := writeDump(t, "CREATE TABLE t (id INT PRIMARY KEY, v TEXT);\nINSERT INTO t VALUES (1,'a');\n")
+	mustExec(t, e, "IMPORT MYSQLDUMP FROM '"+p+"' BATCH 1 CONCURRENCY 1") // 并发度 1 = 串行
+	csv := filepath.Join(t.TempDir(), "d.csv")
+	if err := os.WriteFile(csv, []byte("1,a\n"), 0o644); err != nil {
+		t.Fatalf("write csv: %v", err)
+	}
+	mustExec(t, e, "CREATE TABLE c (id INT PRIMARY KEY, v TEXT)")
+	mustErr(t, e, "IMPORT INTO c FROM '"+csv+"' CONCURRENCY 2", "CONCURRENCY is only supported for IMPORT MYSQLDUMP")
 }

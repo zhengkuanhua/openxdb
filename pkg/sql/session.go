@@ -52,13 +52,26 @@ type Session struct {
 	prepared map[string]string
 	// M18：用户变量（@name→值，会话级；SET @a=... 写入，SELECT @a 读取）。
 	userVars map[string]Value
+	// P2-13 隔离级别：isolation 会话级默认（SET SESSION TRANSACTION
+	// ISOLATION LEVEL 修改）；nextTxIso 为语句级下一事务级别（SET TRANSACTION
+	// ISOLATION LEVEL 设置，BEGIN 时消费并复位 nextTxIsoSet）；txIso 为当前
+	// 事务实际级别（BEGIN 时确定，COMMIT/ROLLBACK 复位为 IsoSnapshot）。
+	isolation    IsoLevel
+	nextTxIso    IsoLevel
+	nextTxIsoSet bool
+	txIso        IsoLevel
+	// P2-13 Serializable 分布式远端读集：跨节点读（GetRemote/ScanRemote）
+	// 返回的行 key 不走本地 txn.Get/Scan，无法由 txn 层 readSet 记录，
+	// 提交时作为 extraRead 并入读集参与 rw-antidependency 检测。
+	serialRemoteReads map[string]bool
 }
 
 // NewSession 创建独立会话。服务端每 TCP 连接调用一次；
 // 同一 Session 不应被多个 goroutine 同时使用（连接内串行语义）。
 func (e *Executor) NewSession() *Session {
 	return &Session{
-		prepared: map[string]string{},
-		userVars: map[string]Value{},
+		prepared:  map[string]string{},
+		userVars:  map[string]Value{},
+		isolation: IsoSnapshot, // P2-13：会话级默认快照隔离
 	}
 }
