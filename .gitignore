@@ -31,3 +31,18 @@ temp/
 
 # mkdocs 构建产物（GitHub Pages 用 site/ 单独发布，不入主仓库）
 site/
+
+# 调试临时产物（v1.3.0 清理后防再跟踪）
+boot_*.txt
+err*.txt
+out2.txt
+build_*.txt
+repl_*.txt
+start_*.txt
+bench_out_a_c*.md
+bench_data_a_c*/
+backup_*.mtables.bin
+*.exe~
+*.exe.bak_*
+*.pyc
+__pycache__/
