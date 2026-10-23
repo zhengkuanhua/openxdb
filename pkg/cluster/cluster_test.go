@@ -131,6 +131,20 @@ func TestHeartbeatDown(t *testing.T) {
 	mgrA.StartHeartbeat(40*time.Millisecond, 100*time.Millisecond)
 	defer mgrA.Stop()
 
+	// 等待至少一次成功心跳（EverUp 置位，确认 B 曾在线）再关闭 B：
+	// 心跳循环对从未收到过 PONG 的节点不做离线判定（启动竞态防护，
+	// 避免集群滚动启动误判），若 B 在首次 PING 前关闭将永远无法标记 DOWN。
+	upDeadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(upDeadline) {
+		if mgrA.EverUp("node-b") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !mgrA.EverUp("node-b") {
+		t.Fatalf("node-b never confirmed up before close")
+	}
+
 	// B 下线后，A 心跳循环应将其标记 DOWN
 	if err := srvB.Close(); err != nil {
 		t.Fatalf("close B: %v", err)
@@ -166,9 +180,12 @@ func TestRegionPushLearnsRoutes(t *testing.T) {
 		{Key: []byte("r\x00\x00\x00\x00\x00\x00\x00\x07k1"), Value: []byte("v1")},
 		{Key: []byte("r\x00\x00\x00\x00\x00\x00\x00\x07k2"), Value: []byte("v2")},
 	}
+	// 源路由视图遵循生产契约（multinode.go 视图显式化）：本地持有 region 补记
+	// Node=selfID（Node=="" 表示源未持有，目标节点不得无条件补记 SrcID）；
+	// 被指派 region 在视图中归属目标节点（applyPush 会将其单独落本地视图）。
 	routes := []sharding.RegionInfo{
-		{RegionID: 5, TableID: 1, Node: "", Local: false}, // A 本地持有（Node 空，SrcID 补记）
-		{RegionID: 7, TableID: 1, Node: "", Local: false},
+		{RegionID: 5, TableID: 1, Node: "node-a", Local: false}, // A 本地持有：Node 补记 node-a，B 学成 remote
+		{RegionID: 7, TableID: 1, Node: "node-b", Local: false}, // 本次被指派 region：视图归属 B
 	}
 	rg := sharding.RegionInfo{RegionID: 7, TableID: 1}
 	if err := mgrA.PushRegion("node-b", rg, rows, routes, "node-a"); err != nil {

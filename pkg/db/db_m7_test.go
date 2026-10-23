@@ -134,6 +134,7 @@ func TestM7AutoBalanceTriggersMigration(t *testing.T) {
 func TestM7BalanceSkipsDownNode(t *testing.T) {
 	dA, dB, _ := m7ThreePlusOneTopology(t)
 	speedupHeartbeat(t, dA)
+	waitEverUp(t, dA, dB.Cluster.SelfID)
 	if err := dB.Close(); err != nil {
 		t.Fatalf("B close: %v", err)
 	}
