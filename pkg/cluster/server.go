@@ -11,6 +11,7 @@ package cluster
 
 import (
 	"errors"
+	"log"
 	"net"
 	"sort"
 	"strings"
@@ -66,6 +67,11 @@ type Server struct {
 	// epochNotify 节点侧 P0 HA epoch 广播接收回调（db.StartCluster 装配
 	// db.DB.NoteEpoch）；nil = 未装配（忽略 EPOCH_NOTIFY，旧节点零回归）。
 	epochNotify func(epoch uint64)
+	// regionEpochCheck 节点侧 P1 HA 路由消息 epoch 校验回调（db.StartCluster 装配
+	// sql.Executor.CheckRegionPushEpoch）；nil = 未装配（跳过校验，旧节点/关闭开关零回归）。
+	// 签名：clusterEpoch=消息级全局纪元，regionEpoch=该 region owner 变更纪元，rid=region ID；
+	// 返回 err 表示消息陈旧，接收端拒绝更新路由并记日志。
+	regionEpochCheck func(clusterEpoch, regionEpoch uint64, rid storage.ID) error
 }
 
 // SetTSO 注入时间戳源（M8：db.StartCluster 装配本地发号器）。
@@ -102,6 +108,23 @@ func (s *Server) SetAddr(addr string) { s.SelfAddr = addr }
 
 // SetRouter 注入分片路由（供 REGION_PUSH 数据装载更新本地路由视图）。
 func (s *Server) SetRouter(r *sharding.Router) { s.router = r }
+
+// SetRegionEpochChecker 注入 P1 路由消息 epoch 校验回调（db.StartCluster 装配
+// sql.Executor.CheckRegionPushEpoch）；传 nil 恢复零回归（跳过校验）。
+func (s *Server) SetRegionEpochChecker(fn func(clusterEpoch, regionEpoch uint64, rid storage.ID) error) {
+	s.regionEpochCheck = fn
+}
+
+// checkPushEpoch 校验 P1 路由消息 epoch 新鲜度：
+//   - 校验器未装配（旧节点）或消息不带 clusterEpoch（=0：关闭开关/ASSIGN 旧路径）
+//     → 放行（版本协商防呆 + 零回归）；
+//   - 否则交由装配的回调判定（陈旧 → 返回错误，接收方拒绝更新路由并记日志）。
+func (s *Server) checkPushEpoch(clusterEpoch, regionEpoch uint64, rid storage.ID) error {
+	if s.regionEpochCheck == nil || clusterEpoch == 0 {
+		return nil
+	}
+	return s.regionEpochCheck(clusterEpoch, regionEpoch, rid)
+}
 
 // SetManager 注入集群管理器（供 NODE_HELLO 双向注册对端节点）。
 func (s *Server) SetManager(m *Manager) { s.mgr = m }
@@ -297,6 +320,17 @@ func (s *Server) applyPush(req *RegionPushReq) (RegionPushResp, error) {
 	if req.SyncOnly {
 		return s.applyRouteSync(req)
 	}
+	// P1 epoch 前置校验（写数据/学路由前）：消息带 clusterEpoch 且本机已装配校验器时，
+	// 校验本次接收 region 与路由视图条目的 epoch 新鲜度；陈旧消息整批拒绝
+	// （不写数据、不学路由），防分区双端各自装载覆盖。
+	if err := s.checkPushEpoch(req.ClusterEpoch, req.Region.RegionEpoch, req.Region.RegionID); err != nil {
+		return RegionPushResp{}, err
+	}
+	for _, route := range req.Routes {
+		if err := s.checkPushEpoch(req.ClusterEpoch, route.RegionEpoch, route.RegionID); err != nil {
+			return RegionPushResp{}, err
+		}
+	}
 	batch := &storage.WriteBatch{}
 	for _, row := range req.Rows {
 		batch.Puts = append(batch.Puts, storage.KVPair{Key: row.Key, Value: row.Value})
@@ -369,6 +403,12 @@ func (s *Server) applyRouteSync(req *RegionPushReq) (RegionPushResp, error) {
 		}
 	}
 	for _, route := range req.Routes {
+		// P1 epoch 校验：陈旧条目跳过（不覆盖本地路由）并记日志；其余条目继续，
+		// 路由广播为尽力而为，单条陈旧不阻断整体同步（防旧分区广播覆盖新视图）。
+		if err := s.checkPushEpoch(req.ClusterEpoch, route.RegionEpoch, route.RegionID); err != nil {
+			log.Printf("cluster: %s: stale route sync rejected rid=%d clusterEpoch=%d regionEpoch=%d: %v", s.SelfID, route.RegionID, req.ClusterEpoch, route.RegionEpoch, err)
+			continue
+		}
 		if route.Node == "" {
 			holds, err := s.regionHoldsLocal(route)
 			if err != nil {

@@ -48,12 +48,19 @@ type RegionInfo struct {
 	// 该字段为 M4 新增，M3 既有落盘元数据不含此字段（JSON 反序列化后为空），
 	// 语义默认"本节点"，保证未多节点化部署时路由行为零回归。
 	Node string `json:"node,omitempty"`
+	// RegionEpoch 该 region 的 owner 变更纪元（P1 HA 防路由分裂）：
+	// owner（Node）每变更一次 +1，随路由/重指派消息携带，接收方据此拒绝陈旧消息。
+	// 0 = 未启用/历史数据（兼容旧节点与关闭开关的路径，零回归）。
+	RegionEpoch uint64 `json:"region_epoch,omitempty"`
 }
 
 // 标准错误。
 var (
 	// ErrRegionNotFound 路由未命中：key 不属于任何 region（表无显式划分且 key 越界 / 显式空洞）。
 	ErrRegionNotFound = errors.New("sharding: no region for key")
+	// ErrStaleRegionEpoch 陈旧 region epoch 拒绝（P1 HA 防路由分裂）：
+	// 收到的 owner 变更纪元落后于本机已记录值，拒绝覆盖更新路由。
+	ErrStaleRegionEpoch = errors.New("sharding: stale region epoch")
 )
 
 // RegionKeyPrefixLen region 前缀长度（'r' + 8B regionID）。
@@ -248,6 +255,57 @@ func (r *Router) FindRegion(regionID storage.ID) (RegionInfo, bool) {
 		}
 	}
 	return RegionInfo{}, false
+}
+
+// RegionEpoch 返回 region 的 owner 变更纪元（P1 HA 防路由分裂）：
+// 未设置/未启用返回 0（兼容关闭开关与历史数据）。
+func (r *Router) RegionEpoch(regionID storage.ID) uint64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for i := range r.regions {
+		if r.regions[i].RegionID == regionID {
+			return r.regions[i].RegionEpoch
+		}
+	}
+	return 0
+}
+
+// SetRegionNodeEpoch 更新 region 归属节点并记录 owner 变更纪元（P1 failover 专用）。
+// epoch 为该 region 递增后的 owner 变更纪元：调用方需保证 epoch >= 当前值
+// （等于时仅刷新节点归属不推进纪元，幂等重试安全）；陈旧 epoch（< 当前值）
+// 拒绝更新并返回 ErrStaleRegionEpoch，防止旧分区的重指派覆盖新路由。
+// 找不到 region 返回 ErrRegionNotFound。
+func (r *Router) SetRegionNodeEpoch(regionID storage.ID, node string, epoch uint64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.regions {
+		if r.regions[i].RegionID == regionID {
+			if epoch < r.regions[i].RegionEpoch {
+				return ErrStaleRegionEpoch
+			}
+			r.regions[i].Node = node
+			r.regions[i].RegionEpoch = epoch
+			return nil
+		}
+	}
+	return ErrRegionNotFound
+}
+
+// BumpRegionEpoch 仅更新 region 的 owner 变更纪元（接收端学习到新 epoch 但
+// 归属不变时使用）；epoch 陈旧（< 当前值）拒绝并返回 ErrStaleRegionEpoch。
+func (r *Router) BumpRegionEpoch(regionID storage.ID, epoch uint64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.regions {
+		if r.regions[i].RegionID == regionID {
+			if epoch < r.regions[i].RegionEpoch {
+				return ErrStaleRegionEpoch
+			}
+			r.regions[i].RegionEpoch = epoch
+			return nil
+		}
+	}
+	return ErrRegionNotFound
 }
 
 // UpsertRegion 插入或更新一个显式 region（M4 ASSIGN REGION 时目标节点学习归属）。

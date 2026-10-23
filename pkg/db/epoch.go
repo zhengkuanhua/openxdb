@@ -72,6 +72,20 @@ func (d *DB) Epoch() uint64 {
 	return d.epoch
 }
 
+// AcquireEpoch P1 路由重指派取号入口（SQL 层 EpochSource 装配调用）：
+// 在 quorum 授权后为一次 region 重指派取新 clusterEpoch（单调递增、
+// 持久化防回退；TSO 优先、本地兜底），随路由消息携带供接收端校验。
+func (d *DB) AcquireEpoch() uint64 {
+	return d.acquireEpoch()
+}
+
+// QuorumOK P1 FailoverDownNode 前置多数派仲裁入口（SQL 层 QuorumArbiter
+// 装配调用）：封装 quorumGuard；返回 nil 表示多数派可达可重指派，
+// 返回 ErrQuorumNotMet 表示 quorum 不足（调用方降级只读，不重指派）。
+func (d *DB) QuorumOK() error {
+	return d.quorumGuard()
+}
+
 // MasterEpoch 返回本节点当前 master 授权 epoch（0 = 未授权主）。
 func (d *DB) MasterEpoch() uint64 {
 	d.epochMu.Lock()

@@ -34,6 +34,18 @@ type Executor struct {
 	// P0 HA：ha_epoch_enabled / ha_quorum_enabled 开关节流控制器
 	// （nil = 未装配，SET ha_* 返回明确错误）；实现见 HAConfigSetter。
 	haCfg HAConfigSetter
+	// P1 HA：clusterEpoch 取号源与 quorum 仲裁器（nil = 未装配，M6 旧行为零回归）。
+	// epochSrc 供 failoverRegion/CheckRegionPushEpoch 取新号与对照；
+	// quorumArb 供 FailoverDownNode 前置多数派确认（不足则降级只读）。
+	epochSrc  EpochSource
+	quorumArb QuorumArbiter
+	// P1 HA：已重指派 region 的 epoch 快照（regionEpoch 大者胜）。
+	// FailoverDownNode 重指派成功后写入（随路由持久化），resolveRegionOwner
+	// 读取 failover 路由时对照，陈旧 failover 条目视为无效。
+	p1Mu    sync.Mutex
+	p1Epoch map[storage.ID]p1RegionEpoch
+	// P1 HA：可注入持有校验钩子（nil = 真实键空间扫描，见 ha_p1.go）。
+	holdsChecker holdsChecker
 	// 全局会话（旧单会话 API 使用：Engine.Execute/ExecuteAs、CLI、既有测试）。
 	// 服务端多连接场景使用 NewSession 创建独立会话，显式事务状态互不干扰。
 	globalSess *Session
@@ -141,6 +153,7 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 		serial:        newSerialRegistry(), // P2-13：Serializable 提交冲突检测注册表
 		router:        sharding.NewRouter(),
 		failoverDone:  map[string]bool{},
+		p1Epoch:       map[storage.ID]p1RegionEpoch{},
 		splitAcc:      map[uint64]int64{},
 		qc:            NewQueryCache(),
 		slowThreshold: slowThresholdDefault, // M13：默认 100ms

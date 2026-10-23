@@ -83,6 +83,23 @@ func (e *Engine) SetWriteFence(wf WriteFence) { e.ex.SetWriteFence(wf) }
 // SetHAConfigSetter 装配 P0 HA 开关节流控制器（db.Open 调用，转发至 Executor）。
 func (e *Engine) SetHAConfigSetter(hc HAConfigSetter) { e.ex.SetHAConfigSetter(hc) }
 
+// SetEpochSource 装配 P1 HA clusterEpoch 取号源（db.Open 调用，转发至 Executor；
+// nil = 不启用，M6 旧行为零回归）。
+func (e *Engine) SetEpochSource(src EpochSource) { e.ex.SetEpochSource(src) }
+
+// SetQuorumArbiter 装配 P1 HA quorum 仲裁器（db.Open 调用，转发至 Executor；
+// nil = 不启用，M6 旧行为零回归）。
+func (e *Engine) SetQuorumArbiter(qa QuorumArbiter) { e.ex.SetQuorumArbiter(qa) }
+
+// CheckRegionPushEpoch 节点侧 P1 路由消息 epoch 校验（db.StartCluster 装配至
+// cluster.Server；由 server.applyPush/applyRouteSync 接收路由消息时调用）。
+func (e *Engine) CheckRegionPushEpoch(clusterEpoch, regionEpoch uint64, rid storage.ID) error {
+	return e.ex.checkRegionPushEpoch(clusterEpoch, regionEpoch, rid)
+}
+
+// EnableAutoFailover 返回自动故障转移开关（P1 quorum 开启后自动重指派需多数派确认）。
+func (e *Engine) EnableAutoFailover() bool { return e.ex.autoFailoverEnabled() }
+
 // AuthenticateUser 校验用户名与密码（M11 预留：server 层连接鉴权握手与执行期权限校验用）。
 // 用户不存在或密码不匹配返回 (false, nil)；存储层错误原样返回。密码只做哈希比对，不落明文。
 func (e *Engine) AuthenticateUser(name, password string) (bool, error) {

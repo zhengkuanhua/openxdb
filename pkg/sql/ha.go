@@ -14,6 +14,7 @@ package sql
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
@@ -34,6 +35,13 @@ func (e *Executor) FailoverDownNode(downID string) (int, error) {
 	}
 	e.failoverMu.Lock()
 	defer e.failoverMu.Unlock()
+	// P1 quorum 前置：复用 P0 quorumGuard（多数派确认或 clusterEpoch 授权）。
+	// quorum 不足 → 降级只读，不执行重指派；不置 failoverDone，
+	// 允许 quorum 恢复后由读路径/心跳再次触发重试。
+	if err := e.quorumOK(); err != nil {
+		log.Printf("sql: failover down node %s skipped: quorum not met: %v", downID, err)
+		return 0, err
+	}
 	if e.failoverDone == nil {
 		e.failoverDone = map[string]bool{}
 	}
@@ -48,7 +56,7 @@ func (e *Executor) FailoverDownNode(downID string) (int, error) {
 		if rg.Node != downID {
 			continue
 		}
-		if err := e.failoverRegion(rg, downID); err != nil {
+		if err := e.failoverRegionP1(rg, downID); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -231,6 +239,17 @@ func (e *Executor) putLocalRows(rows []cluster.QueryRow) error {
 func (e *Executor) resolveRegionOwner(rid storage.ID) string {
 	node := e.regionNode(rid)
 	if e.mgr == nil || !e.mgr.IsDown(node) {
+		return node
+	}
+	// P1：failover 路由条目陈旧（epoch 落后于本机已见快照）→ 视为无效，
+	// 以本机快照为准重新决策（FailoverDownNode 幂等，重复调用安全）。
+	if rg, ok := e.router.FindRegion(rid); ok && e.staleFailover(rg) {
+		log.Printf("sql: stale failover entry invalidated rid=%d epoch=%d < known=%d", rid, rg.RegionEpoch, e.regionEpochOf(rid))
+		_, _ = e.FailoverDownNode(node)
+		node = e.regionNode(rid)
+		if node == "" || e.mgr.IsDown(node) {
+			return e.selfID
+		}
 		return node
 	}
 	_, _ = e.FailoverDownNode(node)

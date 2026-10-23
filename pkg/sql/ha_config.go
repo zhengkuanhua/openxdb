@@ -36,6 +36,39 @@ func (e *Executor) SetWriteFence(wf WriteFence) {
 	e.writeFence = wf
 }
 
+// P1 HA 防路由分裂装配接口：
+//   - EpochSource：clusterEpoch 取号源（由 db.DB 实现并注入；Epoch() 返回当前
+//     已知最大纪元，AcquireEpoch() 在 quorum 授权后单调递增取新号）。
+//   - QuorumArbiter：FailoverDownNode 前置多数派仲裁（由 db.DB 实现并注入；
+//     返回 nil 表示多数派可达，可执行重指派；返回错误表示 quorum 不足，降级只读）。
+//
+// 两者均由 db.Open 装配；nil = 未装配（M6 旧行为零回归）。
+
+// EpochSource clusterEpoch 取号源（由 db.DB 实现）。
+type EpochSource interface {
+	Epoch() uint64
+	AcquireEpoch() uint64
+}
+
+// QuorumArbiter FailoverDownNode 前置多数派仲裁（由 db.DB 实现）。
+type QuorumArbiter interface {
+	QuorumOK() error
+}
+
+// SetEpochSource 装配 clusterEpoch 取号源（db.Open 调用；nil = 不启用，零回归）。
+func (e *Executor) SetEpochSource(src EpochSource) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.epochSrc = src
+}
+
+// SetQuorumArbiter 装配 quorum 仲裁器（db.Open 调用；nil = 不启用，零回归）。
+func (e *Executor) SetQuorumArbiter(qa QuorumArbiter) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.quorumArb = qa
+}
+
 // SetHAConfigSetter 装配 HA 开关节流控制器（db.Open 调用）。
 func (e *Executor) SetHAConfigSetter(hc HAConfigSetter) {
 	e.mu.Lock()

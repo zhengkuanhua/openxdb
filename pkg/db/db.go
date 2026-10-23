@@ -239,6 +239,10 @@ func Open(dir string) (*DB, error) {
 	eng.SetWriteFence(db)
 	// P0 HA：装配 epoch/quorum 开关节流控制器（SET ha_* 热切换入口）。
 	eng.SetHAConfigSetter(db)
+	// P1 HA：装配 clusterEpoch 取号源与 quorum 仲裁器（FailoverDownNode 前置
+	// 多数派确认 + failoverRegion epoch 授权；开关关闭零回归）。
+	eng.SetEpochSource(db)
+	eng.SetQuorumArbiter(db)
 	return db, nil
 }
 
@@ -275,6 +279,9 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// P0 HA：装配 epoch 广播接收回调（升主节点广播新 epoch 时更新本节点
 	// 已知最大 epoch，作为陈旧主写入 fencing 依据；开关关闭时无副作用）。
 	srv.SetEpochNotify(d.NoteEpoch)
+	// P1 HA：装配路由消息 epoch 校验回调（REGION_PUSH/路由广播接收端校验
+	// clusterEpoch+regionEpoch 新鲜度，拒绝陈旧消息；开关关闭/旧节点零回归）。
+	srv.SetRegionEpochChecker(d.SQL.CheckRegionPushEpoch)
 	// M5：2PC 崩溃恢复——清理未决 prepare（未决事务回滚，数据从未写入）
 	// 与历史幂等标记（仅运行期有效），保证重启后参与者状态干净可重入。
 	if err := srv.Recover2PC(); err != nil {
