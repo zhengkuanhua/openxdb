@@ -15,6 +15,17 @@ OpenXDB 版本变更记录。
 
 > 版本线说明：历史版本以仓库 README Status 行、docs/ 设计文档头部标注与 git 提交记录为准。早期部分中间 -alpha 版本未单独打标（git 与文档均无显式版本号），按里程碑区间归纳，版本号不做臆造。
 
+## v1.5.0-dev (2026-10-23)
+
+v1.5.0（协议与吞吐）第 1 项「客户端 pipeline 协议」先行启动落地。服务端 `REPLSession` 本就逐行按序处理，改造集中在驱动层。
+
+**Added**
+
+- **Python 驱动流水线批量执行**：`OpenXDBProtocol.pipeline()` 一次性连续发送多条命令并按序批量读取响应；`Cursor.pipeline()` / `Connection.pipeline()` 暴露 `PipelineResult`（`ok` / `affected` / `table` / `error` 四类结果）；复用既有单条响应边界解析，与 `command()` 行为完全一致。
+- **JDBC 驱动批量执行**：`OpenXDBStatement.addBatch()` / `executeBatch()` / `executeLargeBatch()` 由 `SQLFeatureNotSupportedException` 升级为真实流水线实现（底层 `OpenXDBProtocol.pipeline` 一次写出多行并按序读回），失败语句抛 `BatchUpdateException` 且保留已成功语句更新计数。
+- **服务端回归测试**：`pkg/server/server_pipeline_test.go` 新增 `TestREPLSessionConsecutiveLinesInOrder`，覆盖连续多行混合语句（DDL/DML/查询/非法语句交错）按序执行、错误不中断、表格回复边界。
+- **吞吐基准**：Python 侧 `tests/test_pipeline.py` 与 JDBC 侧 `OpenXDBPipelineTest.java` 内置批量 vs 逐条对比基准（本地实测约 1.2–1.3 倍提升）。
+
 ## v1.0.0 (2026-10-16)
 
 正式发布版，自研单机/分布式关系型数据库内核（Go + RocksDB）功能闭环收尾。

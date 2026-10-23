@@ -124,73 +124,90 @@ final class OpenXDBProtocol {
 
     /** Send a raw command line and parse the full reply. */
     synchronized Result command(String cmd) throws SQLException {
-        if (closed) {
-            throw new SQLException("connection is closed");
-        }
+        if (closed) throw new SQLException("connection is closed");
         try {
-            out.write(cmd);
-            out.write("\n");
+            out.write(cmd); out.write("\n"); out.flush();
+        } catch (IOException e) {
+            close(); throw new SQLException("connection lost while sending command: " + e.getMessage(), e);
+        }
+        String first;
+        try { first = in.readLine(); } catch (IOException e) { close(); throw new SQLException("connection lost while reading reply: " + e.getMessage(), e); }
+        if (first == null) { close(); throw new SQLException("connection closed by server while reading reply"); }
+        if (first.startsWith(ERR_PREFIX)) throw new SQLException(first.substring(ERR_PREFIX.length()));
+        return readOne(first);
+    }
+
+    /** Outcome of one statement inside a pipelined batch: either a parsed
+     *  {@link Result} or the per-statement failure. A failing statement does
+     *  not abort reading the remaining replies. */
+    static final class BatchItem {
+        final Result result;
+        final SQLException error;
+        private BatchItem(Result result, SQLException error) { this.result = result; this.error = error; }
+        static BatchItem ok(Result r) { return new BatchItem(r, null); }
+        static BatchItem fail(SQLException e) { return new BatchItem(null, e); }
+    }
+
+    /** Send many commands in one batch and read their replies in order.
+     *  The whole batch is written in a single burst (one flush) so the server
+     *  REPLSession loop processes consecutive input lines without a round trip
+     *  per statement. Every input command gets exactly one {@link BatchItem}
+     *  in the same order; {@code ERR} replies are captured per item instead of
+     *  aborting the batch. Connection-level failures (lost connection / EOF)
+     *  still throw because remaining replies become unavailable. */
+    synchronized List<BatchItem> pipeline(List<String> cmds) throws SQLException {
+        if (cmds.isEmpty()) throw new SQLException("pipeline requires at least one command");
+        if (closed) throw new SQLException("connection is closed");
+        try {
+            for (String cmd : cmds) { out.write(cmd); out.write("\n"); }
             out.flush();
         } catch (IOException e) {
-            close();
-            throw new SQLException("connection lost while sending command: " + e.getMessage(), e);
+            close(); throw new SQLException("connection lost while sending batch: " + e.getMessage(), e);
         }
-
-        String first;
-        try {
-            first = in.readLine();
-        } catch (IOException e) {
-            close();
-            throw new SQLException("connection lost while reading reply: " + e.getMessage(), e);
-        }
-        if (first == null) {
-            close();
-            throw new SQLException("connection closed by server (EOF)");
-        }
-        if (first.startsWith(ERR_PREFIX)) {
-            throw new SQLException(first.substring(ERR_PREFIX.length()));
-        }
-        if (first.equals("OK")) {
-            return Result.ok();
-        }
-        if (first.equals("PONG")) {
-            return Result.ok();
-        }
-        if (first.equals("BYE")) {
-            return Result.ok();
-        }
-        if (first.startsWith("(") && first.endsWith(" rows affected)")) {
-            String inner = first.substring(1, first.length() - " rows affected)".length()).trim();
+        List<BatchItem> items = new ArrayList<BatchItem>(cmds.size());
+        for (String cmd : cmds) {
+            String first;
+            try { first = in.readLine(); } catch (IOException e) { close(); throw new SQLException("connection lost while reading batch reply: " + e.getMessage(), e); }
+            if (first == null) { close(); throw new SQLException("connection closed by server while reading batch reply"); }
+            if (first.startsWith(ERR_PREFIX)) {
+                items.add(BatchItem.fail(new SQLException(first.substring(ERR_PREFIX.length()))));
+                continue;
+            }
             try {
-                return Result.affected(Integer.parseInt(inner));
-            } catch (NumberFormatException e) {
-                throw new SQLException("cannot parse affected-rows reply: " + first);
+                items.add(BatchItem.ok(readOne(first)));
+            } catch (SQLException e) {
+                // Malformed reply: keep reading the rest of the batch.
+                items.add(BatchItem.fail(e));
             }
         }
-        // Text table: header | separator | data rows | (N rows)
+        return items;
+    }
+
+    /** Read one full reply given its already-read first line (same framing
+     *  and boundary rules as {@link #command(String)}). */
+    private Result readOne(String first) throws SQLException {
+        if (first.equals("OK")) return Result.ok();
+        if (first.equals("PONG")) return Result.ok();
+        if (first.equals("BYE")) return Result.ok();
+        if (first.startsWith("(") && first.endsWith(" rows affected)")) {
+            String inner = first.substring(1, first.length() - " rows affected)".length()).trim();
+            try { return Result.affected(Integer.parseInt(inner)); }
+            catch (NumberFormatException e) { throw new SQLException("cannot parse affected-rows reply: " + first); }
+        }
         List<String> columns = splitRow(first);
         String separator;
         List<String[]> rows = new ArrayList<String[]>();
         try {
-            separator = in.readLine(); // separator line, ignored
-            if (separator == null) {
-                close();
-                throw new SQLException("connection closed by server (EOF in table)");
-            }
+            separator = in.readLine();
+            if (separator == null) { close(); throw new SQLException("connection closed by server while reading table"); }
             while (true) {
                 String line = in.readLine();
-                if (line == null) {
-                    close();
-                    throw new SQLException("connection closed by server (EOF in table)");
-                }
-                if (line.startsWith("(") && line.endsWith(" rows)")) {
-                    break;
-                }
+                if (line == null) { close(); throw new SQLException("connection closed by server while reading table"); }
+                if (line.startsWith("(") && line.endsWith(" rows)")) break;
                 rows.add(splitRow(line).toArray(new String[0]));
             }
         } catch (IOException e) {
-            close();
-            throw new SQLException("connection lost while reading table: " + e.getMessage(), e);
+            close(); throw new SQLException("connection lost while reading table: " + e.getMessage(), e);
         }
         return Result.table(columns, rows);
     }

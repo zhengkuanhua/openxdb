@@ -43,6 +43,14 @@ T19 为 OpenXDB 补充两类标准客户端驱动：
 - **单元格含 `|`**：表格单元格内容可含 `|` 字符，按表头列数 N 在前 N-1 个 `" | "` 分隔处切分，最后一列保留剩余原文。
 - **多行文本**：行协议不支持单元格内换行，`\n` / `\r` 出现在参数化字符串值中会被驱动端拒绝。
 
+### 2.3 流水线批量执行（pipeline）
+
+服务端 `pkg/server.REPLSession` 使用 `bufio.Scanner` **逐行读入、逐条处理、按序回复**，天然支持客户端连续写入多行命令后统一读取响应——服务端无需任何改动。两条驱动在此基础上实现**流水线批量执行**：一次网络往返（一次 `sendall` + 连续读）完成多条语句，消除"发一条 → 等一条"的逐语句往返吞吐瓶颈。
+
+- **Python**：`Cursor.pipeline(queries, params_list=None)` / `Connection.pipeline(...)` 返回与输入等长的 `PipelineResult` 列表；`PipelineResult` 含 `kind`（`ok` / `affected` / `table` / `error`）、`rowcount`、`description`、`rows`、`error` 字段。任一语句失败（服务端 `ERR`）不中断后续语句，按 `kind == "error"` 记录。
+- **JDBC**：`OpenXDBStatement.addBatch(sql)` + `executeBatch()` 真实流水线实现（底层 `OpenXDBProtocol.pipeline` 一次写出多行并按序读回），返回各语句更新计数数组；批量中任一语句失败抛 `BatchUpdateException`，已成功语句计数保留在 `getUpdateCounts()` 中。
+- **响应边界复用**：批量读取沿用单条命令的同一套帧划分规则——单行回复（`OK` / `PONG` / `BYE` / `(N rows affected)`）各自独立成帧，多行表格回复读到末行 `(N rows)` 才收帧，保证响应与发送顺序一一对应。
+
 ## 3. JDBC 驱动（drivers/jdbc）
 
 ### 3.1 模块与注册
@@ -56,7 +64,7 @@ T19 为 OpenXDB 补充两类标准客户端驱动：
 |---|---|
 | `OpenXDBDriver` | 实现 `java.sql.Driver`；URL 前缀 `jdbc:openxdb://`（默认端口 7788），`parseHostPort` 解析 host:port；`user`/`password` 属性被接受但忽略（线上无鉴权） |
 | `OpenXDBConnection` | 实现 `java.sql.Connection`；维护 TCP 会话与事务状态；`setAutoCommit(false)` 触发会话事务（首条语句前自动 `BEGIN`），`commit()`/`rollback()` 发送 `COMMIT`/`ROLLBACK`，`close()` 在事务中时先 `ROLLBACK` 再 `QUIT` |
-| `OpenXDBStatement` | 实现 `java.sql.Statement`；每次执行发送一条命令并解析回复：表回复包装为 `ResultSet`（`executeQuery`/`execute` 返回 true），`(N rows affected)` 作为更新计数；批处理/命名游标/cancel 明确 `SQLFeatureNotSupportedException` |
+| `OpenXDBStatement` | 实现 `java.sql.Statement`；每次执行发送一条命令并解析回复：表回复包装为 `ResultSet`（`executeQuery`/`execute` 返回 true），`(N rows affected)` 作为更新计数；`addBatch`/`executeBatch` 为流水线批量实现（见 §2.3）；命名游标/cancel 明确 `SQLFeatureNotSupportedException` |
 | `OpenXDBPreparedStatement` | 继承 `OpenXDBStatement`；客户端侧 `?` 占位符替换（见 §5） |
 | `OpenXDBResultSet` | 只进、只读 `ResultSet`；单元格文本解析，空单元格映射 NULL；`getString`/`getInt`/`getLong`/`getDouble`/`getBoolean`/`getBigDecimal`/`getBytes` 等；BLOB 线上为大写十六进制，按 hex 解码 |
 | `OpenXDBProtocol` | 内部协议封装：socket 连接（5s 超时）、命令发送、回复解析（OK/PONG/BYE、affected、表、ERR） |
@@ -77,9 +85,9 @@ OpenXDBStatement.run(sql)
 | 模块 | 职责 |
 |---|---|
 | `openxdb/__init__.py` | 模块级 `connect()`、`apilevel="2.0"`、`threadsafety=1`、`paramstyle="qmark"`、`__version__="0.10.0"`；导出错误类与 `DEFAULT_PORT` |
-| `openxdb/connection.py` | `Connection`：TCP 会话；`cursor()` / `ping()` / `begin()` / `commit()` / `rollback()` / `close()`（`QUIT` 尽力发送）；`user`/`password` 接受并忽略 |
-| `openxdb/cursor.py` | `Cursor`（PEP 249）：`execute`/`executemany`/`fetchone`/`fetchmany`/`fetchall`/迭代器；`description`/`rowcount`/`arraysize`；客户端 `?` 替换（§5） |
-| `openxdb/protocol.py` | `OpenXDBProtocol`：socket 建连、`command()` 逐行读写、`_expect_ok`；`PING`→`PONG`、`BEGIN`/`COMMIT`/`ROLLBACK`→`OK`、`QUIT`→`BYE` |
+| `openxdb/connection.py` | `Connection`：TCP 会话；`cursor()` / `ping()` / `begin()` / `commit()` / `rollback()` / `close()`（`QUIT` 尽力发送）；`pipeline(queries, params_list=None)` 流水线批量执行（§2.3）；`user`/`password` 接受并忽略 |
+| `openxdb/cursor.py` | `Cursor`（PEP 249）：`execute`/`executemany`/`pipeline`/`fetchone`/`fetchmany`/`fetchall`/迭代器；`description`/`rowcount`/`arraysize`；客户端 `?` 替换（§5） |
+| `openxdb/protocol.py` | `OpenXDBProtocol`：socket 建连、`command()` 单条逐行读写、`pipeline()` 批量发送/按序读回（§2.3）、`_expect_ok`；`PING`→`PONG`、`BEGIN`/`COMMIT`/`ROLLBACK`→`OK`、`QUIT`→`BYE` |
 | `openxdb/errors.py` | PEP 249 风格错误层级（§6） |
 
 ### 4.2 用法示例
@@ -143,8 +151,10 @@ conn.close()
 
 | 驱动 | 测试入口 | 运行方式 | 覆盖 |
 |---|---|---|---|
-| JDBC | `drivers/jdbc/src/test/java/org/openxdb/jdbc/OpenXDBDriverTest.java` | `mvn test`（Maven，JUnit 5，7/7 通过） | 建连/PING、DDL/DML affected-rows、查询结果集、PreparedStatement 转义、事务 commit/rollback、错误映射、连接关闭语义 |
-| Python | `drivers/python/tests/test_driver.py` + `tests/conftest.py` | `pytest`（session 级 fixture 起服务） | 连接/PING、auth 参数忽略、连接拒绝、DDL/DML、参数化、事务、错误映射、fetch 语义 |
+| JDBC | `drivers/jdbc/src/test/java/org/openxdb/jdbc/OpenXDBDriverTest.java` + `OpenXDBPipelineTest.java` | `mvn test`（Maven，JUnit 5，18/18 通过） | 建连/PING、DDL/DML affected-rows、查询结果集、PreparedStatement 转义、事务 commit/rollback、错误映射、连接关闭语义；pipeline 混合语句按序/错误不中断/与单条一致/吞吐基准 |
+| Python | `drivers/python/tests/test_driver.py` + `tests/test_pipeline.py` + `tests/conftest.py` | `pytest`（session 级 fixture 起服务） | 连接/PING、auth 参数忽略、连接拒绝、DDL/DML、参数化、事务、错误映射、fetch 语义；pipeline 混合语句按序/与单条一致/参数化/校验/吞吐基准 |
+
+另见服务端回归测试：`pkg/server/server_pipeline_test.go`（`TestREPLSessionConsecutiveLinesInOrder`，验证连续多行按序处理与表格回复边界）。
 
 测试要点：
 
@@ -156,7 +166,7 @@ conn.close()
 
 - 无鉴权：`user`/`password` 属性仅兼容 API，线上不校验（后续鉴权需扩展握手）；
 - 无 prepared statement / 二进制参数通道：参数化为客户端转义，NULL、含换行字符串、未绑定参数均拒绝；
-- `ResultSet` 只进只读；无 `ResultSetMetaData`、命名游标、批处理、可滚动结果集、生成键；
+- `ResultSet` 只进只读；无 `ResultSetMetaData`、命名游标、可滚动结果集、生成键；**批处理已支持**（流水线批量，见 §2.3，非 JDBC 二进制批量协议）；
 - 行协议不支持单元格内换行；空单元格统一按 NULL 处理（空串与 NULL 不可区分）；
 - 隔离级别仅 `READ_COMMITTED` / `READ_UNCOMMITTED` 名义支持，语义由服务端快照隔离实现。
 

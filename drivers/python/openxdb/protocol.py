@@ -132,48 +132,96 @@ class OpenXDBProtocol:
         self.command(f"AUTH {user} {password}")
 
     def command(self, line: str) -> str:
-        """Send one command line and return the raw multi-line response text.
-
-        An ``ERR`` reply is converted into :class:`OperationalError`.
-        """
+        """Send one command and read its full reply (raises on ``ERR``)."""
         if self.closed:
             raise ConnectionClosedError("connection is closed")
         try:
             self._sock.sendall(line.encode(_ENCODING) + b"\n")
-            first = self._reader.readline()
+            first = self._readline()
         except OSError as exc:
             self.close()
             raise OperationalError(
                 f"connection lost while sending command: {exc}"
             ) from exc
-        if first == "":
-            self.close()
-            raise OperationalError("connection closed by server (EOF)")
-        first = first.rstrip("\r\n")
         if first.startswith("ERR "):
             raise OperationalError(first[4:])
-        # Fast path for single-line replies (OK / PONG / BYE / rows affected).
-        if _is_single_line_reply(first):
-            return first
-        # Otherwise this is a query table: read rows until the "(N rows)" trailer.
-        lines = [first]
+        return self._read_reply(first)
+
+    def pipeline(self, lines: list[str]) -> list[tuple[bool, str]]:
+        """Send many commands in one batch and read their replies in order.
+
+        All commands are written to the socket in a single ``sendall`` and the
+        replies are then consumed one by one, so the server processes the whole
+        batch without a round-trip per statement (the REPLSession loop already
+        handles consecutive input lines in order).
+
+        Returns a ``(is_error, reply_text)`` pair per input command:
+
+        * ``is_error`` is ``True`` when the server replied ``ERR <message>``;
+          ``reply_text`` is the message (the error does **not** abort reading
+          the remaining replies);
+        * otherwise ``reply_text`` is the full reply exactly as
+          :meth:`command` would return it: ``OK`` / ``PONG`` / ``BYE`` /
+          ``(N rows affected)`` or a text table ending with ``(N rows)``.
+
+        Raises :class:`OperationalError` / :class:`ConnectionClosedError` if
+        the connection is lost or closed mid-batch (replies are then
+        unavailable, so the whole batch fails).
+        """
+        if not lines:
+            raise ValueError("pipeline requires at least one command")
+        if self.closed:
+            raise ConnectionClosedError("connection is closed")
         try:
-            while True:
-                line = self._reader.readline()
-                if line == "":
-                    self.close()
-                    raise OperationalError(
-                        "connection closed by server while reading query result"
-                    )
-                line = line.rstrip("\r\n")
-                lines.append(line)
-                if _is_rows_trailer(line):
-                    break
-        except OperationalError:
-            raise
+            self._sock.sendall(
+                b"".join(line.encode(_ENCODING) + b"\n" for line in lines)
+            )
         except OSError as exc:
             self.close()
-            raise OperationalError(f"connection lost while reading result: {exc}") from exc
+            raise OperationalError(
+                f"connection lost while sending batch: {exc}"
+            ) from exc
+        out: list[tuple[bool, str]] = []
+        for _ in lines:
+            first = self._readline()
+            if first.startswith("ERR "):
+                out.append((True, first[4:]))
+            else:
+                out.append((False, self._read_reply(first)))
+        return out
+
+    def _readline(self) -> str:
+        """Read one reply line; empty line means EOF (server closed)."""
+        try:
+            line = self._reader.readline()
+        except OSError as exc:
+            self.close()
+            raise OperationalError(
+                f"connection lost while reading result: {exc}"
+            ) from exc
+        if line == "":
+            self.close()
+            raise OperationalError(
+                "connection closed by server while reading result"
+            )
+        return line.rstrip("\r\n")
+
+    def _read_reply(self, first: str) -> str:
+        """Complete one reply from an already-read first line.
+
+        Single-line replies (``OK`` / ``PONG`` / ``BYE`` / ``(N rows
+        affected)``) return immediately; table replies are read until the
+        ``(N rows)`` trailer.  Same boundary rules as a single
+        :meth:`command`.
+        """
+        if _is_single_line_reply(first):
+            return first
+        lines = [first]
+        while True:
+            line = self._readline()
+            lines.append(line)
+            if _is_rows_trailer(line):
+                break
         return "\n".join(lines)
 
     # -- typed helpers --------------------------------------------------

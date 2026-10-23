@@ -65,6 +65,21 @@ class Connection:
             raise ConnectionClosedError("connection is closed")
         return Cursor(self._protocol)
 
+    def pipeline(self, queries, params_list=None):
+        """Execute several statements in one network round trip.
+
+        Convenience wrapper around :meth:`Cursor.pipeline`: creates a cursor,
+        runs the batch and closes it.  Returns the list of
+        :class:`~openxdb.cursor.PipelineResult` outcomes (one per query).
+        """
+        if self._closed:
+            raise ConnectionClosedError("connection is closed")
+        cur = self.cursor()
+        try:
+            return cur.pipeline(queries, params_list)
+        finally:
+            cur.close()
+
     def ping(self) -> None:
         if self._closed:
             raise ConnectionClosedError("connection is closed")

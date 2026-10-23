@@ -10,6 +10,8 @@ documented in docs/T19_client_drivers.md.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from .errors import (
     ConnectionClosedError,
     OperationalError,
@@ -20,6 +22,27 @@ from .protocol import OpenXDBProtocol
 
 # SQL literal markers (server-side lexer accepts single or double quotes).
 _QUOTE = "'"
+
+
+class PipelineResult(NamedTuple):
+    """Outcome of one statement inside a :meth:`Cursor.pipeline` batch.
+
+    ``kind`` is one of:
+
+    * ``"error"`` — the server replied ``ERR <message>``; ``error`` carries
+      the :class:`OperationalError` and later statements still executed;
+    * ``"affected"`` — non-query statement; ``rowcount`` is ``(N rows
+      affected)``;
+    * ``"ok"`` — connection-level statement (BEGIN / COMMIT / ...), no data;
+    * ``"table"`` — query; ``description`` is the header list and ``rows``
+      the result rows (empty cells map to ``None``).
+    """
+
+    kind: str
+    rowcount: int = -1
+    description: list | None = None
+    rows: list[tuple] = ()
+    error: BaseException | None = None
 
 
 class Cursor:
@@ -105,6 +128,76 @@ class Cursor:
         self._description = None
         self._rows = []
         return self
+
+    def pipeline(self, queries, params_list=None):
+        """Execute several statements in a single network round trip.
+
+        All statements are sent to the server in one batch and replies are
+        read in order, so there is only one write + one read burst instead of
+        one round trip per statement (server REPLSession handles consecutive
+        input lines in order).
+
+        Returns a list of :class:`PipelineResult` with the same length as
+        *queries*.  A statement that fails (server ``ERR``) is reported as
+        ``kind == "error"`` and does **not** interrupt the remaining
+        statements; every statement in the batch gets a corresponding entry.
+
+        *queries* is a list of SQL strings; when *params_list* is given it
+        must have the same length and each entry is the parameter sequence
+        for the matching query (``None`` means "no parameters"; the query
+        must then contain no ``?`` placeholders).  The cursor's single-
+        statement state is reset after the batch — use :meth:`execute` /
+        :meth:`fetchall` for sequential work.
+        """
+        if self._closed:
+            raise ConnectionClosedError("cursor is closed")
+        if not isinstance(queries, (list, tuple)) or not queries:
+            raise ProgrammingError("queries must be a non-empty list of SQL strings")
+        sqls = []
+        if params_list is None:
+            for q in queries:
+                if not isinstance(q, str) or not q.strip():
+                    raise ProgrammingError("query must be a non-empty string")
+                if "?" in q:
+                    raise ParameterError(
+                        f"query has placeholders but no parameters were given: {q!r}"
+                    )
+                sqls.append(q)
+        else:
+            if len(params_list) != len(queries):
+                raise ParameterError(
+                    f"params_list length {len(params_list)} does not match "
+                    f"queries length {len(queries)}"
+                )
+            for q, p in zip(queries, params_list):
+                if not isinstance(q, str) or not q.strip():
+                    raise ProgrammingError("query must be a non-empty string")
+                if p is None:
+                    if "?" in q:
+                        raise ParameterError(
+                            f"query has placeholders but no parameters: {q!r}"
+                        )
+                    sqls.append(q)
+                else:
+                    sqls.append(self._substitute(q, p))
+        raws = self._protocol.pipeline(sqls)
+        self._reset_buffers()
+        out = []
+        for is_err, text in raws:
+            if is_err:
+                out.append(PipelineResult("error", error=OperationalError(text)))
+            elif text == "OK":
+                out.append(PipelineResult("ok"))
+            elif text.startswith("(") and text.endswith(" rows affected)"):
+                out.append(
+                    PipelineResult("affected", rowcount=_parse_affected(text))
+                )
+            else:
+                header, rows = _parse_table(text)
+                out.append(
+                    PipelineResult("table", description=header, rows=rows)
+                )
+        return out
 
     # -- fetch -----------------------------------------------------------
 

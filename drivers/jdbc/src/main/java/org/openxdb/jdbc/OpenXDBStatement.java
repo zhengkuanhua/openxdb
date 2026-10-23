@@ -1,11 +1,14 @@
 package org.openxdb.jdbc;
 
+import java.sql.BatchUpdateException;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLWarning;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * OpenXDB {@link Statement}: sends one line-protocol command per execution and
@@ -164,26 +167,71 @@ public class OpenXDBStatement implements Statement {
         return executeUpdate(sql);
     }
 
-    // ---- batch (server protocol has no batching; emulate per-statement) ---------
+    // ---- batch (pipelined over OpenXDBProtocol.pipeline) ----------------------------
+
+    private final List<String> batch = new ArrayList<String>();
 
     @Override
     public void addBatch(String sql) throws SQLException {
-        throw new SQLFeatureNotSupportedException("batching is not supported");
+        checkOpen();
+        if (sql == null) throw new SQLException("batch SQL must not be null");
+        batch.add(sql);
     }
 
     @Override
     public void clearBatch() throws SQLException {
-        throw new SQLFeatureNotSupportedException("batching is not supported");
+        checkOpen();
+        batch.clear();
     }
 
     @Override
     public int[] executeBatch() throws SQLException {
-        throw new SQLFeatureNotSupportedException("batching is not supported");
+        checkOpen();
+        int n = batch.size();
+        int[] counts = new int[n];
+        if (n == 0) {
+            return counts;
+        }
+        connection.ensureTxnStarted();
+        List<OpenXDBProtocol.BatchItem> items;
+        try {
+            items = connection.protocol().pipeline(batch);
+        } catch (SQLException e) {
+            clearResult();
+            throw e;
+        }
+        clearResult();
+        int success = 0;
+        for (int i = 0; i < n; i++) {
+            OpenXDBProtocol.BatchItem item = items.get(i);
+            if (item.error != null) {
+                // Fail the batch like the JDBC spec: earlier successful
+                // statements keep their counts in the exception.
+                throw new BatchUpdateException(
+                    "batch statement " + i + " failed: " + item.error.getMessage(),
+                    counts);
+            }
+            if (item.result.kind == OpenXDBProtocol.Result.Kind.AFFECTED) {
+                counts[i] = item.result.rowCount;
+                success++;
+            } else {
+                // OK replies (connection-level commands) and TABLE replies
+                // have no update count; report SUCCESS_NO_INFO.
+                counts[i] = SUCCESS_NO_INFO;
+            }
+        }
+        currentUpdateCount = success;
+        return counts;
     }
 
     @Override
     public long[] executeLargeBatch() throws SQLException {
-        throw new SQLFeatureNotSupportedException("batching is not supported");
+        int[] counts = executeBatch();
+        long[] out = new long[counts.length];
+        for (int i = 0; i < counts.length; i++) {
+            out[i] = counts[i];
+        }
+        return out;
     }
 
     // ---- lifecycle -------------------------------------------------------------
