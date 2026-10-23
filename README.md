@@ -32,7 +32,7 @@ AIGC:
 [![GitHub stars](https://img.shields.io/github/stars/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 [![GitHub issues](https://img.shields.io/github/issues/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 
-OpenXDB 是从零自研的单机/分布式关系型数据库内核（Go + RocksDB），定位于学习与工程实践并重的开源数据库项目。内核自底向上实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务与带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA 故障转移、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动（JDBC/Python）、运维工具链、认证权限（审计 + RBAC）与生态导出（JSON/Parquet）等能力，当前版本 **v1.0.0**。
+OpenXDB 是从零自研的单机/分布式关系型数据库内核（Go + RocksDB），定位于学习与工程实践并重的开源数据库项目。内核自底向上实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务与带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA 故障转移、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动（JDBC/Python）、运维工具链、认证权限（审计 + RBAC）与生态导出（JSON/Parquet）等能力，当前版本 **v1.3.0**。
 
 ## 快速开始
 
@@ -137,6 +137,12 @@ Protocol / CLI (REPL · TCP server · JDBC/Python 驱动 · MySQL wire protocol 
 ### 版本状态
 
 **v1.0.0（2026-10-16 正式发布）**：T1–T42 / M1–M21 / E1–E5 全部里程碑完成，全仓回归测试全绿。近期交付：**M18** MySQL 兼容（prepared statement + information_schema 虚拟视图）、**M19** 生态导出（JSON / Parquet）、**M20** 分布式深化（T33 同步/半同步复制、T34 跨节点 DDL、T35 分布式备份一致性）、**M21** 商业加固（T36 TLS 合规、T37 监控告警、T38 真实用户验证）、**E5** 标准 sysbench OLTP / TPC-C 基准对齐（Python 驱动等价实测）、**T40** SQL 能力簇（MAX/MIN 聚合、算术表达式、SELECT DISTINCT）、**T41** DDL 兼容（IF NOT EXISTS + CREATE TABLE AS SELECT）、**T42** INSERT INTO SELECT。
+
+**v1.1.0（2026-10-22 发布）**：MySQL wire protocol 兼容补全 —— **COM_CHANGE_USER / COM_STMT_SEND_LONG_DATA** 协议命令与参数类型扩展（`--mysql-port` 监听下 mysql CLI / JDBC / go-sql-driver 直连更完整）；**mysqldump 导入扩展**（IMPORT MYSQLDUMP 类型与语句覆盖增强）；**SQL 边缘分支清理**（parser / executor 边界用例、DECIMAL 精度舍入语义等）；**fixregions 工具重构**与测试补全；**文档同步**（变更记录 / 发布说明 / 产品手册对齐 v1.1.0）。
+
+**v1.2.0（2026-10-22 发布）**：**显式事务跨 region 写** —— 显式事务内 2PC 路径补全（行锁保持至 COMMIT，消除 read-modify-write lost update）；**HAVING + GROUP BY 语义补全**；**窗口函数 ROWS / RANGE 帧**扩展；**外键 ON UPDATE CASCADE / SET NULL**；**存储过程子集增强**（IF / 循环 / CASE / 递归深度上限）；**docs 同步**。
+
+**v1.3.0（2026-10-23 发布）**：**全局会话锁消除** —— 以会话级细粒度锁替代全局锁（`e.mu` → `sess.mu`），并发度显著提升；**备份 / 导入并行化** —— `BACKUP CONCURRENCY k` 分片并行与 mysqldump 导入并行；**Serializable 隔离级别** —— `SET TRANSACTION/SESSION` 切换，提交前 rw-antidependency 检测（读集 ∩ 活跃/窗口写集）返回 `ErrConflict`；**行协议语义修订** —— NULL（`\N`）与空串严格区分、RFC4180 换行引用、DECIMAL 行协议导入拒绝小数位 > 4；**仓库清理**与 `.gitignore` 防再跟踪。
 
 ### 完整特性
 
