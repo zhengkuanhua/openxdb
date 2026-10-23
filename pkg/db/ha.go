@@ -22,13 +22,20 @@ var (
 )
 
 // PromoteToMaster 将从节点升级为主节点（M6 主从切换）：
-//  1. 停止 follower 复制循环（断开旧主链路；Start goroutine 返回后置 offline）；
-//  2. 清空 follower 身份，以当前数据为既有快照启动主节点复制（binlog 只记录新写）。
+//  1. P0 HA：升主仲裁（ha_quorum_enabled 开启时）——多数派 N/2+1 节点可达
+//     才允许升主；quorum 不足返回 ErrQuorumNotMet，调用方保持 follower/
+//     只读并持续监控（自动 failover 循环会重试）；
+//  2. 停止 follower 复制循环（断开旧主链路；Start goroutine 返回后置 offline）；
+//  3. 清空 follower 身份，以当前数据为既有快照启动主节点复制（binlog 只记录新写）；
+//     启动复制同时完成 epoch 授权（ha_epoch_enabled 开启时）。
 //
 // 重复调用（已 promote）返回 ErrReplicationStarted。
 func (d *DB) PromoteToMaster() error {
 	if d.Follower == nil {
 		return ErrNotFollower
+	}
+	if err := d.quorumGuard(); err != nil {
+		return err // quorum 不足：拒绝升主（防分区内多 follower 同时升主成双主）
 	}
 	_ = d.Follower.Stop()
 	d.Follower = nil

@@ -76,6 +76,13 @@ func (e *Engine) RemoteRestoreDo(req cluster.RestoreDoReq) (cluster.RestoreDoRes
 // SetReplicationModeSetter 装配 T33 复制模式控制器（db.Open 调用，转发至 Executor）。
 func (e *Engine) SetReplicationModeSetter(c ReplicationModeSetter) { e.ex.SetReplicationModeSetter(c) }
 
+// SetWriteFence 装配 P0 HA 写入 fencing 检查（db.Open 调用，转发至 Executor；
+// nil = 不启用，零回归）。
+func (e *Engine) SetWriteFence(wf WriteFence) { e.ex.SetWriteFence(wf) }
+
+// SetHAConfigSetter 装配 P0 HA 开关节流控制器（db.Open 调用，转发至 Executor）。
+func (e *Engine) SetHAConfigSetter(hc HAConfigSetter) { e.ex.SetHAConfigSetter(hc) }
+
 // AuthenticateUser 校验用户名与密码（M11 预留：server 层连接鉴权握手与执行期权限校验用）。
 // 用户不存在或密码不匹配返回 (false, nil)；存储层错误原样返回。密码只做哈希比对，不落明文。
 func (e *Engine) AuthenticateUser(name, password string) (bool, error) {

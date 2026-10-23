@@ -30,9 +30,37 @@ const (
 	msgAck     byte = 4
 	msgPing    byte = 5
 	msgPong    byte = 6
+	// msgCapability 协议能力协商帧（P0 HA：声明支持 epoch/fencing 语义；
+	// 帧号 31 避开 M2 既有 1-6 与 M4 节点链路帧号）。
+	msgCapability byte = 31
 
 	maxFrameBody = 1 << 30
 )
+
+// 能力位（capability flags）。
+const (
+	// capEpochFencing 声明本协议支持 clusterEpoch 与写入 fencing 语义
+	// （实际开关由 ha_epoch_enabled 控制；能力位仅为版本协商兼容信息）。
+	capEpochFencing byte = 1 << 0
+)
+
+// capability payload: version(2B) + flags(1B)
+func encodeCapability(flags byte) []byte {
+	b := make([]byte, 0, 3)
+	b = binary.BigEndian.AppendUint16(b, protoVersion)
+	b = append(b, flags)
+	return b
+}
+
+func decodeCapability(payload []byte) (byte, error) {
+	if len(payload) != 3 {
+		return 0, ErrCorrupt
+	}
+	if binary.BigEndian.Uint16(payload[0:2]) != protoVersion {
+		return 0, errors.New("replication: capability version mismatch")
+	}
+	return payload[2], nil
+}
 
 // hello payload: magic(10B) + version(2B) + role(1B) + fromLSN(8B)
 func encodeHello(role ReplicaRole, from storage.LSN) []byte {

@@ -28,6 +28,12 @@ type Executor struct {
 	// T33 复制模式控制器（nil = 未装配，SET replication_* 返回明确错误）。
 	// 由 db.Open 注入（避免 sql 包依赖 db 包）；实现见 ReplicationModeSetter。
 	replCtl ReplicationModeSetter
+	// P0 HA：写入 fencing 检查（nil = 未装配，写路径零开销放行）。
+	// 由 db.Open 注入（db.DB.AllowWrite）；实现见 WriteFence。
+	writeFence WriteFence
+	// P0 HA：ha_epoch_enabled / ha_quorum_enabled 开关节流控制器
+	// （nil = 未装配，SET ha_* 返回明确错误）；实现见 HAConfigSetter。
+	haCfg HAConfigSetter
 	// 全局会话（旧单会话 API 使用：Engine.Execute/ExecuteAs、CLI、既有测试）。
 	// 服务端多连接场景使用 NewSession 创建独立会话，显式事务状态互不干扰。
 	globalSess *Session
@@ -1786,6 +1792,10 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 // ---- DML ----
 
 func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
+	// P0 HA：写入 fencing 检查（陈旧主 epoch 被拒；开关关闭时放行）。
+	if err := e.writeFenceCheck(); err != nil {
+		return nil, err
+	}
 	// P0-1：显式事务跨 region 写暂存（本地/远端分组；语句成功路径末尾挂载）。
 	var explLocal []kvOp
 	var explRemote map[string][]kvOp
@@ -4601,6 +4611,10 @@ func (e *Executor) finishRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel,
 }
 
 func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
+	// P0 HA：写入 fencing 检查（陈旧主 epoch 被拒；开关关闭时放行）。
+	if err := e.writeFenceCheck(); err != nil {
+		return nil, err
+	}
 	// P0-1：显式事务跨 region 写暂存（本地/远端分组；语句成功路径末尾挂载）。
 	var explLocal []kvOp
 	var explRemote map[string][]kvOp
@@ -4805,6 +4819,10 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 }
 
 func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
+	// P0 HA：写入 fencing 检查（陈旧主 epoch 被拒；开关关闭时放行）。
+	if err := e.writeFenceCheck(); err != nil {
+		return nil, err
+	}
 	// P0-1：显式事务跨 region 写暂存（本地/远端分组；语句成功路径末尾挂载）。
 	var explLocal []kvOp
 	var explRemote map[string][]kvOp

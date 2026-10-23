@@ -45,6 +45,9 @@ const (
 	// PersistedConfigFile 在线配置热更新持久化文件（M16-1，SET PERSIST 落盘，
 	// 重启由 Open 加载合并：内存 > 持久化 > 默认值）。
 	PersistedConfigFile = "persisted.json"
+	// EpochMetaFile P0 HA epoch 持久化文件（记录已知最大 clusterEpoch，
+	// 重启加载作为单调下限，防回退）。
+	EpochMetaFile = "epoch.meta"
 	// DefaultEngine 当前存储引擎。
 	DefaultEngine = "rocksdb"
 )
@@ -84,6 +87,16 @@ type DB struct {
 	// M6 主从自动故障转移（EnableAutoFailover 后非零；StopAutoFailover 置零）。
 	failoverStop chan struct{}
 	failoverMu   sync.Mutex
+
+	// P0 HA 脑裂防护（最小防双主）：clusterEpoch 与升主仲裁。
+	// epoch 复用 TSO 单调发号 + 本地持久化兜底防回退；ha_epoch_enabled /
+	// ha_quorum_enabled 默认关闭，关闭时以上字段全部保持零值/空，零回归。
+	epochMu       sync.Mutex
+	epoch         uint64 // 本节点已知全局最大 epoch（授权与广播的并集）
+	masterEpoch   uint64 // 本节点当前 master 授权 epoch（0 = 未授权主）
+	epochEnabled  bool   // ha_epoch_enabled：epoch 授权与写入 fencing（默认 off）
+	quorumEnabled bool   // ha_quorum_enabled：升主多数派仲裁（默认 off）
+	epochFilePath string // EpochMetaFile 持久化路径（Open 时装配）
 }
 
 // Init 初始化数据目录：创建 data/ 子目录与 openxdb.conf。
@@ -217,8 +230,15 @@ func Open(dir string) (*DB, error) {
 		return nil, fmt.Errorf("db: load persisted config: %w", err)
 	}
 	db := &DB{Dir: dir, Storage: st, WAL: w, Txn: tm, SQL: eng, Cluster: mgr, TSO: ts}
+	// P0 HA：加载 epoch.meta（已知最大 clusterEpoch 单调下限，防回退）。
+	db.epochFilePath = filepath.Join(dir, EpochMetaFile)
+	db.loadEpochMeta()
 	// T33：装配复制模式控制器（SET replication_* 热切换入口）。
 	eng.SetReplicationModeSetter(db)
+	// P0 HA：装配写入 fencing 检查（epoch 校验拒陈旧主写路径；开关关闭零开销）。
+	eng.SetWriteFence(db)
+	// P0 HA：装配 epoch/quorum 开关节流控制器（SET ha_* 热切换入口）。
+	eng.SetHAConfigSetter(db)
 	return db, nil
 }
 
@@ -252,6 +272,9 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	srv.SetRestoreDo(d.SQL.RemoteRestoreDo)
 	// M8：注入中心化时间戳源（TSO_REQ 由本节点批量发放）。
 	srv.SetTSO(d.TSO)
+	// P0 HA：装配 epoch 广播接收回调（升主节点广播新 epoch 时更新本节点
+	// 已知最大 epoch，作为陈旧主写入 fencing 依据；开关关闭时无副作用）。
+	srv.SetEpochNotify(d.NoteEpoch)
 	// M5：2PC 崩溃恢复——清理未决 prepare（未决事务回滚，数据从未写入）
 	// 与历史幂等标记（仅运行期有效），保证重启后参与者状态干净可重入。
 	if err := srv.Recover2PC(); err != nil {
@@ -324,6 +347,14 @@ func (d *DB) StartReplicationTLS(addr string, tlsCfg *tls.Config) error {
 	d.Txn.SetCommitWaitHook(func(lsn storage.LSN, seq uint64) error {
 		return r.WaitAck(context.Background(), lsn)
 	})
+	// P0 HA：epoch 授权（仅 ha_epoch_enabled 开启时）。成为 master 即取新
+	// clusterEpoch 并广播到集群；此后收到更高 epoch 广播（其它节点升主）
+	// 时本节点写路径将被 fencing 拒绝，防双主。
+	if d.epochEnabled {
+		e := d.acquireEpoch()
+		d.setMasterEpoch(e)
+		d.broadcastEpoch(e)
+	}
 	d.Replicator = r
 	return nil
 }

@@ -165,6 +165,12 @@ func (m *MasterReplicator) handleSlave(conn net.Conn) {
 	if err := writeFrame(conn, msgHelloOK, encodeHelloOK(m.store.LastLSN(), m.ReplicationMode())); err != nil {
 		return
 	}
+	// P0 HA：协议能力协商——HELLO_OK 后追加 CAPABILITY 帧（版本+能力位）。
+	// 声明本协议支持 epoch/fencing 语义；旧节点忽略未知帧，模式（async/
+	// semi-sync/sync）仍由 HELLO_OK 的 mode 字段表达，复制协议本身不变。
+	if err := writeFrame(conn, msgCapability, encodeCapability(capEpochFencing)); err != nil {
+		return
+	}
 	go m.readLoop(sc)
 	m.pushLoop(sc, from)
 }

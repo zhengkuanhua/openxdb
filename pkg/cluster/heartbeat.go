@@ -91,3 +91,31 @@ func (h *heartbeatLoop) pingNode(n NodeInfo, now int64) {
 	}
 	h.mgr.MarkHeartbeat(n.ID, ts)
 }
+
+// Probe 对单个注册节点做一次 PING/PONG 探活（P0 HA 升主多数派仲裁用）。
+// 可达返回 true；地址缺失/拨号失败/超时/非法响应返回 false。不修改节点状态。
+func (m *Manager) Probe(id string) bool {
+	addr, err := m.NodeAddr(id)
+	if err != nil {
+		return false
+	}
+	conn, err := dial(addr)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	if err := writeFrame(conn, msgPing, pingPayload(time.Now().UnixMilli())); err != nil {
+		return false
+	}
+	typ, payload, err := readFrame(conn)
+	if err != nil {
+		return false
+	}
+	if typ != msgPong {
+		return false
+	}
+	if _, err := parseTs(payload); err != nil {
+		return false
+	}
+	return true
+}

@@ -4,6 +4,7 @@ package db_test
 // 复用 M4/M5 基建（openNode/mustSQL/wantIDs/splitBoundary，见 db_cluster_test.go）。
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -48,6 +49,22 @@ func speedupHeartbeat(t *testing.T, d *db.DB) {
 	t.Helper()
 	d.Cluster.Stop()
 	d.Cluster.StartHeartbeat(150*time.Millisecond, 450*time.Millisecond)
+}
+
+// waitEverUp 轮询直到本进程曾成功收到目标节点 PONG（启动竞态防护判定）。
+// 心跳循环对从未收到过 PONG 的节点不做离线判定（EverUp 防护，避免集群
+// 滚动启动误判 DOWN），因此测试关闭节点前必须先确认其曾在线，否则将
+// 永远无法标记 DOWN（与 pkg/cluster TestHeartbeatDown 同类竞态）。
+func waitEverUp(t *testing.T, d *db.DB, id string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if d.Cluster.EverUp(id) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("node %s never confirmed up before close", id)
 }
 
 // TestM6DownNodeReadFailover 节点 down 后读 failover：持有中间 region 的 B 下线，
@@ -122,6 +139,7 @@ func TestM6AutoReassignRegionAfterDown(t *testing.T) {
 	wantIDs(t, dB, "SELECT id FROM users ORDER BY id", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 
 	speedupHeartbeat(t, dA)
+	waitEverUp(t, dA, dB.Cluster.SelfID)
 
 	// B down → 自动重指派给存活远端 C
 	if err := dB.Close(); err != nil {
@@ -137,4 +155,83 @@ func TestM6AutoReassignRegionAfterDown(t *testing.T) {
 	}
 	// A 读路径经 C 转发仍全量一致
 	wantIDs(t, dA, "SELECT id FROM users ORDER BY id", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+}
+
+// TestP0QuorumPromoteSucceeds P0 升主多数派仲裁成功：3 节点集群全部在线时，
+// follower 经 quorum 确认（N/2+1=2 可达）后升主成功（ha_quorum_enabled 开启）。
+func TestP0QuorumPromoteSucceeds(t *testing.T) {
+	dA, addrA := openNode(t, "node-a")
+	t.Cleanup(func() { _ = dA.Close() })
+	dB, _ := openNode(t, "node-b")
+	t.Cleanup(func() { _ = dB.Close() })
+	dC, addrC := openNode(t, "node-c")
+	t.Cleanup(func() { _ = dC.Close() })
+
+	// 互联注册表：B 侧需看到 A、C（quorum 统计全部注册节点）。
+	mustSQL(t, dB, "ADD NODE '"+addrA+"'")
+	mustSQL(t, dB, "ADD NODE '"+addrC+"'")
+	mustSQL(t, dA, "ADD NODE '"+addrC+"'")
+
+	// B 是 A 的复制 follower（M6 场景：旧主 A 曾在线）。
+	if err := dA.StartReplication(":0"); err != nil {
+		t.Fatalf("A StartReplication: %v", err)
+	}
+	raddr, _ := dA.ReplicationStatus()
+	if err := dB.StartFollower(raddr); err != nil {
+		t.Fatalf("B StartFollower: %v", err)
+	}
+	waitEverUp(t, dB, dA.Cluster.SelfID)
+	waitEverUp(t, dB, dC.Cluster.SelfID)
+
+	// 开启 quorum 后升主：3 节点全部可达（quorum=2）→ 成功。
+	dB.SetQuorumEnabled(true)
+	if err := dB.PromoteToMaster(); err != nil {
+		t.Fatalf("promote with full quorum: %v", err)
+	}
+	if dB.Replicator == nil {
+		t.Fatalf("promoted B has no replicator")
+	}
+}
+
+// TestP0QuorumPromoteInsufficient P0 升主仲裁不足：多数派不可达时升主被拒
+// （ErrQuorumNotMet），节点保持 follower 不升主（防分区内多 follower 双主）。
+func TestP0QuorumPromoteInsufficient(t *testing.T) {
+	dA, addrA := openNode(t, "node-a")
+	dB, _ := openNode(t, "node-b")
+	t.Cleanup(func() { _ = dA.Close() })
+	t.Cleanup(func() { _ = dB.Close() })
+	dC, addrC := openNode(t, "node-c")
+	t.Cleanup(func() { _ = dC.Close() })
+
+	// 互联注册表：B 侧看到 A、C。
+	mustSQL(t, dB, "ADD NODE '"+addrA+"'")
+	mustSQL(t, dB, "ADD NODE '"+addrC+"'")
+	mustSQL(t, dA, "ADD NODE '"+addrC+"'")
+
+	// B 是 A 的复制 follower。
+	if err := dA.StartReplication(":0"); err != nil {
+		t.Fatalf("A StartReplication: %v", err)
+	}
+	raddr, _ := dA.ReplicationStatus()
+	if err := dB.StartFollower(raddr); err != nil {
+		t.Fatalf("B StartFollower: %v", err)
+	}
+	waitEverUp(t, dB, dA.Cluster.SelfID)
+	waitEverUp(t, dB, dC.Cluster.SelfID)
+
+	// 关闭 A、C：B 侧仅自身可达（1/3 < quorum=2）→ 拒绝升主。
+	if err := dA.Close(); err != nil {
+		t.Fatalf("A close: %v", err)
+	}
+	if err := dC.Close(); err != nil {
+		t.Fatalf("C close: %v", err)
+	}
+	dB.SetQuorumEnabled(true)
+	if err := dB.PromoteToMaster(); !errors.Is(err, db.ErrQuorumNotMet) {
+		t.Fatalf("promote without quorum = %v, want ErrQuorumNotMet", err)
+	}
+	// 仍保持 follower（未升主）。
+	if dB.Follower == nil {
+		t.Fatalf("B lost follower after rejected promote")
+	}
 }

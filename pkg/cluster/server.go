@@ -63,6 +63,9 @@ type Server struct {
 	// restoreDo 节点侧 T35 分布式恢复执行回调（db.StartCluster 装配
 	// sql.Executor.RemoteRestoreDo）；nil = 未装配（回执 Err）。
 	restoreDo func(req RestoreDoReq) (RestoreDoResp, error)
+	// epochNotify 节点侧 P0 HA epoch 广播接收回调（db.StartCluster 装配
+	// db.DB.NoteEpoch）；nil = 未装配（忽略 EPOCH_NOTIFY，旧节点零回归）。
+	epochNotify func(epoch uint64)
 }
 
 // SetTSO 注入时间戳源（M8：db.StartCluster 装配本地发号器）。
@@ -193,6 +196,9 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.handleBackupDo(conn, payload)
 		case msgRestoreDo:
 			s.handleRestoreDo(conn, payload)
+		case msgEpochNotify:
+			// P0 HA：epoch 广播（升主授权通知；无回执，单向尽力而为）
+			s.handleEpoch(conn, payload)
 		default:
 			return // 未知帧：断开
 		}

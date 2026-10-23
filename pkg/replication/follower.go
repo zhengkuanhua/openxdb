@@ -39,6 +39,19 @@ type Follower struct {
 	HeartbeatInterval time.Duration
 	// ReadTimeout 接收帧超时：超过视为主节点失联，Start 返回。
 	ReadTimeout time.Duration
+
+	// peerCapFlags 握手后主端 CAPABILITY 帧声明的能力位（P0 HA 版本协商）。
+	// 旧主不发 CAPABILITY 帧时保持 0，表示无 epoch/fencing 语义。
+	peerCapFlags byte
+}
+
+// PeerCapability 返回握手协商出的对端（主节点）能力位：
+// 0 = 旧协议（无 CAPABILITY 帧）；非 0 含 capEpochFencing 位表示对端
+// 声明支持 clusterEpoch/fencing 语义。供 db 层决定是否启用 fencing 校验。
+func (f *Follower) PeerCapability() byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.peerCapFlags
 }
 
 // NewFollower 创建从端复制器。
@@ -197,6 +210,16 @@ func (f *Follower) StartTLS(ctx context.Context, masterAddr string, tlsCfg *tls.
 				f.setOffline(masterAddr, werr.Error())
 				return werr
 			}
+		case msgCapability:
+			// P0 HA 版本协商：记录主端能力位（epoch/fencing 语义）。
+			flags, derr := decodeCapability(payload)
+			if derr != nil {
+				f.setOffline(masterAddr, derr.Error())
+				return derr
+			}
+			f.mu.Lock()
+			f.peerCapFlags = flags
+			f.mu.Unlock()
 		default:
 			// HELLO_OK / ACK 等在从端无处理，忽略。
 		}
