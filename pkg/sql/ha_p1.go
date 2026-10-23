@@ -38,6 +38,7 @@ import (
 type p1RegionEpoch struct {
 	clusterEpoch uint64 // 完成重指派的 clusterEpoch（消息级全局纪元）
 	regionEpoch  uint64 // 该 region owner 变更纪元
+	owner        string // 该纪元对应的 owner（重指派/收敛后的路由归属）
 }
 
 // holdsChecker 可注入持有校验钩子（默认 nil = 使用 regionHoldsLocalTarget
@@ -150,9 +151,11 @@ func (e *Executor) checkRegionPushEpoch(clusterEpoch, regionEpoch uint64, rid st
 		return nil
 	}
 	if clusterEpoch < e.epochSrc.Epoch() {
+		e.bumpRegionConflict() // 数据冲突标记：陈旧路由消息被拒
 		return fmt.Errorf("sql: stale cluster epoch %d < known %d (rid=%d)", clusterEpoch, e.epochSrc.Epoch(), rid)
 	}
 	if regionEpoch > 0 && e.regionEpochOf(rid) > regionEpoch {
+		e.bumpRegionConflict() // 数据冲突标记：陈旧路由消息被拒
 		return fmt.Errorf("sql: stale region epoch %d < known %d (rid=%d)", regionEpoch, e.regionEpochOf(rid), rid)
 	}
 	return nil
@@ -263,12 +266,13 @@ func (e *Executor) tryFailoverTargetP1(rg sharding.RegionInfo, downID, target st
 		updated.Node = e.selfID
 		updated.Local = false
 		updated.RegionEpoch = regionEpoch
-		if err := e.router.SetRegionNode(rg.RegionID, e.selfID); err != nil {
+		if err := e.router.SetRegionNodeEpoch(rg.RegionID, e.selfID, regionEpoch); err != nil {
 			return err
 		}
 		if err := e.persistRegions(); err != nil {
 			return err
 		}
+		e.recordRegionEpochOwner(rg.RegionID, clusterEpoch, regionEpoch, e.selfID)
 		return e.broadcastRegionViewEpoch([]sharding.RegionInfo{updated}, nil, clusterEpoch)
 	}
 	// 远端目标：构建权威路由视图（同 failoverRegion，补充显式化本地归属）。
@@ -293,12 +297,13 @@ func (e *Executor) tryFailoverTargetP1(rg sharding.RegionInfo, downID, target st
 	if err := e.mgr.PushRegionEpoch(target, rg, srcRows, regions, srcID, clusterEpoch); err != nil {
 		return err
 	}
-	if err := e.router.SetRegionNode(rg.RegionID, target); err != nil {
+	if err := e.router.SetRegionNodeEpoch(rg.RegionID, target, regionEpoch); err != nil {
 		return err
 	}
 	if err := e.persistRegions(); err != nil {
 		return err
 	}
+	e.recordRegionEpochOwner(rg.RegionID, clusterEpoch, regionEpoch, target)
 	updated := rg
 	updated.Node = target
 	updated.Local = false

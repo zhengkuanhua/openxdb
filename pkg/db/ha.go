@@ -101,3 +101,11 @@ func (d *DB) failoverLoop(onPromote func()) {
 		return
 	}
 }
+
+// ReconcileAfterPartition 分区恢复合并入口（P2，复制轨）：收到对端新
+// clusterEpoch（或本节点从分区中恢复）时按 epoch 大者胜收敛——陈旧侧
+// 由 NoteEpoch 内部自动降级只读、停止复制链路、累计冲突标记；新鲜侧
+// 不受影响。开关关闭时 NoteEpoch 直接忽略（零回归）。
+func (d *DB) ReconcileAfterPartition(remoteEpoch uint64) {
+	d.NoteEpoch(remoteEpoch)
+}

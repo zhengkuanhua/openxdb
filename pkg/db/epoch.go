@@ -21,6 +21,7 @@ package db
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -161,20 +162,63 @@ func (d *DB) setMasterEpoch(e uint64) {
 
 // NoteEpoch 接收集群广播的新 epoch（升主节点授权后广播），更新已知最大
 // epoch 并持久化；这是陈旧主被 fencing 的依据来源。
+// P2 增强（分区恢复合并-复制轨）：本节点已授权为主（masterEpoch>0）且
+// 收到更大 epoch 时判定为陈旧主——自动降级只读、停止复制链路并累计
+// 数据冲突标记（epoch 大者胜收敛，陈旧侧停止写入转为从/只读）。
 func (d *DB) NoteEpoch(e uint64) {
 	if e == 0 {
 		return
 	}
 	d.epochMu.Lock()
-	defer d.epochMu.Unlock()
+	oldMaster := d.masterEpoch
 	d.persistEpochLocked(e)
+	demote := d.epochEnabled && oldMaster > 0 && e > oldMaster && !d.readOnly
+	if demote {
+		d.readOnly = true
+		d.conflictCount++
+	}
+	d.epochMu.Unlock()
+	if demote {
+		log.Printf("db: partition reconcile: demote stale master (masterEpoch=%d < notify %d) -> read-only", oldMaster, e)
+		if d.Replicator != nil {
+			_ = d.Replicator.Close()
+			d.Replicator = nil
+		}
+		if d.demoteHook != nil {
+			d.demoteHook()
+		}
+	}
+}
+
+// ReadOnly 返回本节点是否处于分区恢复合并后的只读降级状态（陈旧主）。
+// 开关关闭或从未成为陈旧主时恒 false（零回归）。
+func (d *DB) ReadOnly() bool {
+	d.epochMu.Lock()
+	defer d.epochMu.Unlock()
+	return d.readOnly
+}
+
+// ConflictCount 返回数据冲突标记计数：陈旧主恢复合并降级次数 + 写路径被
+// fencing 拒绝次数（开关关闭恒 0，零回归）。
+func (d *DB) ConflictCount() uint64 {
+	d.epochMu.Lock()
+	defer d.epochMu.Unlock()
+	return d.conflictCount
+}
+
+// SetDemoteHook 注册降级观察回调（分区恢复合并降级陈旧主时触发；
+// 测试/上层通知用，nil 忽略）。
+func (d *DB) SetDemoteHook(fn func()) {
+	d.epochMu.Lock()
+	defer d.epochMu.Unlock()
+	d.demoteHook = fn
 }
 
 // AllowWrite 写入 fencing 检查（SQL 层经 WriteFence 装配调用）：
 //   - epoch 开关关闭 → 放行（零回归）；
 //   - 本节点从未授权为 master（masterEpoch=0，如普通单机/未授权主）→ 放行；
 //   - 本节点已知 epoch 大于自身授权 epoch → 已被更高 epoch 取代（陈旧主），
-//     拒绝写入（ErrFenced）。
+//     拒绝写入（ErrFenced）并累计数据冲突标记（陈旧侧写尝试被拒）。
 func (d *DB) AllowWrite() error {
 	d.epochMu.Lock()
 	defer d.epochMu.Unlock()
@@ -185,6 +229,7 @@ func (d *DB) AllowWrite() error {
 		return nil
 	}
 	if d.epoch > d.masterEpoch {
+		d.conflictCount++ // 数据冲突标记：陈旧主写尝试被 fencing 拒绝
 		return fmt.Errorf("%w: local epoch %d > master epoch %d", ErrFenced, d.epoch, d.masterEpoch)
 	}
 	return nil

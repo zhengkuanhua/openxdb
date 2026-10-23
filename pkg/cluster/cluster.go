@@ -92,6 +92,12 @@ type Manager struct {
 	// M6 节点离线回调（心跳 UP->DOWN 首次转换时异步触发一次）。
 	onDown func(nodeID string)
 
+	// P2 HA：分区检测与视图 version（见 partition.go）。
+	prober      func(id string) bool // 注入探活函数（nil = 真实 PING/PONG）
+	viewVersion uint64               // 本节点已知最大视图 version（分区恢复收敛）
+	wasMinority bool                 // 上次检查是否处于少数派分区（恢复检测基准）
+	onRecover   func(version uint64) // 少数派→多数派恢复回调
+
 	// everUp 记录本进程内曾成功收到过 PONG 的远端节点（启动竞态防护：
 	// 从未心跳成功的节点不参与离线判定与 failover，避免集群滚动启动时
 	// 误判未就绪节点 DOWN 导致 region 路由被自动重指派污染）。

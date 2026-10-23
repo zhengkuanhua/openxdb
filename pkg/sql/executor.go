@@ -46,6 +46,9 @@ type Executor struct {
 	p1Epoch map[storage.ID]p1RegionEpoch
 	// P1 HA：可注入持有校验钩子（nil = 真实键空间扫描，见 ha_p1.go）。
 	holdsChecker holdsChecker
+	// P2 HA：陈旧路由消息冲突计数（分区恢复合并冲突标记，见 ha_p2.go）。
+	p2Mu           sync.Mutex
+	regionConflict uint64
 	// 全局会话（旧单会话 API 使用：Engine.Execute/ExecuteAs、CLI、既有测试）。
 	// 服务端多连接场景使用 NewSession 创建独立会话，显式事务状态互不干扰。
 	globalSess *Session

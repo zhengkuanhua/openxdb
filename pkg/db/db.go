@@ -97,6 +97,14 @@ type DB struct {
 	epochEnabled  bool   // ha_epoch_enabled：epoch 授权与写入 fencing（默认 off）
 	quorumEnabled bool   // ha_quorum_enabled：升主多数派仲裁（默认 off）
 	epochFilePath string // EpochMetaFile 持久化路径（Open 时装配）
+
+	// P2 HA：分区恢复合并（复制轨收敛 + 数据冲突标记）。
+	// NoteEpoch 检测到本节点为陈旧主（masterEpoch < 广播 epoch）时自动
+	// 降级只读并停止复制；写路径被 fencing 拒绝计入冲突标记。开关关闭
+	// 时以上字段保持零值/空，零回归。
+	readOnly     bool   // 陈旧主降级后的只读标记（分区恢复收敛）
+	conflictCount uint64 // 数据冲突标记：陈旧主写尝试被拒 / 恢复合并降级计数
+	demoteHook   func() // 降级观察回调（测试/上层通知用，nil 忽略）
 }
 
 // Init 初始化数据目录：创建 data/ 子目录与 openxdb.conf。
