@@ -52,6 +52,13 @@ func (e *Engine) ExecutorRouter() *sharding.Router { return e.ex.Router() }
 // SetCluster 注入 M4 集群管理器与本节点 ID（供 db.Open 装配，节点注册/转发/路由展开）。
 func (e *Engine) SetCluster(mgr *cluster.Manager, selfID string) { e.ex.SetCluster(mgr, selfID) }
 
+// PushAllRegionsToNode 全量对齐推送（v1.7.0 回迁降级兜底）：把本节点全部 region
+// 当前行 REGION_PUSH 推送到目标节点，目标节点 applyPush 覆盖本地后学路由落盘。
+// 由 db.StartCluster 装配为集群 Server 的 FULLALIGN_REQ 回调（新主执行侧）。
+func (e *Engine) PushAllRegionsToNode(targetNodeID string) error {
+	return e.ex.pushAllRegionsToNode(targetNodeID)
+}
+
 // ApplyRemoteDDL 节点侧应用远端 DDL 目录变更（T34 跨节点 DDL 广播接收端）。
 func (e *Engine) ApplyRemoteDDL(req cluster.DDLPushReq) error { return e.ex.ApplyRemoteDDL(req) }
 

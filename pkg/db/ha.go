@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -175,10 +176,11 @@ var (
 	// ErrNotStaleMaster 节点不满足陈旧主条件（binlog 为空或未降级只读），不可回迁。
 	ErrNotStaleMaster = errors.New("db: not a stale master, rejoin skipped")
 	// ErrCompensationFailed 补偿段回灌失败（binlog 损坏/连接失败/主端拒绝），
-	// 应走全量对齐兜底路径。
+	// 若能在集群注册表定位新主节点则自动降级走全量对齐兜底路径。
 	ErrCompensationFailed = errors.New("db: compensation failed, need full align")
-	// ErrFullAlignNotReady 全量对齐兜底（SQL 层 region push 联动）未就绪。
-	ErrFullAlignNotReady = errors.New("db: full align fallback not ready")
+	// ErrFullAlignFailed 全量对齐兜底失败（集群未启用/新主未注册/对端不可达/
+	// region 推送失败/清基线或追平失败），调用方应停止回迁并告警。
+	ErrFullAlignFailed = errors.New("db: full align fallback failed")
 )
 
 // StaleMasterReady 判定本节点是否为可回迁的陈旧主（阶段二）：
@@ -208,12 +210,14 @@ func (d *DB) StaleMasterReady() (bool, uint64, error) {
 //  3. 补偿成功（或 binlog 为空）后归档旧 binlog 并停止旧复制器，重置基线；
 //  4. 以全新 follower 身份 StartFollower(newMasterAddr) 从 LSN=1 追平新主
 //     完整 binlog（新写覆盖补偿段，幂等）。
-// 补偿失败（binlog 损坏/连接失败/主端拒绝）返回 ErrCompensationFailed，
-// 调用方应走 FullAlignViaRegionPush 全量对齐兜底。
+// 补偿失败（binlog 损坏/连接失败/主端拒绝）时：若能在集群注册表定位新主节点，
+// 自动降级走 FullAlignViaRegionPush 全量对齐兜底（v1.7.0）；无法定位（如集群
+// 未启用/未注册）则返回 ErrCompensationFailed，交由调用方显式发起对齐。
 func (d *DB) TryRejoinAsFollower(newMasterAddr string) error {
 	ok, lastLSN, err := d.StaleMasterReady()
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrCompensationFailed, err)
+		// binlog 损坏：直接降级全量对齐（读不出补偿段）。
+		return d.rejoinFallback(newMasterAddr, err)
 	}
 	if !ok {
 		return ErrNotStaleMaster
@@ -226,13 +230,13 @@ func (d *DB) TryRejoinAsFollower(newMasterAddr string) error {
 	// 读 binlog 全段（[1,lastLSN]）作为补偿批次。
 	entries, err := d.readLocalBinlogRange(1, lastLSN)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrCompensationFailed, err)
+		return d.rejoinFallback(newMasterAddr, err)
 	}
 	if len(entries) > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if _, cerr := replication.PushCompensation(ctx, newMasterAddr, entries, nil); cerr != nil {
-			return fmt.Errorf("%w: %v", ErrCompensationFailed, cerr)
+			return d.rejoinFallback(newMasterAddr, cerr)
 		}
 	}
 	// 补偿成功：归档旧 binlog（防重启后重复回迁），重置复制状态。
@@ -245,6 +249,59 @@ func (d *DB) TryRejoinAsFollower(newMasterAddr string) error {
 	}
 	// 以全新 follower 身份从 LSN=1 追平新主完整 binlog（幂等覆盖补偿段）。
 	return d.StartFollower(newMasterAddr)
+}
+
+// rejoinFallback 补偿失败后的自动降级：在集群注册表定位新主节点 ID，成功则
+// 走 FullAlignViaRegionPush 全量对齐兜底；无法定位（集群未启用/对端未注册）
+// 返回 ErrCompensationFailed 保留原语义。
+func (d *DB) rejoinFallback(newMasterAddr string, cause error) error {
+	id := d.locateNewMasterNodeID(newMasterAddr)
+	if id == "" {
+		return fmt.Errorf("%w: %v", ErrCompensationFailed, cause)
+	}
+	return d.FullAlignViaRegionPush(id, newMasterAddr)
+}
+
+// locateNewMasterNodeID 在集群注册表中定位新主节点 ID：
+// 优先精确匹配复制地址（Addr==newMasterAddr）；其次同主机地址
+// （复制地址与集群地址端口不同但 host 一致，同机测试场景）；
+// 再退化为唯一远端兜底（双节点场景）。
+func (d *DB) locateNewMasterNodeID(addr string) string {
+	if d.Cluster == nil {
+		return ""
+	}
+	var sameHost, fallback string
+	for _, n := range d.Cluster.ListNodes() {
+		if n.ID == d.Cluster.SelfID {
+			continue
+		}
+		if n.Addr == addr {
+			return n.ID
+		}
+		if sameHost == "" && sameHostAddr(n.Addr, addr) {
+			sameHost = n.ID
+		}
+		if fallback == "" {
+			fallback = n.ID
+		}
+	}
+	if sameHost != "" {
+		return sameHost
+	}
+	return fallback
+}
+
+// sameHostAddr 判断两个 host:port 地址是否同主机（端口可不同）。
+func sameHostAddr(a, b string) bool {
+	ha, _, err := net.SplitHostPort(a)
+	if err != nil {
+		return false
+	}
+	hb, _, err := net.SplitHostPort(b)
+	if err != nil {
+		return false
+	}
+	return ha == hb
 }
 
 // readLocalBinlogRange 读取本地 binlog 位点区间 [from,to]（含端点）条目。
@@ -283,11 +340,42 @@ func (d *DB) archiveBinlog() error {
 	return os.Rename(path, backup)
 }
 
-// FullAlignViaRegionPush 全量对齐兜底入口（阶段二，接口骨架）：
-// 旧主本地 binlog 损坏或补偿失败时，由 SQL 层 region push 机制把新主全部
-// region 当前行推给旧主，旧主 applyPush 覆盖本地后清基线再 StartFollower。
-// 当前实现仅提供入口判定（返回 ErrFullAlignNotReady），联动 SQL 层为后续
-// 排期（详见 T43 阶段二"兜底路径待 SQL 层联动"标注）。
-func (d *DB) FullAlignViaRegionPush() error {
-	return ErrFullAlignNotReady
+// FullAlignViaRegionPush 全量对齐兜底入口（阶段二，v1.7.0 接通 SQL 层 region push）：
+// 旧主本地 binlog 损坏或补偿失败时，请求新主把全部 region 当前行经 REGION_PUSH
+// 推送给本节点（新主侧 sql.Executor.pushAllRegionsToNode 扫描全量物理键，
+// 本机 cluster.Server.applyPush 在单一 WriteBatch 内覆盖落本地 + 学路由 + 落盘，
+// 幂等可重复）；全部推送成功后再清 binlog 基线、停止旧复制链路，最后以全新
+// follower 身份 StartFollower(newMasterAddr) 从 LSN=1 追平新主完整 binlog
+// （新写覆盖对齐段，幂等）。
+// newMasterNodeID 为新主集群节点 ID（本节点注册表内）；newMasterAddr 为复制地址。
+// 集群未启用/新主未注册/对端不可达/任一 region 推送失败/清基线或追平失败
+// 均返回 ErrFullAlignFailed（明确错误，不再返回"未就绪"骨架）。
+func (d *DB) FullAlignViaRegionPush(newMasterNodeID, newMasterAddr string) error {
+	if d.Cluster == nil || d.ClusterSrv == nil {
+		return fmt.Errorf("%w: cluster not enabled", ErrFullAlignFailed)
+	}
+	if _, ok := d.Cluster.GetNode(newMasterNodeID); !ok {
+		return fmt.Errorf("%w: new master node not registered: %s", ErrFullAlignFailed, newMasterNodeID)
+	}
+	// 请求新主把全部 region 当前行推送到本节点（同步等待逐 region applyPush 完成）。
+	if err := d.Cluster.RequestFullAlign(newMasterNodeID, d.Cluster.SelfID); err != nil {
+		return fmt.Errorf("%w: %v", ErrFullAlignFailed, err)
+	}
+	// 对齐完成：清 binlog 基线（防重启重复回迁），停止旧复制链路。
+	if err := d.archiveBinlog(); err != nil {
+		return fmt.Errorf("%w: %v", ErrFullAlignFailed, err)
+	}
+	if d.Follower != nil {
+		_ = d.Follower.Stop()
+		d.Follower = nil
+	}
+	if d.Replicator != nil {
+		_ = d.Replicator.Close()
+		d.Replicator = nil
+	}
+	// 以全新 follower 身份从 LSN=1 追平新主完整 binlog（新写覆盖对齐段，幂等）。
+	if err := d.StartFollower(newMasterAddr); err != nil {
+		return fmt.Errorf("%w: %v", ErrFullAlignFailed, err)
+	}
+	return nil
 }

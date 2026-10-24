@@ -541,3 +541,95 @@ func (e *Executor) migrateRegion(rg sharding.RegionInfo, target string) error {
 	// 路由变更全网广播：仅同步本次迁移条目，避免全量视图扩散残留漂移。
 	return e.broadcastRegionView([]sharding.RegionInfo{rgView}, nil)
 }
+
+// pushAllRegionsToNode 全量对齐推送（v1.7.0 回迁降级兜底）：
+// 把本节点全部 region 当前行 REGION_PUSH 推送到目标节点，目标节点 applyPush
+// 在单一 WriteBatch 内覆盖写本地 + 学路由 + 落盘 m:regions（幂等，可重复执行）。
+// 与 migrateRegion 同源（扫描→组装→推送），但**不切换路由归属、不广播**：
+// 源节点保持权威视图，目标节点经 applyPush 学习后本地持全部 region。
+// 任一 region 推送失败（如目标不可达）立即返回错误，调用方据此判定对齐失败。
+func (e *Executor) pushAllRegionsToNode(target string) error {
+	if e.mgr == nil || !e.mgr.HasRemoteNodes() {
+		return &SQLError{Msg: "cluster not enabled"}
+	}
+	if _, ok := e.mgr.GetNode(target); !ok {
+		return &SQLError{Msg: "node not registered: " + target}
+	}
+	// 收集全部 region：显式路由 + 各表隐式单 region（未落盘，AllRegions 不含）。
+	regions := make([]sharding.RegionInfo, 0, 16)
+	regions = append(regions, e.router.AllRegions()...)
+	seen := make(map[storage.ID]bool, len(regions))
+	for _, rg := range regions {
+		seen[rg.RegionID] = true
+	}
+	tx, err := e.tm.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	tabs, err := loadTables(tx.Get)
+	if err != nil {
+		return err
+	}
+	for _, tb := range tabs {
+		rs := e.regionsOf(tb)
+		if len(rs) == 1 && !rs[0].Explicit {
+			rid := storage.ID(uint64(tb.ID) | (uint64(1) << 63))
+			rg, ok := e.implicitRegion(rid)
+			if ok && !seen[rg.RegionID] {
+				regions = append(regions, rg)
+				seen[rg.RegionID] = true
+			}
+		}
+	}
+	// 权威路由视图：本地持有（Node==""）补记为本节点，供目标节点学习其余 region 归属。
+	routes := e.router.AllRegions()
+	for i := range routes {
+		if routes[i].Node == "" {
+			holds, err := e.regionHoldsLocal(routes[i])
+			if err != nil {
+				return err
+			}
+			if holds {
+				routes[i].Node = e.selfID
+				routes[i].Local = false
+			}
+		}
+	}
+	for _, rg := range regions {
+		start := sharding.EncodeRegionKey(rg.RegionID, rg.StartKey)
+		end := sharding.EncodeRegionKey(rg.RegionID, rg.EndKey)
+		if rg.EndKey == nil {
+			end = sharding.EncodeRegionKey(rg.RegionID+1, nil)
+		}
+		pairs, err := e.scanMerged(tx, []storage.KeyRange{{Start: start, End: end}})
+		if err != nil {
+			return err
+		}
+		rows := make([]cluster.QueryRow, 0, len(pairs))
+		for _, kv := range pairs {
+			rows = append(rows, cluster.QueryRow{Key: kv.Key, Value: kv.Value})
+		}
+		// 本次推送 region 在视图中归属目标节点（供目标节点学习；applyPush 单独落本地）。
+		rgView := rg
+		rgView.Node = target
+		rgView.Local = false
+		pushRoutes := make([]sharding.RegionInfo, 0, len(routes)+1)
+		appended := false
+		for _, rt := range routes {
+			if rt.RegionID == rg.RegionID {
+				pushRoutes = append(pushRoutes, rgView)
+				appended = true
+			} else {
+				pushRoutes = append(pushRoutes, rt)
+			}
+		}
+		if !appended {
+			pushRoutes = append(pushRoutes, rgView)
+		}
+		if err := e.mgr.PushRegion(target, rg, rows, pushRoutes, e.selfID); err != nil {
+			return err
+		}
+	}
+	return nil
+}

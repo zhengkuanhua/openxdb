@@ -72,6 +72,10 @@ type Server struct {
 	// 签名：clusterEpoch=消息级全局纪元，regionEpoch=该 region owner 变更纪元，rid=region ID；
 	// 返回 err 表示消息陈旧，接收端拒绝更新路由并记日志。
 	regionEpochCheck func(clusterEpoch, regionEpoch uint64, rid storage.ID) error
+	// fullAlignFn 节点侧 v1.7.0 全量对齐回调（db.StartCluster 装配
+	// sql.Executor.PushAllRegionsToNode）；nil = 未装配（FULLALIGN_REQ 回执 Err）。
+	// 签名：dest=推送目的地 NodeID（请求方自身，旧主）。
+	fullAlignFn func(dest string) error
 }
 
 // SetTSO 注入时间戳源（M8：db.StartCluster 装配本地发号器）。
@@ -128,6 +132,10 @@ func (s *Server) checkPushEpoch(clusterEpoch, regionEpoch uint64, rid storage.ID
 
 // SetManager 注入集群管理器（供 NODE_HELLO 双向注册对端节点）。
 func (s *Server) SetManager(m *Manager) { s.mgr = m }
+
+// SetFullAlignHandler 注入 v1.7.0 全量对齐回调（db.StartCluster 装配
+// sql.Executor.PushAllRegionsToNode）；传 nil 恢复未装配（FULLALIGN_REQ 回执 Err）。
+func (s *Server) SetFullAlignHandler(fn func(dest string) error) { s.fullAlignFn = fn }
 
 // Serve 在已有 listener 上提供服务，返回实际监听地址（127.0.0.1:0 场景获取端口）。
 func (s *Server) Serve(ln net.Listener) (string, error) {
@@ -222,6 +230,9 @@ func (s *Server) handleConn(conn net.Conn) {
 		case msgEpochNotify:
 			// P0 HA：epoch 广播（升主授权通知；无回执，单向尽力而为）
 			s.handleEpoch(conn, payload)
+		case msgFullAlignReq:
+			// v1.7.0：全量对齐请求（回迁降级兜底；目标节点推送全部 region 后回执）
+			s.handleFullAlign(conn, payload)
 		default:
 			return // 未知帧：断开
 		}

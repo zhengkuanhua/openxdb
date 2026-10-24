@@ -301,6 +301,9 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// P1 HA：装配路由消息 epoch 校验回调（REGION_PUSH/路由广播接收端校验
 	// clusterEpoch+regionEpoch 新鲜度，拒绝陈旧消息；开关关闭/旧节点零回归）。
 	srv.SetRegionEpochChecker(d.SQL.CheckRegionPushEpoch)
+	// v1.7.0：装配全量对齐推送回调（FULLALIGN_REQ 接收端，回迁降级兜底）：
+	// 旧主请求本节点（新主）把全部 region 当前行 REGION_PUSH 推送给它。
+	srv.SetFullAlignHandler(d.SQL.PushAllRegionsToNode)
 	// M5：2PC 崩溃恢复——清理未决 prepare（未决事务回滚，数据从未写入）
 	// 与历史幂等标记（仅运行期有效），保证重启后参与者状态干净可重入。
 	if err := srv.Recover2PC(); err != nil {
