@@ -28,6 +28,7 @@ const (
 	tokLe        // <=
 	tokGe        // >=
 	tokDot       // .
+	tokColon     // :
 	tokKeyword   // 关键字（大写原文）
 	tokVar       // @ident（存储过程变量/参数引用，M15-3）
 	tokQuestion  // ?（M18 prepared statement 参数占位符）
@@ -154,6 +155,8 @@ func lex(sql string) ([]token, error) {
 			l.emit(tokMod, "%", 1)
 		case c == ':' && l.peek(1) == '=':
 			l.emit(tokAssign, ":=", 2)
+		case c == ':':
+			l.emit(tokColon, ":", 1)
 		case c == '=':
 			l.emit(tokEq, "=", 1)
 		case c == '!':

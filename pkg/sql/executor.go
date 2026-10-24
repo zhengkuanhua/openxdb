@@ -547,6 +547,8 @@ func (e *Executor) execStmt(sess *Session, stmt Stmt) (*Result, error) {
 		return e.execShowAlertRules(sess, s)
 	case *ShowBinlogEventsStmt:
 		return e.execShowBinlogEvents(sess, s)
+	case *ShowMasterStatusStmt:
+		return e.execShowMasterStatus(sess)
 	case *SetStmt:
 		return e.execSet(sess, s)
 	case *AssignRegionStmt:

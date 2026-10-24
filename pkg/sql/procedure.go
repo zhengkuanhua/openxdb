@@ -212,28 +212,46 @@ type procIfBranch struct {
 	body   []procStmt
 }
 
-// procLoop LOOP ... END LOOP（无限循环，配合 EXIT/LEAVE）。
-type procLoop struct{ body []procStmt }
+// procLoop LOOP ... END LOOP（无限循环，配合 EXIT/LEAVE / ITERATE）。
+// label 可选：[label:] LOOP ... END LOOP [label]（LEAVE <label> 跳转目标）。
+type procLoop struct {
+	label string
+	body  []procStmt
+}
 
 func (procLoop) procStmt() {}
 
 // procWhile WHILE <cond> LOOP ... END LOOP / WHILE <cond> DO ... END WHILE。
+// label 可选：[label:] WHILE ... END WHILE [label]。
 type procWhile struct {
-	cond []token
-	body []procStmt
+	label string
+	cond  []token
+	body  []procStmt
 }
 
 func (procWhile) procStmt() {}
 
 // procFor FOR @i IN <from> .. <to> | <from> TO <to> LOOP ... END LOOP。
+// label 可选：[label:] FOR ... END FOR [label]。
 type procFor struct {
-	name string
-	from []token
-	to   []token
-	body []procStmt
+	label string
+	name  string
+	from  []token
+	to    []token
+	body  []procStmt
 }
 
 func (procFor) procStmt() {}
+
+// procRepeat REPEAT <body> UNTIL <cond> END REPEAT（先执行后判断）。
+// label 可选：[label:] REPEAT ... END REPEAT [label]。
+type procRepeat struct {
+	label string
+	cond  []token
+	body  []procStmt
+}
+
+func (procRepeat) procStmt() {}
 
 // procCase CASE 语句：简单 CASE（base 非空）或搜索 CASE（base 为空）。
 type procCase struct {
@@ -250,13 +268,29 @@ type procCaseWhen struct {
 	body []procStmt
 }
 
-// procExit EXIT [WHEN <cond>] / LEAVE [WHEN <cond>]：跳出当前循环。
+// procExit EXIT [WHEN <cond>] / LEAVE [label] [WHEN <cond>]：
+// 跳出当前循环；LEAVE <label> 跳出指定标签的循环。
 type procExit struct {
+	label   string // LEAVE <label> 的目标（空表示最近循环）
 	cond    []token
 	hasCond bool
 }
 
 func (procExit) procStmt() {}
+
+// procIterate ITERATE [label] [WHEN <cond>] / CONTINUE [WHEN <cond>]：
+// 跳到当前循环的下一次迭代（重新判断循环条件）。
+type procIterate struct {
+	label   string // ITERATE <label> 的目标（空表示最近循环）
+	cond    []token
+	hasCond bool
+}
+
+func (procIterate) procStmt() {}
+
+// maxLoopIterations 单层循环最大迭代次数（防死循环）。
+// 任意循环（LOOP/WHILE/FOR/REPEAT）单次迭代计数超过该值即报错终止。
+const maxLoopIterations = 10000
 
 // procParser 过程体 token 流解析器。
 type procParser struct {
@@ -360,6 +394,15 @@ func (p *procParser) parseSeq(stops map[string]bool) ([]procStmt, error) {
 		if p.eof() {
 			break
 		}
+		// 标签循环前缀：[label:] LOOP/WHILE/FOR/REPEAT。
+		if p.cur().kind == tokIdent && p.pos+1 < len(p.toks) && p.toks[p.pos+1].kind == tokColon &&
+			p.pos+2 < len(p.toks) {
+			switch strings.ToUpper(p.toks[p.pos+2].text) {
+			case "LOOP", "WHILE", "FOR", "REPEAT":
+				p.next() // label
+				p.next() // :
+			}
+		}
 		k := p.kw()
 		if stops != nil && stops[k] {
 			break
@@ -375,6 +418,8 @@ func (p *procParser) parseSeq(stops map[string]bool) ([]procStmt, error) {
 			s, err = p.parseWhile()
 		case "FOR":
 			s, err = p.parseFor()
+		case "REPEAT":
+			s, err = p.parseRepeat()
 		case "CASE":
 			s, err = p.parseCase()
 		case "DECLARE":
@@ -383,6 +428,8 @@ func (p *procParser) parseSeq(stops map[string]bool) ([]procStmt, error) {
 			s, err = p.parseSet()
 		case "EXIT", "LEAVE":
 			s, err = p.parseExit()
+		case "ITERATE", "CONTINUE":
+			s, err = p.parseIterate()
 		default:
 			s, err = p.parseSQL(stops)
 		}
@@ -563,8 +610,30 @@ func (p *procParser) parseIf() (procStmt, error) {
 	return procIf{branches: branches}, nil
 }
 
-// parseLoop 解析 LOOP ... END LOOP。
+// parseLabel 解析可选的 [label:] 前缀（当前为 tokIdent + ':' 时消费并返回 label）。
+func (p *procParser) parseLabel() string {
+	if p.cur().kind == tokIdent && p.pos+1 < len(p.toks) && p.toks[p.pos+1].kind == tokColon {
+		lbl := p.cur().text
+		p.next()
+		p.next()
+		return lbl
+	}
+	return ""
+}
+
+// consumeEndLabel 消费可选的 END ... [label] 结束标签并返回。
+func (p *procParser) consumeEndLabel() string {
+	if p.cur().kind == tokIdent {
+		lbl := p.cur().text
+		p.next()
+		return lbl
+	}
+	return ""
+}
+
+// parseLoop 解析 [label:] LOOP ... END LOOP [label]。
 func (p *procParser) parseLoop() (procStmt, error) {
+	label := p.parseLabel()
 	p.next() // LOOP
 	p.loopDepth++
 	body, err := p.parseSeq(map[string]bool{"END": true})
@@ -578,14 +647,20 @@ func (p *procParser) parseLoop() (procStmt, error) {
 	if err := p.expect("LOOP"); err != nil {
 		return nil, err
 	}
+	endLabel := p.consumeEndLabel()
+	if label != "" && endLabel != "" && !strings.EqualFold(label, endLabel) {
+		return nil, &SQLError{Msg: "loop end label mismatch: " + label + " vs " + endLabel}
+	}
 	if p.kw() == ";" {
 		p.next()
 	}
-	return procLoop{body: body}, nil
+	return procLoop{label: label, body: body}, nil
 }
 
-// parseWhile 解析 WHILE <cond> LOOP ... END LOOP 或 WHILE <cond> DO ... END WHILE。
+// parseWhile 解析 [label:] WHILE <cond> LOOP ... END LOOP 或
+// WHILE <cond> DO ... END WHILE [label]。
 func (p *procParser) parseWhile() (procStmt, error) {
+	label := p.parseLabel()
 	p.next() // WHILE
 	cond, err := p.collectUntil(false, "LOOP", "DO")
 	if err != nil {
@@ -614,15 +689,21 @@ func (p *procParser) parseWhile() (procStmt, error) {
 	if err := p.expect(endKW); err != nil {
 		return nil, err
 	}
+	endLabel := p.consumeEndLabel()
+	if label != "" && endLabel != "" && !strings.EqualFold(label, endLabel) {
+		return nil, &SQLError{Msg: "loop end label mismatch: " + label + " vs " + endLabel}
+	}
 	if p.kw() == ";" {
 		p.next()
 	}
-	return procWhile{cond: cond, body: body}, nil
+	return procWhile{label: label, cond: cond, body: body}, nil
 }
 
-// parseFor 解析 FOR @i IN <from> .. <to> LOOP ... END LOOP（也接受 TO 与 END FOR）。
+// parseFor 解析 [label:] FOR @i IN <from> .. <to> LOOP ... END LOOP [label]
+//（也接受 TO 与 END FOR）。
 // 注：lexer 数字解析会把 `1..10` 视为非法小数，范围分隔符必须写作 `1 .. 10`（带空格）。
 func (p *procParser) parseFor() (procStmt, error) {
+	label := p.parseLabel()
 	p.next() // FOR
 	if p.cur().kind != tokVar {
 		return nil, &SQLError{Msg: "expected @loop variable after FOR in procedure body"}
@@ -673,7 +754,45 @@ func (p *procParser) parseFor() (procStmt, error) {
 	if p.kw() == ";" {
 		p.next()
 	}
-	return procFor{name: name, from: from, to: to, body: body}, nil
+	return procFor{label: label, name: name, from: from, to: to, body: body}, nil
+}
+
+// parseRepeat 解析 [label:] REPEAT <body> UNTIL <cond> END REPEAT [label]
+//（先执行后判断：UNTIL 条件为真时结束循环，与 WHILE 前置判断相反）。
+func (p *procParser) parseRepeat() (procStmt, error) {
+	label := p.parseLabel()
+	p.next() // REPEAT
+	p.loopDepth++
+	body, err := p.parseSeq(map[string]bool{"UNTIL": true, "END": true})
+	p.loopDepth--
+	if err != nil {
+		return nil, err
+	}
+	if p.kw() != "UNTIL" {
+		return nil, &SQLError{Msg: "REPEAT UNTIL condition required in procedure body"}
+	}
+	p.next() // UNTIL
+	cond, err := p.collectUntil(false, "END")
+	if err != nil {
+		return nil, err
+	}
+	if len(cond) == 0 {
+		return nil, &SQLError{Msg: "REPEAT UNTIL condition required in procedure body"}
+	}
+	if err := p.expect("END"); err != nil {
+		return nil, err
+	}
+	if err := p.expect("REPEAT"); err != nil {
+		return nil, err
+	}
+	endLabel := p.consumeEndLabel()
+	if label != "" && endLabel != "" && !strings.EqualFold(label, endLabel) {
+		return nil, &SQLError{Msg: "loop end label mismatch: " + label + " vs " + endLabel}
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return procRepeat{label: label, cond: cond, body: body}, nil
 }
 
 // parseCase 解析 CASE 语句：CASE <base> WHEN ... END CASE 或搜索 CASE WHEN ... END CASE。
@@ -814,6 +933,37 @@ func (p *procParser) parseExit() (procStmt, error) {
 	return st, nil
 }
 
+// parseIterate 解析 ITERATE [label] [WHEN <cond>] / CONTINUE [label] [WHEN <cond>]：
+// 跳到当前循环的下一次迭代（重新判断循环条件）。
+// label 仅当后续紧跟分号或 WHEN 时才按标签消费，避免误吞 WHEN 关键字。
+func (p *procParser) parseIterate() (procStmt, error) {
+	p.next() // ITERATE / CONTINUE
+	if p.loopDepth == 0 {
+		return nil, &SQLError{Msg: "ITERATE/CONTINUE outside loop in procedure body"}
+	}
+	st := procIterate{}
+	if p.cur().kind == tokIdent && p.pos+1 < len(p.toks) {
+		nk := strings.ToUpper(p.toks[p.pos+1].text)
+		if nk == ";" || nk == "WHEN" {
+			st.label = p.cur().text
+			p.next()
+		}
+	}
+	if p.kw() == "WHEN" {
+		p.next()
+		cond, err := p.collectUntil(true)
+		if err != nil {
+			return nil, err
+		}
+		st.cond = cond
+		st.hasCond = true
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return st, nil
+}
+
 // validProcVarType 校验 DECLARE 变量类型白名单（宽松：INT/DECIMAL/TEXT/BOOLEAN 系列）。
 func validProcVarType(typ string) bool {
 	switch strings.ToUpper(typ) {
@@ -915,6 +1065,15 @@ func validateProcStmts(stmts []procStmt) error {
 			}
 		case procExit:
 			// EXIT/LEAVE 必须位于循环内，已在解析期校验。
+		case procRepeat:
+			if len(st.cond) == 0 {
+				return &SQLError{Msg: "REPEAT UNTIL condition required in procedure body"}
+			}
+			if err := validateProcStmts(st.body); err != nil {
+				return err
+			}
+		case procIterate:
+			// ITERATE/CONTINUE 必须位于循环内，已在解析期校验。
 		}
 	}
 	return nil
@@ -1107,9 +1266,10 @@ func (e *Executor) execProcedureBody(sess *Session, body string, env map[string]
 
 // procRunner 过程体执行上下文。
 type procRunner struct {
-	e    *Executor
-	sess *Session
-	env  map[string]Value
+	e       *Executor
+	sess    *Session
+	env     map[string]Value
+	iterate bool // ITERATE/CONTINUE 触发（由循环层消费，表示继续下一次迭代而非退出）
 }
 
 // run 顺序执行语句列表；返回 exited=true 表示 EXIT/LEAVE 触发（由循环层消费）。
@@ -1202,6 +1362,10 @@ func (r *procRunner) runStmt(s procStmt) (bool, error) {
 				return false, err
 			}
 			if exited {
+				if r.iterate {
+					r.iterate = false
+					continue
+				}
 				return false, nil
 			}
 		}
@@ -1219,6 +1383,10 @@ func (r *procRunner) runStmt(s procStmt) (bool, error) {
 				return false, err
 			}
 			if exited {
+				if r.iterate {
+					r.iterate = false
+					continue
+				}
 				return false, nil
 			}
 		}
@@ -1244,6 +1412,10 @@ func (r *procRunner) runStmt(s procStmt) (bool, error) {
 				return false, err
 			}
 			if exited {
+				if r.iterate {
+					r.iterate = false
+					continue
+				}
 				return false, nil
 			}
 		}
@@ -1293,6 +1465,43 @@ func (r *procRunner) runStmt(s procStmt) (bool, error) {
 			return false, err
 		}
 		if ok {
+			return true, nil
+		}
+		return false, nil
+	case procRepeat:
+		// REPEAT ... UNTIL：先执行 body，再判断 UNTIL 条件，条件为真即结束。
+		for {
+			exited, err := r.run(st.body)
+			if err != nil {
+				return false, err
+			}
+			if exited {
+				if r.iterate {
+					r.iterate = false
+					continue
+				}
+				return false, nil
+			}
+			ok, err := evalProcCond(st.cond, r.env)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				return false, nil
+			}
+		}
+	case procIterate:
+		// ITERATE/CONTINUE：跳过本次迭代剩余语句，回到循环层继续下一次迭代。
+		if !st.hasCond {
+			r.iterate = true
+			return true, nil
+		}
+		ok, err := evalProcCond(st.cond, r.env)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			r.iterate = true
 			return true, nil
 		}
 		return false, nil

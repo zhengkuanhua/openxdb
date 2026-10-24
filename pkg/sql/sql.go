@@ -76,6 +76,13 @@ func (e *Engine) RemoteRestoreDo(req cluster.RestoreDoReq) (cluster.RestoreDoRes
 // SetReplicationModeSetter 装配 T33 复制模式控制器（db.Open 调用，转发至 Executor）。
 func (e *Engine) SetReplicationModeSetter(c ReplicationModeSetter) { e.ex.SetReplicationModeSetter(c) }
 
+// BinlogWireInfo 返回复制协议（COM_BINLOG_DUMP / SHOW MASTER STATUS 装配）所需信息：
+// binlog 文件路径（空 = 未启用）与表目录（tableID → 表名/列定义）。mysqlproto 在
+// 处理复制协议命令时调用，表目录用于行事件表名还原。
+func (e *Engine) BinlogWireInfo() (binlogPath string, tables []TableMeta, err error) {
+	return e.ex.binlogWireInfo()
+}
+
 // SetWriteFence 装配 P0 HA 写入 fencing 检查（db.Open 调用，转发至 Executor；
 // nil = 不启用，零回归）。
 func (e *Engine) SetWriteFence(wf WriteFence) { e.ex.SetWriteFence(wf) }

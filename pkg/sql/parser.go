@@ -3855,6 +3855,15 @@ func (p *parser) parseShow() (Stmt, error) {
 		p.next()
 		return &ShowAlertStatusStmt{}, nil
 	}
+	// SHOW MASTER STATUS：复制协议位点入口（MASTER/STATUS 不在关键字表）。
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "MASTER") {
+		p.next()
+		if !(p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "STATUS")) {
+			return nil, errf("expected keyword STATUS at %d, got %q", p.pos, p.cur().text)
+		}
+		p.next()
+		return &ShowMasterStatusStmt{}, nil
+	}
 	// SHOW BINLOG EVENTS [FROM <lsn>] [LIMIT <n>]：BINLOG/EVENTS 不在关键字表。
 	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "BINLOG") {
 		p.next()
@@ -4048,12 +4057,19 @@ func (p *parser) parseDeallocate() (Stmt, error) {
 	return &DeallocateStmt{Name: strings.ToLower(nameTok.text)}, nil
 }
 
-// parseImport IMPORT MYSQLDUMP FROM 'path' [BATCH n] [IGNORE ERRORS] 或 IMPORT INTO t FROM 'path' [BATCH n] [IGNORE ERRORS]
+// parseImport IMPORT MYSQLDUMP FROM 'path' [选项...] 或 IMPORT INTO t FROM 'path' [BATCH n] [IGNORE ERRORS]
+//
+// P2-13 mysqldump 全选项（仅 MYSQLDUMP）：
+//
+//	NO DATA | NO CREATE INFO | NO DROP TABLES | COMPLETE INSERT | EXTENDED INSERT |
+//	INSERT IGNORE | REPLACE | HEX BLOB | SET NAMES <charset> | BATCH n |
+//	CONCURRENCY k | IGNORE ERRORS
 func (p *parser) parseImport() (Stmt, error) {
 	if err := p.expectKeyword("IMPORT"); err != nil {
 		return nil, err
 	}
-	stmt := &ImportStmt{}
+	// DropTables 默认 true：--add-drop-table 先删后建为导入默认重建语义
+	stmt := &ImportStmt{DropTables: true}
 	// M14：IMPORT MYSQLDUMP FROM 'path' —— mysqldump 兼容导入（解析 CREATE TABLE/INSERT 灌入）
 	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "MYSQLDUMP") {
 		p.next()
@@ -4086,8 +4102,9 @@ func (p *parser) parseImport() (Stmt, error) {
 		stmt.Path = pathTok.text
 	}
 	// 可选后缀：BATCH <n>（逐批提交行数）/ IGNORE ERRORS（坏行计数跳过）/
-	// CONCURRENCY <k>（P2-12：仅 MYSQLDUMP 支持表级并行导入并发度，CSV 单表无意义）
-	for p.cur().kind == tokIdent {
+	// CONCURRENCY <k>（P2-12：仅 MYSQLDUMP 支持表级并行导入并发度，CSV 单表无意义）/
+	// P2-13 mysqldump 全选项（NO DATA 等，仅 MYSQLDUMP 支持）。
+	for p.cur().kind == tokIdent || p.cur().kind == tokKeyword {
 		switch strings.ToUpper(p.cur().text) {
 		case "BATCH":
 			p.next()
@@ -4121,6 +4138,95 @@ func (p *parser) parseImport() (Stmt, error) {
 			}
 			p.next()
 			stmt.IgnoreErrors = true
+		case "NO":
+			p.next()
+			if stmt.Format != "MYSQLDUMP" {
+				return nil, &SQLError{Msg: "NO options are only supported for IMPORT MYSQLDUMP"}
+			}
+			if p.cur().kind != tokIdent {
+				return nil, &SQLError{Msg: "expected DATA/CREATE/DROP after NO"}
+			}
+			switch strings.ToUpper(p.cur().text) {
+			case "DATA":
+				p.next()
+				stmt.NoData = true
+			case "CREATE":
+				p.next()
+				if p.cur().kind != tokIdent || !strings.EqualFold(p.cur().text, "INFO") {
+					return nil, &SQLError{Msg: "expected keyword INFO after NO CREATE"}
+				}
+				p.next()
+				stmt.NoCreateInfo = true
+			case "DROP":
+				p.next()
+				if p.cur().kind != tokIdent || !strings.EqualFold(p.cur().text, "TABLES") {
+					return nil, &SQLError{Msg: "expected keyword TABLES after NO DROP"}
+				}
+				p.next()
+				stmt.DropTables = false
+			default:
+				return nil, &SQLError{Msg: "expected DATA/CREATE INFO/DROP TABLES after NO"}
+			}
+		case "COMPLETE":
+			p.next()
+			if stmt.Format != "MYSQLDUMP" {
+				return nil, &SQLError{Msg: "COMPLETE INSERT is only supported for IMPORT MYSQLDUMP"}
+			}
+			if p.cur().kind != tokIdent || !strings.EqualFold(p.cur().text, "INSERT") {
+				return nil, &SQLError{Msg: "expected keyword INSERT after COMPLETE"}
+			}
+			p.next()
+			stmt.CompleteInsert = true
+		case "EXTENDED":
+			p.next()
+			if stmt.Format != "MYSQLDUMP" {
+				return nil, &SQLError{Msg: "EXTENDED INSERT is only supported for IMPORT MYSQLDUMP"}
+			}
+			if p.cur().kind != tokIdent || !strings.EqualFold(p.cur().text, "INSERT") {
+				return nil, &SQLError{Msg: "expected keyword INSERT after EXTENDED"}
+			}
+			p.next()
+			stmt.ExtendedInsert = true
+		case "INSERT":
+			p.next()
+			if stmt.Format != "MYSQLDUMP" {
+				return nil, &SQLError{Msg: "INSERT IGNORE is only supported for IMPORT MYSQLDUMP"}
+			}
+			if p.cur().kind != tokIdent || !strings.EqualFold(p.cur().text, "IGNORE") {
+				return nil, &SQLError{Msg: "expected keyword IGNORE after INSERT"}
+			}
+			p.next()
+			stmt.InsertIgnore = true
+		case "REPLACE":
+			p.next()
+			if stmt.Format != "MYSQLDUMP" {
+				return nil, &SQLError{Msg: "REPLACE is only supported for IMPORT MYSQLDUMP"}
+			}
+			stmt.Replace = true
+		case "HEX":
+			p.next()
+			if stmt.Format != "MYSQLDUMP" {
+				return nil, &SQLError{Msg: "HEX BLOB is only supported for IMPORT MYSQLDUMP"}
+			}
+			if p.cur().kind != tokIdent || !strings.EqualFold(p.cur().text, "BLOB") {
+				return nil, &SQLError{Msg: "expected keyword BLOB after HEX"}
+			}
+			p.next()
+			stmt.HexBlob = true
+		case "SET":
+			p.next()
+			if stmt.Format != "MYSQLDUMP" {
+				return nil, &SQLError{Msg: "SET NAMES is only supported for IMPORT MYSQLDUMP"}
+			}
+			if p.cur().kind != tokIdent || !strings.EqualFold(p.cur().text, "NAMES") {
+				return nil, &SQLError{Msg: "expected keyword NAMES after SET"}
+			}
+			p.next()
+			csTok, err := p.expect(tokIdent, "charset name")
+			if err != nil {
+				return nil, err
+			}
+			stmt.SetNamesCharset = csTok.text
 		default:
 			return nil, &SQLError{Msg: "unexpected token after IMPORT: " + p.cur().text}
 		}

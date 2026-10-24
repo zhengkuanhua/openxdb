@@ -20,7 +20,9 @@ const (
 	comQuery            = 0x03
 	comFieldList        = 0x04
 	comPing             = 0x0e
+	comBinlogDump       = 0x12
 	comChangeUser       = 0x11
+	comRegisterSlave    = 0x15
 	comStmtPrepare      = 0x16
 	comStmtExecute      = 0x17
 	comStmtSendLongData = 0x18
@@ -98,6 +100,14 @@ func (c *mysqlConn) serveCommands() error {
 			c.handleStmtSendLongData(payload[1:])
 		case comSetOption:
 			if err := c.pc.writePacket(eofPacket(c.status())); err != nil {
+				return err
+			}
+		case comRegisterSlave:
+			if err := c.handleRegisterSlave(payload[1:]); err != nil {
+				return err
+			}
+		case comBinlogDump:
+			if err := c.handleBinlogDump(payload[1:]); err != nil {
 				return err
 			}
 		case comChangeUser:

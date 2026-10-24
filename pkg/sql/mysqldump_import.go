@@ -30,7 +30,20 @@ func (e *Executor) execImportDump(sess *Session, s *ImportStmt) (*Result, error)
 		}
 		return e.execImportDumpParallel(sess, s)
 	}
-	dump, err := mysqldump.ParseFile(s.Path, mysqldump.Options{IgnoreErrors: s.IgnoreErrors})
+	// P2-13：mysqldump 全选项贯通到解析
+	opt := mysqldump.Options{
+		IgnoreErrors:    s.IgnoreErrors,
+		NoData:          s.NoData,
+		NoCreateInfo:    s.NoCreateInfo,
+		CompleteInsert:  s.CompleteInsert,
+		ExtendedInsert:  s.ExtendedInsert,
+		InsertIgnore:    s.InsertIgnore,
+		Replace:         s.Replace,
+		HexBlob:         s.HexBlob,
+		SetNamesCharset: s.SetNamesCharset,
+		DropTables:      s.DropTables,
+	}
+	dump, err := mysqldump.ParseFile(s.Path, opt)
 	if err != nil {
 		return nil, &SQLError{Msg: "import failed: " + err.Error()}
 	}
@@ -63,7 +76,11 @@ func (e *Executor) execImportDump(sess *Session, s *ImportStmt) (*Result, error)
 		return nil
 	}
 	// 1) DROP TABLE IF EXISTS（重建语义：目标库同名表被替换）
+	//    P2-13：NO DROP TABLES 时跳过 DROP，改为"保留目标库存量 + 覆盖式灌入"。
 	for _, dn := range dump.Drops {
+		if !s.DropTables {
+			break
+		}
 		if _, err := e.execDropTable(sess, &DropTableStmt{Name: dn, IfExists: true}); err != nil {
 			if !s.IgnoreErrors {
 				return nil, err
@@ -84,12 +101,15 @@ func (e *Executor) execImportDump(sess *Session, s *ImportStmt) (*Result, error)
 				pk = c.Name
 			}
 		}
-		if _, err := e.execCreateTable(sess, &CreateTableStmt{Name: t.Name, Columns: cols, PK: pk}); err != nil {
-			if !s.IgnoreErrors {
-				return nil, err
+		// P2-13：NO CREATE INFO 不建表（目标库表须已存在），仍从目标库取 meta 灌入。
+		if !s.NoCreateInfo {
+			if _, err := e.execCreateTable(sess, &CreateTableStmt{Name: t.Name, Columns: cols, PK: pk}); err != nil {
+				if !s.IgnoreErrors {
+					return nil, err
+				}
+				bad++
+				continue
 			}
-			bad++
-			continue
 		}
 		tables++
 		tx, err := e.getTx(sess)
@@ -102,13 +122,19 @@ func (e *Executor) execImportDump(sess *Session, s *ImportStmt) (*Result, error)
 		}
 		meta := findTable(tabs, t.Name)
 		if meta == nil {
+			if s.NoCreateInfo && s.IgnoreErrors {
+				bad++
+				continue
+			}
 			return nil, &SQLError{Msg: "table not exists after create: " + t.Name}
 		}
 		var ops []kvOp
 		// seen：文件内重复主键（同事务未提交写不可见，需本表独立去重）
 		seen := make(map[string]bool)
+		// pending：REPLACE 模式下同事务唯一索引冲突检测缓冲（flush 后失效需重置）
+		var pending [][]Value
 		for _, r := range t.Rows {
-			vals, verr := dumpRowValues(t, r)
+			vals, verr := dumpRowValues(t, r, s.HexBlob)
 			if verr != nil {
 				if !s.IgnoreErrors {
 					return nil, verr
@@ -129,20 +155,34 @@ func (e *Executor) execImportDump(sess *Session, s *ImportStmt) (*Result, error)
 				continue
 			}
 			seen[string(pk)] = true
-			rops, ok, oerr := e.insertRowOps(sess, tx, tabs, meta, nil, vals, true)
-			if oerr != nil {
-				if !s.IgnoreErrors {
-					return nil, oerr
+			if s.Replace {
+				// --replace：REPLACE INTO 语义，主键/唯一冲突覆盖旧行
+				rops, _, oerr := e.insertRowUpsertOps(sess, tx, tabs, meta, nil, vals, nil, true, &pending)
+				if oerr != nil {
+					if !s.IgnoreErrors {
+						return nil, oerr
+					}
+					bad++
+					continue
 				}
-				bad++
-				continue
+				ops = append(ops, rops...)
+				inserted++
+			} else {
+				rops, ok, oerr := e.insertRowOps(sess, tx, tabs, meta, nil, vals, true)
+				if oerr != nil {
+					if !s.IgnoreErrors {
+						return nil, oerr
+					}
+					bad++
+					continue
+				}
+				if !ok {
+					skipped++
+					continue
+				}
+				ops = append(ops, rops...)
+				inserted++
 			}
-			if !ok {
-				skipped++
-				continue
-			}
-			ops = append(ops, rops...)
-			inserted++
 			if s.Batch > 0 && len(ops) >= s.Batch {
 				if err := e.applyImportOps(tx, ops); err != nil {
 					return nil, err
@@ -151,6 +191,7 @@ func (e *Executor) execImportDump(sess *Session, s *ImportStmt) (*Result, error)
 				if err := flush(); err != nil {
 					return nil, err
 				}
+				pending = nil // 新事务：pending 唯一冲突缓冲失效
 				// flush 已开启新事务，重新取 tx/tabs/meta
 				tx, err = e.getTx(sess)
 				if err != nil {
@@ -215,7 +256,19 @@ func (e *Executor) execImportDumpParallel(sess *Session, s *ImportStmt) (*Result
 	if inTx {
 		return nil, &SQLError{Msg: "CONCURRENCY import cannot run inside an explicit transaction"}
 	}
-	dump, err := mysqldump.ParseFile(s.Path, mysqldump.Options{IgnoreErrors: s.IgnoreErrors})
+	opt := mysqldump.Options{
+		IgnoreErrors:    s.IgnoreErrors,
+		NoData:          s.NoData,
+		NoCreateInfo:    s.NoCreateInfo,
+		CompleteInsert:  s.CompleteInsert,
+		ExtendedInsert:  s.ExtendedInsert,
+		InsertIgnore:    s.InsertIgnore,
+		Replace:         s.Replace,
+		HexBlob:         s.HexBlob,
+		SetNamesCharset: s.SetNamesCharset,
+		DropTables:      s.DropTables,
+	}
+	dump, err := mysqldump.ParseFile(s.Path, opt)
 	if err != nil {
 		return nil, &SQLError{Msg: "import failed: " + err.Error()}
 	}
@@ -226,6 +279,9 @@ func (e *Executor) execImportDumpParallel(sess *Session, s *ImportStmt) (*Result
 	}
 	tables, badDDL := 0, 0
 	for _, dn := range dump.Drops {
+		if !s.DropTables {
+			break
+		}
 		if _, err := e.execDropTable(sess, &DropTableStmt{Name: dn, IfExists: true}); err != nil {
 			if !s.IgnoreErrors {
 				_ = e.rollbackTx(sess)
@@ -252,13 +308,16 @@ func (e *Executor) execImportDumpParallel(sess *Session, s *ImportStmt) (*Result
 				pk = c.Name
 			}
 		}
-		if _, err := e.execCreateTable(sess, &CreateTableStmt{Name: t.Name, Columns: cols, PK: pk}); err != nil {
-			if !s.IgnoreErrors {
-				_ = e.rollbackTx(sess)
-				return nil, err
+		// P2-13：NO CREATE INFO 不建表（目标库表须已存在）
+		if !s.NoCreateInfo {
+			if _, err := e.execCreateTable(sess, &CreateTableStmt{Name: t.Name, Columns: cols, PK: pk}); err != nil {
+				if !s.IgnoreErrors {
+					_ = e.rollbackTx(sess)
+					return nil, err
+				}
+				badDDL++
+				continue
 			}
-			badDDL++
-			continue
 		}
 		tables++
 		tasks = append(tasks, tblTask{idx: i, t: t})
@@ -298,7 +357,7 @@ func (e *Executor) execImportDumpParallel(sess *Session, s *ImportStmt) (*Result
 					stats[idx].err = err
 					continue
 				}
-				ins, skp, bad, bat, terr := e.importDumpTableRows(ws, tk.t, s.Batch, s.IgnoreErrors)
+				ins, skp, bad, bat, terr := e.importDumpTableRows(ws, tk.t, s.Batch, opt)
 				stats[idx].inserted, stats[idx].skipped, stats[idx].bad, stats[idx].batches = ins, skp, bad, bat
 				stats[idx].err = terr
 				// 表数据已按批提交；清残余事务（无未提交数据，仅回滚空事务）
@@ -346,7 +405,7 @@ func (e *Executor) execImportDumpParallel(sess *Session, s *ImportStmt) (*Result
 // importDumpTableRows P2-12：单表数据灌入（并行导入 worker 专用）。
 // 调用方须已通过 beginTx 为 ws 开启事务；表内逐行 INSERT，达到 batch 行时
 // applyImportOps 落盘并 flush（commitTx + beginTx）开启新事务继续；返回统计与首个错误。
-func (e *Executor) importDumpTableRows(ws *Session, t *mysqldump.Table, batch int, ignore bool) (inserted, skipped, bad, batches int64, retErr error) {
+func (e *Executor) importDumpTableRows(ws *Session, t *mysqldump.Table, batch int, opt mysqldump.Options) (inserted, skipped, bad, batches int64, retErr error) {
 	tx, err := e.getTx(ws)
 	if err != nil {
 		return 0, 0, 0, 0, err
@@ -361,6 +420,7 @@ func (e *Executor) importDumpTableRows(ws *Session, t *mysqldump.Table, batch in
 	}
 	var ops []kvOp
 	seen := make(map[string]bool)
+	var pending [][]Value
 	// flush 仅 BATCH 模式启用（并行入口已保证 batch>0）
 	flush := func() error {
 		if err := e.commitTx(ws); err != nil {
@@ -373,9 +433,9 @@ func (e *Executor) importDumpTableRows(ws *Session, t *mysqldump.Table, batch in
 		return nil
 	}
 	for _, r := range t.Rows {
-		vals, verr := dumpRowValues(t, r)
+		vals, verr := dumpRowValues(t, r, opt.HexBlob)
 		if verr != nil {
-			if !ignore {
+			if !opt.IgnoreErrors {
 				return inserted, skipped, bad, batches, verr
 			}
 			bad++
@@ -383,7 +443,7 @@ func (e *Executor) importDumpTableRows(ws *Session, t *mysqldump.Table, batch in
 		}
 		pk, perr := e.pkOf(meta, vals)
 		if perr != nil {
-			if !ignore {
+			if !opt.IgnoreErrors {
 				return inserted, skipped, bad, batches, perr
 			}
 			bad++
@@ -394,25 +454,39 @@ func (e *Executor) importDumpTableRows(ws *Session, t *mysqldump.Table, batch in
 			continue
 		}
 		seen[string(pk)] = true
-		rops, ok, oerr := e.insertRowOps(ws, tx, tabs, meta, nil, vals, true)
-		if oerr != nil {
-			if !ignore {
-				return inserted, skipped, bad, batches, oerr
+		if opt.Replace {
+			rops, _, oerr := e.insertRowUpsertOps(ws, tx, tabs, meta, nil, vals, nil, true, &pending)
+			if oerr != nil {
+				if !opt.IgnoreErrors {
+					return inserted, skipped, bad, batches, oerr
+				}
+				bad++
+				continue
 			}
-			bad++
-			continue
+			ops = append(ops, rops...)
+			inserted++
+		} else {
+			rops, ok, oerr := e.insertRowOps(ws, tx, tabs, meta, nil, vals, true)
+			if oerr != nil {
+				if !opt.IgnoreErrors {
+					return inserted, skipped, bad, batches, oerr
+				}
+				bad++
+				continue
+			}
+			if !ok {
+				skipped++
+				continue
+			}
+			ops = append(ops, rops...)
+			inserted++
 		}
-		if !ok {
-			skipped++
-			continue
-		}
-		ops = append(ops, rops...)
-		inserted++
 		if len(ops) >= batch {
 			if err := e.applyImportOps(tx, ops); err != nil {
 				return inserted, skipped, bad, batches, err
 			}
 			ops = nil
+			pending = nil
 			if err := flush(); err != nil {
 				return inserted, skipped, bad, batches, err
 			}
@@ -450,15 +524,32 @@ func (e *Executor) applyImportOps(tx txn.Txn, ops []kvOp) error {
 	return applyOps(tx, ops)
 }
 
+// isHexLiteral 判断字符串是否为十六进制字面量内容（仅含 0-9 A-F，长度须为偶数）。
+// 解析层已把 X''/0x 前缀剥离并统一大写，此处校验剩余内容即可。
+func isHexLiteral(s string) bool {
+	if len(s) == 0 || len(s)%2 != 0 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= '0' && c <= '9') && !(c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
 // dumpRowValues 将 mysqldump 解析单元格转换为 OpenXDB 存储值：
 //   - INT：十进制字符串 → IntVal；解析失败报错（NULL → 0）
 //   - TEXT：字符串原样（NULL → 空串）
 //   - DATE：校验 YYYY-MM-DD（NULL → 1970-01-01）
 //   - DECIMAL：parseDecimal 规范化（NULL → 0.0000）
-//   - BLOB：解析层规范化文本（hex 字面量统一大写，普通字符串原样）（NULL → 空串）
+//   - BLOB：解析层规范化文本（hex 字面量统一大写，普通字符串原样）（NULL → 空串）；
+//     P2-13 HexBlob=true 时强制校验 BLOB 内容为十六进制字面量（--hex-blob 语义），
+//     非 hex 内容报错。
 //
 // OpenXDB 无 NULL 语义，NULL 统一映射为列类型零值（文档 T27 说明）。
-func dumpRowValues(t *mysqldump.Table, r []mysqldump.Value) ([]Value, error) {
+func dumpRowValues(t *mysqldump.Table, r []mysqldump.Value, hexBlob bool) ([]Value, error) {
 	if len(r) != len(t.Columns) {
 		return nil, &SQLError{Msg: "import failed: row column count mismatch"}
 	}
@@ -506,7 +597,14 @@ func dumpRowValues(t *mysqldump.Table, r []mysqldump.Value) ([]Value, error) {
 			vals[i] = Value{Kind: "DECIMAL", I: scaled, S: canon}
 		case "BLOB":
 			// 解析层已把 hex 字面量（X''/0x）统一为大写文本；普通字符串按原样存储。
-			vals[i] = Value{Kind: "BLOB", S: cell.Raw}
+			raw := cell.Raw
+			if hexBlob && raw != "" {
+				// --hex-blob：BLOB 列必须为十六进制字面量（解析层统一为不含 X''/0x 前缀的大写 hex）
+				if !isHexLiteral(raw) {
+					return nil, &SQLError{Msg: "import failed: --hex-blob expects hex literal for BLOB column " + c.Name + ": " + raw}
+				}
+			}
+			vals[i] = Value{Kind: "BLOB", S: raw}
 		default:
 			return nil, &SQLError{Msg: "import failed: unsupported column type: " + c.Type}
 		}

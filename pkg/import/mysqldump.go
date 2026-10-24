@@ -52,14 +52,32 @@ type Table struct {
 type Dump struct {
 	Tables     []*Table // 按语句出现顺序
 	Drops      []string // DROP TABLE IF EXISTS 的表名（重建语义）
+	Databases  []string // CREATE DATABASE 识别的库名（--databases 模式；OpenXDB 单 default 库，仅记录）
 	Statements int      // 有内容语句总数（不含纯注释/空语句）
 	Skipped    int      // 跳过的语句数（SET/LOCK/不支持语句）
 	BadRows    int      // 容错模式下跳过的坏行数
+	Charset    string   // 最近一次 SET NAMES <charset> 识别的字符集（无则空）
 }
 
-// Options 控制解析容错。
+// Options 控制解析与导入选项（P2 全选项扩展）。
+// 除 IgnoreErrors 影响解析容错外，其余字段为 mysqldump 常见选项的语义开关，
+// 由导入执行层（pkg/sql）贯通消费；解析层自身对 NoCreateInfo 的 INSERT
+// 引用未定义表做宽容跳过，其余选项不影响解析产出。
 type Options struct {
 	IgnoreErrors bool // true：跳过无法解析的语句/行；false：首个错误即返回
+
+	NoData       bool // --no-data：跳过 INSERT 数据行（只导结构）
+	NoCreateInfo bool // --no-create-info：不建表（目标库表须已存在，只导数据）
+	// 说明：NoCreateInfo 只作用于导入执行层（跳过 CREATE 执行）；
+	// 解析层仍解析 CREATE 结构以校验 INSERT 列序；若 dump 无 CREATE
+	// （--no-create-info 导出），INSERT 引用未定义表时宽容跳过。
+	CompleteInsert bool // --complete-insert：INSERT 带完整列清单（解析层本就支持列清单）
+	ExtendedInsert bool // --extended-insert：多值 INSERT（解析层本就支持多值）
+	InsertIgnore   bool // --insert-ignore：主键冲突忽略（导入幂等默认语义）
+	Replace        bool // --replace：REPLACE INTO 语义（冲突覆盖旧行）
+	HexBlob        bool // --hex-blob：BLOB 列必须以十六进制字面量（大写 hex）解析
+	SetNamesCharset string // SET NAMES <charset>：解析时识别的字符集（数据按 UTF-8 处理）
+	DropTables     bool // --add-drop-table：DROP TABLE IF EXISTS 先删后建（默认 true 由执行层保证）
 }
 
 // ParseFile 解析 mysqldump 导出文件。
@@ -98,6 +116,7 @@ func Parse(r io.Reader, opt Options) (*Dump, error) {
 				}
 				return nil, err
 			}
+			t.Name = stripTablePrefix(t.Name)
 			if old := tables[t.Name]; old != nil {
 				// 同名表重复 CREATE（罕见）：以后者为准重建
 				old.Columns = t.Columns
@@ -107,6 +126,11 @@ func Parse(r io.Reader, opt Options) (*Dump, error) {
 			tables[t.Name] = t
 			d.Tables = append(d.Tables, t)
 		case strings.HasPrefix(upper, "INSERT"):
+			if opt.NoData {
+				// --no-data：跳过全部数据行（只导结构）
+				d.Skipped++
+				continue
+			}
 			id, bad, err := parseInsert(body)
 			if err != nil {
 				if opt.IgnoreErrors {
@@ -115,9 +139,16 @@ func Parse(r io.Reader, opt Options) (*Dump, error) {
 				}
 				return nil, err
 			}
+			id.Table = stripTablePrefix(id.Table)
 			d.BadRows += bad
 			t := tables[id.Table]
 			if t == nil {
+				if opt.NoCreateInfo {
+					// --no-create-info 导出：dump 不含 CREATE TABLE，
+					// 表结构由目标库提供，无法校验列序，宽容跳过该数据段。
+					d.Skipped++
+					continue
+				}
 				if opt.IgnoreErrors {
 					d.Skipped++
 					continue
@@ -182,6 +213,7 @@ func Parse(r io.Reader, opt Options) (*Dump, error) {
 				}
 				return nil, err
 			}
+			name = stripTablePrefix(name)
 			d.Drops = append(d.Drops, name)
 			if old := tables[name]; old != nil {
 				delete(tables, name)
@@ -193,8 +225,22 @@ func Parse(r io.Reader, opt Options) (*Dump, error) {
 				}
 			}
 		default:
-			// SET / LOCK TABLES / UNLOCK TABLES / 存储过程定义等辅助语句
-			d.Skipped++
+			// SET NAMES <charset>：识别并记录字符集（数据按 UTF-8 处理）。
+			// CREATE DATABASE：--databases 模式，记录库名（OpenXDB 单 default 库，仅记录）。
+			// USE <db>：--databases 模式切换上下文，识别并跳过（表名库前缀已剥离）。
+			// 其余辅助语句（LOCK TABLES / UNLOCK TABLES / SET 变量 /
+			// 存储过程定义等）整体跳过。
+			if cs, ok := parseSetNames(body); ok {
+				d.Charset = cs
+				d.Skipped++
+			} else if db, ok := parseCreateDatabase(body); ok {
+				d.Databases = append(d.Databases, db)
+				d.Skipped++
+			} else if _, ok := parseUseDatabase(body); ok {
+				d.Skipped++
+			} else {
+				d.Skipped++
+			}
 		}
 	}
 	return d, nil
@@ -377,11 +423,92 @@ func parseDropTable(s string) (string, error) {
 	if strings.HasPrefix(strings.ToUpper(rest), "IF EXISTS") {
 		rest = strings.TrimSpace(rest[len("IF EXISTS"):])
 	}
-	name, _, err := parseIdent(rest, 0)
+	name, _, err := parseQualifiedName(rest, 0)
 	if err != nil {
 		return "", fmt.Errorf("invalid DROP TABLE: %v", err)
 	}
 	return name, nil
+}
+
+// parseCreateDatabase 识别 "CREATE DATABASE [IF NOT EXISTS] <name>" 并返回库名（去反引号/引号）。
+// 可忽略尾部子句：DEFAULT CHARACTER SET / COLLATE / DEFAULT COLLATE 等。
+func parseCreateDatabase(s string) (string, bool) {
+	const prefix = "CREATE DATABASE"
+	if len(s) < len(prefix) {
+		return "", false
+	}
+	rest := strings.TrimSpace(s[len(prefix):])
+	if strings.HasPrefix(strings.ToUpper(rest), "IF NOT EXISTS") {
+		rest = strings.TrimSpace(rest[len("IF NOT EXISTS"):])
+	}
+	name, _, err := parseIdent(rest, 0)
+	if err != nil {
+		return "", false
+	}
+	return strings.Trim(name, "'\""), true
+}
+
+// parseUseDatabase 识别 "USE <name>" 并返回库名（去反引号/引号）。
+func parseUseDatabase(s string) (string, bool) {
+	const prefix = "USE"
+	if len(s) < len(prefix) {
+		return "", false
+	}
+	rest := strings.TrimSpace(s[len(prefix):])
+	name, _, err := parseIdent(rest, 0)
+	if err != nil {
+		return "", false
+	}
+	return strings.Trim(name, "'\""), true
+}
+
+// parseQualifiedName 解析表名，支持 [db.]tbl 与 `db`.`tbl` 限定形式：
+// 解析第一段标识符后若紧跟 '.'，继续解析第二段，返回第二段（表名，剥离库前缀）。
+// OpenXDB 为单 default 库模型，导入时统一使用裸表名。
+func parseQualifiedName(s string, i int) (string, int, error) {
+	name, j, err := parseIdent(s, i)
+	if err != nil {
+		return "", i, err
+	}
+	for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
+		j++
+	}
+	if j < len(s) && s[j] == '.' {
+		j++
+		for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
+			j++
+		}
+		return parseIdent(s, j)
+	}
+	return name, j, nil
+}
+
+// stripTablePrefix 剥离表名中的库前缀（`db`.`tbl` / db.tbl → tbl）。
+// 仅处理裸标识符形式（parseQualifiedName 已处理反引号限定形式）；
+// 单个反引号包裹的整体标识符（如 `db.tbl`，MySQL 允许点号在反引号内）视为表名本身。
+func stripTablePrefix(name string) string {
+	if strings.HasPrefix(name, "`") {
+		return name
+	}
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		return name[i+1:]
+	}
+	return name
+}
+
+// parseSetNames 识别 "SET NAMES <charset>" 语句并返回字符集（去引号）。
+// 支持大小写不敏感前缀与带引号字符集（'utf8mb4' / "utf8"）。
+func parseSetNames(s string) (string, bool) {
+	rest := strings.TrimSpace(s[len("SET"):])
+	if !strings.HasPrefix(strings.ToUpper(rest), "NAMES") {
+		return "", false
+	}
+	rest = strings.TrimSpace(rest[len("NAMES"):])
+	cs, _, err := parseIdent(rest, 0)
+	if err != nil {
+		return "", false
+	}
+	return strings.Trim(cs, "'\""), true
 }
 
 // parseCreateTable CREATE TABLE [IF NOT EXISTS] <name> (...)。
@@ -390,7 +517,7 @@ func parseCreateTable(s string) (*Table, error) {
 	if strings.HasPrefix(strings.ToUpper(rest), "IF NOT EXISTS") {
 		rest = strings.TrimSpace(rest[len("IF NOT EXISTS"):])
 	}
-	name, i, err := parseIdent(rest, 0)
+	name, i, err := parseQualifiedName(rest, 0)
 	if err != nil {
 		return nil, fmt.Errorf("CREATE TABLE: %v", err)
 	}
@@ -559,7 +686,7 @@ func parseInsert(s string) (*insertData, int, error) {
 		return nil, 0, fmt.Errorf("expected INTO after INSERT")
 	}
 	rest = strings.TrimSpace(rest[len("INTO"):])
-	name, i, err := parseIdent(rest, 0)
+	name, i, err := parseQualifiedName(rest, 0)
 	if err != nil {
 		return nil, 0, fmt.Errorf("INSERT: %v", err)
 	}

@@ -569,6 +569,13 @@ func (DeallocateStmt) stmt() {}
 // Batch>0 时逐批提交（每 n 行一批）；IgnoreErrors 时坏行计数跳过不整体回滚。
 // Concurrency>1（仅 MYSQLDUMP + BATCH 模式，P2-12）时启用表级并行导入：
 // 每张表独立会话/独立事务并发灌入，保持 BATCH 的"部分完成可恢复"语义。
+//
+// P2-13 mysqldump 全选项扩展（仅 Format=MYSQLDUMP 生效）：
+// NoData=跳过数据行；NoCreateInfo=不建表（目标库表须已存在）；CompleteInsert/
+// ExtendedInsert=兼容 --complete-insert/--extended-insert 输出形态（解析层原生支持）；
+// InsertIgnore=主键冲突忽略（幂等默认语义）；Replace=REPLACE INTO 覆盖语义；
+// HexBlob=BLOB 列按十六进制字面量解析；SetNamesCharset=SET NAMES 识别字符集
+// （数据按 UTF-8 处理）；DropTables=DROP TABLE IF EXISTS 先删后建（默认 true，NO DROP TABLES 关闭）。
 type ImportStmt struct {
 	Format       string // ""=CSV（IMPORT INTO t FROM 'path'）；"MYSQLDUMP"=mysqldump 兼容导入
 	Table        string
@@ -576,6 +583,17 @@ type ImportStmt struct {
 	Batch        int
 	IgnoreErrors bool
 	Concurrency  int // P2-12：mysqldump 表级并行导入并发度（0/1=串行）
+
+	// P2-13：mysqldump 全选项（仅 MYSQLDUMP）
+	NoData          bool
+	NoCreateInfo    bool
+	CompleteInsert  bool
+	ExtendedInsert  bool
+	InsertIgnore    bool
+	Replace         bool
+	HexBlob         bool
+	SetNamesCharset string
+	DropTables      bool // 默认 true（parser 初始化；NO DROP TABLES 关闭）
 }
 
 func (ImportStmt) stmt() {}
@@ -727,6 +745,12 @@ type ShowBinlogEventsStmt struct {
 }
 
 func (ShowBinlogEventsStmt) stmt() {}
+
+// ShowMasterStatusStmt SHOW MASTER STATUS（v1.6.0 P1-2 复制协议位点入口）：
+// 返回 binlog 文件名与当前写位点（最后 LSN+1），供 MySQL 复制/订阅工具取位点。
+type ShowMasterStatusStmt struct{}
+
+func (ShowMasterStatusStmt) stmt() {}
 
 // SetStmt 会话变量设置：SET [PERSIST] <name> = <value>（M9 查询缓存开关等；
 // M16-1 起支持 PERSIST：应用后同时写入持久化配置文件，重启后仍生效）。

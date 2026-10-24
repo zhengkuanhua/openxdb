@@ -16,12 +16,130 @@ package cdc
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/replication"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 )
+
+// ErrTimeout 阻塞订阅超时哨兵：Blocking=true 且 BlockTimeout>0 时，
+// 在等待期内无新事件到达，返回 ErrTimeout（此前已收到的事件仍随返回值带出）。
+var ErrTimeout = errors.New("cdc: blocking fetch timeout")
+
+// pollInterval 阻塞订阅的轮询间隔（binlog 为 append-only 落盘文件，反复扫描尾部）。
+const pollInterval = 50 * time.Millisecond
+
+// EventFormat 控制事件负载格式（P2-14 binlog 全选项）。
+type EventFormat int
+
+const (
+	// FormatFullRow 完整行负载：保留 RawValue（encodeRow JSON）。
+	FormatFullRow EventFormat = iota
+	// FormatPKOnly 仅主键负载：RawValue 置空，消费方只取 Kind/PK（节省带宽）。
+	FormatPKOnly
+)
+
+// KindFilter 变更类型过滤（P2-14）。
+// 零值（两者都 false）表示不过滤（等价 nil）。
+type KindFilter struct {
+	Put    bool // 收 PUT 事件
+	Delete bool // 收 DELETE 事件
+}
+
+func (f *KindFilter) match(k ChangeKind) bool {
+	if f == nil {
+		return true
+	}
+	switch k {
+	case KindPut:
+		return f.Put
+	case KindDelete:
+		return f.Delete
+	}
+	return false
+}
+
+// TableFilter 按表名/库名过滤事件（P2-14）。
+// Entries 任一规则命中即通过；空 Entries 表示不过滤。
+// 规则支持：
+//   - "tbl"：精确表名（匹配 resolve 结果 "db.tbl" 的后半段或裸表名）；
+//   - "db.tbl"：精确 库.表；
+//   - "db.*"：库下全部表；
+//   - "*" 或 "*.*"：全部表；
+//   - 十进制数字：按表 ID 精确匹配（未配置 resolver 时也可用）。
+type TableFilter struct {
+	Entries []string
+}
+
+func (f *TableFilter) match(id uint64, resolve func(uint64) (string, bool)) bool {
+	if f == nil || len(f.Entries) == 0 {
+		return true
+	}
+	var name string
+	if resolve != nil {
+		if n, ok := resolve(id); ok {
+			name = n
+		}
+	}
+	for _, e := range f.Entries {
+		if e == "*" || e == "*.*" {
+			return true
+		}
+		if n, err := strconv.ParseUint(e, 10, 64); err == nil && n == id {
+			return true
+		}
+		if name == "" {
+			continue
+		}
+		if matchTableRule(e, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchTableRule 判断规则是否命中全名（"db.tbl" 或 "tbl"）。
+func matchTableRule(rule, name string) bool {
+	if rule == name {
+		return true
+	}
+	if strings.HasSuffix(rule, ".*") {
+		// "db.*"：库前缀 + 任意表
+		return strings.HasPrefix(name, strings.TrimSuffix(rule, "*"))
+	}
+	if !strings.Contains(rule, ".") {
+		// 裸表名规则：匹配 "db.tbl" 的后半段
+		if i := strings.LastIndexByte(name, '.'); i >= 0 {
+			return name[i+1:] == rule
+		}
+	}
+	return false
+}
+
+// Filter 订阅过滤与行为选项（P2-14 binlog 全选项）。
+// 各字段均为可选项；零值 = 不施加对应限制或使用 Fetch 的默认参数。
+type Filter struct {
+	// TableFilter 表/库过滤；nil = 全部。
+	TableFilter *TableFilter
+	// KindFilter 变更类型过滤；nil = Put+Delete 都收。
+	KindFilter *KindFilter
+	// FromPosition 起始位点；>0 时覆盖 Fetch 的 from 参数。
+	FromPosition storage.LSN
+	// MaxEvents 返回事件上限；>0 时覆盖 Fetch 的 limit 参数（取两者更小值）。
+	MaxEvents int
+	// Blocking 阻塞订阅：无新事件时轮询等待而非立即返回。
+	Blocking bool
+	// BlockTimeout 阻塞等待总超时（毫秒）；<=0 表示无限等待。
+	// 超时且无事件返回 ErrTimeout；超时前已有事件则正常返回（含已收事件）。
+	BlockTimeout int64
+	// EventFormat 事件负载格式（默认 FormatFullRow）。
+	EventFormat EventFormat
+}
 
 // ChangeKind 变更类型。
 type ChangeKind uint8
@@ -133,9 +251,10 @@ func decodeKey(key []byte, kind ChangeKind) *Event {
 // 会话持有一个独立只读句柄；Fetch 内部加锁，支持单会话顺序拉取。
 // Close 后再次 Fetch 返回 replication.ErrClosed。
 type Subscriber struct {
-	mu     sync.Mutex
-	reader *replication.BinlogReader
-	closed bool
+	mu      sync.Mutex
+	reader  *replication.BinlogReader
+	closed  bool
+	resolve func(uint64) (string, bool) // 表 ID → "db.tbl"（TableFilter 按名过滤用）
 }
 
 // NewSubscriber 打开 binlog 只读订阅会话。
@@ -148,6 +267,14 @@ func NewSubscriber(path string) (*Subscriber, error) {
 	return &Subscriber{reader: r}, nil
 }
 
+// SetTableResolver 设置表 ID → "库.表" 名解析回调（TableFilter 按表名/库名过滤时需要）。
+// 回调返回 ok=false 表示未知表（此时按名规则不命中，仅 "*"/数字 ID 规则可命中）。
+func (s *Subscriber) SetTableResolver(fn func(uint64) (string, bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resolve = fn
+}
+
 // Fetch 从 from（含）开始增量读取至多 limit 条事件（limit<=0 表示一次读完
 // 当前文件全部），返回事件列表与下一消费位点 nextLSN：
 //   - 达到 limit：nextLSN = 最后返回事件的 LSN + 1；
@@ -156,35 +283,83 @@ func NewSubscriber(path string) (*Subscriber, error) {
 //
 // 客户端应把 nextLSN 保存到 OffsetStore，下次以该值续读；LSN 单调递增，
 // 重连续读不会重复也不会遗漏。
+// 等价 FetchFiltered(from, limit, Filter{})：不带过滤与阻塞行为。
 func (s *Subscriber) Fetch(from storage.LSN, limit int) ([]*Event, storage.LSN, error) {
+	return s.FetchFiltered(from, limit, Filter{})
+}
+
+// FetchFiltered 同 Fetch，但应用 P2-14 全选项（表过滤 / 类型过滤 / 起始位点 /
+// 上限 / 阻塞订阅 / 负载格式）。Filter 内 FromPosition/MaxEvents 为 0 时
+// 回退使用 from/limit 参数；两者均非 0 时取更小更严的值。
+func (s *Subscriber) FetchFiltered(from storage.LSN, limit int, f Filter) ([]*Event, storage.LSN, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return nil, 0, replication.ErrClosed
 	}
+	scanFrom := from
+	if f.FromPosition > 0 {
+		scanFrom = f.FromPosition
+	}
+	max := limit
+	if f.MaxEvents > 0 {
+		if max <= 0 || f.MaxEvents < max {
+			max = f.MaxEvents
+		}
+	}
 	var events []*Event
-	lastCollected := from - 1 // 无事件时表示 from 之前均已消费
-	tail, err := s.reader.ScanFrom(from, func(e *replication.BinlogEntry) error {
-		for _, ev := range Decode(e) {
-			events = append(events, &ev)
-			lastCollected = e.LSN
+	lastCollected := scanFrom - 1 // 无事件时表示 scanFrom 之前均已消费
+	var deadline time.Time
+	if f.Blocking && f.BlockTimeout > 0 {
+		deadline = time.Now().Add(time.Duration(f.BlockTimeout) * time.Millisecond)
+	}
+	for {
+		tail, err := s.reader.ScanFrom(scanFrom, func(e *replication.BinlogEntry) error {
+			for _, ev := range Decode(e) {
+				if !f.TableFilter.match(ev.TableID, s.resolve) {
+					continue
+				}
+				if !f.KindFilter.match(ev.Kind) {
+					continue
+				}
+				if f.EventFormat == FormatPKOnly {
+					ev.RawValue = nil
+				}
+				events = append(events, &ev)
+				lastCollected = e.LSN
+			}
+			if max > 0 && len(events) >= max {
+				return errStop
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, 0, err
 		}
-		if limit > 0 && len(events) >= limit {
-			return errStop
+		if max > 0 && len(events) >= max {
+			return events, lastCollected + 1, nil
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, 0, err
+		if !f.Blocking {
+			next := tail + 1
+			if next < scanFrom {
+				next = scanFrom
+			}
+			return events, next, nil
+		}
+		// 阻塞订阅：未达上限且无更多新事件，轮询等待。
+		if !deadline.IsZero() && time.Now().After(deadline) {
+			next := tail + 1
+			if next < scanFrom {
+				next = scanFrom
+			}
+			if len(events) > 0 {
+				// 超时前已收到部分事件：正常返回（不报超时）
+				return events, next, nil
+			}
+			return events, next, ErrTimeout
+		}
+		time.Sleep(pollInterval)
 	}
-	if limit > 0 && len(events) >= limit {
-		return events, lastCollected + 1, nil
-	}
-	next := tail + 1
-	if next < from {
-		next = from
-	}
-	return events, next, nil
 }
 
 // Close 关闭订阅会话。
