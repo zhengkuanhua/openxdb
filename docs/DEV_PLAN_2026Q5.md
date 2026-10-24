@@ -66,6 +66,7 @@ Q4（v1.1.0-v1.3.0）排期与 HA 脑裂防护 P0/P1/P2 已全部落地并推送
 **执行状态（2026-10-24）：第 1 项完成并推送双端；第 2 项 T44 测试落地**
 - 第 1 项：SQL 子集三项——ALTER 列级类型变更（`ALTER TABLE t MODIFY [COLUMN] c TYPE`，行数据重写 + 非法值零值回填、同事务原子提交）、CREATE DATABASE [IF NOT EXISTS] 多库目录（`db.go` 新增 `m:databases` 目录键 + SHOW DATABASES 同步可见，default 恒存前置）、窗口 ORDER BY 多列（`OVER (ORDER BY col1, col2 [ASC|DESC] ...)` 任意组合，RANGE 帧仍限单列）；新增 `pkg/sql/t39_sql_subset_test.go` 13 用例，`go build ./...` 与 `go test ./pkg/sql/` 全绿（基线 TestM6DownNodeReadFailover / TestP1DecimalAgg 排期外不修改）
 - 第 2 项：T44 复制协议测试正式化（此前 binlog_dump.go / p1_2_wire.go 已入库、测试未跟踪）——mysqlproto 侧新增 t44_wire_test.go 5 用例（COM_REGISTER_SLAVE 合法/截断、COM_BINLOG_DUMP 全量逐记录/中间 LSN/轮询新事件/未启用报错）；sql 侧 4 用例（SHOW MASTER STATUS 位点语义、整库 dump 导入、Position 往返一致）；import 解析层 2 用例（数据库级 dump、`db.tbl` 整体反引号保留）。同步修复两个缺陷：① 整体反引号标识符 `\`db.tbl\`` 被 stripTablePrefix 误剥离点号前缀（parseQualifiedName 增加 whole 标志，CREATE/INSERT/DROP 按需剥离）；② binlog dump 轮询不感知客户端断开导致订阅句柄常驻（文件尾探活读超时，连接关闭即退出释放）。三包全量测试通过
+- 第 4 项：阶段二回迁自动化完成——新增补偿帧 msgCompensate（RoleCompensate 独立连接回灌旧主未复制段，新主 apply+追加自身 binlog）、旧主识别新主 epoch 后重置基线以全新 follower 追平、binlog 损坏走全量对齐兜底入口判定；docs/T43_ha_rpo_rejoin.md 同步标注落地，新增 pkg/db/db_rejoin_test.go 三用例，replication/sql 全绿（db 仅基线 TestM6DownNodeReadFailover 排期外不修改）
 
 ## 4. 基线失败与边界约束
 - TestM6DownNodeReadFailover：双节点心跳时序竞态（滚动启动误判 DOWN），排期外不修改。

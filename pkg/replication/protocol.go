@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 )
@@ -20,6 +21,8 @@ import (
 //	  ACK      (4)  Slave → Master：已应用位点确认
 //	  PING     (5)  双向：心跳探测（发送时间戳 ms）
 //	  PONG     (6)  双向：心跳应答（原样回传时间戳）
+//	  COMPENSATE (32) 旧主 → 新主（阶段二回迁）：崩溃前未复制 binlog 段补偿批次
+//	  （payload=startLSN+count+encodeBinRecord 记录序列；新主 apply 后追加自身 binlog）
 const (
 	protoMagic   = "OPENXDBRPL"
 	protoVersion = 1
@@ -33,6 +36,9 @@ const (
 	// msgCapability 协议能力协商帧（P0 HA：声明支持 epoch/fencing 语义；
 	// 帧号 31 避开 M2 既有 1-6 与 M4 节点链路帧号）。
 	msgCapability byte = 31
+	// msgCompensate 补偿帧（阶段二回迁自动化）：旧主把崩溃前未复制 binlog 段
+	// 作为补偿批次发送给新主；帧号 32 避开既有帧号与能力协商帧。
+	msgCompensate byte = 32
 
 	maxFrameBody = 1 << 30
 )
@@ -178,4 +184,47 @@ func readFrame(r io.Reader) (byte, []byte, error) {
 // decodeBinFramePayload 将 BINLOG 帧 payload 解码为复制日志条目。
 func decodeBinFramePayload(payload []byte) (*BinlogEntry, error) {
 	return decodeBinRecord(bytes.NewReader(payload))
+}
+
+// compensation payload: startLSN(8B) + count(4B) + records...
+// 每条记录以 encodeBinRecord 编码（与 BINLOG 帧同构），服务端按序解码、
+// 按序 apply。start 为补偿段起始位点（旧主 binlog 位点语义，供审计/调试）。
+func encodeCompensation(start storage.LSN, entries []*BinlogEntry) ([]byte, error) {
+	if len(entries) > math.MaxUint32 {
+		return nil, errors.New("replication: compensation too many entries")
+	}
+	buf := make([]byte, 0, 12+len(entries)*64)
+	buf = binary.BigEndian.AppendUint64(buf, uint64(start))
+	buf = binary.BigEndian.AppendUint32(buf, uint32(len(entries)))
+	for _, e := range entries {
+		rec, err := encodeBinRecord(e)
+		if err != nil {
+			return nil, err
+		}
+		buf = append(buf, rec...)
+	}
+	return buf, nil
+}
+
+// decodeCompensation 将补偿帧 payload 解码为起始位点与条目列表。
+// 条目严格解码（半条视为损坏）；条目后仍有剩余字节视为损坏。
+func decodeCompensation(payload []byte) (storage.LSN, []*BinlogEntry, error) {
+	if len(payload) < 12 {
+		return 0, nil, ErrCorrupt
+	}
+	start := storage.LSN(binary.BigEndian.Uint64(payload[0:8]))
+	n := binary.BigEndian.Uint32(payload[8:12])
+	r := bytes.NewReader(payload[12:])
+	entries := make([]*BinlogEntry, 0, n)
+	for i := uint32(0); i < n; i++ {
+		e, err := decodeBinRecord(r)
+		if err != nil {
+			return 0, nil, err
+		}
+		entries = append(entries, e)
+	}
+	if r.Len() != 0 {
+		return 0, nil, ErrCorrupt
+	}
+	return start, entries, nil
 }

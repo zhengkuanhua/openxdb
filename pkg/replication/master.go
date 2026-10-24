@@ -49,6 +49,11 @@ type MasterReplicator struct {
 	degCount   int64           // 累计降级次数
 	lastWaitMs int64           // 最近一次 WaitAck 实际等待毫秒
 	waiting    bool            // 当前是否有提交在等待 ACK
+
+	// compensateFn 补偿帧应用回调（阶段二回迁）：nil 表示不接受补偿。
+	// 由上层（DB.StartReplicationTLS）装配，收到补偿批次时按序 apply 到本地
+	// 存储并追加自身 binlog，使其他从端可同步到补偿数据。
+	compensateFn func(entries []*BinlogEntry) error
 }
 
 type slaveConn struct {
@@ -109,6 +114,14 @@ func (m *MasterReplicator) Addr() string { return m.ln.Addr().String() }
 // BinlogPath 返回 binlog 落盘文件路径。
 func (m *MasterReplicator) BinlogPath() string { return m.store.(*binlogStore).path }
 
+// SetCompensationHandler 装配补偿帧应用回调（阶段二回迁）。nil 清除回调。
+// 回调负责把补偿批次 apply 到本地存储并追加自身 binlog（幂等 PUT/DELETE）。
+func (m *MasterReplicator) SetCompensationHandler(fn func(entries []*BinlogEntry) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.compensateFn = fn
+}
+
 // Serve 启动接受循环与心跳循环（异步）。
 func (m *MasterReplicator) Serve() error {
 	go m.acceptLoop()
@@ -138,7 +151,16 @@ func (m *MasterReplicator) handleSlave(conn net.Conn) {
 		return
 	}
 	role, from, err := decodeHello(payload)
-	if err != nil || role != RoleSlave {
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+	// 阶段二回迁：陈旧主以 RoleCompensate 身份发补偿帧回灌，不注册为从端。
+	if role == RoleCompensate {
+		m.handleCompensation(conn)
+		return
+	}
+	if role != RoleSlave {
 		_ = conn.Close()
 		return
 	}
@@ -173,6 +195,51 @@ func (m *MasterReplicator) handleSlave(conn net.Conn) {
 	}
 	go m.readLoop(sc)
 	m.pushLoop(sc, from)
+}
+
+// handleCompensation 处理一条补偿连接（阶段二回迁）：陈旧主以
+// RoleCompensate 身份握手后发送 msgCompensate 补偿帧，逐批 apply+追加
+// binlog 并回 ACK；连接关闭（EOF/断开）即结束，不注册从端、不推送 binlog。
+// compensateFn 为 nil（旧版主端未装配）时拒绝处理直接断开。
+func (m *MasterReplicator) handleCompensation(conn net.Conn) {
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second)) // 握手后仍留超时防呆连接
+	if err := writeFrame(conn, msgHelloOK, encodeHelloOK(m.store.LastLSN(), m.ReplicationMode())); err != nil {
+		return
+	}
+	if err := writeFrame(conn, msgCapability, encodeCapability(capEpochFencing)); err != nil {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Time{}) // 清除握手超时
+	for {
+		typ, payload, err := readFrame(conn)
+		if err != nil {
+			return // EOF / 断开：补偿批次发送完毕
+		}
+		if typ != msgCompensate {
+			continue // 忽略非补偿帧（补偿连接不允许其他上行帧）
+		}
+		_, entries, derr := decodeCompensation(payload)
+		if derr != nil {
+			return
+		}
+		m.mu.Lock()
+		fn := m.compensateFn
+		m.mu.Unlock()
+		if fn == nil {
+			return // 未装配补偿回调：拒绝本次补偿（发送端应走全量对齐兜底）
+		}
+		if aerr := fn(entries); aerr != nil {
+			return
+		}
+		var last storage.LSN
+		if len(entries) > 0 {
+			last = entries[len(entries)-1].LSN
+		}
+		if werr := writeFrame(conn, msgAck, encodeAck(last)); werr != nil {
+			return
+		}
+	}
 }
 
 // readLoop 读取从节点上行帧：ACK 推进位点，PONG 维持存活标记。

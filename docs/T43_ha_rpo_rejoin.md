@@ -1,13 +1,17 @@
 # T43 v1.6.0 P2-4：HA 后续——async 丢 RPO 补偿 / 回迁自动化设计草案
 
-> 版本：v1.6.0-P2-4（阶段一已实现，阶段二设计草案待立项）
+> 版本：v1.6.0-P2-4（阶段一、阶段二均已实现）
 > 日期：2026-10-24
-> 状态：阶段一（RPO 补偿）落地；阶段二（回迁自动化）设计草案评审后立项
+> 状态：阶段一（RPO 补偿）落地；阶段二（回迁自动化）落地
 > 范围：
 > - `pkg/replication/follower.go`（FollowerStatus/Follower 扩展 + PullCatchup 一次性追平）
-> - `pkg/db/ha.go`（promoteInfo/LastPromoteInfo/追平窗口 catchupBeforePromote）
-> - `pkg/db/db.go`（FailoverCatchupTimeout 可配置字段 + 默认 2s）
-> - `pkg/db/db_ha_repl_test.go`（阶段一三测试）
+> - `pkg/replication/replication.go`（RoleCompensate 角色 + msgCompensate 帧常量）
+> - `pkg/replication/protocol.go`（encodeCompensation/decodeCompensation）
+> - `pkg/replication/master.go`（补偿帧接收：SetCompensationHandler/handleCompensation）
+> - `pkg/replication/compensation.go`（PushCompensation 一次性补偿连接）
+> - `pkg/db/ha.go`（promoteInfo/LastPromoteInfo/追平窗口 + 回迁入口 StaleMasterReady/TryRejoinAsFollower/FullAlignViaRegionPush）
+> - `pkg/db/db.go`（FailoverCatchupTimeout 可配置字段 + ReceiveCompensation/compMu）
+> - `pkg/db/db_ha_repl_test.go`（阶段一三测试）、`pkg/db/db_rejoin_test.go`（阶段二回迁测试）
 > - 文档：本设计草案（docs/T43_ha_rpo_rejoin.md）
 > 闭环：`go build ./...` 无输出；`go test ./pkg/replication/...`、`go test ./pkg/sql/...` 全绿；
 > `go test ./pkg/db/...` 仅基线失败 TestM6DownNodeReadFailover（排期外不修改）
@@ -23,7 +27,7 @@ v1.6.0 第 4 项「HA 后续」承接 M6 主从切换（docs/T15_m6_ha.md）与�
 - **回迁缺失**：旧主恢复后无自动路径识别新主、补回未复制段、重置复制基线重新从属。
 
 阶段一解决「丢多少」——位点通告 + RPO 审计 + promote 前追平窗口（旧主短暂可达时尽力补偿）；
-阶段二解决「丢的怎么回来 + 角色回迁」——新增补偿帧回灌 + 复制基线重置（设计草案，待立项）。
+阶段二解决「丢的怎么回来 + 角色回迁」——新增补偿帧回灌 + 复制基线重置（本实现）。
 
 ## 阶段一：RPO 补偿（本实现）
 
@@ -67,53 +71,65 @@ v1.6.0 第 4 项「HA 后续」承接 M6 主从切换（docs/T15_m6_ha.md）与�
 | TestM6FailoverCatchupRpoZero | follower 落线但旧主端口仍可达，failover 自动追平 | `RpoLost = 0`；旧主在窗口内新写的键已补齐（k0..k14 均存在） |
 | TestM6FailoverCatchupDisabledRegression | `FailoverCatchupTimeout = 0` | 跳过追平照常 promote；窗口内旧主新键 k9 缺失、k0 既有数据存在（旧行为回归） |
 
-## 阶段二：回迁自动化（设计草案，待立项）
+## 阶段二：回迁自动化（本实现）
 
 ### 目标
 
 旧主（M_old）故障后，新主（M_new，原从端）接管写路径并推进 binlog（LSN 从 1 重新计数）。
 M_old 恢复后自动完成：识别新主 → 回灌崩溃前未复制段 → 重置复制基线 → 作为全新 follower 从属，
-且数据最终一致；binlog 损坏时走 SQL 层 region push 全量对齐兜底。
+且数据最终一致；binlog 损坏时走 SQL 层 region push 全量对齐兜底（接口骨架 + 文档说明，联动为后续排期）。
 
 ### 1. 旧主恢复后识别新主
 
 - 复用 P0 HA 既有能力：`msgCapability` 版本协商（epoch/fencing 位）、`NoteEpoch`、
   `ReconcileAfterPartition`（epoch 大者胜收敛）。
-- M_old 恢复启动后不自动重开复制；先探测集群对端（SQL 层 region 目录/心跳），
-  比较 `clusterEpoch`：对端 epoch 更大 → 对端是新主，M_old 进入回迁流程；
-  M_old epoch 更大（无对端存活）→ M_old 维持主身份（split-brain 由 quorum/epoch 仲裁已有语义兜底）。
+- `DB.StaleMasterReady() (bool, uint64, error)` 判定可回迁陈旧主：本地 binlog 文件存在且
+  非空（`BinlogLSN()>0`，崩溃前曾是主节点）+ 已降级只读（`ReadOnly()`，NoteEpoch 已收到
+  更高 clusterEpoch，写路径被 fencing 拒绝）→ 就绪，返回 binlog 最大位点；
+  binlog 为空（从未主/已重置）→ 非陈旧主跳过；binlog 损坏 → 返回错误（走全量对齐兜底）。
 
 ### 2. 崩溃前未复制 binlog 段经补偿帧回灌
 
-- 新帧类型 `msgCompensate`（replication.go 帧表新增）：
-  `payload = lastLSN u64（主端当前位点）| seq u64 | schema_ver u64 | kind u8 | table_id u64 | pk lenenc | raw_value lenenc`，
-  语义对齐现有 OPENXDB_ROWS_EVENT（PUT/DELETE）。
-- 触发：M_old 恢复后读取**崩溃前本地 binlog**（自 LSN=1 起，含崩溃瞬间未推送段）；
-  M_old 记录的确认位点（master.go Ack 侧从端确认）< 崩溃时 binlog 尾 → 存在未复制段。
-- 回灌路径：M_old 以补偿连接向 M_new 发送未复制段（逐条 msgCompensate）；
-  **M_new 侧 apply 语义**：按 table_id+pk 写入新主存储，并**追加进自己 binlog**（新 LSN 续计数），
-  使其他从端可同步；**冲突语义：新写为准**——补偿帧仅填充不存在或旧版本键
-  （新主已在新写路径覆盖的键不覆盖，保证写冲突不丢新写）。
-- 幂等：补偿帧携带 seq/位点，M_new 按主键幂等应用；断线重发不重复生效。
+- 新帧类型 `msgCompensate = 32`（replication.go 帧表新增）；新角色 `RoleCompensate = 3`。
+- **帧格式（本实现）**：`payload = startLSN u64（段起始位点）| count u32（条目数）| records`；
+  records 逐条复用既有 `encodeBinRecord/decodeBinRecord`（每条含 CommitLSN/SchemaVer 与
+  OPENXDB_ROWS_EVENT 语义 kind/table_id/pk/raw_value），不新增字段格式。
+- **发送侧**：`replication.PushCompensation(ctx, masterAddr, entries, tlsCfg)`——
+  独立一次性连接（不占用从端 dump 流、不注册从端）：`RoleCompensate` 握手 → 收 helloOK
+  （取主端位点）→ capability 帧 → 按 `maxCompensateBatch=512` 分批发送 msgCompensate、
+  每批等 msgAck 确认；`defer conn.Close()` 用完即释放，不泄漏句柄；30s 连接超时兜底。
+- **接收侧**：`master.go` 新增 `compensateFn` 与 `SetCompensationHandler(fn)`；`handleSlave`
+  中 role==RoleCompensate 分支走 `handleCompensation`（回 HelloOK+Capability，循环读
+  msgCompensate → 解码 → 调补偿回调 apply → 回 msgAck；EOF 结束）。
+- **DB 层入口**：`DB.ReceiveCompensation(entries []*replication.BinlogEntry) error`——
+  `compMu` 串行化批次：逐条 `Storage.Write(batch)` 幂等 apply（PUT/DELETE 覆盖语义）后
+  `Replicator.Append` 追加进自身 binlog（LSN 续增、CommitLSN 保留源值、SchemaVer 透传），
+  使其他从端经正常复制流同步到补偿数据；补偿写入不经过 Txn/commit hook，无竞争窗口。
+- **冲突语义：新写为准**——补偿先 apply、promote 后新写后 apply 时键冲突由新写覆盖
+  （均走同一存储覆盖语义；binlog 顺序即最终顺序，追平幂等）。
+- 幂等：PUT/DELETE 覆盖语义天然幂等；断线重发不重复生效；从端已确认段也重放（更稳，无害）。
 
 ### 3. 旧主重置复制基线，作为全新 follower 从 LSN=1 追平
 
-- 回灌完成后 M_old 丢弃本地旧 binlog（或归档），`StartFollowerTLS(M_new)`：
-  hello `from=1`，从 M_new 的 binlog 头开始全新追平——M_new binlog 已含
-  「M_old 未复制段 + 新写段」，追平后 M_old 与 M_new 数据一致。
-- 复制基线重置即“旧身份作废”：M_old 的旧 epoch/旧 master 身份下线，
-  M_new 的 Ack 记录从 LSN=1 重新计数。
+- `DB.TryRejoinAsFollower(newMasterAddr) error` 回迁入口：
+  1. `StaleMasterReady` 前置校验（binlog 非空 + 已降级只读），不满足返回 `ErrNotStaleMaster`；
+  2. 停止旧复制器（若有）→ `readLocalBinlogRange(1, lastLSN)` 读全段 → `PushCompensation`
+     回灌新主（30s ctx 超时）；失败返回 `ErrCompensationFailed`（调用方走全量对齐兜底）；
+  3. 补偿成功 → `archiveBinlog`（binlog 改名为 `.rejoin-bak-<unixnano>`，防重启重复回迁）
+     → 停止残留 Follower → `StartFollower(newMasterAddr)` 以全新 follower 身份从 LSN=1
+     追平新主完整 binlog（新写覆盖补偿段，幂等；追平后进入正常 streaming 增量同步）。
+- 基线重置即“旧身份作废”：旧 binlog 归档、旧 Replicator 关闭、epoch 只读态保留（写路径
+  持续 fencing，不回写身份）。
 - 风险与兜底：追平期间 M_new 继续写（binlog 追加），M_old 追平到当前尾后进入正常
   streaming，由后续 msgBinlog 增量同步，无窗口丢失（async 语义下 RPO=0 至多等于在途段）。
 
 ### 4. binlog 损坏兜底：SQL 层 region push 全量对齐
 
-- 触发：M_old 崩溃后本地 binlog 损坏/缺失（无法定位未复制段），无法按段补偿。
-- 方案：复用 SQL 层 region 数据通道（引擎 region push / scan + apply 全量）：
-  M_new 导出全量 region 快照（含数据与表目录 schema_ver），M_old 清空后全量 apply，
-  再走 §3 重置基线从 LSN=1 追平。
-- 代价：全量对齐吞吐低于增量补偿，仅作兜底；与 SQL 层既有 region 同步机制复用，
-  不新造复制协议。
+- 触发：M_old 崩溃后本地 binlog 损坏/缺失（`BinlogLSN`/段读取失败），无法按段补偿。
+- 本实现提供**入口判定骨架** `DB.FullAlignViaRegionPush() error`（返回 `ErrFullAlignNotReady`，
+  标注"兜底路径待 SQL 层联动"）；完整方案（M_new 导出全量 region 快照、M_old 清空后
+  applyPush 覆盖、再走 §3 重置基线）与 SQL 层 region 数据通道联动，为后续排期。
+- 代价：全量对齐吞吐低于增量补偿，仅作兜底；与 SQL 层既有 region 同步机制复用，不新造复制协议。
 
 ### 5. 明确不做（排期外）
 
@@ -126,11 +142,14 @@ M_old 恢复后自动完成：识别新主 → 回灌崩溃前未复制段 → �
 | 文件 | 改动 | 状态 |
 |---|---|---|
 | pkg/replication/follower.go | FollowerStatus/Follower 字段扩展、LastMasterLSN/RpoGap/recordMasterLSN、握手与 msgBinlog 记录位点、savedTLS、PullCatchup、catchupDialTimeout | 阶段一已实现 |
-| pkg/replication/replication.go | 帧表新增 msgCompensate 与编解码（阶段二） | 草案 |
-| pkg/replication/master.go | 追平连接从端身份/确认位点处理、补偿帧发送侧（阶段二） | 草案 |
-| pkg/db/ha.go | promoteInfo/LastPromoteInfo、catchupBeforePromote、failoverLoop 追平窗口 | 阶段一已实现 |
-| pkg/db/db.go | FailoverCatchupTimeout 字段与默认值；回迁后 StartFollowerTLS 复用（阶段二） | 阶段一已实现 / 草案 |
+| pkg/replication/replication.go | 帧表新增 msgCompensate（阶段二）、RoleCompensate 角色 | 阶段二已实现 |
+| pkg/replication/protocol.go | encodeCompensation/decodeCompensation（复用 encodeBinRecord/decodeBinRecord） | 阶段二已实现 |
+| pkg/replication/master.go | compensateFn/SetCompensationHandler、handleSlave RoleCompensate 分支、handleCompensation 接收循环 | 阶段二已实现 |
+| pkg/replication/compensation.go | PushCompensation 一次性补偿连接（分批发送 + ACK） | 阶段二已实现 |
+| pkg/db/ha.go | promoteInfo/LastPromoteInfo、catchupBeforePromote、failoverLoop 追平窗口（阶段一）；StaleMasterReady/TryRejoinAsFollower/readLocalBinlogRange/archiveBinlog/FullAlignViaRegionPush（阶段二） | 均已实现 |
+| pkg/db/db.go | FailoverCatchupTimeout 字段与默认值；ReceiveCompensation/compMu、StartReplicationTLS 装配补偿回调（阶段二） | 均已实现 |
 | pkg/db/db_ha_repl_test.go | 阶段一三测试 | 阶段一已实现 |
+| pkg/db/db_rejoin_test.go | 阶段二回迁测试（回灌/识别重置/兜底判定） | 阶段二已实现 |
 | docs/T43_ha_rpo_rejoin.md | 本文档 | 本提交 |
 
 ## 测试矩阵
@@ -142,6 +161,7 @@ M_old 恢复后自动完成：识别新主 → 回灌崩溃前未复制段 → �
 | 一 | TestM6FailoverCatchupDisabledRegression | 回归开关：Timeout=0 跳过追平、旧行为不变 | ✅ 通过 |
 | 一 | TestM6PromoteFollowerWriteContinues / TestM6AutoPromoteFollowerOnMasterDown | 既有 HA 回归 | ✅ 通过 |
 | 一 | pkg/replication 全量 / pkg/sql 全量 | 编解码/复制协议/上层回归 | ✅ 通过（TestM6DownNodeReadFailover 基线失败排期外不修改） |
-| 二 | （草案）补偿帧回灌：M_old 段 → M_new apply+追加 binlog、新写为准冲突、断线幂等 | 待立项后实现 |
-| 二 | （草案）重置基线：M_old 从 LSN=1 全新追平后数据一致 | 待立项后实现 |
-| 二 | （草案）binlog 损坏兜底：region push 全量对齐 | 待立项后实现 |
+| 二 | TestRejoinCompensationBackfill | 补偿帧回灌：M_old 段 → M_new apply+追加 binlog；新主数据与旧主崩溃前一致；其他从端同步到补偿段 | ✅ 通过 |
+| 二 | TestRejoinStaleMasterResetsAndTracksNewMaster | 旧主识别新主 epoch（fencing 降级只读）→ 补偿回灌 → 归档 binlog 重置基线 → 全新 follower 追平新写 | ✅ 通过 |
+| 二 | TestRejoinFallbackPathDecision | 兜底判定：binlog 为空跳过（ErrNotStaleMaster）/ binlog 损坏走补偿失败（ErrCompensationFailed）/ FullAlignViaRegionPush 未就绪（ErrFullAlignNotReady） | ✅ 通过 |
+

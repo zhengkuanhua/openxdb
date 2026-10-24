@@ -21,6 +21,9 @@ const (
 	RoleMaster ReplicaRole = 1
 	// RoleSlave 从节点：连接主节点并按复制日志回放。
 	RoleSlave ReplicaRole = 2
+	// RoleCompensate 补偿节点（阶段二回迁）：曾是主节点、崩溃后恢复的陈旧主，
+	// 经一次性连接把崩溃前未复制 binlog 段回灌给新主（不注册为从端、不接收推送）。
+	RoleCompensate ReplicaRole = 3
 )
 
 // BinlogEntry 一条复制日志条目（M2 实现）。

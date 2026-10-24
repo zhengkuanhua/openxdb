@@ -12,9 +12,13 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/replication"
+	"github.com/zhengkuanhua/openxdb/pkg/storage"
 )
 
 var (
@@ -162,4 +166,128 @@ func (d *DB) catchupBeforePromote(f *replication.Follower) {
 // 不受影响。开关关闭时 NoteEpoch 直接忽略（零回归）。
 func (d *DB) ReconcileAfterPartition(remoteEpoch uint64) {
 	d.NoteEpoch(remoteEpoch)
+}
+
+// ---- 阶段二：回迁自动化（v1.6.0 P2 HA，docs/T43_ha_rpo_rejoin.md）----
+
+// 回迁相关标准错误。
+var (
+	// ErrNotStaleMaster 节点不满足陈旧主条件（binlog 为空或未降级只读），不可回迁。
+	ErrNotStaleMaster = errors.New("db: not a stale master, rejoin skipped")
+	// ErrCompensationFailed 补偿段回灌失败（binlog 损坏/连接失败/主端拒绝），
+	// 应走全量对齐兜底路径。
+	ErrCompensationFailed = errors.New("db: compensation failed, need full align")
+	// ErrFullAlignNotReady 全量对齐兜底（SQL 层 region push 联动）未就绪。
+	ErrFullAlignNotReady = errors.New("db: full align fallback not ready")
+)
+
+// StaleMasterReady 判定本节点是否为可回迁的陈旧主（阶段二）：
+//   - 本地 binlog 文件存在且非空（崩溃前曾是主节点，有复制历史）；
+//   - 已降级只读（NoteEpoch 识别到更高 clusterEpoch，写路径已被 fencing 拒绝）。
+//
+// 返回是否就绪与 binlog 最大位点；binlog 损坏时返回错误（应走全量对齐兜底）。
+func (d *DB) StaleMasterReady() (bool, uint64, error) {
+	lsn, err := d.BinlogLSN()
+	if err != nil {
+		return false, 0, err // binlog 损坏：全量对齐兜底
+	}
+	if lsn == 0 {
+		return false, 0, nil // binlog 为空：从未担任主节点（或已重置），无需回迁
+	}
+	if !d.ReadOnly() {
+		return false, 0, nil // 未降级只读：尚未识别到新主更高 epoch，不可回迁
+	}
+	return true, lsn, nil
+}
+
+// TryRejoinAsFollower 回迁自动化入口（阶段二）：
+// 旧主（曾是 master、崩溃后恢复）识别到新主更高 epoch 后：
+//  1. 前置校验 StaleMasterReady（binlog 非空 + 已降级只读）；
+//  2. 读本地 binlog 全段作为补偿批次，经一次性补偿连接 PushCompensation
+//     回灌新主（新主 apply + 追加自身 binlog，从端已确认段也幂等重放）；
+//  3. 补偿成功（或 binlog 为空）后归档旧 binlog 并停止旧复制器，重置基线；
+//  4. 以全新 follower 身份 StartFollower(newMasterAddr) 从 LSN=1 追平新主
+//     完整 binlog（新写覆盖补偿段，幂等）。
+// 补偿失败（binlog 损坏/连接失败/主端拒绝）返回 ErrCompensationFailed，
+// 调用方应走 FullAlignViaRegionPush 全量对齐兜底。
+func (d *DB) TryRejoinAsFollower(newMasterAddr string) error {
+	ok, lastLSN, err := d.StaleMasterReady()
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrCompensationFailed, err)
+	}
+	if !ok {
+		return ErrNotStaleMaster
+	}
+	// 停止旧复制器（若此前仍挂着监听/复制），重置主端身份。
+	if d.Replicator != nil {
+		_ = d.Replicator.Close()
+		d.Replicator = nil
+	}
+	// 读 binlog 全段（[1,lastLSN]）作为补偿批次。
+	entries, err := d.readLocalBinlogRange(1, lastLSN)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrCompensationFailed, err)
+	}
+	if len(entries) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, cerr := replication.PushCompensation(ctx, newMasterAddr, entries, nil); cerr != nil {
+			return fmt.Errorf("%w: %v", ErrCompensationFailed, cerr)
+		}
+	}
+	// 补偿成功：归档旧 binlog（防重启后重复回迁），重置复制状态。
+	if err := d.archiveBinlog(); err != nil {
+		return fmt.Errorf("%w: %v", ErrCompensationFailed, err)
+	}
+	if d.Follower != nil {
+		_ = d.Follower.Stop()
+		d.Follower = nil
+	}
+	// 以全新 follower 身份从 LSN=1 追平新主完整 binlog（幂等覆盖补偿段）。
+	return d.StartFollower(newMasterAddr)
+}
+
+// readLocalBinlogRange 读取本地 binlog 位点区间 [from,to]（含端点）条目。
+// binlog 损坏/越界返回错误（调用方走全量对齐兜底）。
+func (d *DB) readLocalBinlogRange(from, to uint64) ([]*replication.BinlogEntry, error) {
+	path := filepath.Join(d.Dir, BinlogFile)
+	b, err := replication.OpenBinlog(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = b.Close() }()
+	var entries []*replication.BinlogEntry
+	err = b.ReadFrom(storage.LSN(from), func(e *replication.BinlogEntry) error {
+		if e.LSN <= storage.LSN(to) {
+			entries = append(entries, e)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+// archiveBinlog 归档本地 binlog 文件（改名为 .rejoin-bak-<unixnano>），
+// 使节点以全新 follower 身份启动（binlog 位点从 1 重计，防重启重复回迁）。
+func (d *DB) archiveBinlog() error {
+	path := filepath.Join(d.Dir, BinlogFile)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	backup := fmt.Sprintf("%s.rejoin-bak-%d", path, time.Now().UnixNano())
+	return os.Rename(path, backup)
+}
+
+// FullAlignViaRegionPush 全量对齐兜底入口（阶段二，接口骨架）：
+// 旧主本地 binlog 损坏或补偿失败时，由 SQL 层 region push 机制把新主全部
+// region 当前行推给旧主，旧主 applyPush 覆盖本地后清基线再 StartFollower。
+// 当前实现仅提供入口判定（返回 ErrFullAlignNotReady），联动 SQL 层为后续
+// 排期（详见 T43 阶段二"兜底路径待 SQL 层联动"标注）。
+func (d *DB) FullAlignViaRegionPush() error {
+	return ErrFullAlignNotReady
 }

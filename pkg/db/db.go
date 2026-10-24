@@ -103,6 +103,10 @@ type DB struct {
 	masterEpoch   uint64 // 本节点当前 master 授权 epoch（0 = 未授权主）
 	epochEnabled  bool   // ha_epoch_enabled：epoch 授权与写入 fencing（默认 off）
 	quorumEnabled bool   // ha_quorum_enabled：升主多数派仲裁（默认 off）
+
+	// compMu 补偿批次串行化（阶段二回迁自动化）：ReceiveCompensation 逐条
+	// apply+追加 binlog，与并发写/commit hook 隔离，保证补偿批次原子性。
+	compMu sync.Mutex
 	epochFilePath string // EpochMetaFile 持久化路径（Open 时装配）
 
 	// P2 HA：分区恢复合并（复制轨收敛 + 数据冲突标记）。
@@ -360,6 +364,9 @@ func (d *DB) StartReplicationTLS(addr string, tlsCfg *tls.Config) error {
 		_ = r.Close()
 		return fmt.Errorf("db: serve replicator: %w", err)
 	}
+	// 阶段二回迁：装配补偿帧回调——陈旧主补偿批次 apply 到本地存储并
+	// 追加自身 binlog（ReceiveCompensation 内部 compMu 串行化保证原子）。
+	r.SetCompensationHandler(d.ReceiveCompensation)
 	// 事务提交成功后按提交顺序同步写 binlog；错误仅记录，不改变单机提交语义。
 	d.Txn.SetCommitHook(func(lsn storage.LSN, seq uint64, batch *storage.WriteBatch) error {
 		return r.Append(&replication.BinlogEntry{CommitLSN: lsn, Batch: batch, SchemaVer: 0})
@@ -378,6 +385,41 @@ func (d *DB) StartReplicationTLS(addr string, tlsCfg *tls.Config) error {
 		d.broadcastEpoch(e)
 	}
 	d.Replicator = r
+	return nil
+}
+
+// ReceiveCompensation 接收并应用一个补偿批次（阶段二回迁自动化）。
+// 由 Replicator 补偿连接回调调用：把陈旧主崩溃前未复制的 binlog 段逐条
+// apply 到本地存储（幂等 PUT/DELETE，冲突以新写为准——补偿先 apply、
+// promote 后新写后 apply 时新写覆盖）并追加进自身 binlog（LSN 续增，
+// CommitLSN 保留源值），使其他从端可同步到补偿数据。
+// 与并发写/commit hook 顺序安全：compMu 串行化补偿批次（单批次内逐条
+// 顺序 apply+append），补偿写入不经过 Txn/commit hook，无竞争窗口。
+// 非主节点（Replicator 为 nil）返回 replication.ErrClosed。
+func (d *DB) ReceiveCompensation(entries []*replication.BinlogEntry) error {
+	if d.Replicator == nil {
+		return replication.ErrClosed
+	}
+	d.compMu.Lock()
+	defer d.compMu.Unlock()
+	for _, e := range entries {
+		if e == nil || e.Batch == nil {
+			return replication.ErrCorrupt
+		}
+		// 1) apply 到本地存储（幂等 PUT/DELETE，覆盖语义）。
+		if err := d.Storage.Write(e.Batch); err != nil {
+			return fmt.Errorf("db: compensation apply: %w", err)
+		}
+		// 2) 追加进自身 binlog（LSN 由 Append 分配续增，CommitLSN 保留源值，
+		//    SchemaVer 原样透传），其他从端经正常复制流同步到补偿数据。
+		if err := d.Replicator.Append(&replication.BinlogEntry{
+			CommitLSN: e.CommitLSN,
+			SchemaVer: e.SchemaVer,
+			Batch:     e.Batch,
+		}); err != nil {
+			return fmt.Errorf("db: compensation append: %w", err)
+		}
+	}
 	return nil
 }
 
