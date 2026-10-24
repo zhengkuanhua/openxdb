@@ -126,9 +126,13 @@ M_old 恢复后自动完成：识别新主 → 回灌崩溃前未复制段 → �
 ### 4. binlog 损坏兜底：SQL 层 region push 全量对齐
 
 - 触发：M_old 崩溃后本地 binlog 损坏/缺失（`BinlogLSN`/段读取失败），无法按段补偿。
-- 本实现提供**入口判定骨架** `DB.FullAlignViaRegionPush() error`（返回 `ErrFullAlignNotReady`，
-  标注"兜底路径待 SQL 层联动"）；完整方案（M_new 导出全量 region 快照、M_old 清空后
-  applyPush 覆盖、再走 §3 重置基线）与 SQL 层 region 数据通道联动，为后续排期。
+- 实现（v1.7.0 已接通）：`TryRejoinAsFollower` 补偿失败自动降级调用
+  `DB.FullAlignViaRegionPush(newMasterNodeID, newMasterAddr)`：定位新主节点后经集群
+  `RequestFullAlign`（`cluster.FullAlignReq`/`handleFullAlign`，`SetFullAlignHandler`
+  装配）请求新主导出全部 region 当前行——SQL 层 `PushAllRegionsToNode` 遍历
+  `AllRegions` + 隐式单 region 扫描物理键，`e.mgr.PushRegion` 逐 region 推送，
+  旧主侧 `applyPush` 覆盖落本地；对齐成功后归档旧 binlog、停旧链路，以全新
+  follower 从 LSN=1 追平新主（复用 §3 重置基线）。失败统一返回 `ErrFullAlignFailed`。
 - 代价：全量对齐吞吐低于增量补偿，仅作兜底；与 SQL 层既有 region 同步机制复用，不新造复制协议。
 
 ### 5. 明确不做（排期外）
