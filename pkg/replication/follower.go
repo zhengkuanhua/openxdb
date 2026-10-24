@@ -14,12 +14,13 @@ import (
 
 // FollowerStatus 从节点状态快照（查询/观测用）。
 type FollowerStatus struct {
-	Role       ReplicaRole
-	MasterAddr string
-	State      string // idle | connecting | streaming | offline
-	AppliedLSN storage.LSN
-	Connected  bool
-	LastError  string
+	Role          ReplicaRole
+	MasterAddr    string
+	State         string // idle | connecting | streaming | offline
+	AppliedLSN    storage.LSN
+	LastMasterLSN storage.LSN // 主端通告/收到的最新 binlog 位点（RPO 审计基准）
+	Connected     bool
+	LastError     string
 }
 
 // Follower 从端复制器：连接主节点、握手（携带本地续传位点）、接收 binlog 幂等
@@ -30,10 +31,13 @@ type Follower struct {
 
 	mu        sync.Mutex
 	applied   storage.LSN
-	state     string
-	masterAddr string
-	lastErr   string
-	conn      net.Conn
+	// lastMasterLSN 主端 binlog 最新位点（v1.6.0 阶段一 RPO 审计）：握手
+	// helloOK 通告与每个 msgBinlog 时取 max 更新；RpoGap 以它为基准。
+	lastMasterLSN storage.LSN
+	state         string
+	masterAddr    string
+	lastErr       string
+	conn          net.Conn
 
 	// HeartbeatInterval 预留心跳发送间隔（当前以回 PONG 应答主端 PING）。
 	HeartbeatInterval time.Duration
@@ -43,7 +47,12 @@ type Follower struct {
 	// peerCapFlags 握手后主端 CAPABILITY 帧声明的能力位（P0 HA 版本协商）。
 	// 旧主不发 CAPABILITY 帧时保持 0，表示无 epoch/fencing 语义。
 	peerCapFlags byte
+	// savedTLS 最近一次复制连接使用的 TLS 配置（PullCatchup 追平复用；nil=明文）。
+	savedTLS *tls.Config
 }
+
+// catchupDialTimeout PullCatchup 追平连接拨号超时（旧主可达性短探测）。
+const catchupDialTimeout = 500 * time.Millisecond
 
 // PeerCapability 返回握手协商出的对端（主节点）能力位：
 // 0 = 旧协议（无 CAPABILITY 帧）；非 0 含 capEpochFencing 位表示对端
@@ -94,17 +103,45 @@ func (f *Follower) AppliedLSN() storage.LSN {
 	return f.applied
 }
 
+// LastMasterLSN 返回主端 binlog 最新位点（RPO 审计基准，v1.6.0 阶段一）：
+// 握手 helloOK 通告与每个 msgBinlog 时取 max 更新；从未连接或旧主无位点
+// 通告时为 0。
+func (f *Follower) LastMasterLSN() storage.LSN {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastMasterLSN
+}
+
+// RpoGap 返回复制落后缺口（RPO 审计，v1.6.0 阶段一）：
+// lastMasterLSN - appliedLSN；已知主端位点不高于已应用位点时记 0。
+func (f *Follower) RpoGap() uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lastMasterLSN <= f.applied {
+		return 0
+	}
+	return uint64(f.lastMasterLSN - f.applied)
+}
+
+// recordMasterLSN 记录主端 binlog 最新位点（取 max，幂等；锁内调用方自持锁）。
+func (f *Follower) recordMasterLSN(lsn storage.LSN) {
+	if lsn > f.lastMasterLSN {
+		f.lastMasterLSN = lsn
+	}
+}
+
 // Status 返回从节点状态快照。
 func (f *Follower) Status() FollowerStatus {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return FollowerStatus{
-		Role:       RoleSlave,
-		MasterAddr: f.masterAddr,
-		State:      f.state,
-		AppliedLSN: f.applied,
-		Connected:  f.conn != nil,
-		LastError:  f.lastErr,
+		Role:          RoleSlave,
+		MasterAddr:    f.masterAddr,
+		State:         f.state,
+		AppliedLSN:    f.applied,
+		LastMasterLSN: f.lastMasterLSN,
+		Connected:     f.conn != nil,
+		LastError:     f.lastErr,
 	}
 }
 
@@ -134,6 +171,7 @@ func (f *Follower) StartTLS(ctx context.Context, masterAddr string, tlsCfg *tls.
 	f.conn = conn
 	f.masterAddr = masterAddr
 	f.state = "connecting"
+	f.savedTLS = tlsCfg
 	f.mu.Unlock()
 	defer func() {
 		f.mu.Lock()
@@ -158,10 +196,15 @@ func (f *Follower) StartTLS(ctx context.Context, masterAddr string, tlsCfg *tls.
 		f.setOffline(masterAddr, "unexpected handshake response")
 		return errors.New("replication: unexpected handshake response")
 	}
-	if _, _, err := decodeHelloOK(payload); err != nil {
+	// 阶段一 RPO 审计：握手通告记录主端 binlog 最新位点（旧主无位点=0）。
+	last, _, err := decodeHelloOK(payload)
+	if err != nil {
 		f.setOffline(masterAddr, err.Error())
 		return err
 	}
+	f.mu.Lock()
+	f.recordMasterLSN(last)
+	f.mu.Unlock()
 	f.setStateStreaming(masterAddr)
 
 	// 复制循环。
@@ -192,6 +235,10 @@ func (f *Follower) StartTLS(ctx context.Context, masterAddr string, tlsCfg *tls.
 				f.setOffline(masterAddr, derr.Error())
 				return derr
 			}
+			// 阶段一 RPO 审计：收到 binlog 即记录主端最新位点（max 语义）。
+			f.mu.Lock()
+			f.recordMasterLSN(e.LSN)
+			f.mu.Unlock()
 			if aerr := f.ApplyBinlog(e); aerr != nil {
 				f.setOffline(masterAddr, aerr.Error())
 				return aerr
@@ -234,6 +281,100 @@ func (f *Follower) Stop() error {
 		_ = f.conn.Close()
 	}
 	return nil
+}
+
+// PullCatchup 一次性追平复制（阶段一 RPO 补偿）：连接 masterAddr，从
+// AppliedLSN+1 续传，追平到主端通告位点（握手 helloOK lastLSN；每个
+// msgBinlog 时取 max 更新）或 ctx 截止即停；已应用条目保留（幂等）。
+// 使用独立一次性连接，不写入 f.conn，可与主复制循环并发安全共用幂等
+// 应用（ApplyBinlog 锁内写存储）；TLS 配置复用最近一次 StartTLS 的
+// savedTLS（nil=明文）。返回追平后的 AppliedLSN（未追平时返回截止前
+// 进度与 ctx/网络错误，调用方按需决定 promote 策略）。
+func (f *Follower) PullCatchup(ctx context.Context, masterAddr string) (storage.LSN, error) {
+	tlsCfg := func() *tls.Config {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.savedTLS
+	}()
+	var conn net.Conn
+	var err error
+	d := &net.Dialer{Timeout: catchupDialTimeout}
+	if tlsCfg != nil {
+		conn, err = tls.DialWithDialer(d, "tcp", masterAddr, tlsCfg)
+	} else {
+		conn, err = d.Dial("tcp", masterAddr)
+	}
+	if err != nil {
+		return f.AppliedLSN(), fmt.Errorf("replication: catchup dial %s: %w", masterAddr, err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	from := f.AppliedLSN() + 1
+	if err := writeFrame(conn, msgHello, encodeHello(RoleSlave, from)); err != nil {
+		return f.AppliedLSN(), fmt.Errorf("replication: catchup hello: %w", err)
+	}
+	typ, payload, err := readFrame(conn)
+	if err != nil {
+		return f.AppliedLSN(), fmt.Errorf("replication: catchup handshake: %w", err)
+	}
+	if typ != msgHelloOK {
+		return f.AppliedLSN(), errors.New("replication: catchup unexpected handshake response")
+	}
+	last, _, err := decodeHelloOK(payload)
+	if err != nil {
+		return f.AppliedLSN(), fmt.Errorf("replication: catchup decode hello_ok: %w", err)
+	}
+	f.mu.Lock()
+	f.recordMasterLSN(last)
+	f.mu.Unlock()
+
+	for f.AppliedLSN() < f.LastMasterLSN() {
+		if err := ctx.Err(); err != nil {
+			return f.AppliedLSN(), err
+		}
+		if dl, ok := ctx.Deadline(); ok {
+			_ = conn.SetReadDeadline(dl)
+		} else {
+			_ = conn.SetReadDeadline(time.Now().Add(f.ReadTimeout))
+		}
+		typ, payload, err := readFrame(conn)
+		if err != nil {
+			if ctx.Err() != nil {
+				return f.AppliedLSN(), ctx.Err()
+			}
+			return f.AppliedLSN(), err
+		}
+		_ = conn.SetReadDeadline(time.Time{})
+		switch typ {
+		case msgBinlog:
+			e, derr := decodeBinFramePayload(payload)
+			if derr != nil {
+				return f.AppliedLSN(), derr
+			}
+			f.mu.Lock()
+			f.recordMasterLSN(e.LSN)
+			f.mu.Unlock()
+			if aerr := f.ApplyBinlog(e); aerr != nil {
+				return f.AppliedLSN(), aerr
+			}
+			if werr := writeFrame(conn, msgAck, encodeAck(e.LSN)); werr != nil {
+				return f.AppliedLSN(), werr
+			}
+		case msgPing:
+			ts, derr := decodePing(payload)
+			if derr != nil {
+				return f.AppliedLSN(), derr
+			}
+			if werr := writeFrame(conn, msgPong, encodePing(ts)); werr != nil {
+				return f.AppliedLSN(), werr
+			}
+		case msgCapability:
+			// 一次性追平连接忽略能力协商（不覆盖主复制循环的 peerCapFlags）。
+		default:
+			// HELLO_OK / ACK 等在从端无处理，忽略。
+		}
+	}
+	return f.AppliedLSN(), nil
 }
 
 func (f *Follower) setOffline(addr, errMsg string) {

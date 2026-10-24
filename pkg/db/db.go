@@ -76,6 +76,13 @@ type DB struct {
 	Replicator *replication.MasterReplicator // 主节点复制器（StartReplication 后非 nil）
 	Follower   *replication.Follower         // 从节点复制器（StartFollower 后非 nil）
 
+	// 阶段一（v1.6.0 P2 HA）：promote 前追平旧主窗口。
+	// >0 时 failover 检测到 offline 后先尝试从旧主续传追平（窗口内尽力），
+	// 追平失败/超时带 RPO 提升；0=跳过追平保持旧 promote 行为。默认 2s。
+	FailoverCatchupTimeout time.Duration
+	promoteMu              sync.Mutex
+	lastPromote            promoteInfo
+
 	// M4 集群组件（Open 即创建管理器；StartCluster 后服务端监听节点链路）。
 	Cluster    *cluster.Manager // 节点注册表 + 心跳 + 查询转发
 	ClusterSrv *cluster.Server  // 节点链路服务（StartCluster 后非 nil）
@@ -237,7 +244,7 @@ func Open(dir string) (*DB, error) {
 		_ = st.Close()
 		return nil, fmt.Errorf("db: load persisted config: %w", err)
 	}
-	db := &DB{Dir: dir, Storage: st, WAL: w, Txn: tm, SQL: eng, Cluster: mgr, TSO: ts}
+	db := &DB{Dir: dir, Storage: st, WAL: w, Txn: tm, SQL: eng, Cluster: mgr, TSO: ts, FailoverCatchupTimeout: 2 * time.Second}
 	// P0 HA：加载 epoch.meta（已知最大 clusterEpoch 单调下限，防回退）。
 	db.epochFilePath = filepath.Join(dir, EpochMetaFile)
 	db.loadEpochMeta()
