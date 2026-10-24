@@ -3069,19 +3069,8 @@ func aggColumn(meta *TableMeta, rows [][]Value, c *SelectColumn) (Value, error) 
 		return best, nil
 	case "SUM", "AVG":
 		if len(vals) == 0 {
-			// T39：空表 SUM/AVG 返回类型化零值（DECIMAL 列返回 DECIMAL 0，否则 INT 0），
-			// 与 MySQL 语义对齐（MAX/MIN 空集保持 NULL）。
-			kind := "INT"
-			for _, cd := range meta.Columns {
-				if strings.EqualFold(cd.Name, c.Col) {
-					kind = strings.ToUpper(cd.Type)
-					break
-				}
-			}
-			if kind == "DECIMAL" {
-				return decVal(0), nil
-			}
-			return IntVal(0), nil
+			// 空表/空组 SUM/AVG 返回 NULL（SQL 标准：COUNT=0，SUM/AVG=NULL），与 MAX/MIN 一致。
+			return Value{Kind: "NULL"}, nil
 		}
 		dec := false
 		var isum, dsum int64
@@ -3846,11 +3835,8 @@ func aggValues(rel *Rel, rows [][]Value, c *SelectColumn) (Value, error) {
 	case "SUM", "AVG":
 		// INT：int64 求和；DECIMAL：scaled int64 求和后保持精度。
 		if len(vals) == 0 {
-			// 空表/空组：SUM 返回 0、AVG 返回 0（DECIMAL，与项目测试约定一致）。
-			if c.Agg == "SUM" {
-				return IntVal(0), nil
-			}
-			return decVal(0), nil
+			// 空表/空组 SUM/AVG 返回 NULL（SQL 标准：COUNT=0，SUM/AVG=NULL），与 MAX/MIN 一致。
+			return Value{Kind: "NULL"}, nil
 		}
 		dec := false
 		var isum int64

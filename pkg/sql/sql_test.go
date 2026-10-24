@@ -841,7 +841,7 @@ func TestP1DecimalAgg(t *testing.T) {
 	// 空表 AVG 返回 0
 	mustExec(t, e, "CREATE TABLE a2 (id INT, amount DECIMAL, PRIMARY KEY (id))")
 	rows = mustRows(t, e, "SELECT AVG(amount) FROM a2")
-	if len(rows) != 1 || rows[0][0].S != "0.0000" {
+	if len(rows) != 1 || rows[0][0].Kind != "NULL" {
 		t.Fatalf("empty AVG: got %+v", rows)
 	}
 }
