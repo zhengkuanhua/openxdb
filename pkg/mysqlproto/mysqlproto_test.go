@@ -187,9 +187,10 @@ func (c *testClient) readBinaryRows(cols []string) (rows [][]string) {
 		}
 		row := make([]string, len(cols))
 		// 包结构：header(0x00) + null bitmap((n+7+2)/8 字节) + 列值。
+		nullBitmap := rp[1 : 1+(len(cols)+7+2)/8]
 		off := 1 + (len(cols)+7+2)/8
 		for i := 0; i < len(cols); i++ {
-			if rp[(i+2)/8]&(1<<(uint(i+2)%8)) != 0 {
+			if nullBitmap[(i+2)/8]&(1<<(uint(i+2)%8)) != 0 {
 				row[i] = "<NULL>"
 				continue
 			}

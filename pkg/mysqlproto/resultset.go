@@ -95,17 +95,18 @@ func textRow(cols [][]byte) []byte {
 
 // binaryRow 构造二进制协议数据行（COM_STMT_EXECUTE 结果集行）。
 // 包结构：header(0x00) + null bitmap((n+7+2)/8 字节) + 各非 NULL 列 lenenc 值。
-// 第 i 列（i 从 0 起）为 NULL 时置位包内第 i+2 bit（含 header 字节起算）。
+// null bitmap 的 bit 0-1 保留（对应 header 字节），第 i 列（i 从 0 起）为 NULL 时
+// 置位 null bitmap 内第 i+2 bit（即 byte (i+2)/8 的 bit (i+2)%8）。
 func binaryRow(values []sql.Value) []byte {
 	p := make([]byte, 0, 16)
-	// bitfield 首字节即 0x00 header，其后为 null bitmap。
-	bitfield := make([]byte, 1+(len(values)+7+2)/8)
+	bitmap := make([]byte, (len(values)+7+2)/8)
 	for i, v := range values {
 		if v.Kind == "NULL" {
-			bitfield[(i+2)/8] |= 1 << (uint(i+2) % 8)
+			bitmap[(i+2)/8] |= 1 << (uint(i+2) % 8)
 		}
 	}
-	p = append(p, bitfield...)
+	p = append(p, 0x00) // header
+	p = append(p, bitmap...)
 	for _, v := range values {
 		if v.Kind == "NULL" {
 			continue
