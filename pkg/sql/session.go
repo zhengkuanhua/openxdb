@@ -50,6 +50,10 @@ type Session struct {
 	// 递归防护深度：triggerDepth 防触发器无限递归；
 	// procDepth 防存储过程嵌套展开。
 	triggerDepth int
+	// v1.8.0 同键递归栈：记录本调用链上已触发的 (timing\x00event\x00table) 键，
+	// 命中即整批抑制（直接递归 / 同键链式互触发），防死循环；跨键链式深度由
+	// Executor.triggerMaxDepth 控制。
+	triggerStack []string
 	procDepth    int
 	// M18：prepared statement（名称→SQL 文本，会话级）。
 	prepared map[string]string

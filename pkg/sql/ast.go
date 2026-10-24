@@ -446,6 +446,7 @@ type CreateTriggerStmt struct {
 	Table       string // 源表
 	Body        string // 触发器体原始 SQL 文本
 	IfNotExists bool   // T41：CREATE TRIGGER IF NOT EXISTS（触发器已存在时静默跳过）
+	RowLevel    bool   // v1.8.0：FOR EACH ROW 行级触发；false = FOR EACH STATEMENT / 无子句（语句级）
 }
 
 func (CreateTriggerStmt) stmt() {}

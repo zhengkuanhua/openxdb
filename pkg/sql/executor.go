@@ -52,6 +52,9 @@ type Executor struct {
 	// 全局会话（旧单会话 API 使用：Engine.Execute/ExecuteAs、CLI、既有测试）。
 	// 服务端多连接场景使用 NewSession 创建独立会话，显式事务状态互不干扰。
 	globalSess *Session
+	// v1.8.0 触发器递归深度上限：允许的嵌套触发层数（默认 1：最外层 DML +
+	// 1 层链式不同触发器；更深层与直接/同键递归被抑制）。配置化可热更新。
+	triggerMaxDepth int
 	// M3 分片路由（sql.New 注入默认 Router；db.Open 加载落盘元数据后覆盖）
 	router *sharding.Router
 	// M4 集群管理器（nil = 单机模式，转发路径零触发）。
@@ -162,6 +165,8 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 		slowThreshold: slowThresholdDefault, // M13：默认 100ms
 		slowQueryMax:  slowQueryMaxDefault,
 		slowLog:       NewSlowLog(),
+		// v1.8.0：触发器递归深度默认 1（允许 1 层链式，禁止直接/更深递归）。
+		triggerMaxDepth: 1,
 		// M17-1：审计默认开启（安全默认）+ 内存环 1000 条；落盘器懒创建。
 		auditEnabled: true,
 		auditMax:     auditMaxDefault,
@@ -1914,11 +1919,12 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 		return nil, &SQLError{Msg: "cannot insert into information_schema"}
 	}
 	auto := e.autocommit(sess)
-	// T42：INSERT INTO ... SELECT 需要 SELECT 读取与写入同一事务。autocommit
-	// 下先将会话提升为显式事务（execSelect 复用 curTx，不再独立开临时事务并
-	// defer Rollback），提交路径仍走 exec2pcWrite；函数返回前无论成败复位会话
-	// 事务状态，避免提交/回滚后残留 inTx/curTx 影响后续语句。
-	if s.Select != nil && auto {
+	// v1.8.0 同事务原子性：autocommit 下若该表该事件存在触发器，临时提升
+	// 会话事务，使触发器体写入（经显式路径 applyOps 入同一 curTx）随主 DML
+	// 一并提交或回滚；T42 INSERT...SELECT 的读改写同事务需求一并由该提升
+	// 满足。函数返回前无论成败复位会话状态，避免提交/回滚后残留 inTx/curTx
+	// 影响后续语句。
+	if auto && !sess.inTx && (s.Select != nil || e.anyTriggerOn(sess, s.Table, "INSERT")) {
 		if err := e.beginTx(sess); err != nil {
 			return nil, err
 		}
@@ -1951,6 +1957,12 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 	}
 	affected := 0
 	var ops []kvOp
+	// v1.8.0 行级触发器：语句前探测存在行级触发器时逐行收集 NEW 行快照，
+	// 供 FOR EACH ROW 触发器按行物化；无行级触发器时零开销（nil）。
+	var rowSnaps []triggerRow
+	if e.anyRowTrigger(sess, s.Table) {
+		rowSnaps = make([]triggerRow, 0)
+	}
 	// M10 UPSERT：语句内已计划写入的最终行（含 REPLACE 删旧插新后的新行、
 	// ON DUPLICATE 更新后的目标行），用于语句内主键/唯一键冲突判定。
 	var pending [][]Value
@@ -1971,6 +1983,13 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 			if aff > 0 {
 				affected += aff
 				ops = append(ops, rops...)
+				if rowSnaps != nil {
+					snap, serr := e.buildRow(meta, s.Columns, row, tx)
+					if serr != nil {
+						return nil, serr
+					}
+					rowSnaps = append(rowSnaps, triggerRow{meta: meta, newRow: snap})
+				}
 			}
 		}
 	} else {
@@ -1982,12 +2001,28 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 			if aff > 0 {
 				affected += aff
 				ops = append(ops, rops...)
+				if rowSnaps != nil {
+					snap, serr := e.buildRow(meta, s.Columns, row, tx)
+					if serr != nil {
+						return nil, serr
+					}
+					rowSnaps = append(rowSnaps, triggerRow{meta: meta, newRow: snap})
+				}
 			}
 		}
 	}
-	// M15-2：BEFORE 触发器（在写入提交前执行；失败则整个 DML 随事务回滚）
+	// M15-2/v1.8.0：BEFORE 触发器（写入提交前执行；失败则整个 DML 随事务回滚）。
+	// 行级触发器按行快照逐行触发；语句级保持一次触发。
 	if affected > 0 {
-		if err := e.fireTriggers(sess, "BEFORE", s.Table, "INSERT"); err != nil {
+		if err := e.fireTriggers(sess, tx, "BEFORE", s.Table, "INSERT", rowSnaps); err != nil {
+			return nil, err
+		}
+	}
+	// v1.8.0：AFTER 触发器移入主事务提交前执行（同事务原子性）——体写入随
+	// 主 DML 一并提交/回滚；任一侧失败主 DML 整体回滚（旧语义为体独立事务、
+	// 主 DML 失败不回滚体写，已按 v1.8.0 设计变更）。
+	if affected > 0 {
+		if err := e.fireTriggers(sess, tx, "AFTER", s.Table, "INSERT", rowSnaps); err != nil {
 			return nil, err
 		}
 	}
@@ -2014,12 +2049,6 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 	// 分裂为独立事务，避免与用户事务交叠）。
 	if err := e.maybeAutoSplit(meta); err != nil {
 		return nil, err
-	}
-	// M15-2：AFTER 触发器（DML 已提交后执行；失败不影响主语句结果）
-	if affected > 0 {
-		if err := e.fireTriggers(sess, "AFTER", s.Table, "INSERT"); err != nil {
-			return nil, err
-		}
 	}
 	// P0-1：语句成功，挂载显式事务跨 region 写暂存（本地累积供恢复重放与
 	// 版本记录，远端按节点累积，COMMIT 统一 2PC；ROLLBACK 直接丢弃）。
@@ -4778,11 +4807,19 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 	// P0-1：显式事务跨 region 写暂存（本地/远端分组；语句成功路径末尾挂载）。
 	var explLocal []kvOp
 	var explRemote map[string][]kvOp
+	auto := e.autocommit(sess)
+	// v1.8.0 同事务原子性：autocommit 下该表该事件存在触发器时临时提升会话
+	// 事务，使触发器体写入随主 DML 一并提交或回滚；函数返回前复位会话状态。
+	if auto && !sess.inTx && e.anyTriggerOn(sess, s.Table, "UPDATE") {
+		if err := e.beginTx(sess); err != nil {
+			return nil, err
+		}
+		defer e.resetSessionTxState(sess)
+	}
 	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -4864,6 +4901,12 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 	}
 	affected := 0
 	var ops []kvOp
+	// v1.8.0 行级触发器：存在行级触发器时逐行收集 OLD/NEW 行快照，
+	// 供 FOR EACH ROW 触发器按行物化；无行级触发器时零开销（nil）。
+	var rowSnaps []triggerRow
+	if e.anyRowTrigger(sess, s.Table) {
+		rowSnaps = make([]triggerRow, 0)
+	}
 	// M10 UPSERT：语句内已计划更新的最终行（唯一索引语句内冲突判定）
 	var pending [][]Value
 	for _, kv := range pairs {
@@ -4953,10 +4996,19 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 		}
 		ops = append(ops, iops...)
 		affected++
+		if rowSnaps != nil {
+			rowSnaps = append(rowSnaps, triggerRow{meta: meta, oldRow: oldRow, newRow: append([]Value{}, row...)})
+		}
 	}
-	// M15-2：BEFORE 触发器（在写入提交前执行；失败则整个 DML 随事务回滚）
+	// M15-2/v1.8.0：BEFORE 触发器（写入提交前执行；失败则整个 DML 随事务回滚）。
 	if affected > 0 {
-		if err := e.fireTriggers(sess, "BEFORE", s.Table, "UPDATE"); err != nil {
+		if err := e.fireTriggers(sess, tx, "BEFORE", s.Table, "UPDATE", rowSnaps); err != nil {
+			return nil, err
+		}
+	}
+	// v1.8.0：AFTER 触发器移入主事务提交前执行（同事务原子性，见 execInsert）。
+	if affected > 0 {
+		if err := e.fireTriggers(sess, tx, "AFTER", s.Table, "UPDATE", rowSnaps); err != nil {
 			return nil, err
 		}
 	}
@@ -4976,12 +5028,6 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 	if err := e.maybeAutoSplit(meta); err != nil {
 		return nil, err
 	}
-	// M15-2：AFTER 触发器（DML 已提交后执行；失败不影响主语句结果）
-	if affected > 0 {
-		if err := e.fireTriggers(sess, "AFTER", s.Table, "UPDATE"); err != nil {
-			return nil, err
-		}
-	}
 	// P0-1：语句成功，挂载显式事务跨 region 写暂存（本地累积供恢复重放与
 	// 版本记录，远端按节点累积，COMMIT 统一 2PC；ROLLBACK 直接丢弃）。
 	e.stagePendingExplicit(sess, explLocal, explRemote)
@@ -4996,11 +5042,19 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 	// P0-1：显式事务跨 region 写暂存（本地/远端分组；语句成功路径末尾挂载）。
 	var explLocal []kvOp
 	var explRemote map[string][]kvOp
+	auto := e.autocommit(sess)
+	// v1.8.0 同事务原子性：autocommit 下该表该事件存在触发器时临时提升会话
+	// 事务，使触发器体写入随主 DML 一并提交或回滚；函数返回前复位会话状态。
+	if auto && !sess.inTx && e.anyTriggerOn(sess, s.Table, "DELETE") {
+		if err := e.beginTx(sess); err != nil {
+			return nil, err
+		}
+		defer e.resetSessionTxState(sess)
+	}
 	tx, err := e.getTx(sess)
 	if err != nil {
 		return nil, err
 	}
-	auto := e.autocommit(sess)
 	if auto {
 		defer tx.Rollback()
 	}
@@ -5056,6 +5110,12 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 	}
 	affected := 0
 	var ops []kvOp
+	// v1.8.0 行级触发器：存在行级触发器时逐行收集 OLD 行快照，
+	// 供 FOR EACH ROW 触发器按行物化；无行级触发器时零开销（nil）。
+	var rowSnaps []triggerRow
+	if e.anyRowTrigger(sess, s.Table) {
+		rowSnaps = make([]triggerRow, 0)
+	}
 	for _, kv := range pairs {
 		row, err := decodeRow(meta, kv.Value)
 		if err != nil {
@@ -5083,10 +5143,19 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 		ops = append(ops, fkops...)
 		ops = append(ops, kvOp{Key: kv.Key, Delete: true})
 		affected++
+		if rowSnaps != nil {
+			rowSnaps = append(rowSnaps, triggerRow{meta: meta, oldRow: row})
+		}
 	}
-	// M15-2：BEFORE 触发器（在写入提交前执行；失败则整个 DML 随事务回滚）
+	// M15-2/v1.8.0：BEFORE 触发器（写入提交前执行；失败则整个 DML 随事务回滚）。
 	if affected > 0 {
-		if err := e.fireTriggers(sess, "BEFORE", s.Table, "DELETE"); err != nil {
+		if err := e.fireTriggers(sess, tx, "BEFORE", s.Table, "DELETE", rowSnaps); err != nil {
+			return nil, err
+		}
+	}
+	// v1.8.0：AFTER 触发器移入主事务提交前执行（同事务原子性，见 execInsert）。
+	if affected > 0 {
+		if err := e.fireTriggers(sess, tx, "AFTER", s.Table, "DELETE", rowSnaps); err != nil {
 			return nil, err
 		}
 	}
@@ -5105,12 +5174,6 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 	// M7 自动分裂：写提交后检查本地 region 数据规模（同 execInsert）。
 	if err := e.maybeAutoSplit(meta); err != nil {
 		return nil, err
-	}
-	// M15-2：AFTER 触发器（DML 已提交后执行；失败不影响主语句结果）
-	if affected > 0 {
-		if err := e.fireTriggers(sess, "AFTER", s.Table, "DELETE"); err != nil {
-			return nil, err
-		}
 	}
 	// P0-1：语句成功，挂载显式事务跨 region 写暂存（本地累积供恢复重放与
 	// 版本记录，远端按节点累积，COMMIT 统一 2PC；ROLLBACK 直接丢弃）。

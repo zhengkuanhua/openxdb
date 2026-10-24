@@ -1790,14 +1790,22 @@ func (p *parser) parseCreateTrigger() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := p.expectKeyword("FOR"); err != nil {
-		return nil, err
-	}
-	if err := p.expectKeyword("EACH"); err != nil {
-		return nil, err
-	}
-	if err := p.expectKeyword("ROW"); err != nil {
-		return nil, err
+	// v1.8.0 触发粒度：FOR EACH ROW 行级；FOR EACH STATEMENT / 无子句语句级。
+	// 兼容旧语法要求 FOR EACH ROW；无 FOR EACH 子句时默认语句级（宽容解析）。
+	rowLevel := false
+	if p.cur().kind == tokKeyword && p.cur().text == "FOR" {
+		p.next()
+		if err := p.expectKeyword("EACH"); err != nil {
+			return nil, err
+		}
+		if p.cur().kind == tokKeyword && p.cur().text == "ROW" {
+			rowLevel = true
+			p.next()
+		} else if p.cur().kind == tokKeyword && p.cur().text == "STATEMENT" {
+			p.next()
+		} else {
+			return nil, errf("expected ROW or STATEMENT after FOR EACH at %d, got %q", p.cur().pos, p.cur().text)
+		}
 	}
 	body := strings.TrimSpace(p.remaining())
 	if body == "" {
@@ -1811,7 +1819,7 @@ func (p *parser) parseCreateTrigger() (Stmt, error) {
 	}
 	// 消耗剩余 token（body 已整体接收）
 	p.pos = len(p.toks) - 1
-	return &CreateTriggerStmt{Name: nameTok.text, Timing: timing, Event: event, Table: tableTok.text, Body: body, IfNotExists: ifNot}, nil
+	return &CreateTriggerStmt{Name: nameTok.text, Timing: timing, Event: event, Table: tableTok.text, Body: body, IfNotExists: ifNot, RowLevel: rowLevel}, nil
 }
 
 // parseCreateProcedure 解析 CREATE PROCEDURE <name> [( [IN] <param> <TYPE> [, ...] )]
@@ -2925,6 +2933,20 @@ func (p *parser) parseExprPrimary() (*Expr, error) {
 			v := Value{Kind: "NULL"}
 			return &Expr{Val: &v, Raw: "NULL"}, nil
 		}
+		// v1.8.0：NEW./OLD. 行引用同样可能出现在表达式位置（如 SET col = NEW.id、
+		// WHERE NEW.id = 1、CASE WHEN NEW.id ...）。先于列引用识别，生成 TRIGREF
+		// 字面量；列存在性/事件语义由创建期校验与执行期物化负责。
+		if (strings.EqualFold(p.cur().text, "NEW") || strings.EqualFold(p.cur().text, "OLD")) &&
+			p.pos+1 < len(p.toks) && p.toks[p.pos+1].kind == tokDot &&
+			p.pos+2 < len(p.toks) && p.toks[p.pos+2].kind == tokIdent {
+			prefix := strings.ToUpper(p.cur().text)
+			p.next()
+			p.next()
+			col := p.cur().text
+			p.next()
+			v := Value{Kind: "TRIGREF", S: prefix + "." + col}
+			return &Expr{Val: &v, Raw: prefix + "." + col}, nil
+		}
 		ref, col, err := p.parseColumnRef()
 		if err != nil {
 			return nil, err
@@ -3654,6 +3676,17 @@ func (p *parser) parseValue() (Value, error) {
 		if strings.EqualFold(p.cur().text, "NULL") {
 			p.next()
 			return Value{Kind: "NULL"}, nil
+		}
+		// v1.8.0：NEW./OLD. 行引用（触发器体；列存在性由执行层物化期校验）。
+		if (strings.EqualFold(p.cur().text, "NEW") || strings.EqualFold(p.cur().text, "OLD")) &&
+			p.pos+1 < len(p.toks) && p.toks[p.pos+1].kind == tokDot &&
+			p.pos+2 < len(p.toks) && p.toks[p.pos+2].kind == tokIdent {
+			prefix := strings.ToUpper(p.cur().text)
+			p.next()
+			p.next()
+			col := p.cur().text
+			p.next()
+			return Value{Kind: "TRIGREF", S: prefix + "." + col}, nil
 		}
 		return Value{}, errf("expected value at %d, got %q", p.cur().pos, p.cur().text)
 	case tokVar:

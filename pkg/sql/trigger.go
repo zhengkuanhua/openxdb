@@ -5,17 +5,19 @@ import (
 	"sort"
 
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
+	"github.com/zhengkuanhua/openxdb/pkg/txn"
 )
 
 // TriggerMeta 触发器元数据：名称 + 时机 + 事件 + 源表 + 触发器体原文（M15-2）。
 // 体以原始 SQL 文本持久化，DML 触发时重新 Parse + execStmt，与普通语句共用
 // 同一执行路径，保证与物化视图 / 虚拟视图 / 表共存。
 type TriggerMeta struct {
-	Name   string `json:"name"`
-	Timing string `json:"timing"` // "BEFORE" | "AFTER"
-	Event  string `json:"event"`  // "INSERT" | "UPDATE" | "DELETE"
-	Table  string `json:"table"`  // 源表
-	Body   string `json:"body"`   // 触发器体原始 SQL 文本
+	Name     string `json:"name"`
+	Timing   string `json:"timing"`              // "BEFORE" | "AFTER"
+	Event    string `json:"event"`               // "INSERT" | "UPDATE" | "DELETE"
+	Table    string `json:"table"`               // 源表
+	Body     string `json:"body"`                // 触发器体原始 SQL 文本
+	RowLevel bool   `json:"row_level,omitempty"` // v1.8.0：FOR EACH ROW 行级触发
 }
 
 // triggersKey 触发器目录键（独立于 m:tables / m:views / m:matviews）。
@@ -120,6 +122,26 @@ func (e *Executor) execCreateTrigger(sess *Session, s *CreateTriggerStmt) (*Resu
 			}
 		}
 	}
+	// v1.8.0 行级触发器：NEW./OLD. 引用的事件语义与列存在性校验。
+	// INSERT 仅 NEW、DELETE 仅 OLD、UPDATE 双引用；未定义列明确报错。
+	if s.RowLevel {
+		src := findTable(tabs, s.Table)
+		for _, r := range collectTRIGRefs(bodyStmt) {
+			if len(r) < 5 {
+				return nil, &SQLError{Msg: "invalid trigger row reference: " + r}
+			}
+			prefix, col := r[:4], r[4:]
+			if prefix == "OLD." && s.Event == "INSERT" {
+				return nil, &SQLError{Msg: "INSERT row trigger cannot reference OLD row: " + r}
+			}
+			if prefix == "NEW." && s.Event == "DELETE" {
+				return nil, &SQLError{Msg: "DELETE row trigger cannot reference NEW row: " + r}
+			}
+			if colIndex(src, col) < 0 {
+				return nil, &SQLError{Msg: "unknown column in " + r + " (table " + s.Table + ")"}
+			}
+		}
+	}
 	trs, err := loadTriggers(tx.Get)
 	if err != nil {
 		return nil, err
@@ -132,11 +154,12 @@ func (e *Executor) execCreateTrigger(sess *Session, s *CreateTriggerStmt) (*Resu
 		return nil, &SQLError{Msg: "trigger already exists: " + s.Name}
 	}
 	trs = append(trs, &TriggerMeta{
-		Name:   s.Name,
-		Timing: s.Timing,
-		Event:  s.Event,
-		Table:  s.Table,
-		Body:   s.Body,
+		Name:     s.Name,
+		Timing:   s.Timing,
+		Event:    s.Event,
+		Table:    s.Table,
+		Body:     s.Body,
+		RowLevel: s.RowLevel,
 	})
 	raw, err := saveTriggers(trs)
 	if err != nil {
@@ -271,17 +294,22 @@ func (e *Executor) loadTriggerCatalog(sess *Session) ([]*TriggerMeta, error) {
 	return trs, nil
 }
 
-// fireTriggers 在源表 DML 提交前（BEFORE）/提交后（AFTER）执行匹配的触发器体。
-// 匹配规则：时机 + 事件 + 源表名全部一致；触发粒度为语句级（受影响行数>0 时
-// 触发一次）。触发器体经完整 Parse + execStmt 执行，与普通语句共用执行路径。
-// 原子性说明：触发器体在独立隐式事务中执行并提交（BEFORE 时序上先于主 DML
-// 提交；主 DML 提交失败时已提交的体不会回滚——文档化限制，简单 SQL 体场景
-// 可接受）。triggerDepth 递归防护：触发器体再次写同一表时不再触发，
-// 避免无限递归（体对其它表的写入同样被抑制，文档化限制）。
-func (e *Executor) fireTriggers(sess *Session, timing, table, event string) error {
-	if sess.triggerDepth > 0 {
-		return nil
-	}
+// fireTriggers 在源表 DML 主事务提交前执行匹配的触发器体（v1.8.0：BEFORE 与
+// AFTER 均与主 DML 同事务原子性，体写入随主 DML 一并提交或回滚）。
+// 匹配规则：时机 + 事件 + 源表名全部一致；触发粒度：
+//   - 语句级（默认 / FOR EACH STATEMENT，RowLevel=false）：受影响行数>0 时触发一次；
+//   - 行级（FOR EACH ROW，RowLevel=true）：按 rows 逐行触发，每行携带 NEW./OLD.
+//     行上下文（INSERT 仅 NEW、DELETE 仅 OLD、UPDATE 双引用）。
+//
+// 触发器体经完整 Parse + 行上下文物化（NEW./OLD. → 字面量）后 execStmt 执行，
+// 与普通语句共用执行路径，并复用调用方传入的同一事务 tx（2PC/autocommit
+// 主路径）。递归策略（v1.8.0）：
+//   - 同键递归栈（timing\x00event\x00table）：本调用链已触发过同键触发器即整批
+//     抑制（防直接递归 / 双向互触发死循环）；
+//   - 跨键链式深度上限：len(triggerStack) > triggerMaxDepth（默认 1，即允许
+//     最外层 DML + 1 层嵌套触发器链式执行；第 2 层嵌套起抑制）时整批抑制；
+//     上限可配置化放宽，保留链式触发能力。
+func (e *Executor) fireTriggers(sess *Session, tx txn.Txn, timing, table, event string, rows []triggerRow) error {
 	trs, err := e.loadTriggerCatalog(sess)
 	if err != nil {
 		return err
@@ -295,23 +323,40 @@ func (e *Executor) fireTriggers(sess *Session, timing, table, event string) erro
 	if len(hit) == 0 {
 		return nil
 	}
-	tx, err := e.getTx(sess)
-	if err != nil {
-		return err
-	}
-	auto := e.autocommit(sess)
-	if auto {
-		defer tx.Rollback()
-	}
-	sess.triggerDepth++
-	defer func() { sess.triggerDepth-- }()
-	for _, t := range hit {
-		stmt, err := Parse(t.Body)
-		if err != nil {
-			return &SQLError{Msg: "trigger " + t.Name + ": invalid body: " + err.Error()}
+	key := timing + "\x00" + event + "\x00" + table
+	for _, k := range sess.triggerStack {
+		if k == key {
+			return nil // 同键递归抑制（直接递归 / 双向互触发）
 		}
-		if _, err := e.execStmt(sess, stmt); err != nil {
-			return &SQLError{Msg: "trigger " + t.Name + " failed: " + err.Error()}
+	}
+	if len(sess.triggerStack) > e.triggerMaxDepth {
+		return nil // 链式深度超限抑制（默认 1：允许 1 层嵌套链式触发）
+	}
+	sess.triggerStack = append(sess.triggerStack, key)
+	defer func() { sess.triggerStack = sess.triggerStack[:len(sess.triggerStack)-1] }()
+	for _, t := range hit {
+		if !t.RowLevel {
+			stmt, err := Parse(t.Body)
+			if err != nil {
+				return &SQLError{Msg: "trigger " + t.Name + ": invalid body: " + err.Error()}
+			}
+			if _, err := e.execStmt(sess, stmt); err != nil {
+				return &SQLError{Msg: "trigger " + t.Name + " failed: " + err.Error()}
+			}
+			continue
+		}
+		// 行级：逐行物化 NEW./OLD. 引用后执行体（每行独立 Parse，体通常很小）。
+		for _, tr := range rows {
+			stmt, err := Parse(t.Body)
+			if err != nil {
+				return &SQLError{Msg: "trigger " + t.Name + ": invalid body: " + err.Error()}
+			}
+			if err := e.replaceTrigRefs(stmt, tr.refs()); err != nil {
+				return &SQLError{Msg: "trigger " + t.Name + ": " + err.Error()}
+			}
+			if _, err := e.execStmt(sess, stmt); err != nil {
+				return &SQLError{Msg: "trigger " + t.Name + " failed: " + err.Error()}
+			}
 		}
 	}
 	return nil

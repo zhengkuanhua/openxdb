@@ -202,9 +202,14 @@ func TestM15TriggerRecursionGuard(t *testing.T) {
 	mustExec(t, e, "CREATE TRIGGER tr_loop AFTER INSERT ON loop_t FOR EACH ROW UPDATE loop_t SET v = 100")
 
 	mustExec(t, e, "INSERT INTO loop_t (id, v) VALUES (2, 50)")
-	got := mustRows(t, e, "SELECT v FROM loop_t WHERE id = 2")[0][0].String()
-	if got != "100" {
-		t.Fatalf("recursion guard: v = %s, want 100 (single trigger execution)", got)
+	// v1.8.0 同事务语义：触发器体在提交前执行，事务读快照不含本语句新插入行，
+	// 故体 UPDATE 仅更新既有行 id=1；id=2 保持插入值。递归防护保证体只执行一次
+	// （不无限循环）。
+	if got := mustRows(t, e, "SELECT v FROM loop_t WHERE id = 1")[0][0].String(); got != "100" {
+		t.Fatalf("recursion guard: body update should apply once, id=1 v = %s, want 100", got)
+	}
+	if got := mustRows(t, e, "SELECT v FROM loop_t WHERE id = 2")[0][0].String(); got != "50" {
+		t.Fatalf("same-tx snapshot: new row keeps inserted value, id=2 v = %s, want 50", got)
 	}
 }
 
@@ -235,8 +240,12 @@ func TestM15CreateTriggerErrors(t *testing.T) {
 	mustErr(t, e, "CREATE TRIGGER t1 INSERT ON users FOR EACH ROW UPDATE audit SET cnt = 1", "expected BEFORE or AFTER")
 	// 非法事件
 	mustErr(t, e, "CREATE TRIGGER t1 AFTER SELECT ON users FOR EACH ROW UPDATE audit SET cnt = 1", "expected INSERT, UPDATE or DELETE")
-	// 缺少 FOR EACH ROW
-	mustErr(t, e, "CREATE TRIGGER t1 AFTER INSERT ON users UPDATE audit SET cnt = 1", "expected keyword FOR")
+	// v1.8.0：无 FOR 子句合法，默认语句级（FOR EACH STATEMENT 语义）
+	mustExec(t, e, "CREATE TRIGGER t_default AFTER INSERT ON users UPDATE audit SET cnt = 1")
+	mustExec(t, e, "INSERT INTO users (id, name, age) VALUES (10, 'def', 20)")
+	if got := mustRows(t, e, "SELECT cnt FROM audit")[0][0].String(); got != "1" {
+		t.Fatalf("default statement-level trigger: cnt = %s, want 1", got)
+	}
 	// 触发器体为空
 	mustErr(t, e, "CREATE TRIGGER t1 AFTER INSERT ON users FOR EACH ROW", "trigger body required")
 	// 触发器体非受支持语句（SELECT 体拒绝）
