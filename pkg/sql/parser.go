@@ -1839,7 +1839,9 @@ func (p *parser) parseCreateProcedure() (Stmt, error) {
 		p.next()
 		if p.cur().kind != tokRParen {
 			for {
-				if p.cur().kind == tokKeyword && p.cur().text == "IN" {
+				mode := "IN"
+				if mt := strings.ToUpper(p.cur().text); mt == "IN" || mt == "OUT" || mt == "INOUT" {
+					mode = mt
 					p.next()
 				}
 				paramTok, err := p.expect(tokIdent, "parameter name")
@@ -1857,7 +1859,7 @@ func (p *parser) parseCreateProcedure() (Stmt, error) {
 				if typ != "INT" && typ != "TEXT" {
 					return nil, errf("unsupported parameter type %q at %d (expected INT or TEXT)", typTok.text, typTok.pos)
 				}
-				stmt.Params = append(stmt.Params, ParamMeta{Name: paramTok.text, Type: typ})
+				stmt.Params = append(stmt.Params, ParamMeta{Name: paramTok.text, Type: typ, Mode: mode})
 				if p.cur().kind == tokComma {
 					p.next()
 					continue

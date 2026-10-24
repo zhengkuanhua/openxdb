@@ -288,6 +288,46 @@ type procIterate struct {
 
 func (procIterate) procStmt() {}
 
+// ===== P1-3：游标（DECLARE CURSOR / OPEN / FETCH / CLOSE）=====
+
+// procCursorDecl DECLARE <name> CURSOR FOR <SELECT ...>;（游标声明，P1-3）。
+// 游标名为裸标识符；query 为 SELECT 原文 token（不含收尾分号）。
+type procCursorDecl struct {
+	name  string
+	query []token
+}
+
+func (procCursorDecl) procStmt() {}
+
+// procCursorOpen OPEN <name>;（打开游标：执行 SELECT 并收集行集快照）。
+type procCursorOpen struct{ name string }
+
+func (procCursorOpen) procStmt() {}
+
+// procCursorFetch FETCH <name> INTO @a, @b, ...;（取下一条记录到局部变量）。
+// vars 为变量名（不含 @，统一小写）。
+type procCursorFetch struct {
+	name string
+	vars []string
+}
+
+func (procCursorFetch) procStmt() {}
+
+// procCursorClose CLOSE <name>;（关闭游标并释放行集快照）。
+type procCursorClose struct{ name string }
+
+func (procCursorClose) procStmt() {}
+
+// procCursorState 游标运行期状态：DECLARE 时保存 SELECT 原文，
+// OPEN 时执行 SELECT 收集行集快照，FETCH 顺序消费
+// （受限子集不做 NOT FOUND 处理，越界直接报错）。
+type procCursorState struct {
+	query []token
+	rows  [][]Value
+	pos   int
+	open  bool
+}
+
 // maxLoopIterations 单层循环最大迭代次数（防死循环）。
 // 任意循环（LOOP/WHILE/FOR/REPEAT）单次迭代计数超过该值即报错终止。
 const maxLoopIterations = 10000
@@ -430,6 +470,12 @@ func (p *procParser) parseSeq(stops map[string]bool) ([]procStmt, error) {
 			s, err = p.parseExit()
 		case "ITERATE", "CONTINUE":
 			s, err = p.parseIterate()
+		case "OPEN":
+			s, err = p.parseCursorOpen()
+		case "FETCH":
+			s, err = p.parseCursorFetch()
+		case "CLOSE":
+			s, err = p.parseCursorClose()
 		default:
 			s, err = p.parseSQL(stops)
 		}
@@ -853,8 +899,13 @@ func (p *procParser) parseCase() (procStmt, error) {
 // parseDeclare 解析 DECLARE @x [TYPE] [DEFAULT <expr>]。
 func (p *procParser) parseDeclare() (procStmt, error) {
 	p.next() // DECLARE
+	// P1-3：DECLARE <name> CURSOR FOR <SELECT ...> 游标声明（游标名为裸 ident）。
+	if p.cur().kind == tokIdent && p.pos+1 < len(p.toks) &&
+		strings.ToUpper(p.toks[p.pos+1].text) == "CURSOR" {
+		return p.parseCursorDecl()
+	}
 	if p.cur().kind != tokVar {
-		return nil, &SQLError{Msg: "expected @variable after DECLARE in procedure body"}
+		return nil, &SQLError{Msg: "expected @variable or CURSOR after DECLARE in procedure body"}
 	}
 	name := p.cur().text[1:]
 	p.next()
@@ -884,6 +935,101 @@ func (p *procParser) parseDeclare() (procStmt, error) {
 		p.next()
 	}
 	return st, nil
+}
+
+// parseCursorDecl 解析 DECLARE <name> CURSOR FOR <SELECT ...>;（P1-3）。
+// 调用时游标名 token 尚未消费；SELECT 原文收集到顶层分号（括号深度保护）。
+func (p *procParser) parseCursorDecl() (procStmt, error) {
+	nameTok := p.cur()
+	if nameTok.kind != tokIdent {
+		return nil, &SQLError{Msg: "expected cursor name after DECLARE in procedure body"}
+	}
+	p.next() // name
+	if err := p.expect("CURSOR"); err != nil {
+		return nil, err
+	}
+	if err := p.expect("FOR"); err != nil {
+		return nil, err
+	}
+	start := p.pos
+	parenDepth := 0
+	for !p.eof() {
+		t := p.cur()
+		if t.kind == tokLParen {
+			parenDepth++
+		} else if t.kind == tokRParen {
+			parenDepth--
+		} else if t.kind == tokSemicolon && parenDepth == 0 {
+			break
+		}
+		p.next()
+	}
+	if p.pos == start {
+		return nil, &SQLError{Msg: "CURSOR FOR requires a SELECT query in procedure body"}
+	}
+	query := append([]token(nil), p.toks[start:p.pos]...)
+	if p.kw() == ";" {
+		p.next()
+	}
+	return procCursorDecl{name: nameTok.text, query: query}, nil
+}
+
+// parseCursorOpen 解析 OPEN <name>;。
+func (p *procParser) parseCursorOpen() (procStmt, error) {
+	p.next() // OPEN
+	nameTok := p.cur()
+	if nameTok.kind != tokIdent {
+		return nil, &SQLError{Msg: "expected cursor name after OPEN in procedure body"}
+	}
+	p.next()
+	if p.kw() == ";" {
+		p.next()
+	}
+	return procCursorOpen{name: nameTok.text}, nil
+}
+
+// parseCursorFetch 解析 FETCH <name> INTO @a, @b, ...;。
+func (p *procParser) parseCursorFetch() (procStmt, error) {
+	p.next() // FETCH
+	nameTok := p.cur()
+	if nameTok.kind != tokIdent {
+		return nil, &SQLError{Msg: "expected cursor name after FETCH in procedure body"}
+	}
+	p.next()
+	if err := p.expect("INTO"); err != nil {
+		return nil, err
+	}
+	var vars []string
+	for {
+		if p.cur().kind != tokVar {
+			return nil, &SQLError{Msg: "expected @variable in FETCH INTO in procedure body"}
+		}
+		vars = append(vars, strings.ToLower(p.cur().text[1:]))
+		p.next()
+		if p.kw() == "," {
+			p.next()
+			continue
+		}
+		break
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return procCursorFetch{name: nameTok.text, vars: vars}, nil
+}
+
+// parseCursorClose 解析 CLOSE <name>;。
+func (p *procParser) parseCursorClose() (procStmt, error) {
+	p.next() // CLOSE
+	nameTok := p.cur()
+	if nameTok.kind != tokIdent {
+		return nil, &SQLError{Msg: "expected cursor name after CLOSE in procedure body"}
+	}
+	p.next()
+	if p.kw() == ";" {
+		p.next()
+	}
+	return procCursorClose{name: nameTok.text}, nil
 }
 
 // parseSet 解析 SET @x = <expr> 或 SET @x := <expr>（过程局部变量赋值）。
@@ -985,7 +1131,11 @@ func validateProcedureBody(body string) error {
 	if len(stmts) == 0 {
 		return &SQLError{Msg: "procedure body required"}
 	}
-	return validateProcStmts(stmts)
+	if err := validateProcStmts(stmts); err != nil {
+		return err
+	}
+	// P1-3：游标声明唯一性 + OPEN/FETCH/CLOSE 引用校验。
+	return validateCursorRefs(stmts)
 }
 
 // validateProcStmts 递归校验语句树。
@@ -1021,6 +1171,31 @@ func validateProcStmts(stmts []procStmt) error {
 		case procDeclare:
 			if st.typ != "" && !validProcVarType(st.typ) {
 				return &SQLError{Msg: "unsupported variable type: " + st.typ}
+			}
+		case procCursorDecl:
+			if st.name == "" {
+				return &SQLError{Msg: "cursor name required in procedure body"}
+			}
+			if len(st.query) == 0 {
+				return &SQLError{Msg: "CURSOR FOR requires a SELECT query in procedure body"}
+			}
+			// 创建期静态校验：游标查询在 @var 占位替换后可解析且必须为 SELECT。
+			env := make(map[string]Value)
+			for _, t := range st.query {
+				if t.kind == tokVar {
+					env[strings.ToLower(t.text[1:])] = IntVal(1)
+				}
+			}
+			sub, err := replaceVars(tokensToString(st.query), env, true)
+			if err != nil {
+				return err
+			}
+			qstmt, err := Parse(sub)
+			if err != nil {
+				return err
+			}
+			if _, ok := qstmt.(*SelectStmt); !ok {
+				return &SQLError{Msg: "CURSOR FOR only supports SELECT queries in procedure body"}
 			}
 		case procIf:
 			for _, br := range st.branches {
@@ -1077,6 +1252,119 @@ func validateProcStmts(stmts []procStmt) error {
 		}
 	}
 	return nil
+}
+
+// collectCursorDecls 递归收集游标声明名（重复声明报错）。
+func collectCursorDecls(stmts []procStmt, out map[string]bool) error {
+	for _, s := range stmts {
+		switch st := s.(type) {
+		case procCursorDecl:
+			key := strings.ToLower(st.name)
+			if out[key] {
+				return &SQLError{Msg: "duplicate cursor declaration: " + st.name}
+			}
+			out[key] = true
+		case procIf:
+			for _, br := range st.branches {
+				if err := collectCursorDecls(br.body, out); err != nil {
+					return err
+				}
+			}
+		case procLoop:
+			if err := collectCursorDecls(st.body, out); err != nil {
+				return err
+			}
+		case procWhile:
+			if err := collectCursorDecls(st.body, out); err != nil {
+				return err
+			}
+		case procFor:
+			if err := collectCursorDecls(st.body, out); err != nil {
+				return err
+			}
+		case procRepeat:
+			if err := collectCursorDecls(st.body, out); err != nil {
+				return err
+			}
+		case procCase:
+			for _, w := range st.whens {
+				if err := collectCursorDecls(w.body, out); err != nil {
+					return err
+				}
+			}
+			if st.hasElse {
+				if err := collectCursorDecls(st.elseBody, out); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// validateCursorRefs 校验 OPEN/FETCH/CLOSE 引用的游标已声明、FETCH 变量非空。
+func validateCursorRefs(stmts []procStmt) error {
+	decls := make(map[string]bool)
+	if err := collectCursorDecls(stmts, decls); err != nil {
+		return err
+	}
+	var walk func([]procStmt) error
+	walk = func(ss []procStmt) error {
+		for _, s := range ss {
+			switch st := s.(type) {
+			case procCursorOpen:
+				if !decls[strings.ToLower(st.name)] {
+					return &SQLError{Msg: "unknown cursor in OPEN: " + st.name}
+				}
+			case procCursorFetch:
+				if !decls[strings.ToLower(st.name)] {
+					return &SQLError{Msg: "unknown cursor in FETCH: " + st.name}
+				}
+				if len(st.vars) == 0 {
+					return &SQLError{Msg: "FETCH INTO requires at least one @variable in procedure body"}
+				}
+			case procCursorClose:
+				if !decls[strings.ToLower(st.name)] {
+					return &SQLError{Msg: "unknown cursor in CLOSE: " + st.name}
+				}
+			case procIf:
+				for _, br := range st.branches {
+					if err := walk(br.body); err != nil {
+						return err
+					}
+				}
+			case procLoop:
+				if err := walk(st.body); err != nil {
+					return err
+				}
+			case procWhile:
+				if err := walk(st.body); err != nil {
+					return err
+				}
+			case procFor:
+				if err := walk(st.body); err != nil {
+					return err
+				}
+			case procRepeat:
+				if err := walk(st.body); err != nil {
+					return err
+				}
+			case procCase:
+				for _, w := range st.whens {
+					if err := walk(w.body); err != nil {
+						return err
+					}
+				}
+				if st.hasElse {
+					if err := walk(st.elseBody); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+	return walk(stmts)
 }
 
 // execCreateProcedure CREATE PROCEDURE <name> [( [IN] <param> <TYPE> [, ...] )]
@@ -1211,6 +1499,13 @@ func (e *Executor) execShowProcedures(sess *Session, s *ShowProceduresStmt) (*Re
 // 返回固定 AffectedRows=1）。procDepth 递归/嵌套防护：允许递归调用，但
 // 深度超过 maxProcDepth 时报错，避免无限递归撑爆调用栈。
 func (e *Executor) execCall(sess *Session, s *CallStmt) (*Result, error) {
+	return e.execCallOut(sess, s, nil, nil)
+}
+
+// execCallOut 是 execCall 的内部实现；outSink 非空时 OUT/INOUT 参数值
+// 经回调写入（P1-3 过程体 CALL 回写外层 env），否则写入会话用户变量。
+// lookupVar 提供"实参 @var 当前值"查询，缺省时查 sess.userVars。
+func (e *Executor) execCallOut(sess *Session, s *CallStmt, outSink map[string]Value, lookupVar func(string) (Value, bool)) (*Result, error) {
 	if s.Name == "" {
 		return nil, &SQLError{Msg: "procedure name required"}
 	}
@@ -1237,18 +1532,90 @@ func (e *Executor) execCall(sess *Session, s *CallStmt) (*Result, error) {
 	}
 	env := make(map[string]Value, len(proc.Params))
 	for i, pm := range proc.Params {
-		v, err := evalExprForRow(nil, nil, s.Args[i])
-		if err != nil {
-			return nil, &SQLError{Msg: "procedure " + s.Name + " argument " + strconv.Itoa(i+1) + ": " + err.Error()}
+		argVar, argIsVar := callArgVar(s.Args[i])
+		switch pm.Mode {
+		case "OUT":
+			// 输出参数：实参必须为 @var，初始化为类型默认值，结束后回写。
+			if !argIsVar {
+				return nil, &SQLError{Msg: "procedure " + s.Name + " OUT parameter " + strconv.Itoa(i+1) + " requires a @variable argument"}
+			}
+			env[strings.ToLower(pm.Name)] = procDefaultValue(pm.Type)
+		case "INOUT":
+			// 双向参数：实参必须为 @var，初始化为调用方当前值，结束后回写。
+			if !argIsVar {
+				return nil, &SQLError{Msg: "procedure " + s.Name + " INOUT parameter " + strconv.Itoa(i+1) + " requires a @variable argument"}
+			}
+			if lv, ok := e.lookupCallVarValue(sess, argVar, lookupVar); ok {
+				env[strings.ToLower(pm.Name)] = lv
+			} else {
+				env[strings.ToLower(pm.Name)] = procDefaultValue(pm.Type)
+			}
+		default: // IN
+			if argIsVar {
+				// 单个 @var 实参取调用方当前值（修复原先错误代入 VAR 字面量）。
+				lv, ok := e.lookupCallVarValue(sess, argVar, lookupVar)
+				if !ok {
+					return nil, &SQLError{Msg: "user variable not set: @" + argVar}
+				}
+				env[strings.ToLower(pm.Name)] = lv
+			} else {
+				v, err := evalExprForRow(nil, nil, s.Args[i])
+				if err != nil {
+					return nil, &SQLError{Msg: "procedure " + s.Name + " argument " + strconv.Itoa(i+1) + ": " + err.Error()}
+				}
+				env[strings.ToLower(pm.Name)] = v
+			}
 		}
-		env[strings.ToLower(pm.Name)] = v
 	}
 	sess.procDepth++
 	defer func() { sess.procDepth-- }()
 	if err := e.execProcedureBody(sess, proc.Body, env); err != nil {
 		return nil, &SQLError{Msg: "procedure " + s.Name + " failed: " + err.Error()}
 	}
+	// P1-3：OUT/INOUT 参数值回写调用方变量。
+	for i, pm := range proc.Params {
+		if pm.Mode != "OUT" && pm.Mode != "INOUT" {
+			continue
+		}
+		v := env[strings.ToLower(pm.Name)]
+		if outSink != nil {
+			outSink[strings.ToLower(pm.Name)] = v
+			continue
+		}
+		if argVar, ok := callArgVar(s.Args[i]); ok {
+			sess.userVars["@"+argVar] = v
+		}
+	}
 	return &Result{AffectedRows: 1}, nil
+}
+
+// callArgVar 判断 CALL 实参是否为单个 @var（Expr{Val:&Value{Kind:"VAR"}}），
+// 返回变量名（小写，不含 @）与是否变量。非变量实参返回 ("", false)。
+func callArgVar(arg *Expr) (string, bool) {
+	if arg == nil || arg.Val == nil {
+		return "", false
+	}
+	if arg.Val.Kind == "VAR" {
+		name := arg.Val.S
+		if len(name) > 1 && name[0] == '@' {
+			return strings.ToLower(name[1:]), true
+		}
+		return strings.ToLower(name), true
+	}
+	return "", false
+}
+
+// lookupCallVarValue 查询 CALL 实参 @var 的当前值：优先 lookupVar 回调
+// （过程体内外层 env），否则查会话用户变量。
+func (e *Executor) lookupCallVarValue(sess *Session, name string, lookupVar func(string) (Value, bool)) (Value, bool) {
+	if lookupVar != nil {
+		return lookupVar(name)
+	}
+	if sess.userVars == nil {
+		return Value{}, false
+	}
+	v, ok := sess.userVars["@"+name]
+	return v, ok
 }
 
 // execProcedureBody 按控制流解释器执行过程体语句（M15-3 / P0-2 内部实现）。
@@ -1257,7 +1624,7 @@ func (e *Executor) execProcedureBody(sess *Session, body string, env map[string]
 	if err != nil {
 		return err
 	}
-	r := &procRunner{e: e, sess: sess, env: env}
+	r := &procRunner{e: e, sess: sess, env: env, cursors: make(map[string]*procCursorState)}
 	if _, err := r.run(stmts); err != nil {
 		return err
 	}
@@ -1269,6 +1636,7 @@ type procRunner struct {
 	e       *Executor
 	sess    *Session
 	env     map[string]Value
+	cursors map[string]*procCursorState // 游标名（小写）→ 运行期状态（P1-3）
 	iterate bool // ITERATE/CONTINUE 触发（由循环层消费，表示继续下一次迭代而非退出）
 }
 
@@ -1307,16 +1675,90 @@ func (r *procRunner) runStmt(s procStmt) (bool, error) {
 		return false, nil
 	case *procCall:
 		call := &CallStmt{Name: st.name}
+		outSink := make(map[string]Value)
 		for _, argToks := range st.args {
+			// 单个 @var 实参保持引用身份：IN 取外层当前值，OUT/INOUT 回写外层 env。
+			if len(argToks) == 1 && argToks[0].kind == tokVar {
+				call.Args = append(call.Args, &Expr{Val: &Value{Kind: "VAR", S: argToks[0].text}})
+				continue
+			}
 			v, err := evalProcExpr(argToks, r.env)
 			if err != nil {
 				return false, err
 			}
 			call.Args = append(call.Args, &Expr{Val: &v})
 		}
-		if _, err := r.e.execCall(r.sess, call); err != nil {
+		if _, err := r.e.execCallOut(r.sess, call, outSink, func(name string) (Value, bool) {
+			v, ok := r.env[name]
+			return v, ok
+		}); err != nil {
 			return false, err
 		}
+		for name, v := range outSink {
+			r.env[name] = v
+		}
+		return false, nil
+	case procCursorDecl:
+		key := strings.ToLower(st.name)
+		if _, ok := r.cursors[key]; ok {
+			return false, &SQLError{Msg: "duplicate cursor declaration: " + st.name}
+		}
+		r.cursors[key] = &procCursorState{query: st.query}
+		return false, nil
+	case procCursorOpen:
+		key := strings.ToLower(st.name)
+		cs, ok := r.cursors[key]
+		if !ok {
+			return false, &SQLError{Msg: "unknown cursor: " + st.name}
+		}
+		// 查询内 @var 代入当前环境后走标准 SELECT 执行，收集行集快照。
+		sub, err := replaceVars(tokensToString(cs.query), r.env, true)
+		if err != nil {
+			return false, err
+		}
+		stmt, err := Parse(sub)
+		if err != nil {
+			return false, err
+		}
+		sel, ok := stmt.(*SelectStmt)
+		if !ok {
+			return false, &SQLError{Msg: "CURSOR FOR only supports SELECT queries in procedure body"}
+		}
+		res, err := r.e.execSelect(r.sess, sel)
+		if err != nil {
+			return false, err
+		}
+		cs.rows = res.Rows
+		cs.pos = 0
+		cs.open = true
+		return false, nil
+	case procCursorFetch:
+		key := strings.ToLower(st.name)
+		cs, ok := r.cursors[key]
+		if !ok {
+			return false, &SQLError{Msg: "unknown cursor: " + st.name}
+		}
+		if !cs.open {
+			return false, &SQLError{Msg: "cursor not open: " + st.name}
+		}
+		if cs.pos >= len(cs.rows) {
+			return false, &SQLError{Msg: "cursor fetch out of rows: " + st.name}
+		}
+		row := cs.rows[cs.pos]
+		cs.pos++
+		if len(st.vars) != len(row) {
+			return false, &SQLError{Msg: "FETCH INTO variable count mismatch for cursor " + st.name}
+		}
+		for i, name := range st.vars {
+			r.env[name] = row[i]
+		}
+		return false, nil
+	case procCursorClose:
+		key := strings.ToLower(st.name)
+		if _, ok := r.cursors[key]; !ok {
+			return false, &SQLError{Msg: "unknown cursor: " + st.name}
+		}
+		delete(r.cursors, key)
 		return false, nil
 	case procSet:
 		v, err := evalProcExpr(st.expr, r.env)

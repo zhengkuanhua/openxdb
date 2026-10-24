@@ -466,11 +466,14 @@ type ShowTriggersStmt struct {
 
 func (ShowTriggersStmt) stmt() {}
 
-// ParamMeta 存储过程参数定义（M15-3）。参数类型仅用于元数据展示，
+// ParamMeta 存储过程参数定义（M15-3 / P1-3）。参数类型仅用于元数据展示，
 // 调用时不强制类型检查（参数值按字面量代入过程体）。
+// Mode 为参数方向："IN"（默认，可省略）、"OUT"（输出，实参须为 @var）、
+// "INOUT"（双向，实参须为 @var）；空串等价于 IN。
 type ParamMeta struct {
 	Name string `json:"name"`
 	Type string `json:"type"` // "INT" | "TEXT"
+	Mode string `json:"mode,omitempty"` // "IN" | "OUT" | "INOUT"；空=IN
 }
 
 // ProcedureMeta 存储过程元数据（M15-3）：名称、IN 参数列表、过程体原文。
