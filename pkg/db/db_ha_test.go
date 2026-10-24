@@ -96,6 +96,10 @@ func TestM6DownNodeReadFailover(t *testing.T) {
 
 	speedupHeartbeat(t, dA)
 
+	// 关闭 B 前先确认心跳握手已完成（A 曾成功收到 B 的 PONG），
+	// 否则启动竞态防护 EverUp 会阻止 DOWN 判定，导致 failover 无法触发。
+	waitEverUp(t, dA, dB.Cluster.SelfID)
+
 	// 关闭 B（模拟节点 down）→ 心跳感知 DOWN
 	if err := dB.Close(); err != nil {
 		t.Fatalf("B close: %v", err)
