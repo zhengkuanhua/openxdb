@@ -13,7 +13,7 @@ AIGC:
 
 > 从零自研的单机/分布式关系型数据库内核（Go + RocksDB），全栈自研，**v1.0.0 正式发布**。
 
-OpenXDB 是一个从零自研的单机/分布式关系型数据库内核（Go + RocksDB），历经 M1–M21、T1–T42、E1–E5 全部里程碑。它实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务、带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA、region 自动分裂与负载均衡、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动、运维工具链、认证权限（审计 + RBAC）、商业加固（TLS / 监控告警 / 真实用户验证）与生态导出（JSON / Parquet）等能力。
+OpenXDB 是一个从零自研的单机/分布式关系型数据库内核（Go + RocksDB），历经 M1–M21、T1–T43、E1–E5 全部里程碑。它实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务、带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA、region 自动分裂与负载均衡、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动、运维工具链、认证权限（审计 + RBAC）、商业加固（TLS / 监控告警 / 真实用户验证）与生态导出（JSON / Parquet）等能力。
 
 ## 项目一句话定位
 
@@ -81,7 +81,7 @@ SELECT name FROM users WHERE age >= 25 AND age < 35 ORDER BY age;
 - [CHANGELOG](../CHANGELOG.md)：完整版本变更记录
 - [RELEASE_NOTES](../RELEASE_NOTES.md)：v1.0.0 发布说明
 - [KNOWN_LIMITATIONS](../KNOWN_LIMITATIONS.md)：已知限制与边界
-- [设计文档与基准实验](https://github.com/zhengkuanhua/openxdb/tree/main/docs)：T1–T42 / M 系列 / E1–E5 全部设计记录
+- [设计文档与基准实验](https://github.com/zhengkuanhua/openxdb/tree/main/docs)：T1–T43 / M 系列 / E1–E5 全部设计记录
 
 **GitHub 仓库**：[zhengkuanhua/openxdb](https://github.com/zhengkuanhua/openxdb) —— Star 支持、提交 Issue、参与共建，欢迎你的加入。
 

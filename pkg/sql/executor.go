@@ -2535,8 +2535,17 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
 	if err := e.resolveWhereVars(sess, s.Where); err != nil {
 		return nil, err
 	}
-	// 普通 schema.table 限定名剥去 schema（OpenXDB 单库模型）；information_schema.* 保留全名。
-	s.From = normalizeTableRef(s.From)
+	// T39：普通 schema.table 限定名解析归属库并校验库存在（信息表保留全名）。
+	if strings.Contains(s.From, "."+infoSchemaPrefix) {
+		// 兼容 default.information_schema.tables 等带库前缀的信息表写法：剥去库前缀。
+		s.From = s.From[strings.Index(s.From, "."+infoSchemaPrefix)+1:]
+	} else if !isInfoSchemaName(s.From) {
+		_, tbl, err := e.resolveTableDB(sess, tx, s.From)
+		if err != nil {
+			return nil, err
+		}
+		s.From = tbl
+	}
 	// M18-A：information_schema 虚拟表（只读目录视图），拦截在 CTE/视图展开之前。
 	if isInfoSchemaName(s.From) {
 		tabs, err := loadTables(tx.Get)
@@ -3058,7 +3067,19 @@ func aggColumn(meta *TableMeta, rows [][]Value, c *SelectColumn) (Value, error) 
 		return best, nil
 	case "SUM", "AVG":
 		if len(vals) == 0 {
-			return Value{Kind: "NULL"}, nil
+			// T39：空表 SUM/AVG 返回类型化零值（DECIMAL 列返回 DECIMAL 0，否则 INT 0），
+			// 与 MySQL 语义对齐（MAX/MIN 空集保持 NULL）。
+			kind := "INT"
+			for _, cd := range meta.Columns {
+				if strings.EqualFold(cd.Name, c.Col) {
+					kind = strings.ToUpper(cd.Type)
+					break
+				}
+			}
+			if kind == "DECIMAL" {
+				return decVal(0), nil
+			}
+			return IntVal(0), nil
 		}
 		dec := false
 		var isum, dsum int64
@@ -4781,6 +4802,16 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// T39：UPDATE 表名支持 db.tbl 库前缀；s.Table 归一为表名。
+	{
+		var tbl string
+		var err error
+		_, tbl, err = e.resolveTableDB(sess, tx, s.Table)
+		if err != nil {
+			return nil, err
+		}
+		s.Table = tbl
+	}
 	meta := findTable(tabs, s.Table)
 	if meta == nil {
 		return nil, &SQLError{Msg: "table not exists: " + s.Table}
@@ -6240,7 +6271,7 @@ func (e *Executor) resolveTableDB(sess *Session, tx txn.Txn, name string) (strin
 			return "", "", err
 		}
 		if !findDatabase(dbs, db) {
-			return "", "", &SQLError{Msg: "unknown database: " + db}
+			return "", "", &SQLError{Msg: "database not exists: " + db}
 		}
 	}
 	return db, tbl, nil

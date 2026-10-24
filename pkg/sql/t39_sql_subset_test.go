@@ -243,6 +243,72 @@ var _ sql.Stmt = (*sql.ShowDatabasesStmt)(nil)
 var _ sql.Stmt = (*sql.UseStmt)(nil)
 var _ sql.Stmt = (*sql.DropDatabaseStmt)(nil)
 
+// T39：db.tbl 库前缀限定 DML/DDL（INSERT/UPDATE/DELETE/SELECT/ALTER/DROP TABLE）。
+func TestT39QualifiedTableDML(t *testing.T) {
+	e := newEngine(t)
+	mustExec(t, e, "CREATE DATABASE db2")
+	mustExec(t, e, "USE db2")
+	mustExec(t, e, "CREATE TABLE t1 (id INT, v INT, PRIMARY KEY (id))")
+	mustExec(t, e, "USE default")
+	mustExec(t, e, "CREATE TABLE t2 (id INT, PRIMARY KEY (id))")
+
+	// INSERT 带库前缀
+	mustExec(t, e, "INSERT INTO db2.t1 (id, v) VALUES (1, 10), (2, 20)")
+	// SELECT 带库前缀
+	rows := mustRows(t, e, "SELECT id, v FROM db2.t1 ORDER BY id")
+	if len(rows) != 2 || rows[0][0].I != 1 || rows[0][1].I != 10 {
+		t.Fatalf("qualified select: got %+v", rows)
+	}
+	// UPDATE 带库前缀
+	mustExec(t, e, "UPDATE db2.t1 SET v = 99 WHERE id = 1")
+	rows = mustRows(t, e, "SELECT v FROM db2.t1 WHERE id = 1")
+	if rows[0][0].I != 99 {
+		t.Fatalf("qualified update: got %+v", rows[0][0])
+	}
+	// DELETE 带库前缀
+	mustExec(t, e, "DELETE FROM db2.t1 WHERE id = 2")
+	rows = mustRows(t, e, "SELECT COUNT(*) FROM db2.t1")
+	if rows[0][0].I != 1 {
+		t.Fatalf("qualified delete: got %+v", rows[0][0])
+	}
+	// ALTER TABLE 带库前缀（MODIFY）
+	mustExec(t, e, "ALTER TABLE db2.t1 MODIFY COLUMN v TEXT")
+	rows = mustRows(t, e, "SELECT v FROM db2.t1 WHERE id = 1")
+	if rows[0][0].Kind != "TEXT" {
+		t.Fatalf("qualified alter modify: got %+v", rows[0][0])
+	}
+	// 未建库前缀报错
+	mustErr(t, e, "SELECT * FROM ghostdb.t1", "database not exists")
+	// DROP TABLE 带库前缀
+	mustExec(t, e, "DROP TABLE db2.t1")
+	mustErr(t, e, "SELECT * FROM db2.t1", "table not exists")
+	// 库内已删表不影响 default 库表
+	rows = mustRows(t, e, "SELECT id FROM t2")
+	if len(rows) != 0 {
+		t.Fatalf("default table should be empty: %+v", rows)
+	}
+}
+
+// T39：SHOW TABLES 按会话当前库（USE 切换）过滤。
+func TestT39ShowTablesPerDB(t *testing.T) {
+	e := newEngine(t)
+	mustExec(t, e, "CREATE DATABASE db2")
+	mustExec(t, e, "USE db2")
+	mustExec(t, e, "CREATE TABLE a (id INT, PRIMARY KEY (id))")
+	mustExec(t, e, "USE default")
+	mustExec(t, e, "CREATE TABLE b (id INT, PRIMARY KEY (id))")
+
+	rows := mustRows(t, e, "SHOW TABLES")
+	if len(rows) != 1 || rows[0][0].S != "b" {
+		t.Fatalf("default SHOW TABLES: want only b, got %+v", rows)
+	}
+	mustExec(t, e, "USE db2")
+	rows = mustRows(t, e, "SHOW TABLES")
+	if len(rows) != 1 || rows[0][0].S != "a" {
+		t.Fatalf("db2 SHOW TABLES: want only a, got %+v", rows)
+	}
+}
+
 func TestT39UseDatabase(t *testing.T) {
 	e := newEngine(t)
 	mustExec(t, e, "CREATE DATABASE db2")
