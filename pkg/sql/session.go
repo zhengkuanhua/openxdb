@@ -18,6 +18,9 @@ import (
 type Session struct {
 	mu sync.Mutex
 
+	// T39 会话级当前库（USE 切换；空串按 default 处理，存量兼容）。
+	CurrentDB string
+
 	// 显式事务状态（BEGIN 后置位，COMMIT/ROLLBACK 复位）。
 	inTx  bool
 	curTx txn.Txn
@@ -73,5 +76,6 @@ func (e *Executor) NewSession() *Session {
 		prepared:  map[string]string{},
 		userVars:  map[string]Value{},
 		isolation: IsoSnapshot, // P2-13：会话级默认快照隔离
+		CurrentDB: defaultDB,   // T39：新会话默认库为 default（存量兼容）
 	}
 }

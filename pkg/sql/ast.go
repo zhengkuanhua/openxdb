@@ -218,6 +218,7 @@ func (DropIndexStmt) stmt() {}
 //	"DROP_COLUMN"   删除列（连同引用该列的索引），列名在 Col
 //	"RENAME_COLUMN" 重命名列，旧列在 Col、新列在 NewName
 //	"RENAME_TABLE"  重命名表，新表名在 NewName
+//	"MODIFY_COLUMN" 列级类型变更（T39），列名在 Col、目标类型在 NewType
 //	"ADD_INDEX"     新增索引，索引名在 Name、索引列在 Col
 //	"DROP_INDEX"    删除索引，索引名在 Name
 type AlterTableStmt struct {
@@ -226,6 +227,7 @@ type AlterTableStmt struct {
 	Col     string
 	NewName string
 	Name    string
+	NewType string
 	Column  ColumnDef
 }
 
@@ -307,9 +309,10 @@ type CTE struct {
 // WindowSpec 窗口函数规格（M10）：OVER(PARTITION BY ... ORDER BY ... [frame])。
 // 无显式框架，默认为 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW。
 type WindowSpec struct {
-	PartitionBy []string      // 分区列（t.col / col）
-	OrderBy     *OrderBy      // 窗口内排序（可为 nil）
-	Frame       *WindowFrame  // P0-5：显式窗口帧（nil = 默认 ROWS UNBOUNDED PRECEDING..CURRENT ROW）
+	PartitionBy []string     // 分区列（t.col / col）
+	OrderBy     *OrderBy     // 窗口内排序（可为 nil；首列，保持既有单列路径兼容）
+	OrderBys    []OrderBy    // T39：窗口内多列 ORDER BY（首列同步写入 OrderBy；逗号分隔任意 ASC/DESC 组合）
+	Frame       *WindowFrame // P0-5：显式窗口帧（nil = 默认 ROWS UNBOUNDED PRECEDING..CURRENT ROW）
 }
 
 // WindowFrameBound 窗口帧边界（P0-5）。
@@ -578,6 +581,35 @@ type ImportStmt struct {
 func (ImportStmt) stmt() {}
 
 // ---- P2：运维语句 ----
+
+// CreateDatabaseStmt CREATE DATABASE [IF NOT EXISTS] <name>（T39 多库元数据）。
+// 仓库为单库模型（默认库 default 恒存在），新增库仅登记数据库目录，不影响表目录。
+type CreateDatabaseStmt struct {
+	Name        string
+	IfNotExists bool // 库已存在时静默跳过
+}
+
+func (CreateDatabaseStmt) stmt() {}
+
+// DropDatabaseStmt DROP DATABASE [IF EXISTS] <name>（T39）：级联删除库内所有表。
+type DropDatabaseStmt struct {
+	Name     string
+	IfExists bool // 库不存在时静默成功
+}
+
+func (DropDatabaseStmt) stmt() {}
+
+// UseStmt USE <db>（T39）：切换会话级默认数据库。
+type UseStmt struct {
+	Name string
+}
+
+func (UseStmt) stmt() {}
+
+// ShowDatabasesStmt SHOW DATABASES：列出全部数据库（默认库 default + 已创建库）。
+type ShowDatabasesStmt struct{}
+
+func (ShowDatabasesStmt) stmt() {}
 
 // ShowTablesStmt SHOW TABLES：列出全部表（含列定义/主键/索引概要）。
 type ShowTablesStmt struct{}

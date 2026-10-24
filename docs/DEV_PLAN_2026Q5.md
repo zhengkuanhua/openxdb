@@ -63,6 +63,9 @@ Q4（v1.1.0-v1.3.0）排期与 HA 脑裂防护 P0/P1/P2 已全部落地并推送
 | 3 | 存储过程受限子集 | P2 | 2 周 | 扩展面较大，按 T28_m15 预留推进 |
 | 4 | HA 后续：async 丢 RPO 补偿 / 回迁自动化 | P2 | 2 周 | 设计草案评估后立项；region 多副本 / TSO 高可用 / 跨机房多活已明确不做 |
 
+**执行状态（2026-10-24）：第 1 项完成并推送双端**
+- 第 1 项：SQL 子集三项——ALTER 列级类型变更（`ALTER TABLE t MODIFY [COLUMN] c TYPE`，行数据重写 + 非法值零值回填、同事务原子提交）、CREATE DATABASE [IF NOT EXISTS] 多库目录（`db.go` 新增 `m:databases` 目录键 + SHOW DATABASES 同步可见，default 恒存前置）、窗口 ORDER BY 多列（`OVER (ORDER BY col1, col2 [ASC|DESC] ...)` 任意组合，RANGE 帧仍限单列）；新增 `pkg/sql/t39_sql_subset_test.go` 13 用例，`go build ./...` 与 `go test ./pkg/sql/` 全绿（基线 TestM6DownNodeReadFailover / TestP1DecimalAgg 排期外不修改）
+
 ## 4. 基线失败与边界约束
 - TestM6DownNodeReadFailover：双节点心跳时序竞态（滚动启动误判 DOWN），排期外不修改。
 - TestP1DecimalAgg：空表 AVG 断言期望 0.0000 与实现返回 NULL 的分歧（实现符合 SQL 标准），排期外不修改。

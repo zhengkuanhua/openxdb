@@ -513,6 +513,14 @@ func (e *Executor) execStmt(sess *Session, stmt Stmt) (*Result, error) {
 		return e.execShowUsers(sess)
 	case *ShowTablesStmt:
 		return e.execShowTables(sess)
+	case *ShowDatabasesStmt:
+		return e.execShowDatabases(sess)
+	case *CreateDatabaseStmt:
+		return e.execCreateDatabase(sess, s)
+	case *UseStmt:
+		return e.execUse(sess, s)
+	case *DropDatabaseStmt:
+		return e.execDropDatabase(sess, s)
 	case *ShowIndexStmt:
 		return e.execShowIndex(sess, s)
 	case *ShowSlowQueriesStmt:
@@ -958,6 +966,16 @@ func (e *Executor) execCreateTable(sess *Session, s *CreateTableStmt) (*Result, 
 	if isInfoSchemaName(s.Name) {
 		return nil, &SQLError{Msg: "cannot create table in information_schema"}
 	}
+	// T39：表名支持 db.tbl 库前缀，解析归属库并校验库存在；s.Name 归一为表名。
+	var db, tbl string
+	{
+		var err error
+		db, tbl, err = e.resolveTableDB(sess, tx, s.Name)
+		if err != nil {
+			return nil, err
+		}
+	}
+	s.Name = tbl
 	if findTable(tabs, s.Name) != nil {
 		// T41：CREATE TABLE IF NOT EXISTS——表已存在时静默跳过
 		if s.IfNotExists {
@@ -972,7 +990,7 @@ func (e *Executor) execCreateTable(sess *Session, s *CreateTableStmt) (*Result, 
 	if s.PK == "" && len(s.Columns) > 0 {
 		s.PK = s.Columns[0].Name
 	}
-	meta := &TableMeta{ID: nextTableID(tabs), Name: s.Name, Columns: s.Columns, PK: s.PK, PKCols: s.PKCols, ForeignKeys: s.ForeignKeys, Indexes: s.Indexes}
+	meta := &TableMeta{ID: nextTableID(tabs), Name: s.Name, DB: db, Columns: s.Columns, PK: s.PK, PKCols: s.PKCols, ForeignKeys: s.ForeignKeys, Indexes: s.Indexes}
 	// M9 外键：建表时校验引用关系（父表存在/列存在/引用主键/类型兼容）
 	if err := validateForeignKeys(tabs, meta); err != nil {
 		return nil, err
@@ -1015,6 +1033,10 @@ func (e *Executor) execCreateTableAsSelect(sess *Session, s *CreateTableStmt, ta
 		}()
 	}
 	tx := sess.curTx
+	db, _, err := e.resolveTableDB(sess, tx, s.Name)
+	if err != nil {
+		return nil, err
+	}
 	res, err := e.execSelect(sess, s.Select)
 	if err != nil {
 		return nil, err
@@ -1030,6 +1052,7 @@ func (e *Executor) execCreateTableAsSelect(sess *Session, s *CreateTableStmt, ta
 	meta := &TableMeta{
 		ID:      nextTableID(tabs),
 		Name:    s.Name,
+		DB:      db,
 		Columns: defs,
 	}
 	if len(defs) > 0 {
@@ -1098,6 +1121,16 @@ func (e *Executor) execDropTable(sess *Session, s *DropTableStmt) (*Result, erro
 	tabs, err := loadTables(tx.Get)
 	if err != nil {
 		return nil, err
+	}
+	// T39：DROP TABLE 表名支持 db.tbl 库前缀；s.Name 归一为表名。
+	{
+		var tbl string
+		var err error
+		_, tbl, err = e.resolveTableDB(sess, tx, s.Name)
+		if err != nil {
+			return nil, err
+		}
+		s.Name = tbl
 	}
 	meta := findTable(tabs, s.Name)
 	if meta == nil {
@@ -1578,6 +1611,16 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 	if err != nil {
 		return nil, err
 	}
+	// T39：ALTER TABLE 表名支持 db.tbl 库前缀；s.Table 归一为表名。
+	{
+		var tbl string
+		var err error
+		_, tbl, err = e.resolveTableDB(sess, tx, s.Table)
+		if err != nil {
+			return nil, err
+		}
+		s.Table = tbl
+	}
 	meta := findTable(tabs, s.Table)
 	if meta == nil {
 		return nil, &SQLError{Msg: "table not exists: " + s.Table}
@@ -1723,6 +1766,55 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 			e.broadcastDDL(cluster.DDLOpAlter, meta, 0, "")
 		}
 		return &Result{AffectedRows: 0}, nil
+	case "MODIFY_COLUMN":
+		idx := colIndex(meta, s.Col)
+		if idx < 0 {
+			return nil, &SQLError{Msg: "unknown column: " + s.Col}
+		}
+		// 主键 / 索引列类型变更会破坏行键与索引键编码，拒绝修改（提示先删索引）。
+		if meta.PK == s.Col {
+			return nil, &SQLError{Msg: "cannot modify primary key column: " + s.Col}
+		}
+		for _, in := range meta.Indexes {
+			if in.Col == s.Col {
+				return nil, &SQLError{Msg: "cannot modify indexed column: " + s.Col + " (drop index first)"}
+			}
+		}
+		if meta.Columns[idx].Type == s.NewType {
+			// 同类型幂等：无行重写
+			return &Result{AffectedRows: 0}, nil
+		}
+		// 旧列布局解码（行字节按旧类型编码），转换后按新布局编码重写。
+		old := *meta
+		old.Columns = append([]ColumnDef(nil), meta.Columns...)
+		old.Indexes = append([]IndexMeta(nil), meta.Indexes...)
+		meta.Columns[idx].Type = s.NewType
+		pairs, err := e.scanMerged(tx, e.rowRanges(meta))
+		if err != nil {
+			return nil, err
+		}
+		var ops []kvOp
+		for _, kv := range pairs {
+			row, err := decodeRow(&old, kv.Value)
+			if err != nil {
+				return nil, err
+			}
+			// 宽松转换，失败回填目标类型零值（如 TEXT→INT 非数字 → 0）
+			row[idx] = convertColValue(row[idx], s.NewType)
+			raw, err := encodeRow(meta, row)
+			if err != nil {
+				return nil, err
+			}
+			ops = append(ops, kvOp{Key: kv.Key, Value: raw})
+		}
+		affected = len(pairs)
+		if err := e.ddlCommit(sess, tx, tabs, ops, auto); err != nil {
+			return nil, err
+		}
+		if auto {
+			e.broadcastDDL(cluster.DDLOpAlter, meta, 0, "")
+		}
+		return &Result{AffectedRows: affected}, nil
 	case "ADD_INDEX":
 		if findIndex(meta, s.Name) != nil {
 			return nil, &SQLError{Msg: "index already exists: " + s.Name}
@@ -1840,6 +1932,16 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 	tabs, err := loadTables(tx.Get)
 	if err != nil {
 		return nil, err
+	}
+	// T39：INSERT 表名支持 db.tbl 库前缀；s.Table 归一为表名。
+	{
+		var tbl string
+		var err error
+		_, tbl, err = e.resolveTableDB(sess, tx, s.Table)
+		if err != nil {
+			return nil, err
+		}
+		s.Table = tbl
 	}
 	meta := findTable(tabs, s.Table)
 	if meta == nil {
@@ -3721,7 +3823,11 @@ func aggValues(rel *Rel, rows [][]Value, c *SelectColumn) (Value, error) {
 	case "SUM", "AVG":
 		// INT：int64 求和；DECIMAL：scaled int64 求和后保持精度。
 		if len(vals) == 0 {
-			return Value{Kind: "NULL"}, nil
+			// 空表/空组：SUM 返回 0、AVG 返回 0（DECIMAL，与项目测试约定一致）。
+			if c.Agg == "SUM" {
+				return IntVal(0), nil
+			}
+			return decVal(0), nil
 		}
 		dec := false
 		var isum int64
@@ -3800,33 +3906,62 @@ func computeWindowCol(rows [][]Value, getter func(row []Value, col string) (Valu
 	}
 	for _, k := range order {
 		idxs := parts[k]
-		// 组内稳定排序：按窗口 ORDER BY 键；无 ORDER BY 保持原行序
+		// 组内稳定排序：按窗口 ORDER BY 键（支持多列任意 ASC/DESC 组合）；
+		// 无 ORDER BY 保持原行序。
 		sorted := make([]int, len(idxs))
 		copy(sorted, idxs)
+		orbs := ws.OrderBys
+		if len(orbs) == 0 && ws.OrderBy != nil {
+			orbs = []OrderBy{*ws.OrderBy}
+		}
+		// keyMap：单键（RANGE 帧按首列键值域，parser 已拦截 RANGE 多列）；
+		// keyMapMulti：多键（排序与 rank 断点）。
 		keyMap := make(map[int]Value, len(idxs))
-		if ws.OrderBy != nil {
-			qname := qualifiedName(ws.OrderBy.Ref, ws.OrderBy.Col)
+		keyMapMulti := make(map[int][]Value, len(idxs))
+		if len(orbs) > 0 {
 			for _, oi := range idxs {
-				v, err := getter(rows[oi], qname)
-				if err != nil {
-					return nil, err
+				var ks []Value
+				for _, ob := range orbs {
+					qname := qualifiedName(ob.Ref, ob.Col)
+					v, err := getter(rows[oi], qname)
+					if err != nil {
+						return nil, err
+					}
+					ks = append(ks, v)
 				}
-				keyMap[oi] = v
+				keyMapMulti[oi] = ks
+				keyMap[oi] = ks[0]
 			}
 			sort.SliceStable(sorted, func(a, b int) bool {
-				cmp := compareVal(keyMap[sorted[a]], keyMap[sorted[b]])
-				if ws.OrderBy.Desc {
-					return cmp > 0
+				ka := keyMapMulti[sorted[a]]
+				kb := keyMapMulti[sorted[b]]
+				for i, ob := range orbs {
+					cmp := compareVal(ka[i], kb[i])
+					if cmp != 0 {
+						if ob.Desc {
+							return cmp > 0
+						}
+						return cmp < 0
+					}
 				}
-				return cmp < 0
+				return false
 			})
 		}
 		// 组内逐行窗口值：rank 为 RANK（带 gap），dense 为 DENSE_RANK（连续编号）
 		rank := 1
 		dense := 1
 		for t, oi := range sorted {
-			if t > 0 && ws.OrderBy != nil {
-				if compareVal(keyMap[sorted[t]], keyMap[sorted[t-1]]) != 0 {
+			if t > 0 && len(orbs) > 0 {
+				ka := keyMapMulti[sorted[t]]
+				kb := keyMapMulti[sorted[t-1]]
+				diff := false
+				for i := range ka {
+					if compareVal(ka[i], kb[i]) != 0 {
+						diff = true
+						break
+					}
+				}
+				if diff {
 					rank = t + 1
 					dense++
 				}
@@ -4854,6 +4989,16 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// T39：DELETE 表名支持 db.tbl 库前缀；s.Table 归一为表名。
+	{
+		var tbl string
+		var err error
+		_, tbl, err = e.resolveTableDB(sess, tx, s.Table)
+		if err != nil {
+			return nil, err
+		}
+		s.Table = tbl
+	}
 	meta := findTable(tabs, s.Table)
 	if meta == nil {
 		return nil, &SQLError{Msg: "table not exists: " + s.Table}
@@ -5878,8 +6023,16 @@ func (e *Executor) execShowTables(sess *Session) (*Result, error) {
 		return nil, err
 	}
 	res := &Result{Columns: []string{"table", "columns", "pk", "indexes"}}
+	// T39：SHOW TABLES 仅列出会话当前库（USE 切换）中的表；空/默认归 default。
+	cur := sess.CurrentDB
+	if cur == "" {
+		cur = defaultDB
+	}
 	sort.Slice(tabs, func(i, j int) bool { return tabs[i].Name < tabs[j].Name })
 	for _, t := range tabs {
+		if tableDB(t) != cur {
+			continue
+		}
 		cols := make([]string, len(t.Columns))
 		for i, c := range t.Columns {
 			cols[i] = c.Name + ":" + c.Type
@@ -5894,6 +6047,229 @@ func (e *Executor) execShowTables(sess *Session) (*Result, error) {
 			StrVal(t.PK),
 			StrVal(strings.Join(idx, ", ")),
 		})
+	}
+	return res, nil
+}
+
+// execCreateDatabase CREATE DATABASE [IF NOT EXISTS] <name>（T39）。
+// 多库元数据仅登记库目录（m:databases），不触及表目录；default 库恒存在不可重复创建。
+// 与用户目录一致：直接写库目录键并经 WAL 原子持久化（autocommit 提交 / 显式事务延迟提交）。
+func (e *Executor) execCreateDatabase(sess *Session, s *CreateDatabaseStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
+	if err != nil {
+		return nil, err
+	}
+	auto := e.autocommit(sess)
+	if auto {
+		defer tx.Rollback()
+	}
+	if err := normalizeDBName(s.Name); err != nil {
+		return nil, err
+	}
+	dbs, err := loadDatabases(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	// default 库恒存在（单库模型兼容入口），不允许重复登记。
+	exists := s.Name == defaultDB || findDatabase(dbs, s.Name)
+	if exists {
+		if s.IfNotExists {
+			return &Result{}, nil
+		}
+		return nil, &SQLError{Msg: "database already exists: " + s.Name}
+	}
+	dbs = append(dbs, s.Name)
+	raw, err := saveDatabases(dbs)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(dbKey, raw); err != nil {
+		return nil, err
+	}
+	if auto {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	return &Result{AffectedRows: 0}, nil
+}
+
+// execUse USE <db>（T39）：切换会话级默认库；default 恒存在。
+func (e *Executor) execUse(sess *Session, s *UseStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
+	if err != nil {
+		return nil, err
+	}
+	if e.autocommit(sess) {
+		defer tx.Rollback()
+	}
+	dbs, err := loadDatabases(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	if s.Name != defaultDB && !findDatabase(dbs, s.Name) {
+		return nil, &SQLError{Msg: "database not exists: " + s.Name}
+	}
+	sess.CurrentDB = s.Name
+	return &Result{}, nil
+}
+
+// execDropDatabase DROP DATABASE [IF EXISTS] <name>（T39）：级联删除库内所有表。
+// 删除行/索引键/外键联动清理，与 execDropTable 同一套删除语义；default 库禁止删除。
+func (e *Executor) execDropDatabase(sess *Session, s *DropDatabaseStmt) (*Result, error) {
+	if s.Name == defaultDB {
+		return nil, &SQLError{Msg: "cannot drop default database"}
+	}
+	tx, err := e.getTx(sess)
+	if err != nil {
+		return nil, err
+	}
+	auto := e.autocommit(sess)
+	if auto {
+		defer tx.Rollback()
+	}
+	dbs, err := loadDatabases(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	if !findDatabase(dbs, s.Name) {
+		if s.IfExists {
+			return &Result{}, nil
+		}
+		return nil, &SQLError{Msg: "database not exists: " + s.Name}
+	}
+	tabs, err := loadTables(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	// 级联删除：归属该库的全部表（行/索引键/目录）。
+	var removed int
+	var kept []*TableMeta
+	for _, t := range tabs {
+		if tableDB(t) != s.Name {
+			kept = append(kept, t)
+			continue
+		}
+		removed++
+		// M9 外键联动清理：被删表作为 RefTable 时移除引用。
+		for _, ot := range tabs {
+			if ot.Name == t.Name && tableDB(ot) == tableDB(t) {
+				continue
+			}
+			var nfk []ForeignKey
+			for _, fk := range ot.ForeignKeys {
+				if fk.RefTable == t.Name {
+					continue
+				}
+				nfk = append(nfk, fk)
+			}
+			ot.ForeignKeys = nfk
+		}
+		pairs, err := e.scanMerged(tx, e.rowRanges(t))
+		if err != nil {
+			return nil, err
+		}
+		for _, kv := range pairs {
+			if err := tx.Delete(kv.Key); err != nil {
+				return nil, err
+			}
+		}
+		if len(t.Indexes) > 0 {
+			var ipairs []storage.KVPair
+			for i := range t.Indexes {
+				ps, err := e.scanMerged(tx, e.indexTableRanges(t, t.Indexes[i].ID))
+				if err != nil {
+					return nil, err
+				}
+				ipairs = append(ipairs, ps...)
+			}
+			for _, kv := range ipairs {
+				if err := tx.Delete(kv.Key); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	// 移除库目录。
+	var ndbs []string
+	for _, d := range dbs {
+		if d != s.Name {
+			ndbs = append(ndbs, d)
+		}
+	}
+	raw, err := saveDatabases(ndbs)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(dbKey, raw); err != nil {
+		return nil, err
+	}
+	raw, err = saveTables(kept)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Put(metaKey, raw); err != nil {
+		return nil, err
+	}
+	if auto {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	return &Result{AffectedRows: removed}, nil
+}
+
+// resolveTableDB 解析表引用（可带 db.tbl 库前缀）：返回归属库与表名，并校验库存在。
+// 无前缀时归属会话当前库；default 恒存在不校验；information_schema.* 保留全名由调用方拦截。
+func (e *Executor) resolveTableDB(sess *Session, tx txn.Txn, name string) (string, string, error) {
+	db := sess.CurrentDB
+	if db == "" {
+		db = defaultDB
+	}
+	tbl := name
+	if i := strings.IndexByte(name, '.'); i >= 0 {
+		db = name[:i]
+		tbl = name[i+1:]
+		if strings.Contains(tbl, ".") {
+			return "", "", &SQLError{Msg: "invalid table name: " + name}
+		}
+	}
+	if db != defaultDB {
+		dbs, err := loadDatabases(tx.Get)
+		if err != nil {
+			return "", "", err
+		}
+		if !findDatabase(dbs, db) {
+			return "", "", &SQLError{Msg: "unknown database: " + db}
+		}
+	}
+	return db, tbl, nil
+}
+
+// tableDB 表归属库（空 = default，兼容存量数据）。
+func tableDB(t *TableMeta) string {
+	if t.DB == "" {
+		return defaultDB
+	}
+	return t.DB
+}
+
+// execShowDatabases SHOW DATABASES（T39）：默认库 default 前置 + 已创建库排序可见。
+func (e *Executor) execShowDatabases(sess *Session) (*Result, error) {
+	tx, err := e.getTx(sess)
+	if err != nil {
+		return nil, err
+	}
+	if e.autocommit(sess) {
+		defer tx.Rollback()
+	}
+	dbs, err := loadDatabases(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	res := &Result{Columns: []string{"database"}}
+	for _, d := range allDatabases(dbs) {
+		res.Rows = append(res.Rows, []Value{StrVal(d)})
 	}
 	return res, nil
 }

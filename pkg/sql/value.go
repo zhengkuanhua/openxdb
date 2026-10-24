@@ -324,6 +324,87 @@ func zeroValue(typ string) Value {
 	}
 }
 
+// convertColValue T39 MODIFY COLUMN：按目标类型宽松转换旧值。
+// 语义对齐 MySQL 宽松转换：INT↔TEXT/DATE/DECIMAL 可互转（文本解析失败回填零值），
+// BLOB 与 TEXT 按 hex 文本透传；同类型幂等透传，不做严格报错（区别于 insert 的 coerceValue）。
+func convertColValue(v Value, newType string) Value {
+	switch newType {
+	case "INT":
+		switch v.Kind {
+		case "INT":
+			return v
+		case "DECIMAL":
+			return IntVal(v.I / decUnit) // 小数截断
+		case "TEXT", "DATE":
+			n, err := strconv.ParseInt(strings.TrimSpace(v.S), 10, 64)
+			if err != nil {
+				return IntVal(0)
+			}
+			return IntVal(n)
+		default:
+			return IntVal(0)
+		}
+	case "DECIMAL":
+		switch v.Kind {
+		case "DECIMAL":
+			return v
+		case "INT":
+			return Value{Kind: "DECIMAL", I: v.I * decUnit, S: decCanonical(v.I * decUnit)}
+		case "TEXT", "DATE":
+			scaled, canon, err := parseDecimal(strings.TrimSpace(v.S))
+			if err != nil {
+				return decVal(0)
+			}
+			return Value{Kind: "DECIMAL", I: scaled, S: canon}
+		default:
+			return decVal(0)
+		}
+	case "DATE":
+		switch v.Kind {
+		case "DATE":
+			return v
+		case "TEXT":
+			s := v.S
+			// TIMESTAMP 文本（"YYYY-MM-DD HH:MM:SS"）取日期部分，兼容 TPC-C schema 映射
+			if len(s) > 10 && s[10] == ' ' {
+				s = s[:10]
+			}
+			if err := validateDate(s); err != nil {
+				return zeroValue("DATE")
+			}
+			return Value{Kind: "DATE", S: s}
+		default:
+			return zeroValue("DATE")
+		}
+	case "BLOB":
+		switch v.Kind {
+		case "BLOB":
+			return v
+		case "TEXT":
+			raw, err := decodeHex(v.S)
+			if err != nil {
+				return zeroValue("BLOB")
+			}
+			return Value{Kind: "BLOB", S: encodeHex(raw)}
+		default:
+			return zeroValue("BLOB")
+		}
+	default: // TEXT
+		switch v.Kind {
+		case "TEXT", "DATE":
+			return StrVal(v.S)
+		case "INT":
+			return StrVal(v.String())
+		case "DECIMAL":
+			return StrVal(v.S)
+		case "BLOB":
+			return StrVal(v.String()) // hex 文本透传
+		default:
+			return zeroValue("TEXT")
+		}
+	}
+}
+
 // String 规范化：BLOB 以大写 hex 输出。
 func (v Value) String() string {
 	if v.Kind == "INT" {

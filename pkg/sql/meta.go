@@ -17,6 +17,7 @@ import (
 type TableMeta struct {
 	ID          uint64       `json:"id"`
 	Name        string       `json:"name"`
+	DB          string       `json:"db,omitempty"` // 归属数据库（空 = default，兼容存量数据）
 	Columns     []ColumnDef  `json:"columns"`
 	PK          string       `json:"pk"`
 	PKCols      []string     `json:"pk_cols,omitempty"` // 复合主键全列（空 = 单列主键 PK）

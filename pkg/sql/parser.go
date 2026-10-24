@@ -73,6 +73,10 @@ func (p *parser) expectName(what string) (token, error) {
 }
 
 func (p *parser) parseStmt() (Stmt, error) {
+	// USE 未注册进关键字表（避免与列名/表名冲突），按标识符文本匹配。
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "USE") {
+		return p.parseUse()
+	}
 	if p.cur().kind != tokKeyword {
 		return nil, errf("expected statement at %d, got %q", p.cur().pos, p.cur().text)
 	}
@@ -312,10 +316,23 @@ func (p *parser) parseAlter() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
+	s := &AlterTableStmt{Table: tbl.text}
+	// M18-A：ALTER TABLE 表名支持 db.tbl 库前缀限定（保留全名，executor 规范化）。
+	for p.cur().kind == tokDot {
+		p.next()
+		t, err := p.expect(tokIdent, "table name after dot")
+		if err != nil {
+			return nil, err
+		}
+		s.Table = s.Table + "." + t.text
+	}
 	if p.cur().kind != tokKeyword {
+		// MODIFY 不在关键字表（避免与表名/列名冲突），按标识符文本匹配（同 SHOW USERS 模式）。
+		if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "MODIFY") {
+			return p.parseAlterModify(s)
+		}
 		return nil, errf("expected ALTER action at %d, got %q", p.cur().pos, p.cur().text)
 	}
-	s := &AlterTableStmt{Table: tbl.text}
 	switch p.cur().text {
 	case "ADD":
 		p.next()
@@ -410,6 +427,60 @@ func (p *parser) parseAlter() (Stmt, error) {
 		return nil, errf("expected COLUMN or TO after RENAME at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	return nil, errf("unsupported ALTER action %q at %d", p.cur().text, p.cur().pos)
+}
+
+// parseAlterModify T39：ALTER TABLE t MODIFY [COLUMN] c TYPE——列级类型变更。
+// 类型归一化与 CREATE TABLE 一致（INTEGER→INT、VARCHAR/CHAR→TEXT、TIMESTAMP→DATE、STRING→TEXT），
+// 可选精度参数（varchar(10)/decimal(12,2) 等）解析接受、暂不强制长度约束。
+func (p *parser) parseAlterModify(s *AlterTableStmt) (Stmt, error) {
+	p.next() // 消费 MODIFY
+	if p.cur().kind == tokKeyword && p.cur().text == "COLUMN" {
+		p.next()
+	}
+	col, err := p.expect(tokIdent, "column name")
+	if err != nil {
+		return nil, err
+	}
+	typTok, err := p.expect(tokIdent, "column type")
+	if err != nil {
+		return nil, err
+	}
+	typ := strings.ToUpper(typTok.text)
+	switch typ {
+	case "INTEGER":
+		typ = "INT"
+	case "VARCHAR", "CHAR":
+		typ = "TEXT"
+	case "TIMESTAMP":
+		typ = "DATE"
+	}
+	if typ != "INT" && typ != "TEXT" && typ != "STRING" &&
+		typ != "DATE" && typ != "DECIMAL" && typ != "BLOB" {
+		return nil, errf("unsupported column type %q at %d", typTok.text, typTok.pos)
+	}
+	if typ == "STRING" {
+		typ = "TEXT"
+	}
+	// 类型精度参数：varchar(10)/char(2)/decimal(12,2)/int(11)——解析接受，暂不强制长度约束
+	if p.cur().kind == tokLParen {
+		p.next()
+		if _, err := p.expect(tokNumber, "type precision"); err != nil {
+			return nil, err
+		}
+		if p.cur().kind == tokComma {
+			p.next()
+			if _, err := p.expect(tokNumber, "type scale"); err != nil {
+				return nil, err
+			}
+		}
+		if _, err := p.expect(tokRParen, ")"); err != nil {
+			return nil, err
+		}
+	}
+	s.Action = "MODIFY_COLUMN"
+	s.Col = col.text
+	s.NewType = typ
+	return s, nil
 }
 
 // parseAlterUser ALTER USER '<name>' IDENTIFIED BY '<pwd>'（重置密码）。
@@ -534,6 +605,24 @@ func (p *parser) parseCreateRole() (Stmt, error) {
 		return nil, err
 	}
 	return &CreateRoleStmt{Name: roleTok.text, IfNotExists: ifNot}, nil
+}
+
+// parseCreateDatabase T39：CREATE DATABASE [IF NOT EXISTS] <name>。
+// DATABASE 为关键字（lexer 保留），由 parseCreate 的 DATABASE 分支转入。
+// 语法与 MySQL 对齐：库名非引号标识符，支持可选 IF NOT EXISTS 静默跳过。
+func (p *parser) parseCreateDatabase() (Stmt, error) {
+	if err := p.expectKeyword("DATABASE"); err != nil {
+		return nil, err
+	}
+	ifNot, err := p.parseIfNotExists()
+	if err != nil {
+		return nil, err
+	}
+	nameTok, err := p.expect(tokIdent, "database name")
+	if err != nil {
+		return nil, err
+	}
+	return &CreateDatabaseStmt{Name: nameTok.text, IfNotExists: ifNot}, nil
 }
 
 // parseDropRole DROP ROLE [IF EXISTS] '<role>'：删除角色（M17 RBAC）。
@@ -862,8 +951,11 @@ func (p *parser) parseCreate() (Stmt, error) {
 	case "ROLE":
 		// M17：CREATE ROLE '<role>'
 		return p.parseCreateRole()
+	case "DATABASE":
+		// T39：CREATE DATABASE [IF NOT EXISTS] <name>——多库元数据登记
+		return p.parseCreateDatabase()
 	default:
-		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW, USER, TRIGGER, PROCEDURE or ROLE at %d, got %q", p.cur().pos, p.cur().text)
+		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW, USER, TRIGGER, PROCEDURE, ROLE or DATABASE at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
@@ -1483,11 +1575,41 @@ func (p *parser) parseRefClause(fk ForeignKey) (ForeignKey, error) {
 	return fk, nil
 }
 
+// parseUse USE <db>（T39）：切换会话级默认库；库名合法性由 executor 校验。
+func (p *parser) parseUse() (Stmt, error) {
+	if p.cur().kind != tokIdent || !strings.EqualFold(p.cur().text, "USE") {
+		return nil, errf("expected USE at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	p.next()
+	db, err := p.expectName("database name")
+	if err != nil {
+		return nil, err
+	}
+	return &UseStmt{Name: db.text}, nil
+}
+
 func (p *parser) parseDrop() (Stmt, error) {
 	if err := p.expectKeyword("DROP"); err != nil {
 		return nil, err
 	}
 	switch p.cur().text {
+	case "DATABASE":
+		// DROP DATABASE [IF EXISTS] <name>（T39）：级联删除库内所有表。
+		p.next()
+		s := &DropDatabaseStmt{}
+		if p.cur().kind == tokKeyword && p.cur().text == "IF" {
+			p.next()
+			if err := p.expectKeyword("EXISTS"); err != nil {
+				return nil, err
+			}
+			s.IfExists = true
+		}
+		db, err := p.expectName("database name")
+		if err != nil {
+			return nil, err
+		}
+		s.Name = db.text
+		return s, nil
 	case "INDEX":
 		return p.parseDropIndex()
 	case "MATERIALIZED":
@@ -2841,7 +2963,7 @@ func (p *parser) parseSelectAlias(sc *SelectColumn) error {
 }
 
 // parseWindowSpec 解析 OVER 子句（M10 窗口函数）：
-// OVER ( [PARTITION BY col [, col ...]] [ORDER BY col [ASC|DESC]] [frame] )
+// OVER ( [PARTITION BY col [, col ...]] [ORDER BY col [, col ...] [ASC|DESC]] [frame] )
 // frame 为 P0-5 显式窗口帧（ROWS|RANGE ...）；无显式框架，默认为
 // ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW。
 func (p *parser) parseWindowSpec(sc *SelectColumn) error {
@@ -2880,21 +3002,31 @@ func (p *parser) parseWindowSpec(sc *SelectColumn) error {
 		if err := p.expectKeyword("BY"); err != nil {
 			return err
 		}
-		ref, col, err := p.parseColumnRef()
-		if err != nil {
-			return err
-		}
-		ob := &OrderBy{Ref: ref, Col: col}
-		if p.cur().kind == tokKeyword {
-			switch p.cur().text {
-			case "ASC":
-				p.next()
-			case "DESC":
-				ob.Desc = true
-				p.next()
+		// T39：窗口 ORDER BY 多列——ORDER BY col1, col2 [ASC|DESC] 任意组合。
+		// 首列同步写入 ws.OrderBy 保持既有单列路径兼容（排序/帧计算按 OrderBys 消费）。
+		for {
+			ref, col, err := p.parseColumnRef()
+			if err != nil {
+				return err
 			}
+			ob := &OrderBy{Ref: ref, Col: col}
+			if p.cur().kind == tokKeyword {
+				switch p.cur().text {
+				case "ASC":
+					p.next()
+				case "DESC":
+					ob.Desc = true
+					p.next()
+				}
+			}
+			ws.OrderBy = ob
+			ws.OrderBys = append(ws.OrderBys, *ob)
+			if p.cur().kind == tokComma {
+				p.next()
+				continue
+			}
+			break
 		}
-		ws.OrderBy = ob
 	}
 	// P0-5：显式窗口帧 ROWS|RANGE ...
 	if p.cur().kind == tokKeyword && (p.cur().text == "ROWS" || p.cur().text == "RANGE") {
@@ -2903,6 +3035,10 @@ func (p *parser) parseWindowSpec(sc *SelectColumn) error {
 			return err
 		}
 		ws.Frame = frame
+	}
+	// T39：RANGE 帧按 ORDER BY 键值域计算窗口，仅支持单列排序（MySQL 语义一致）。
+	if ws.Frame != nil && ws.Frame.Type == "RANGE" && len(ws.OrderBys) > 1 {
+		return errf("RANGE frame requires single ORDER BY column at %d", p.cur().pos)
 	}
 	if _, err := p.expect(tokRParen, ")"); err != nil {
 		return err
@@ -3535,10 +3671,19 @@ func (p *parser) parseUpdate() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
+	stmt := &UpdateStmt{Table: nameTok.text}
+	// M18-A：UPDATE 表名支持 db.tbl 库前缀限定（保留全名，executor 规范化）。
+	for p.cur().kind == tokDot {
+		p.next()
+		t, err := p.expect(tokIdent, "table name after dot")
+		if err != nil {
+			return nil, err
+		}
+		stmt.Table = stmt.Table + "." + t.text
+	}
 	if err := p.expectKeyword("SET"); err != nil {
 		return nil, err
 	}
-	stmt := &UpdateStmt{Table: nameTok.text}
 	sets, err := p.parseSetItems()
 	if err != nil {
 		return nil, err
@@ -3567,6 +3712,15 @@ func (p *parser) parseDelete() (Stmt, error) {
 		return nil, err
 	}
 	stmt := &DeleteStmt{Table: nameTok.text}
+	// M18-A：DELETE 表名支持 db.tbl 库前缀限定（保留全名，executor 规范化）。
+	for p.cur().kind == tokDot {
+		p.next()
+		t, err := p.expect(tokIdent, "table name after dot")
+		if err != nil {
+			return nil, err
+		}
+		stmt.Table = stmt.Table + "." + t.text
+	}
 	if p.cur().kind == tokKeyword && p.cur().text == "WHERE" {
 		p.next()
 		w, err := p.parseWhere()
@@ -3657,6 +3811,12 @@ func (p *parser) parseShow() (Stmt, error) {
 			user = userTok.text
 		}
 		return &ShowGrantsStmt{User: user}, nil
+	}
+	// SHOW DATABASES：DATABASES 不在关键字表（DATABASE 为单数保留字），
+	// 按标识符文本匹配，避免与表名 databases 冲突。
+	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "DATABASES") {
+		p.next()
+		return &ShowDatabasesStmt{}, nil
 	}
 	// SHOW USERS：USERS 不在关键字表（避免与表名 users 冲突），按标识符文本匹配。
 	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "USERS") {
