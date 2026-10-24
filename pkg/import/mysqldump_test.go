@@ -416,3 +416,50 @@ func TestM14ScientificNumber(t *testing.T) {
 		}
 	}
 }
+
+// TestT44DatabaseLevelParse 整库 dump 解析：CREATE DATABASE/USE 记录与跳过，
+// db.tbl 前缀剥离（反引号与裸形式），DROP 前缀剥离。
+func TestT44DatabaseLevelParse(t *testing.T) {
+	d := parse(t, "CREATE DATABASE IF NOT EXISTS `shop` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n"+
+		"USE `shop`;\n"+
+		"DROP TABLE IF EXISTS `shop`.`old_t`;\n"+
+		"CREATE TABLE `shop`.`items` (id INT PRIMARY KEY, name TEXT);\n"+
+		"INSERT INTO `shop`.`items` VALUES (1,'pen'),(2,'book');\n"+
+		"CREATE TABLE shop.t2 (id INT PRIMARY KEY, v INT);\n"+
+		"INSERT INTO shop.t2 VALUES (3,30);\n")
+	if len(d.Databases) != 1 || d.Databases[0] != "shop" {
+		t.Fatalf("Databases = %v, want [shop]", d.Databases)
+	}
+	if d.Skipped != 2 {
+		t.Fatalf("Skipped = %d, want 2 (CREATE DATABASE + USE)", d.Skipped)
+	}
+	if len(d.Drops) != 1 || d.Drops[0] != "old_t" {
+		t.Fatalf("Drops = %v, want [old_t]", d.Drops)
+	}
+	if len(d.Tables) != 2 {
+		t.Fatalf("Tables = %d, want 2", len(d.Tables))
+	}
+	if d.Tables[0].Name != "items" {
+		t.Fatalf("table0 name = %q, want items", d.Tables[0].Name)
+	}
+	if d.Tables[1].Name != "t2" {
+		t.Fatalf("table1 name = %q, want t2", d.Tables[1].Name)
+	}
+	if len(d.Tables[0].Rows) != 2 || d.Tables[0].Rows[1][1].Raw != "book" {
+		t.Fatalf("items rows = %+v", d.Tables[0].Rows)
+	}
+	if len(d.Tables[1].Rows) != 1 || d.Tables[1].Rows[0][1].Raw != "30" {
+		t.Fatalf("t2 rows = %+v", d.Tables[1].Rows)
+	}
+}
+
+// TestT44DottedTableNamePreserved 整体反引号 `db.tbl`（点号是表名一部分）不剥离。
+func TestT44DottedTableNamePreserved(t *testing.T) {
+	d := parse(t, "CREATE TABLE `db.tbl` (id INT); INSERT INTO `db.tbl` VALUES (1);")
+	if len(d.Tables) != 1 || d.Tables[0].Name != "db.tbl" {
+		t.Fatalf("Tables = %+v, want single [db.tbl]", d.Tables)
+	}
+	if len(d.Tables[0].Rows) != 1 || d.Tables[0].Rows[0][0].Raw != "1" {
+		t.Fatalf("rows = %+v", d.Tables[0].Rows)
+	}
+}

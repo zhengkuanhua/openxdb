@@ -3,6 +3,7 @@ package mysqlproto
 import (
 	"encoding/binary"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -145,7 +146,18 @@ func (c *mysqlConn) handleBinlogDump(p []byte) error {
 		}
 		from = next
 		if len(evs) == 0 {
-			// 文件尾：轮询等待新事件。
+			// 文件尾：探活连接后轮询等待新事件。
+			// 客户端断开时服务端收不到读错误（本循环不主动读包），
+			// 需用短读超时探测：EOF/重置视为客户端关闭，退出释放订阅句柄。
+			if nc, ok := c.pc.rw.(net.Conn); ok {
+				_ = nc.SetReadDeadline(time.Now().Add(binlogDumpPollInterval / 2))
+				var one [1]byte
+				if _, err := nc.Read(one[:]); err != nil {
+					if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+						return nil
+					}
+				}
+			}
 			time.Sleep(binlogDumpPollInterval)
 		}
 	}

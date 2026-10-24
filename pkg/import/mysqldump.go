@@ -108,7 +108,7 @@ func Parse(r io.Reader, opt Options) (*Dump, error) {
 		upper := strings.ToUpper(body)
 		switch {
 		case strings.HasPrefix(upper, "CREATE TABLE"):
-			t, err := parseCreateTable(body)
+			t, whole, err := parseCreateTable(body)
 			if err != nil {
 				if opt.IgnoreErrors {
 					d.Skipped++
@@ -116,7 +116,9 @@ func Parse(r io.Reader, opt Options) (*Dump, error) {
 				}
 				return nil, err
 			}
-			t.Name = stripTablePrefix(t.Name)
+			if !whole {
+				t.Name = stripTablePrefix(t.Name)
+			}
 			if old := tables[t.Name]; old != nil {
 				// 同名表重复 CREATE（罕见）：以后者为准重建
 				old.Columns = t.Columns
@@ -131,7 +133,7 @@ func Parse(r io.Reader, opt Options) (*Dump, error) {
 				d.Skipped++
 				continue
 			}
-			id, bad, err := parseInsert(body)
+			id, bad, whole, err := parseInsert(body)
 			if err != nil {
 				if opt.IgnoreErrors {
 					d.Skipped++
@@ -139,7 +141,9 @@ func Parse(r io.Reader, opt Options) (*Dump, error) {
 				}
 				return nil, err
 			}
-			id.Table = stripTablePrefix(id.Table)
+			if !whole {
+				id.Table = stripTablePrefix(id.Table)
+			}
 			d.BadRows += bad
 			t := tables[id.Table]
 			if t == nil {
@@ -205,7 +209,7 @@ func Parse(r io.Reader, opt Options) (*Dump, error) {
 				t.Rows = append(t.Rows, id.Rows...)
 			}
 		case strings.HasPrefix(upper, "DROP TABLE"):
-			name, err := parseDropTable(body)
+			name, whole, err := parseDropTable(body)
 			if err != nil {
 				if opt.IgnoreErrors {
 					d.Skipped++
@@ -213,7 +217,9 @@ func Parse(r io.Reader, opt Options) (*Dump, error) {
 				}
 				return nil, err
 			}
-			name = stripTablePrefix(name)
+			if !whole {
+				name = stripTablePrefix(name)
+			}
 			d.Drops = append(d.Drops, name)
 			if old := tables[name]; old != nil {
 				delete(tables, name)
@@ -417,17 +423,17 @@ func splitTopLevel(s string, start int) ([]string, error) {
 	return nil, fmt.Errorf("unterminated parentheses")
 }
 
-// parseDropTable DROP TABLE [IF EXISTS] <name>。
-func parseDropTable(s string) (string, error) {
+// parseDropTable DROP TABLE [IF EXISTS] <name>，返回表名与"整体反引号标识符"标志。
+func parseDropTable(s string) (string, bool, error) {
 	rest := strings.TrimSpace(s[len("DROP TABLE"):])
 	if strings.HasPrefix(strings.ToUpper(rest), "IF EXISTS") {
 		rest = strings.TrimSpace(rest[len("IF EXISTS"):])
 	}
-	name, _, err := parseQualifiedName(rest, 0)
+	name, _, whole, err := parseQualifiedName(rest, 0)
 	if err != nil {
-		return "", fmt.Errorf("invalid DROP TABLE: %v", err)
+		return "", false, fmt.Errorf("invalid DROP TABLE: %v", err)
 	}
-	return name, nil
+	return name, whole, nil
 }
 
 // parseCreateDatabase 识别 "CREATE DATABASE [IF NOT EXISTS] <name>" 并返回库名（去反引号/引号）。
@@ -465,10 +471,16 @@ func parseUseDatabase(s string) (string, bool) {
 // parseQualifiedName 解析表名，支持 [db.]tbl 与 `db`.`tbl` 限定形式：
 // 解析第一段标识符后若紧跟 '.'，继续解析第二段，返回第二段（表名，剥离库前缀）。
 // OpenXDB 为单 default 库模型，导入时统一使用裸表名。
-func parseQualifiedName(s string, i int) (string, int, error) {
+// whole 为 true 表示"整体反引号标识符"（首个 token 被反引号包裹且其后无 '.' 限定符），
+// 此时点号属于标识符本身（如 `db.tbl`），调用方不应再剥离库前缀。
+func parseQualifiedName(s string, i int) (name string, next int, whole bool, err error) {
+	if i >= len(s) {
+		return "", i, false, fmt.Errorf("expected identifier at end")
+	}
+	wholeBacktick := s[i] == '`'
 	name, j, err := parseIdent(s, i)
 	if err != nil {
-		return "", i, err
+		return "", i, false, err
 	}
 	for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
 		j++
@@ -478,9 +490,16 @@ func parseQualifiedName(s string, i int) (string, int, error) {
 		for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
 			j++
 		}
-		return parseIdent(s, j)
+		n2, j2, err := parseIdent(s, j)
+		if err != nil {
+			return "", i, false, err
+		}
+		return n2, j2, false, nil
 	}
-	return name, j, nil
+	if wholeBacktick {
+		return name, j, true, nil
+	}
+	return name, j, false, nil
 }
 
 // stripTablePrefix 剥离表名中的库前缀（`db`.`tbl` / db.tbl → tbl）。
@@ -511,23 +530,23 @@ func parseSetNames(s string) (string, bool) {
 	return strings.Trim(cs, "'\""), true
 }
 
-// parseCreateTable CREATE TABLE [IF NOT EXISTS] <name> (...)。
-func parseCreateTable(s string) (*Table, error) {
+// parseCreateTable CREATE TABLE [IF NOT EXISTS] <name> (...)，返回表与"整体反引号标识符"标志。
+func parseCreateTable(s string) (*Table, bool, error) {
 	rest := strings.TrimSpace(s[len("CREATE TABLE"):])
 	if strings.HasPrefix(strings.ToUpper(rest), "IF NOT EXISTS") {
 		rest = strings.TrimSpace(rest[len("IF NOT EXISTS"):])
 	}
-	name, i, err := parseQualifiedName(rest, 0)
+	name, i, whole, err := parseQualifiedName(rest, 0)
 	if err != nil {
-		return nil, fmt.Errorf("CREATE TABLE: %v", err)
+		return nil, false, fmt.Errorf("CREATE TABLE: %v", err)
 	}
 	rest = strings.TrimSpace(rest[i:])
 	if !strings.HasPrefix(rest, "(") {
-		return nil, fmt.Errorf("CREATE TABLE %s: expected ( after table name", name)
+		return nil, false, fmt.Errorf("CREATE TABLE %s: expected ( after table name", name)
 	}
 	segments, err := splitTopLevel(rest, 0)
 	if err != nil {
-		return nil, fmt.Errorf("CREATE TABLE %s: %v", name, err)
+		return nil, false, fmt.Errorf("CREATE TABLE %s: %v", name, err)
 	}
 	t := &Table{Name: name}
 	tablePK := ""
@@ -541,11 +560,11 @@ func parseCreateTable(s string) (*Table, error) {
 		case strings.HasPrefix(u, "PRIMARY KEY"):
 			start := strings.IndexByte(seg, '(')
 			if start < 0 {
-				return nil, fmt.Errorf("CREATE TABLE %s: invalid PRIMARY KEY clause", name)
+				return nil, false, fmt.Errorf("CREATE TABLE %s: invalid PRIMARY KEY clause", name)
 			}
 			cols, _, err := parseParenIdents(seg, start)
 			if err != nil {
-				return nil, fmt.Errorf("CREATE TABLE %s: %v", name, err)
+				return nil, false, fmt.Errorf("CREATE TABLE %s: %v", name, err)
 			}
 			if len(cols) > 0 {
 				tablePK = cols[0]
@@ -557,7 +576,7 @@ func parseCreateTable(s string) (*Table, error) {
 		default:
 			col, err := parseColumnDef(seg)
 			if err != nil {
-				return nil, fmt.Errorf("CREATE TABLE %s: %v", name, err)
+				return nil, false, fmt.Errorf("CREATE TABLE %s: %v", name, err)
 			}
 			t.Columns = append(t.Columns, *col)
 			if col.Primary {
@@ -566,7 +585,7 @@ func parseCreateTable(s string) (*Table, error) {
 		}
 	}
 	if len(t.Columns) == 0 {
-		return nil, fmt.Errorf("CREATE TABLE %s: no columns", name)
+		return nil, false, fmt.Errorf("CREATE TABLE %s: no columns", name)
 	}
 	if tablePK != "" {
 		for i := range t.Columns {
@@ -575,7 +594,7 @@ func parseCreateTable(s string) (*Table, error) {
 			}
 		}
 	}
-	return t, nil
+	return t, whole, nil
 }
 
 // parseParenIdents 解析 (a, b, c) 括号内标识符列表（去反引号），
@@ -677,32 +696,33 @@ func mapType(t string) (string, error) {
 }
 
 // parseInsert INSERT [IGNORE] INTO <name> [(cols)] VALUES (...),(...)。
-func parseInsert(s string) (*insertData, int, error) {
+// 返回插入数据、坏行数与"整体反引号标识符"标志。
+func parseInsert(s string) (*insertData, int, bool, error) {
 	rest := strings.TrimSpace(s[len("INSERT"):])
 	if strings.HasPrefix(strings.ToUpper(rest), "IGNORE") {
 		rest = strings.TrimSpace(rest[len("IGNORE"):])
 	}
 	if !strings.HasPrefix(strings.ToUpper(rest), "INTO") {
-		return nil, 0, fmt.Errorf("expected INTO after INSERT")
+		return nil, 0, false, fmt.Errorf("expected INTO after INSERT")
 	}
 	rest = strings.TrimSpace(rest[len("INTO"):])
-	name, i, err := parseQualifiedName(rest, 0)
+	name, i, whole, err := parseQualifiedName(rest, 0)
 	if err != nil {
-		return nil, 0, fmt.Errorf("INSERT: %v", err)
+		return nil, 0, false, fmt.Errorf("INSERT: %v", err)
 	}
 	id := &insertData{Table: name}
 	rest = strings.TrimSpace(rest[i:])
 	if strings.HasPrefix(rest, "(") {
 		cols, end, err := parseParenIdents(rest, 0)
 		if err != nil {
-			return nil, 0, fmt.Errorf("INSERT %s: %v", name, err)
+			return nil, 0, false, fmt.Errorf("INSERT %s: %v", name, err)
 		}
 		id.Columns = cols
 		rest = strings.TrimSpace(rest[end:])
 	}
 	u := strings.ToUpper(rest)
 	if !strings.HasPrefix(u, "VALUES") && !strings.HasPrefix(u, "VALUE") {
-		return nil, 0, fmt.Errorf("INSERT %s: expected VALUES", name)
+		return nil, 0, false, fmt.Errorf("INSERT %s: expected VALUES", name)
 	}
 	if strings.HasPrefix(u, "VALUES") {
 		rest = strings.TrimSpace(rest[len("VALUES"):])
@@ -712,7 +732,7 @@ func parseInsert(s string) (*insertData, int, error) {
 	bad := 0
 	for {
 		if !strings.HasPrefix(rest, "(") {
-			return nil, 0, fmt.Errorf("INSERT %s: expected ( in VALUES", name)
+			return nil, 0, false, fmt.Errorf("INSERT %s: expected ( in VALUES", name)
 		}
 		vals, end, err := parseParenValues(rest, 0)
 		if err != nil {
@@ -732,9 +752,9 @@ func parseInsert(s string) (*insertData, int, error) {
 		break
 	}
 	if len(id.Rows) == 0 {
-		return nil, 0, fmt.Errorf("INSERT %s: no valid rows", name)
+		return nil, 0, false, fmt.Errorf("INSERT %s: no valid rows", name)
 	}
-	return id, bad, nil
+	return id, bad, whole, nil
 }
 
 // parseParenValues 解析一行元组 (v1, v2, ...) 的值列表。
