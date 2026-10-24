@@ -51,10 +51,14 @@ def test_connect_and_ping(server):
     assert c.closed
 
 
-def test_connect_with_auth_args_ignored(server):
-    # Protocol has no auth; user/password must be accepted and ignored.
+def test_connect_with_auth_args_rejected_when_disabled(server):
+    # Test server starts with auth disabled; supplying user/password must be
+    # rejected explicitly (server replies "auth unavailable"), while plain
+    # connections keep working.
     host, port, _ = server
-    c = openxdb.connect(host, port, user="u", password="p")
+    with pytest.raises(OperationalError):
+        openxdb.connect(host, port, user="u", password="p")
+    c = openxdb.connect(host, port)
     c.ping()
     c.close()
 
@@ -101,9 +105,9 @@ def test_select_types_and_null(cur):
     cur.execute("SELECT id, v, d, dt FROM t_driver ORDER BY id")
     rows = cur.fetchall()
     # DECIMAL is canonicalised to fixed 4 fractional digits; empty TEXT cell
-    # is indistinguishable from NULL on the wire and maps to None.
+    # is now distinguishable from NULL on the wire: empty string maps to "".
     assert rows[0] == ("1", "x", "12.3400", "2026-10-01")
-    assert rows[1][1] is None
+    assert rows[1][1] == ""
     assert rows[1][2] == "0.5000"
 
 
@@ -210,14 +214,19 @@ def test_parameter_mismatch_raises(cur):
         cur.execute("INSERT INTO t_driver (id) VALUES (?)")
 
 
-def test_parameter_null_unsupported(cur):
-    with pytest.raises(ParameterError):
-        cur.execute("SELECT 1 WHERE 1 = ?", (None,))
+def test_parameter_null_roundtrip(cur):
+    cur.execute("CREATE TABLE t_driver (id INT, v TEXT, PRIMARY KEY (id))")
+    cur.execute("INSERT INTO t_driver (id, v) VALUES (?, ?)", (1, None))
+    cur.execute("SELECT v FROM t_driver WHERE id = ?", (1,))
+    assert cur.fetchall() == [(None,)]
 
 
-def test_parameter_newline_rejected(cur):
-    with pytest.raises(ParameterError):
-        cur.execute("SELECT ?", ("a\nb",))
+def test_parameter_newline_roundtrip(cur):
+    cur.execute("CREATE TABLE t_driver (id INT, v TEXT, PRIMARY KEY (id))")
+    val = "a\nb\rc\\d'e"
+    cur.execute("INSERT INTO t_driver (id, v) VALUES (?, ?)", (1, val))
+    cur.execute("SELECT v FROM t_driver WHERE id = ?", (1,))
+    assert cur.fetchall() == [(val,)]
 
 
 # -- transactions ---------------------------------------------------------

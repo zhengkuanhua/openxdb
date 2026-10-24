@@ -183,6 +183,15 @@ func lex(sql string) ([]token, error) {
 				return nil, err
 			}
 		case isIdentStart(c):
+			// v1.5.0 P2-12：E'...' / e'...' 转义字符串（驱动参数化含换行/反斜杠文本
+			// 时生成；普通字符串字面量保持原语义，兼容既有 SQL 与 Windows 路径）。
+			if (c == 'E' || c == 'e') && l.pos+1 < len(l.src) &&
+				(l.src[l.pos+1] == '\'' || l.src[l.pos+1] == '"') {
+				if err := l.lexEString(l.src[l.pos+1]); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			l.lexIdent()
 		default:
 			return nil, errf("unexpected character %q at %d", c, l.pos)
@@ -265,6 +274,46 @@ func (l *lexer) lexString(q byte) error {
 		c := l.src[l.pos]
 		if c == q {
 			// SQL 标准转义：两个连续引号表示一个字面引号（如 'O''Brien'）。
+			if l.pos+1 < len(l.src) && l.src[l.pos+1] == q {
+				sb.WriteByte(q)
+				l.pos += 2
+				continue
+			}
+			l.pos++
+			l.toks = append(l.toks, token{kind: tokString, text: sb.String(), pos: start})
+			return nil
+		}
+		sb.WriteByte(c)
+		l.pos++
+	}
+	return errf("unterminated string at %d", start)
+}
+
+func (l *lexer) lexEString(q byte) error {
+	start := l.pos
+	l.pos += 2 // skip E prefix + opening quote
+	var sb strings.Builder
+	for l.pos < len(l.src) {
+		c := l.src[l.pos]
+		if c == '\\' && l.pos+1 < len(l.src) {
+			// 转义序列：\\ → 反斜杠，\n → 换行，\r → 回车；其余 \x 保持原样。
+			next := l.src[l.pos+1]
+			switch next {
+			case '\\':
+				sb.WriteByte('\\')
+				l.pos += 2
+				continue
+			case 'n':
+				sb.WriteByte('\n')
+				l.pos += 2
+				continue
+			case 'r':
+				sb.WriteByte('\r')
+				l.pos += 2
+				continue
+			}
+		}
+		if c == q {
 			if l.pos+1 < len(l.src) && l.src[l.pos+1] == q {
 				sb.WriteByte(q)
 				l.pos += 2

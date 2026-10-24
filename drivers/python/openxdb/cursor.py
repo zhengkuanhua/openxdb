@@ -35,7 +35,7 @@ class PipelineResult(NamedTuple):
       affected)``;
     * ``"ok"`` — connection-level statement (BEGIN / COMMIT / ...), no data;
     * ``"table"`` — query; ``description`` is the header list and ``rows``
-      the result rows (empty cells map to ``None``).
+      the result rows (``\\N`` cells map to ``None``, empty cells to ``""``).
     """
 
     kind: str
@@ -285,18 +285,19 @@ def _literal(value) -> str:
         # BLOB columns are transported as upper-case hex text (docs/T9).
         return _QUOTE + value.hex().upper() + _QUOTE
     if isinstance(value, str):
-        if "\n" in value or "\r" in value:
-            raise ParameterError(
-                "string parameter containing newline is not supported by the "
-                "OpenXDB line protocol"
-            )
-        escaped = value.replace(_QUOTE, _QUOTE * 2)
-        return _QUOTE + escaped + _QUOTE
+        # v1.5.0 P2-12: line protocol now supports cell newlines.  String
+        # parameters use the E'...' escape-string literal: backslash and
+        # CR/LF are escaped (\\ / \n / \r), quotes are doubled.  The server
+        # lexer decodes them back, so round-trips are lossless.
+        escaped = value.replace("\\", "\\\\")
+        escaped = escaped.replace("\n", "\\n")
+        escaped = escaped.replace("\r", "\\r")
+        escaped = escaped.replace(_QUOTE, _QUOTE * 2)
+        return "E" + _QUOTE + escaped + _QUOTE
     if value is None:
-        raise ParameterError(
-            "NULL parameters are not supported: the OpenXDB server protocol "
-            "has no NULL literal"
-        )
+        # NULL literal is accepted by the SQL engine and rendered as \N on
+        # the wire; the driver decodes \N back to None on reads.
+        return "NULL"
     raise ParameterError(f"unsupported parameter type: {type(value).__name__}")
 
 
@@ -315,7 +316,12 @@ def _parse_table(raw: str):
     The first line is the header, the second is the ``-`` separator line,
     the trailing ``(N rows)`` line is dropped. Rows are split on the first
     ``N-1`` occurrences of ``" | "`` so cell values may contain ``|``.
-    Empty cells map to ``None`` (NULL semantics, see module docstring).
+
+    Cell decoding (v1.5.0 P2-12): the server renders NULL as the literal
+    ``\\N`` and the empty string as an empty cell, so the two are
+    distinguishable on the wire.  Cell escapes ``\\\\`` / ``\\n`` / ``\\r``
+    are decoded back to backslash / newline / carriage return; any other
+    backslash sequence is kept verbatim.
     """
     lines = raw.split("\n")
     if len(lines) < 3:
@@ -327,8 +333,42 @@ def _parse_table(raw: str):
         if line.startswith("(") and line.endswith(" rows)"):
             break
         cells = _split_row(line, n)
-        rows.append(tuple(None if cell.strip() == "" else cell.strip() for cell in cells))
+        vals = []
+        for cell in cells:
+            raw_cell = cell.strip()
+            if raw_cell == _NULL_CELL:
+                vals.append(None)
+            else:
+                vals.append(_unescape_cell(raw_cell))
+        rows.append(tuple(vals))
     return header, rows
+
+
+_NULL_CELL = "\\N"
+
+
+def _unescape_cell(cell: str) -> str:
+    """Decode server cell escapes (\\\\ -> \\, \\n -> LF, \\r -> CR)."""
+    out = []
+    i = 0
+    while i < len(cell):
+        if cell[i] == "\\" and i + 1 < len(cell):
+            nxt = cell[i + 1]
+            if nxt == "\\":
+                out.append("\\")
+                i += 2
+                continue
+            if nxt == "n":
+                out.append("\n")
+                i += 2
+                continue
+            if nxt == "r":
+                out.append("\r")
+                i += 2
+                continue
+        out.append(cell[i])
+        i += 1
+    return "".join(out)
 
 
 def _split_row(line: str, n: int):

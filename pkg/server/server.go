@@ -467,6 +467,24 @@ func (s *Server) doSQL(line string, sess *session) (string, error) {
 	return formatResult(res), nil
 }
 
+// 行协议单元格边界（v1.5.0 P2-12）：NULL 渲染为 \N，单元格内反斜杠/换行/回车
+// 转义为 \\ / \n / \r，保证换行文本与 NULL/空串二义在线上可区分，驱动端解码还原。
+const nullCell = "\\N"
+
+func escapeCell(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	return s
+}
+
+func cellText(v sql.Value) string {
+	if v.Kind == "NULL" {
+		return nullCell
+	}
+	return escapeCell(v.String())
+}
+
 // formatResult 将 SQL 结果渲染为文本表格 / 影响行数。
 func formatResult(res *sql.Result) string {
 	if len(res.Columns) == 0 {
@@ -481,7 +499,7 @@ func formatResult(res *sql.Result) string {
 	}
 	for _, r := range res.Rows {
 		for i, v := range r {
-			s := v.String()
+			s := cellText(v)
 			if len(s) > widths[i] {
 				widths[i] = len(s)
 			}
@@ -514,7 +532,7 @@ func formatResult(res *sql.Result) string {
 	for _, r := range res.Rows {
 		cells := make([]string, len(r))
 		for i, v := range r {
-			cells[i] = v.String()
+			cells[i] = cellText(v)
 		}
 		writeRow(cells)
 	}

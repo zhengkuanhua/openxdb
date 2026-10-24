@@ -17,14 +17,15 @@ Wire protocol (as implemented by ``pkg/server.Server.handleLocked``):
 
 Parsing caveats (documented in docs/T19_client_drivers.md):
 
-* NULL and the empty string are both rendered as an empty cell on the wire;
-  this driver therefore maps an empty cell to ``None`` (NULL semantics);
+* NULL is rendered as the literal ``\\N`` cell and the empty string as an
+  empty cell on the wire (v1.5.0 P2-12); this driver maps ``\\N`` to
+  ``None`` (NULL semantics) and keeps empty cells as ``""``;
 * cell values may contain the ``|`` character, so rows are split on the
   first ``N-1`` occurrences of ``" | "`` where ``N`` is the header column
   count (the last column keeps the remainder verbatim);
-* TEXT values containing newlines are **not** supported by the line
-  protocol: ``\n`` / ``\r`` inside parameterised string values are rejected
-  by the client-side escaping engine.
+* cell escapes ``\\`` / ``\n`` / ``\r`` are decoded back to backslash /
+  newline / carriage return, so TEXT values containing newlines round-trip
+  losslessly (``E'...'`` escape-string literals on write).
 """
 
 from __future__ import annotations

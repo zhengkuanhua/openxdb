@@ -234,11 +234,17 @@ class OpenXDBDriverTest {
     void nullAndMissingValuesAreVisible() throws Exception {
         try (Connection c = connect(); Statement st = c.createStatement()) {
             st.executeUpdate("CREATE TABLE t_null (id INT, note TEXT, PRIMARY KEY (id))");
-            st.executeUpdate("INSERT INTO t_null VALUES (1, '')");
-            try (ResultSet rs = st.executeQuery("SELECT note FROM t_null WHERE id = 1")) {
+            st.executeUpdate("INSERT INTO t_null VALUES (1, ''), (2, NULL)");
+            try (ResultSet rs = st.executeQuery("SELECT id, note FROM t_null ORDER BY id")) {
                 assertTrue(rs.next());
-                assertNull(rs.getString(1), "NULL cell should map to null");
-                assertTrue(rs.wasNull());
+                assertEquals(1, rs.getInt("id"));
+                assertEquals("", rs.getString("note"), "empty TEXT cell must map to empty string");
+                assertFalse(rs.wasNull(), "empty TEXT cell must NOT be NULL");
+
+                assertTrue(rs.next());
+                assertEquals(2, rs.getInt("id"));
+                assertNull(rs.getString("note"), "NULL cell should map to null");
+                assertTrue(rs.wasNull(), "NULL cell must report wasNull");
             }
         } finally {
             dropTable("t_null");

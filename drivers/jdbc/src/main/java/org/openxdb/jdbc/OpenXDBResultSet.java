@@ -25,7 +25,8 @@ import java.util.Map;
 
 /**
  * Forward-only, read-only {@link ResultSet} backed by the table parsed from the
- * line protocol. Cell values arrive as text; empty cells map to SQL NULL.
+ * line protocol. Cell values arrive as text; the literal {@code \N} maps to
+ * SQL NULL (wasNull() is true) and empty cells are the empty string.
  * {@code getString} returns the raw text, numeric getters parse the text.
  */
 public class OpenXDBResultSet implements ResultSet {

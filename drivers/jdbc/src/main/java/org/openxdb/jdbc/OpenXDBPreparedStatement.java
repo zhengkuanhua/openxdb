@@ -30,7 +30,9 @@ import java.util.List;
  * the OpenXDB protocol has no prepared-statement / binary parameter channel, so
  * {@code ?} placeholders are substituted with safely escaped SQL literals before
  * the statement is sent (same escaping rules as the Python driver; see
- * docs/T19_client_drivers.md). NULL parameters are not supported on the wire.
+ * docs/T19_client_drivers.md). Since v1.5.0 (P2-12) NULL parameters are sent as
+ * the literal {@code NULL} and string values use {@code E'...'} escape-string
+ * literals so newlines / backslashes round-trip losslessly.
  */
 public class OpenXDBPreparedStatement extends OpenXDBStatement implements PreparedStatement {
 
@@ -68,12 +70,12 @@ public class OpenXDBPreparedStatement extends OpenXDBStatement implements Prepar
 
     @Override
     public void setNull(int parameterIndex, int sqlType) throws SQLException {
-        throw new SQLFeatureNotSupportedException("NULL parameters are not supported by the OpenXDB line protocol");
+        setParam(parameterIndex, "NULL");
     }
 
     @Override
     public void setNull(int parameterIndex, int sqlType, String typeName) throws SQLException {
-        throw new SQLFeatureNotSupportedException("NULL parameters are not supported by the OpenXDB line protocol");
+        setParam(parameterIndex, "NULL");
     }
 
     @Override
@@ -113,27 +115,25 @@ public class OpenXDBPreparedStatement extends OpenXDBStatement implements Prepar
 
     @Override
     public void setBigDecimal(int parameterIndex, BigDecimal x) throws SQLException {
-        if (x == null) {
-            throw new SQLFeatureNotSupportedException("NULL parameters are not supported");
-        }
-        setParam(parameterIndex, x.toPlainString());
+        setParam(parameterIndex, x == null ? "NULL" : x.toPlainString());
     }
 
     @Override
     public void setString(int parameterIndex, String x) throws SQLException {
         if (x == null) {
-            throw new SQLFeatureNotSupportedException("NULL parameters are not supported");
+            setParam(parameterIndex, "NULL");
+            return;
         }
-        if (x.indexOf('\n') >= 0 || x.indexOf('\r') >= 0) {
-            throw new SQLException("string parameter containing newline is not supported by the OpenXDB line protocol");
-        }
-        setParam(parameterIndex, quote(x.replace("'", "''")));
+        // E'...' escape-string literal keeps backslashes, newlines and
+        // carriage returns intact across the line protocol.
+        setParam(parameterIndex, OpenXDBProtocol.escapeString(x));
     }
 
     @Override
     public void setBytes(int parameterIndex, byte[] x) throws SQLException {
         if (x == null) {
-            throw new SQLFeatureNotSupportedException("NULL parameters are not supported");
+            setParam(parameterIndex, "NULL");
+            return;
         }
         StringBuilder sb = new StringBuilder("'");
         for (byte b : x) {
@@ -145,32 +145,24 @@ public class OpenXDBPreparedStatement extends OpenXDBStatement implements Prepar
 
     @Override
     public void setDate(int parameterIndex, Date x) throws SQLException {
-        if (x == null) {
-            throw new SQLFeatureNotSupportedException("NULL parameters are not supported");
-        }
-        setParam(parameterIndex, quote(x.toString()));
+        setParam(parameterIndex, x == null ? "NULL" : quote(x.toString()));
     }
 
     @Override
     public void setTime(int parameterIndex, Time x) throws SQLException {
-        if (x == null) {
-            throw new SQLFeatureNotSupportedException("NULL parameters are not supported");
-        }
-        setParam(parameterIndex, quote(x.toString()));
+        setParam(parameterIndex, x == null ? "NULL" : quote(x.toString()));
     }
 
     @Override
     public void setTimestamp(int parameterIndex, Timestamp x) throws SQLException {
-        if (x == null) {
-            throw new SQLFeatureNotSupportedException("NULL parameters are not supported");
-        }
-        setParam(parameterIndex, quote(x.toString()));
+        setParam(parameterIndex, x == null ? "NULL" : quote(x.toString()));
     }
 
     @Override
     public void setObject(int parameterIndex, Object x) throws SQLException {
         if (x == null) {
-            throw new SQLFeatureNotSupportedException("NULL parameters are not supported");
+            setParam(parameterIndex, "NULL");
+            return;
         }
         if (x instanceof String) {
             setString(parameterIndex, (String) x);

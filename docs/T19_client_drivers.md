@@ -39,9 +39,9 @@ T19 为 OpenXDB 补充两类标准客户端驱动：
 
 ### 2.2 解析边界（必须知晓）
 
-- **NULL 与空串**：线上空单元格同时表示 NULL 与空字符串；驱动统一把空单元格映射为 `NULL`（JDBC `getString` 返回 null / `wasNull()` 为 true；Python 返回 `None`）。
+- **NULL 与空串（v1.5.0 起可区分）**：NULL 渲染为 `\N` 字面量、空字符串渲染为空单元格；驱动据此区分——`\N` 映射为 `NULL`（JDBC `getString` 返回 null / `wasNull()` 为 true；Python 返回 `None`），空单元格映射为空字符串 `""`（`wasNull()` 为 false）。**单元格内容恰好为 `\N`（真实文本）由服务端转义为 `\\N`，不会被误判为 NULL。**
 - **单元格含 `|`**：表格单元格内容可含 `|` 字符，按表头列数 N 在前 N-1 个 `" | "` 分隔处切分，最后一列保留剩余原文。
-- **多行文本**：行协议不支持单元格内换行，`\n` / `\r` 出现在参数化字符串值中会被驱动端拒绝。
+- **单元格内换行/反斜杠（v1.5.0 起支持）**：服务端将单元格内 `\n` / `\r` / `\\` 分别转义为 `\n` / `\r` / `\\` 两个字符序列，驱动在切分后解码还原（`\n`→换行、`\r`→回车、`\\`→反斜杠），文本可无损往返；参数化字符串值通过 `E'...'` 转义字符串字面量发送（见 §5）。
 
 ### 2.3 流水线批量执行（pipeline）
 
@@ -66,7 +66,7 @@ T19 为 OpenXDB 补充两类标准客户端驱动：
 | `OpenXDBConnection` | 实现 `java.sql.Connection`；维护 TCP 会话与事务状态；`setAutoCommit(false)` 触发会话事务（首条语句前自动 `BEGIN`），`commit()`/`rollback()` 发送 `COMMIT`/`ROLLBACK`，`close()` 在事务中时先 `ROLLBACK` 再 `QUIT` |
 | `OpenXDBStatement` | 实现 `java.sql.Statement`；每次执行发送一条命令并解析回复：表回复包装为 `ResultSet`（`executeQuery`/`execute` 返回 true），`(N rows affected)` 作为更新计数；`addBatch`/`executeBatch` 为流水线批量实现（见 §2.3）；命名游标/cancel 明确 `SQLFeatureNotSupportedException` |
 | `OpenXDBPreparedStatement` | 继承 `OpenXDBStatement`；客户端侧 `?` 占位符替换（见 §5） |
-| `OpenXDBResultSet` | 只进、只读 `ResultSet`；单元格文本解析，空单元格映射 NULL；`getString`/`getInt`/`getLong`/`getDouble`/`getBoolean`/`getBigDecimal`/`getBytes` 等；BLOB 线上为大写十六进制，按 hex 解码 |
+| `OpenXDBResultSet` | 只进、只读 `ResultSet`；单元格文本解析，`\N` 映射 NULL（`wasNull()` 为 true）、空单元格映射空串（`wasNull()` 为 false），单元格转义解码还原（§2.2）；`getString`/`getInt`/`getLong`/`getDouble`/`getBoolean`/`getBigDecimal`/`getBytes` 等；BLOB 线上为大写十六进制，按 hex 解码 |
 | `OpenXDBProtocol` | 内部协议封装：socket 连接（5s 超时）、命令发送、回复解析（OK/PONG/BYE、affected、表、ERR） |
 
 ### 3.3 执行流
@@ -112,11 +112,11 @@ conn.close()
 | `bool` | `1` / `0` |
 | `int` / `float` | 十进制字面量（`str` / `repr`） |
 | `bytes`（BLOB） | 大写十六进制字符串，加单引号 |
-| `str` | 单引号包裹，`'` 双写转义；**含 `\n` / `\r` 拒绝**（行协议限制） |
-| `None` | **不支持**：协议无 NULL 字面量，抛参数错误 |
+| `str` | `E'...'` 转义字符串字面量：`\` → `\\`、`\n` → `\n`、`\r` → `\r`、`'` 双写；**支持单元格内换行与反斜杠（v1.5.0 起）** |
+| `None` | `NULL` 字面量（v1.5.0 起支持；服务端 `\N` 渲染，读取端还原为 NULL） |
 | 其他类型 | 抛不支持错误 |
 
-边界必须写明：转义引擎保证字面量安全，但**不**支持 `LIKE` 通配符转义语义扩展、不支持 NULL 参数、不支持单元格内换行；`LIKE '%'` 等模式中的 `%`/`_` 由用户 SQL 自行控制。参数数量与占位符数量不符时抛 `ParameterError` / SQLException。
+边界必须写明：转义引擎保证字面量安全，但**不**支持 `LIKE` 通配符转义语义扩展；`LIKE '%'` 等模式中的 `%`/`_` 由用户 SQL 自行控制。参数数量与占位符数量不符时抛 `ParameterError` / SQLException。
 
 ## 6. 错误码与事务语义
 
@@ -151,7 +151,7 @@ conn.close()
 
 | 驱动 | 测试入口 | 运行方式 | 覆盖 |
 |---|---|---|---|
-| JDBC | `drivers/jdbc/src/test/java/org/openxdb/jdbc/OpenXDBDriverTest.java` + `OpenXDBPipelineTest.java` | `mvn test`（Maven，JUnit 5，18/18 通过） | 建连/PING、DDL/DML affected-rows、查询结果集、PreparedStatement 转义、事务 commit/rollback、错误映射、连接关闭语义；pipeline 混合语句按序/错误不中断/与单条一致/吞吐基准 |
+| JDBC | `drivers/jdbc/src/test/java/org/openxdb/jdbc/OpenXDBDriverTest.java` + `OpenXDBPipelineTest.java` + `OpenXDBRowProtoTest.java` | `mvn test`（Maven，JUnit 5，21/21 通过） | 建连/PING、DDL/DML affected-rows、查询结果集、PreparedStatement 转义、事务 commit/rollback、错误映射、连接关闭语义；pipeline 混合语句按序/错误不中断/与单条一致/吞吐基准；行协议 NULL vs 空串区分、换行/反斜杠无损往返 |
 | Python | `drivers/python/tests/test_driver.py` + `tests/test_pipeline.py` + `tests/conftest.py` | `pytest`（session 级 fixture 起服务） | 连接/PING、auth 参数忽略、连接拒绝、DDL/DML、参数化、事务、错误映射、fetch 语义；pipeline 混合语句按序/与单条一致/参数化/校验/吞吐基准 |
 
 另见服务端回归测试：`pkg/server/server_pipeline_test.go`（`TestREPLSessionConsecutiveLinesInOrder`，验证连续多行按序处理与表格回复边界）。
@@ -165,9 +165,9 @@ conn.close()
 ## 8. 边界与限制
 
 - 无鉴权：`user`/`password` 属性仅兼容 API，线上不校验（后续鉴权需扩展握手）；
-- 无 prepared statement / 二进制参数通道：参数化为客户端转义，NULL、含换行字符串、未绑定参数均拒绝；
+- 无 prepared statement / 二进制参数通道：参数化为客户端转义（NULL → `NULL` 字面量、字符串 → `E'...'` 字面量，含换行/反斜杠安全转义）；未绑定参数拒绝；
 - `ResultSet` 只进只读；无 `ResultSetMetaData`、命名游标、可滚动结果集、生成键；**批处理已支持**（流水线批量，见 §2.3，非 JDBC 二进制批量协议）；
-- 行协议不支持单元格内换行；空单元格统一按 NULL 处理（空串与 NULL 不可区分）；
+- 行协议已区分 NULL 与空串（`\N` 标记 vs 空单元格）；单元格内换行/回车/反斜杠经转义无损往返（§2.2）；
 - 隔离级别仅 `READ_COMMITTED` / `READ_UNCOMMITTED` 名义支持，语义由服务端快照隔离实现。
 
 ## 9. 相关文件

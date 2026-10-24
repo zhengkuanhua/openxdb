@@ -45,5 +45,6 @@ bench_data_a_c*/
 backup_*.mtables.bin
 *.exe~
 *.exe.bak_*
+.tmp-jdbc-classes/
 *.pyc
 __pycache__/

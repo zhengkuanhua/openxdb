@@ -236,10 +236,66 @@ final class OpenXDBProtocol {
         return cells;
     }
 
-    /** @return trimmed cell, or null for an empty cell (NULL on the wire). */
+    /** Wire marker for SQL NULL (mirrors pkg/server cellText). */
+    static final String NULL_CELL = "\\N";
+
+    /** Parse one trimmed cell into its value: {@code \N} is SQL NULL, an
+     *  empty cell is the empty string, anything else is unescaped (cell
+     *  escapes {@code \\}, {@code \n}, {@code \r} decode back to backslash /
+     *  newline / carriage return). */
     static String cellValue(String cell) {
         String t = cell.trim();
-        return t.isEmpty() ? null : t;
+        if (t.equals(NULL_CELL)) {
+            return null;
+        }
+        if (t.isEmpty()) {
+            return "";
+        }
+        return unescapeCell(t);
+    }
+
+    /** Decode server-side cell escapes (mirrors pkg/server escapeCell). */
+    private static String unescapeCell(String s) {
+        if (s.indexOf('\\') < 0) {
+            return s;
+        }
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c != '\\' || i + 1 >= s.length()) {
+                sb.append(c);
+                continue;
+            }
+            char n = s.charAt(i + 1);
+            switch (n) {
+                case '\\': sb.append('\\'); i++; break;
+                case 'n': sb.append('\n'); i++; break;
+                case 'r': sb.append('\r'); i++; break;
+                default: sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    /** Encode a string value for use inside an {@code E'...'} literal (used by
+     *  {@link OpenXDBPreparedStatement#setString}). Backslash, newline and
+     *  carriage return are escaped so the value survives the line protocol;
+     *  single quotes are doubled per SQL standard. */
+    static String escapeString(String value) {
+        StringBuilder sb = new StringBuilder(value.length() + 2);
+        sb.append("E'");
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\'': sb.append("''"); break;
+                default: sb.append(c);
+            }
+        }
+        sb.append('\'');
+        return sb.toString();
     }
 }
 

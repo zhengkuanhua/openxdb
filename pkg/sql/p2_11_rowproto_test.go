@@ -253,3 +253,45 @@ func TestP211RowProtoDecimalPrecision(t *testing.T) {
 		t.Fatalf("id=10 value: got %q", v)
 	}
 }
+
+// P2-12-1：E'...' 转义字符串（驱动参数化通道）。
+// 驱动对含换行/回车/反斜杠的参数生成 E'...' 字面量，服务端解码 \\ \n \r；
+// 与普通字符串 '...'（保持原语义、不转义）形成互斥边界：
+//   - E'...' 解码后与"渲染转义再解码"结果一致（导出导入往返）；
+//   - 普通 '...' 含反斜杠序列时保持原样（Windows 路径 / 字面 \n 不受影响）。
+func TestP212EScapeStringLiteralRoundtrip(t *testing.T) {
+	e := newEngine(t)
+	mustExec(t, e, "CREATE TABLE t (id INT, txt TEXT, PRIMARY KEY (id))")
+
+	// E'...'：换行/回车/反斜杠/单引号均转义，解码后为真实字符
+	mustExec(t, e, "INSERT INTO t VALUES (1, E'a\\nb\\rc\\\\d''e')")
+	rows := mustRows(t, e, "SELECT txt FROM t WHERE id = 1")
+	if rows[0][0].Kind != "TEXT" || rows[0][0].S != "a\nb\rc\\d'e" {
+		t.Fatalf("E-string decode: got %q", rows[0][0].S)
+	}
+
+	// 普通 '...'：反斜杠序列保持原样（不转义，兼容 Windows 路径）
+	mustExec(t, e, "INSERT INTO t VALUES (2, 'C:\\new\\tmp')")
+	rows2 := mustRows(t, e, "SELECT txt FROM t WHERE id = 2")
+	if rows2[0][0].S != `C:\new\tmp` {
+		t.Fatalf("plain string must keep backslashes: got %q", rows2[0][0].S)
+	}
+
+	// 往返一致：存储值经渲染转义（\\ \n \r）后，再用 E'...' 导入还原为同一值
+	stored := rows[0][0].S
+	mustExec(t, e, "CREATE TABLE t2 (id INT, txt TEXT, PRIMARY KEY (id))")
+	mustExec(t, e, "INSERT INTO t2 VALUES (1, E'"+escapeESQL(stored)+"')")
+	back := mustRows(t, e, "SELECT txt FROM t2 WHERE id = 1")[0][0].S
+	if back != stored {
+		t.Fatalf("roundtrip mismatch: %q vs %q", back, stored)
+	}
+}
+
+// escapeESQL 将字符串转义为 E'...' 字面量内容（与驱动 _literal 规则一致）。
+func escapeESQL(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	s = strings.ReplaceAll(s, "'", "''")
+	return s
+}
