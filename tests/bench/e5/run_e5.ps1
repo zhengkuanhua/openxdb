@@ -1,4 +1,4 @@
-# E5 benchmark orchestration for OpenXDB (Windows / PowerShell 5.1)
+﻿# E5 benchmark orchestration for OpenXDB (Windows / PowerShell 5.1)
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File tests/bench/e5/run_e5.ps1 -Phase init
@@ -21,6 +21,7 @@ param(
     [int]$TpccThreads = 8,
     [int]$TpccTime = 120,
     [int]$TpccWarmup = 10,
+    [double]$Timeout = 120.0,
     [switch]$SkipBuild
 )
 
@@ -52,9 +53,9 @@ function Invoke-Init {
 function Invoke-Build {
     if ($SkipBuild) { Write-Host '[build] skipped'; return }
     Write-Host '[build] go build ./... (CGO with RocksDB 11.8.1) ...'
-    $env:CGO_CFLAGS = '-ID:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-11.8.1\include'
-    $env:CGO_CXXFLAGS = '-ID:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-11.8.1\include'
-    $env:CGO_LDFLAGS = '-LD:\AI项目\OpenXDB开源数据库开发\OpenXDBTools\rocksdb-build -lrocksdb -lm'
+    $env:CGO_CFLAGS = '-ID:\OpenXDBTools\rocksdb-11.8.1\include'
+    $env:CGO_CXXFLAGS = '-ID:\OpenXDBTools\rocksdb-11.8.1\include'
+    $env:CGO_LDFLAGS = '-LD:\OpenXDBTools\rocksdb-build -lrocksdb -lm'
     Remove-Item Env:CGO_ENABLED -ErrorAction SilentlyContinue
     Push-Location $Root
     try {
@@ -73,7 +74,7 @@ function Invoke-Start {
         $proc | Stop-Process -Force
         Start-Sleep -Seconds 2
     }
-    Write-Host '[start] launching openxdb v0.27.0-alpha on :7797 (relative data dir) ...'
+    Write-Host '[start] launching openxdb v1.13.0 on :7797 (relative data dir) ...'
     Start-Process -FilePath $Exe -ArgumentList "start --data-dir $DataDir --port $Port --log-level info" -WorkingDirectory $Root
     Start-Sleep -Seconds 5
     $alive = Get-Process openxdb -ErrorAction SilentlyContinue
@@ -94,11 +95,11 @@ function Invoke-Prepare {
 function Invoke-Run {
     foreach ($mode in @('read', 'write', 'read_write')) {
         Write-Host "[run] oltp mode=$mode ..."
-        & python (Join-Path $E5 'bench_oltp.py') --port $Port --mode $mode --threads $OltpThreads --time $OltpTime
+        & python (Join-Path $E5 'bench_oltp.py') --port $Port --mode $mode --threads $OltpThreads --time $OltpTime --timeout $Timeout
         if ($LASTEXITCODE -ne 0) { throw "oltp $mode failed" }
     }
     Write-Host "[run] tpcc (${TpccThreads} threads, ${TpccTime}s, warmup ${TpccWarmup}s) ..."
-    & python (Join-Path $E5 'bench_tpcc.py') --port $Port --threads $TpccThreads --time $TpccTime --warmup $TpccWarmup
+    & python (Join-Path $E5 'bench_tpcc.py') --port $Port --threads $TpccThreads --time $TpccTime --warmup $TpccWarmup --timeout $Timeout
     if ($LASTEXITCODE -ne 0) { throw 'tpcc run failed' }
     Write-Host '[run] done'
 }
