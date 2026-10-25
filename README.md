@@ -32,7 +32,7 @@ AIGC:
 [![GitHub stars](https://img.shields.io/github/stars/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 [![GitHub issues](https://img.shields.io/github/issues/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 
-OpenXDB 是从零自研的单机/分布式关系型数据库内核（Go + RocksDB），定位于学习与工程实践并重的开源数据库项目。内核自底向上实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务与带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA 故障转移、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动（JDBC/Python）、运维工具链、认证权限（审计 + RBAC）与生态导出（JSON/Parquet）等能力，当前版本 **v1.12.0**。
+OpenXDB 是从零自研的单机/分布式关系型数据库内核（Go + RocksDB），定位于学习与工程实践并重的开源数据库项目。内核自底向上实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务与带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA 故障转移、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动（JDBC/Python）、运维工具链、认证权限（审计 + RBAC）与生态导出（JSON/Parquet）等能力，当前版本 **v1.13.0**。
 
 ## 快速开始
 
@@ -163,6 +163,8 @@ Protocol / CLI (REPL · TCP server · JDBC/Python 驱动 · MySQL wire protocol 
 **v1.11.0（2026-10-25 落地）**：**商业生态增强与文档对齐** —— T32 生态导出流式化（Parquet 多 RowGroup、CSV 分块扫描即时写盘，内存有界）；T37 告警规则级 webhook 通知（异步 POST、URL 白名单校验）；T36 TLS 证书热轮换（AutoListener SetConfig + ReloadTLS）；README/KNOWN_LIMITATIONS 同步至 v1.10.0、quorum 边界结论登记（HEAD `7e8ed42`）。
 
 **v1.12.0（2026-10-25 落地）**：**性能与精度优化** —— ① P1 协议解析优化：全量对话边界 bufio 读覆层（减少逐字节系统调用）+ COM_QUERY 多语句在线切分执行（引号/注释内分号安全，`serverStatusMoreResults=0x0008`，单语句行为兼容）；② P2 DECIMAL 高精度扩展：4 位小数 → 按列声明 scale 可配置精度（值对象 DS 字段、跨 scale 对齐比较/舍入、行协议与 JSON 导出联动）；③ P2 备份导入提速：IMPORT BATCH 语义强化（事务分批提交、失败回滚边界清晰）；④ P2 组提交默认开启评估：WAL 组提交默认开（Append 仅写缓冲、SyncUpTo 合并 fsync），E5 实测 TPC-C tpmC 13.5→41.0、OLTP write 0.93→1.25 TPS。
+
+**v1.13.0（2026-10-25 落地）**：**服务端并发与 E5 pipeline 化** —— ① P1 服务端多连接并发处理：协议读侧 REPLSession 改 reader goroutine 预读 + 有界 channel + 主循环顺序执行，消除单连接逐命令串行读等待，会话级隔离不变、既有 server/mysqlproto 测试与单节点部署零回归；② P1 E5 脚本 pipeline 化：bench_oltp.py / bench_tpcc.py 事务内语句改客户端 pipeline 批量发送（整事务一次往返）；③ P1 E5 受控复测：干净重置 + 3 轮取中位数，TPC-C tpmC 41.00→78.00 / tpm_total 88.50→164.50（提升约 90%）、OLTP read 0.40 / write 0.40 / read-write 0.40 TPS（read 受引擎聚合/范围查询执行开销制约，SQL 执行层零改动），连接超时 errs 根因修复（--timeout 120s + 连接级异常重建，3 轮 errs=0 / reconnects=0）；④ P2 文档同步（README / KNOWN_LIMITATIONS 至 v1.13.0、DEV_PLAN 2026Q7 补 v1.13.0 排期标完成，DEV_PLAN 不入库）。
 
 ### 完整特性
 

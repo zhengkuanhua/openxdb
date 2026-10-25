@@ -22,7 +22,7 @@ AIGC:
 
 # OpenXDB Known Limitations
 
-版本：v1.12.0（2026-10-25）
+版本：v1.13.0（2026-10-25）
 
 本文档列出 OpenXDB v1.10.0 的已知限制与边界。每条目给出限制描述、影响与建议，帮助用户在选型、部署与使用时做出合理判断。详细功能范围请以 [docs/product_manual_zh.md](docs/product_manual_zh.md)（第 4 章 SQL 参考）与设计文档 docs/ 为准。
 
@@ -56,10 +56,10 @@ AIGC:
 
 ## 2. 性能边界
 
-### 2.1 协议/解析性能边界（v1.12.0 已落地 P1 优化）
+### 2.1 协议/解析性能边界（v1.13.0 已落地 P1 并发处理）
 
-- **限制描述**：v1.3.0 已将全局会话锁消除为会话级细粒度锁，v1.5.0 起 Python/JDBC 驱动支持客户端 pipeline 批量流水线执行；v1.12.0 起服务端协议解析完成两项 P1 优化：① 全量对话边界 bufio 读覆层（mysqlConn 外层 bufio.Reader，减少逐字节读系统调用）；② COM_QUERY 多语句在线切分执行（splitSQLStatements 安全跳过引号/注释内分号，多结果以 `serverStatusMoreResults=0x0008` 状态位串行返回，单语句行为完全兼容）。
-- **影响**：E5 复测（同机 Python 驱动等价，8 线程，数据重置后）：OLTP read 1.33 TPS（QPS 18.67）/ write 1.25 TPS（QPS 5.00）/ read-write 1.22 TPS（QPS 21.90）；TPC-C 5 仓 tpmC 41.00 / tpm_total 88.50（较 v1.10.0 基线 13.50 / 32.50 提升约 2~3 倍）。write 与 TPC-C 显著受益于组提交默认开启 + 协议优化；read 侧波动与数据规模/机器状态相关。TPC-C 高并发下客户端仍有连接超时错误计数（errs 计数含重试连接）。
+- **限制描述**：v1.3.0 已将全局会话锁消除为会话级细粒度锁，v1.5.0 起 Python/JDBC 驱动支持客户端 pipeline 批量流水线执行；v1.12.0 完成协议解析两项 P1 优化（① 全量对话边界 bufio 读覆层，mysqlConn 外层 bufio.Reader 减少逐字节读系统调用；② COM_QUERY 多语句在线切分执行，splitSQLStatements 安全跳过引号/注释内分号，多结果以 `serverStatusMoreResults=0x0008` 状态位串行返回，单语句行为完全兼容）；v1.13.0 完成服务端多连接并发处理：协议读侧 REPLSession 改造为 reader goroutine 预读 + 有界 channel + 主循环顺序执行，消除单连接逐命令串行读等待，每连接独立 goroutine 使多连接请求可并行进入执行层；会话级隔离保持（connSession 独立 SQL 会话），既有 server/mysqlproto 测试与单节点部署零回归。E5 脚本侧 bench_oltp.py / bench_tpcc.py 事务内语句启用客户端 pipeline 批量发送（整事务一次往返），并新增连接超时防护（--timeout 默认 120s、连接级异常自动重建并计数）。
+- **影响**：E5 受控复测（干净数据重置 + 3 轮取中位数，8 连接）：OLTP read 0.40 / write 0.40 / read-write 0.40 TPS（errs=0 / reconnects=0）；TPC-C 5 仓 tpmC 78.00 / tpm_total 164.50（errs=0 / reconnects=0，较 v1.12.0 的 41.00 / 88.50 提升约 90%）。说明：OLTP read 侧仍受引擎聚合/范围查询执行开销制约（SUM/GROUP BY/ORDER BY 范围查询单条约 560ms、COUNT 全表约 580ms、点查约 3ms；SQL 执行层 v1.12→v1.13 零改动，属既有引擎特征），单连接 pipeline 与串行对照无差异证明瓶颈在服务端执行而非网络往返；v1.12.0 记录的 read 1.33 TPS 与当前受控复测不一致，以本次为准。TPC-C 高并发连接超时问题已修复：客户端默认超时提升至 120s 且连接级异常自动重建，3 轮复测 errs=0 / reconnects=0。
 - **建议**：将上述数值视为**单机端侧功能基准**，非生产级吞吐承诺；生产负载请先按真实数据量/并发做压测，评估是否需要单机优化或集群扩展。
 
 ### 2.2 备份/恢复与大批量导入耗时
