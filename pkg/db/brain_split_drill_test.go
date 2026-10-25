@@ -14,6 +14,7 @@ package db_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/db"
 )
@@ -113,6 +114,11 @@ func TestP1BrainSplitDrill(t *testing.T) {
 	dA.ReconcileAfterPartition(me + 10)
 	if !dA.ReadOnly() {
 		t.Fatal("stale master A should be demoted read-only")
+	}
+	// NoteEpoch 在锁内置 readOnly、锁外停 Replicator：轮询等待停复制完成，避免竞态。
+	deadline := time.Now().Add(2 * time.Second)
+	for dA.Replicator != nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
 	}
 	if dA.Replicator != nil {
 		t.Fatal("stale master A replicator should be stopped")
