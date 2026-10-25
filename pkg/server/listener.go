@@ -16,19 +16,40 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+	"sync"
 	"time"
 )
 
 // NewAutoListener 包装底层监听器：peek 首字节识别 TLS ClientHello 并
 // 决定连接类型（tls.Server 或明文）。config 为服务端 TLS 配置（非 nil）。
 func NewAutoListener(ln net.Listener, config *tls.Config) *AutoListener {
-	return &AutoListener{Listener: ln, config: config}
+	l := &AutoListener{Listener: ln}
+	l.SetConfig(config)
+	return l
 }
 
 // AutoListener 在同一端口提供明文与 TLS 并存监听（T36 AllowLegacy）。
+// config 经 SetConfig 原子替换，支持证书热轮换：新 Accept 的连接使用
+// 最新配置，已建立连接继续使用其握手时的配置直至断开。
 type AutoListener struct {
 	net.Listener
+	mu     sync.RWMutex
 	config *tls.Config
+}
+
+// SetConfig 原子替换监听层 TLS 配置（T36 证书热轮换）：仅影响后续
+// Accept 建立的连接；已建立连接不受影响。
+func (l *AutoListener) SetConfig(config *tls.Config) {
+	l.mu.Lock()
+	l.config = config
+	l.mu.Unlock()
+}
+
+// currentConfig 返回当前 TLS 配置（Accept 时读取）。
+func (l *AutoListener) currentConfig() *tls.Config {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.config
 }
 
 // Accept 接受一条连接并按首字节判定类型；判定失败（对端提前关闭等）
@@ -54,7 +75,7 @@ func (l *AutoListener) wrap(c net.Conn) net.Conn {
 		// 关键：tls.Server 必须基于 bufferedConn，否则 Peek 已缓冲的
 		// ClientHello 首字节从底层 socket 读不到，握手死锁。
 		bc := &bufferedConn{Conn: c, br: br}
-		tc := tls.Server(bc, l.config)
+		tc := tls.Server(bc, l.currentConfig())
 		return &autoConn{Conn: bc, tls: tc, secure: true}
 	}
 	// 明文连接：保持原样（secure=false），已缓冲字节经 bufferedConn 消费。

@@ -83,6 +83,11 @@ type Server struct {
 	// tlsConfig 非 nil 时 ServeTCP 使用 tls.Listen 提供加密监听（P0 TLS）；
 	// nil 保持明文监听（默认行为，向后兼容）。经 SetTLS 装配。
 	tlsConfig *tls.Config
+	// tlsMu 保护 tlsConfig 读写（T36 证书热轮换 ReloadTLS）。
+	tlsMu sync.RWMutex
+	// autoLn 非 nil 时记录 AllowLegacy 模式已启动的 AutoListener，
+	// ReloadTLS 同步热轮换其配置。
+	autoLn *AutoListener
 	// tlsAllowLegacy T36：true 时已装配 TLS 的 ServeTCP 使用 AutoListener，
 	// 同端口明文/TLS 并存（AllowLegacy 语义）；false（默认）为纯 TLS 监听。
 	tlsAllowLegacy bool
@@ -122,7 +127,46 @@ func New(tm txn.TxnManager) *Server {
 // SetTLS 装配监听层 TLS 配置（P0 TLS）。传入 nil 恢复明文监听（默认行为，
 // 向后兼容）；非 nil 时 ServeTCP 使用 tls.Listen 提供加密监听，客户端须
 // 以 TLS 连接（pkg/server 的 Dial/InsecureTLSConfig 可配合内网自签名测试）。
-func (s *Server) SetTLS(cfg *tls.Config) { s.tlsConfig = cfg }
+// ServeTCP 启动后调用可同步热轮换 AllowLegacy 监听器（AutoListener）的配置。
+func (s *Server) SetTLS(cfg *tls.Config) {
+	s.tlsMu.Lock()
+	s.tlsConfig = cfg
+	s.tlsMu.Unlock()
+	s.syncAutoListenerConfig()
+}
+
+// getTLSConfig 返回当前 TLS 配置（读锁）。
+func (s *Server) getTLSConfig() *tls.Config {
+	s.tlsMu.RLock()
+	defer s.tlsMu.RUnlock()
+	return s.tlsConfig
+}
+
+// syncAutoListenerConfig 将最新配置同步到已启动的 AutoListener（若存在）。
+func (s *Server) syncAutoListenerConfig() {
+	if s.autoLn != nil {
+		s.autoLn.SetConfig(s.getTLSConfig())
+	}
+}
+
+// ReloadTLS 热轮换 TLS 证书（T36 增强）：重新加载 certFile/keyFile，
+// 成功后原子替换监听层配置；加载失败保留旧配置并返回错误。
+// AllowLegacy（AutoListener）模式下运行中的监听器立即生效；纯 TLS
+// 监听（tls.Listen）在 Server 已启动后不支持热轮换，需重建 Server。
+func (s *Server) ReloadTLS(certFile, keyFile string) error {
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return fmt.Errorf("server: reload tls: %w", err)
+	}
+	s.tlsMu.Lock()
+	if s.tlsConfig == nil {
+		s.tlsConfig = &tls.Config{}
+	}
+	s.tlsConfig.Certificates = []tls.Certificate{cert}
+	s.tlsMu.Unlock()
+	s.syncAutoListenerConfig()
+	return nil
+}
 
 // SetTLSLegacy 开启同端口明文/TLS 并存（T36 AllowLegacy 语义）：仅在
 // 已装配 TLS 配置时生效；开启后 ServeTCP 使用 AutoListener，非 TLS
@@ -622,16 +666,17 @@ func (s *Server) ServeTCP(addr string) error {
 	var ln net.Listener
 	var err error
 	switch {
-	case s.tlsConfig != nil && s.tlsAllowLegacy:
+	case s.getTLSConfig() != nil && s.tlsAllowLegacy:
 		// T36 AllowLegacy：同一端口自动识别 TLS 与明文连接。
 		raw, lerr := net.Listen("tcp", addr)
 		if lerr != nil {
 			err = lerr
 			break
 		}
-		ln = NewAutoListener(raw, s.tlsConfig)
-	case s.tlsConfig != nil:
-		ln, err = tls.Listen("tcp", addr, s.tlsConfig)
+		s.autoLn = NewAutoListener(raw, s.getTLSConfig())
+		ln = s.autoLn
+	case s.getTLSConfig() != nil:
+		ln, err = tls.Listen("tcp", addr, s.getTLSConfig())
 	default:
 		ln, err = net.Listen("tcp", addr)
 	}
