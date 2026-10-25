@@ -1,6 +1,7 @@
 package mysqlproto
 
 import (
+	"bufio"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -8,6 +9,21 @@ import (
 
 	"github.com/zhengkuanhua/openxdb/pkg/sql"
 )
+
+// bufConn 全量对话边界读覆层：读路径经 bufio.Reader 缓冲，减少逐字节
+// 系统调用（packetConn.readPacket 的 io.ReadFull 均走此缓冲）；写路径
+// 仍直接写底层 conn，避免引入 Flush 时序风险。
+type bufConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+// Read 从缓冲读取（覆写内嵌 net.Conn 的 Read）。
+func (c *bufConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// bufReadSize 读缓冲大小：64KiB 覆盖典型协议包（最大 16MB-1 的分片重组
+// 由 packetConn 循环处理，此处仅降低 syscall 频次）。
+const bufReadSize = 64 << 10
 
 // MySQLServer MySQL wire protocol 服务端：与行协议（pkg/server）独立监听，
 // 共享同一 SQL 引擎与会话模型。
@@ -72,6 +88,8 @@ func (s *MySQLServer) ServeListener(ln net.Listener) error {
 // handleConn 处理单个 MySQL 连接：握手 → 认证 → 命令循环。
 func (s *MySQLServer) handleConn(conn net.Conn) {
 	defer conn.Close()
+	// P1-A 全量对话边界 bufio 读覆层：握手/命令/载荷读取全部经缓冲。
+	conn = &bufConn{Conn: conn, r: bufio.NewReaderSize(conn, bufReadSize)}
 	pc := &packetConn{rw: conn}
 	id := s.connID.Add(1)
 	scramble, err := genScramble()

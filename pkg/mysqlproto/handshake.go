@@ -45,8 +45,9 @@ var serverCapabilities uint32 = capLongPassword | capFoundRows | capLongFlag |
 
 // serverStatus 常量。
 const (
-	statusAutocommit    = 0x0002
-	statusInTransaction = 0x0001
+	statusAutocommit       = 0x0002
+	statusInTransaction    = 0x0001
+	statusMoreResults      = 0x0008 // SERVER_MORE_RESULTS_EXISTS：多语句结果流中仍有后续结果
 )
 
 // authPlugin 当前认证插件（MySQL 8 默认 caching_sha2_password）。

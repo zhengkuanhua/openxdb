@@ -232,10 +232,14 @@ func (c *mysqlConn) writePrepareOK(stmtID uint32, numColumns, numParams int) err
 
 // status 返回当前连接状态标志（autocommit 恒真，显式事务时置 IN_TRANSACTION）。
 func (c *mysqlConn) status() uint16 {
+	var st uint16 = statusAutocommit
 	if c.inTx {
-		return statusAutocommit | statusInTransaction
+		st |= statusInTransaction
 	}
-	return statusAutocommit
+	if c.moreResults {
+		st |= statusMoreResults
+	}
+	return st
 }
 
 // notImplemented 返回未实现命令的 ERR 包（错误码 1235 ER_NOT_SUPPORTED_YET）。

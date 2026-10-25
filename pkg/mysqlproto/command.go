@@ -44,6 +44,10 @@ type mysqlConn struct {
 	nextStmtID uint32
 	inTx       bool
 	autoCommit bool // MySQL 兼容：SET autocommit=0 后进入隐式事务模式
+	// moreResults 多语句（COM_QUERY 分号切分）执行中：非最后一条语句的
+	// 响应（OK/EOF）需携带 SERVER_MORE_RESULTS_EXISTS(0x0008)，提示客户端
+	// 结果流中仍有后续结果（行为对齐 MySQL 多语句协议）。
+	moreResults bool
 	// srv 持有服务器引用：COM_CHANGE_USER 重新认证时复用 authenticate 流程。
 	srv *MySQLServer
 }
@@ -247,6 +251,27 @@ func (c *mysqlConn) handleQuery(query string) error {
 		}
 		return c.pc.writePacket(okPacket(0, 0, c.status()))
 	}
+	// 多语句切分执行（P1-B）：splitSQLStatements 跳过引号/注释内分号，
+	// 非最后一条语句的响应携带 SERVER_MORE_RESULTS_EXISTS(0x0008)。
+	// 单语句场景切分后仅一段，行为与原实现完全一致（兼容性不变）。
+	stmts := splitSQLStatements(query)
+	if len(stmts) == 0 {
+		return c.pc.writePacket(okPacket(0, 0, c.status()))
+	}
+	last := len(stmts) - 1
+	for i, st := range stmts {
+		c.moreResults = i < last
+		if err := c.execOneQuery(st); err != nil {
+			c.moreResults = false
+			return err
+		}
+	}
+	c.moreResults = false
+	return nil
+}
+
+// execOneQuery 执行单条 SQL 并写响应（原 handleQuery 主逻辑）。
+func (c *mysqlConn) execOneQuery(query string) error {
 	// MySQL autocommit=0 隐式事务：DML/DDL 前自动开启会话事务。
 	if !c.autoCommit && !c.inTx && isImplicitTxTrigger(query) {
 		if _, err := c.engine.ExecuteAsSession("BEGIN", c.user, c.sess); err != nil {
@@ -285,6 +310,95 @@ func (c *mysqlConn) handleQuery(query string) error {
 		return c.writeResultSetTyped(res.Columns, res.ColTypes, rows)
 	}
 	return c.pc.writePacket(okPacket(uint64(res.AffectedRows), 0, c.status()))
+}
+
+// splitSQLStatements 按分号切分 SQL 为多条语句，跳过单引号/双引号/反引号
+// 字符串与 -- 、# 、/* */ 注释内的分号；返回去除首尾空白后的非空语句列表。
+// 单语句输入返回 1 段；纯空白/纯注释输入返回空列表。
+func splitSQLStatements(sqlText string) []string {
+	var stmts []string
+	start := 0
+	i := 0
+	n := len(sqlText)
+	for i < n {
+		ch := sqlText[i]
+		switch {
+		case ch == '\'':
+			i = skipSQLQuoted(sqlText, i, '\'')
+		case ch == '"':
+			i = skipSQLQuoted(sqlText, i, '"')
+		case ch == '`':
+			i = skipSQLQuoted(sqlText, i, '`')
+		case ch == '-' && i+1 < n && sqlText[i+1] == '-' &&
+			(i+2 >= n || isSQLCommentSpace(sqlText[i+2])):
+			i = skipSQLLineComment(sqlText, i+2)
+		case ch == '#':
+			i = skipSQLLineComment(sqlText, i+1)
+		case ch == '/' && i+1 < n && sqlText[i+1] == '*':
+			i = skipSQLBlockComment(sqlText, i+2)
+		case ch == ';':
+			if stmt := strings.TrimSpace(sqlText[start:i]); stmt != "" {
+				stmts = append(stmts, stmt)
+			}
+			i++
+			start = i
+		default:
+			i++
+		}
+	}
+	if stmt := strings.TrimSpace(sqlText[start:n]); stmt != "" {
+		stmts = append(stmts, stmt)
+	}
+	return stmts
+}
+
+// skipSQLQuoted 跳过以 quote 开头的引号段（支持反斜杠转义与引号内
+// 双写转义 '' / "" / ``）；返回段后首个位置。
+func skipSQLQuoted(s string, i int, quote byte) int {
+	i++
+	n := len(s)
+	for i < n {
+		if s[i] == '\\' && i+1 < n && quote != '`' {
+			i += 2
+			continue
+		}
+		if s[i] == quote {
+			if i+1 < n && s[i+1] == quote {
+				i += 2
+				continue
+			}
+			return i + 1
+		}
+		i++
+	}
+	return n
+}
+
+// skipSQLLineComment 跳过 -- / # 行注释至换行；返回换行后位置（含换行，
+// 由后续普通扫描处理空白）。
+func skipSQLLineComment(s string, i int) int {
+	n := len(s)
+	for i < n && s[i] != '\n' {
+		i++
+	}
+	return i
+}
+
+// skipSQLBlockComment 跳过 /* ... */ 块注释（不嵌套）；返回注释后位置。
+func skipSQLBlockComment(s string, i int) int {
+	n := len(s)
+	for i+1 < n && !(s[i] == '*' && s[i+1] == '/') {
+		i++
+	}
+	if i+1 >= n {
+		return n
+	}
+	return i + 2
+}
+
+// isSQLCommentSpace 判断 -- 后字符是否为 MySQL 要求的空白。
+func isSQLCommentSpace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\r' || b == '\n'
 }
 
 // handleStmtPrepare COM_STMT_PREPARE：登记 SQL 文本并返回 PREPARE OK。
