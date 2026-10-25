@@ -13,8 +13,10 @@ package sql
 // 评估数据源与 Prometheus 指标同源（metrics.Registry.Snapshot()），不另造口径。
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,7 +27,8 @@ import (
 )
 
 // AlertRule 一条告警规则：以指标快照字段为输入，超过阈值并持续 duration 秒
-// 触发告警；severity 为严重级别（info/warn/critical）。
+// 触发告警；severity 为严重级别（info/warn/critical）。webhook 为规则级回调
+// URL（可选）：触发/恢复时异步 POST JSON 载荷，与 logx 全局通知并存。
 type AlertRule struct {
 	ID          string  `json:"id"`           // 规则唯一标识
 	Metric      string  `json:"metric"`       // 指标名（见 alertMetricValue）
@@ -34,6 +37,7 @@ type AlertRule struct {
 	DurationSec int64   `json:"duration_sec"` // 越界持续秒数；0 = 立即触发
 	Severity    string  `json:"severity"`     // info / warn / critical
 	Enabled     bool    `json:"enabled"`      // 规则开关
+	Webhook     string  `json:"webhook,omitempty"` // 规则回调 URL（http/https，可选）
 }
 
 // 规则状态机（NORMAL/ALERT/RESOLVED）。
@@ -79,6 +83,8 @@ type AlertRulesEngine struct {
 	now      func() time.Time                       // 测试注入时钟
 	notifier func(level, module, event, msg string) // 通知出口（默认 logx.DefaultAlerts.Notify）
 	snapshot func() metrics.Snapshot                // 指标快照源（默认 e.m.Snapshot，e.m 非 nil）
+
+	webhookClient *http.Client // 规则级 webhook 回调客户端（2s 超时，尽力而为）
 }
 
 // alertRulesTick 评估循环检查节拍（固定细粒度轮询，周期由 alert_eval_interval
@@ -93,6 +99,9 @@ func newAlertRulesEngine(e *Executor) *AlertRulesEngine {
 		rt:       map[string]*ruleRuntime{},
 		now:      time.Now,
 		notifier: logx.DefaultAlerts.Notify,
+		webhookClient: &http.Client{
+			Timeout: 2 * time.Second,
+		},
 	}
 }
 
@@ -296,6 +305,8 @@ func (ar *AlertRulesEngine) advanceLocked(r *AlertRule, st *ruleRuntime, violati
 }
 
 // notifyLocked 发出一条规则告警/恢复通知（调用方持锁；msg 含规则上下文）。
+// 除 notifier 出口外，若规则配置了 webhook 回调 URL，同步构造 JSON 载荷并
+// 异步 POST（2s 超时，尽力而为，失败静默不影响评估循环）。
 func (ar *AlertRulesEngine) notifyLocked(r *AlertRule, st *ruleRuntime, event, level string) {
 	msg := fmt.Sprintf("rule=%s metric=%s op=%s threshold=%s current=%s duration=%ds severity=%s state=%s",
 		r.ID, r.Metric, r.Op, strconv.FormatFloat(r.Threshold, 'g', -1, 64),
@@ -303,6 +314,60 @@ func (ar *AlertRulesEngine) notifyLocked(r *AlertRule, st *ruleRuntime, event, l
 	if ar.notifier != nil {
 		ar.notifier(level, "alert-rules", event, msg)
 	}
+	if r.Webhook != "" && ar.webhookClient != nil {
+		go ar.pushRuleWebhook(r.Webhook, ar.ruleWebhookBody(r, st, event, level))
+	}
+}
+
+// ruleWebhookBody 构造规则回调 JSON 载荷（调用方持锁，字段读取安全；
+// goroutine 只持有已序列化的 body，不接触规则/运行时对象）。
+func (ar *AlertRulesEngine) ruleWebhookBody(r *AlertRule, st *ruleRuntime, event, level string) []byte {
+	type ruleInfo struct {
+		ID          string  `json:"id"`
+		Metric      string  `json:"metric"`
+		Op          string  `json:"op"`
+		Threshold   float64 `json:"threshold"`
+		DurationSec int64   `json:"duration_sec"`
+		Severity    string  `json:"severity"`
+	}
+	payload := struct {
+		Event       string   `json:"event"`
+		Level       string   `json:"level"`
+		State       string   `json:"state"`
+		MetricValue float64  `json:"metric_value"`
+		Rule        ruleInfo `json:"rule"`
+		Time        string   `json:"time"`
+	}{
+		Event:       event,
+		Level:       level,
+		State:       string(st.state),
+		MetricValue: st.lastValue,
+		Rule: ruleInfo{
+			ID: r.ID, Metric: r.Metric, Op: r.Op, Threshold: r.Threshold,
+			DurationSec: r.DurationSec, Severity: r.Severity,
+		},
+		Time: ar.now().Format(time.RFC3339),
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		// Marshal 失败仅发生于字段不可序列化（结构体字段均为基础类型，理论不可达）。
+		return []byte(`{"event":"` + event + `","level":"` + level + `","error":"marshal"}`)
+	}
+	return b
+}
+
+// pushRuleWebhook 异步发送规则回调（非阻塞；失败静默，规则引擎不因此降级）。
+func (ar *AlertRulesEngine) pushRuleWebhook(url string, body []byte) {
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := ar.webhookClient.Do(req)
+	if err != nil {
+		return
+	}
+	_ = resp.Body.Close()
 }
 
 // RuleStatus SHOW ALERT RULES 单行（规则 + 运行时状态 + 最近评估值）。
@@ -420,6 +485,9 @@ func parseAlertRulesJSON(s string) ([]AlertRule, error) {
 		}
 		if !validSeverity(r.Severity) {
 			return nil, fmt.Errorf("alert rule %q: invalid severity %q (expected info/warn/critical)", r.ID, r.Severity)
+		}
+		if r.Webhook != "" && !strings.HasPrefix(r.Webhook, "http://") && !strings.HasPrefix(r.Webhook, "https://") {
+			return nil, fmt.Errorf("alert rule %q: invalid webhook URL %q (expected http:// or https://)", r.ID, r.Webhook)
 		}
 	}
 	return rules, nil
