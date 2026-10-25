@@ -11,9 +11,10 @@ type Stmt interface{ stmt() }
 
 // Value 字面量：INT 或 TEXT。
 type Value struct {
-	Kind string // "INT" | "TEXT"
+	Kind string // "INT" | "TEXT" | "DECIMAL" | ...
 	I    int64
 	S    string
+	DS   int // DECIMAL 小数位（v1.12.0 高精度；<=0 表示默认 4，非 DECIMAL 恒 0）
 }
 
 func IntVal(i int64) Value  { return Value{Kind: "INT", I: i} }
@@ -24,6 +25,7 @@ type ColumnDef struct {
 	Name          string
 	Type          string // INT | TEXT | DATE | DECIMAL | BLOB
 	Params        []int  // 类型精度参数：varchar(10)→[10]、decimal(12,2)→[12,2]（仅解析接受，不强制长度）
+	Scale         int    // DECIMAL 小数位（v1.12.0 高精度；decimal(p,s)→s，<=0 默认 4；非 DECIMAL 恒 0）
 	AutoIncrement bool   // AUTO_INCREMENT 列属性（MySQL DDL 兼容，仅登记）
 }
 

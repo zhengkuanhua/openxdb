@@ -70,7 +70,8 @@ func TestP110UnaryMinus(t *testing.T) {
 		t.Fatalf("-1: got %+v", rows[0][0])
 	}
 	rows = mustRows(t, e, "SELECT -2.5")
-	if rows[0][0].Kind != "DECIMAL" || rows[0][0].I != -25000 {
+	// v1.12.0 高精度：字面量按实际小数位缩放（-2.5 → scale=1，I=-25）。
+	if rows[0][0].Kind != "DECIMAL" || rows[0][0].I != -25 || rows[0][0].DS != 1 {
 		t.Fatalf("-2.5: got %+v", rows[0][0])
 	}
 	// 表达式结果取负

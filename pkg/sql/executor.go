@@ -1811,8 +1811,8 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 				return nil, &SQLError{Msg: "cannot modify indexed column: " + s.Col + " (drop index first)"}
 			}
 		}
-		if meta.Columns[idx].Type == s.NewType {
-			// 同类型幂等：无行重写
+		if meta.Columns[idx].Type == s.NewType && meta.Columns[idx].Scale == s.Column.Scale {
+			// 同类型同精度幂等：无行重写
 			return &Result{AffectedRows: 0}, nil
 		}
 		// 旧列布局解码（行字节按旧类型编码），转换后按新布局编码重写。
@@ -1820,6 +1820,10 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 		old.Columns = append([]ColumnDef(nil), meta.Columns...)
 		old.Indexes = append([]IndexMeta(nil), meta.Indexes...)
 		meta.Columns[idx].Type = s.NewType
+		// v1.12.0 高精度：DECIMAL 声明 scale 同步更新（同类型改精度走行重写）。
+		if s.Column.Scale > 0 {
+			meta.Columns[idx].Scale = s.Column.Scale
+		}
 		pairs, err := e.scanMerged(tx, e.rowRanges(meta))
 		if err != nil {
 			return nil, err
@@ -1831,7 +1835,7 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 				return nil, err
 			}
 			// 宽松转换，失败回填目标类型零值（如 TEXT→INT 非数字 → 0）
-			row[idx] = convertColValue(row[idx], s.NewType)
+			row[idx] = convertColValue(row[idx], s.NewType, s.Column.Scale)
 			raw, err := encodeRow(meta, row)
 			if err != nil {
 				return nil, err
@@ -2343,7 +2347,7 @@ func (e *Executor) onDupUpdateOps(sess *Session, tx txn.Txn, tabs []*TableMeta, 
 		} else {
 			v = set.Val
 		}
-		v, err = coerceValue(meta.Columns[idx].Type, set.Col, v)
+		v, err = coerceValueScaled(meta.Columns[idx].Type, set.Col, meta.Columns[idx].Scale, v)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -3175,10 +3179,18 @@ func aggColumn(meta *TableMeta, rows [][]Value, c *SelectColumn) (Value, error) 
 			}
 		}
 		if dec {
-			if c.Agg == "SUM" {
-				return decVal(dsum), nil
+			// v1.12.0 高精度：取首个 DECIMAL 操作数的小数位作为结果 scale（同列同 scale）。
+			ds := decScale
+			for _, v := range vals {
+				if v.Kind == "DECIMAL" {
+					ds = decDS(v)
+					break
+				}
 			}
-			return decVal(dsum / int64(len(vals))), nil
+			if c.Agg == "SUM" {
+				return decValScaled(dsum, ds), nil
+			}
+			return decValScaled(dsum/int64(len(vals)), ds), nil
 		}
 		if c.Agg == "SUM" {
 			return IntVal(isum), nil
@@ -3427,7 +3439,7 @@ func evalExprForRow(rel *Rel, row []Value, e *Expr) (Value, error) {
 		case "INT":
 			return IntVal(-v.I), nil
 		case "DECIMAL":
-			return decVal(-v.I), nil
+			return decValScaled(-v.I, decDS(v)), nil
 		case "NULL":
 			// P1-10：SQL 语义 -NULL = NULL。
 			return v, nil
@@ -3471,7 +3483,7 @@ func evalSetExpr(meta *TableMeta, row []Value, e *Expr) (Value, error) {
 		case "INT":
 			return IntVal(-v.I), nil
 		case "DECIMAL":
-			return decVal(-v.I), nil
+			return decValScaled(-v.I, decDS(v)), nil
 		case "NULL":
 			// P1-10：SQL 语义 -NULL = NULL。
 			return v, nil
@@ -3492,7 +3504,8 @@ func evalSetExpr(meta *TableMeta, row []Value, e *Expr) (Value, error) {
 
 // evalArith 计算二元算术（T40）。
 // 类型规则：INT op INT → INT（除法除外，INT/INT → DECIMAL；取模为 INT）；
-// 任一操作数为 DECIMAL → DECIMAL（定点 scale=4）；TEXT/DATE/BLOB 参与算术报错。
+// 任一操作数为 DECIMAL → DECIMAL（定点，小数位取两操作数较大 scale，v1.12.0 高精度）；
+// TEXT/DATE/BLOB 参与算术报错。
 // 内部统一用 big.Int 计算防溢出；除零报错。
 func evalArith(a, b Value, op string) (Value, error) {
 	if !isNumericKind(a.Kind) || !isNumericKind(b.Kind) {
@@ -3534,14 +3547,24 @@ func evalArith(a, b Value, op string) (Value, error) {
 		}
 		return IntVal(ab.Int64()), nil
 	}
-	// DECIMAL 路径：统一为缩放整数（INT 放大 1e4 对齐 scale）。
+	// DECIMAL 路径：统一为缩放整数（INT 放大 10^scale 对齐；scale 取两操作数较大值）。
+	dsA, dsB := decDS(a), decDS(b)
+	ds := dsA
+	if dsB > ds {
+		ds = dsB
+	}
+	unit := big.NewInt(pow10Int64(ds))
 	as := new(big.Int).SetInt64(a.I)
 	if a.Kind == "INT" {
-		as.Mul(as, big.NewInt(decUnit))
+		as.Mul(as, unit)
+	} else if dsA < ds {
+		as.Mul(as, big.NewInt(pow10Int64(ds-dsA)))
 	}
 	bs := new(big.Int).SetInt64(b.I)
 	if b.Kind == "INT" {
-		bs.Mul(bs, big.NewInt(decUnit))
+		bs.Mul(bs, unit)
+	} else if dsB < ds {
+		bs.Mul(bs, big.NewInt(pow10Int64(ds-dsB)))
 	}
 	if op == "/" || op == "%" {
 		if bs.Sign() == 0 {
@@ -3555,9 +3578,9 @@ func evalArith(a, b Value, op string) (Value, error) {
 		as.Sub(as, bs)
 	case "*":
 		as.Mul(as, bs)
-		as.Quo(as, big.NewInt(decUnit)) // scaled*scaled/1e4 → scaled
+		as.Quo(as, unit) // scaled*scaled/10^ds → scaled
 	case "/":
-		as.Mul(as, big.NewInt(decUnit))
+		as.Mul(as, unit)
 		as.Quo(as, bs)
 	case "%":
 		as.Rem(as, bs)
@@ -3565,7 +3588,7 @@ func evalArith(a, b Value, op string) (Value, error) {
 	if !as.IsInt64() {
 		return Value{}, &SQLError{Msg: "DECIMAL overflow in arithmetic"}
 	}
-	return decVal(as.Int64()), nil
+	return decValScaled(as.Int64(), ds), nil
 }
 
 // execSelectRel 增强路径主流程：FROM（表/子查询）→ JOIN → WHERE → 聚合/分组 → 排序/投影。
@@ -3942,10 +3965,18 @@ func aggValues(rel *Rel, rows [][]Value, c *SelectColumn) (Value, error) {
 			}
 		}
 		if dec {
-			if c.Agg == "SUM" {
-				return decVal(dsum), nil
+			// v1.12.0 高精度：取首个 DECIMAL 操作数的小数位作为结果 scale（同列同 scale）。
+			ds := decScale
+			for _, v := range vals {
+				if v.Kind == "DECIMAL" {
+					ds = decDS(v)
+					break
+				}
 			}
-			return decVal(dsum / int64(len(vals))), nil
+			if c.Agg == "SUM" {
+				return decValScaled(dsum, ds), nil
+			}
+			return decValScaled(dsum/int64(len(vals)), ds), nil
 		}
 		if c.Agg == "SUM" {
 			return IntVal(isum), nil
@@ -4227,10 +4258,11 @@ func rangeOffsetVal(cur Value, offset int64, following bool) (Value, error) {
 		}
 		return IntVal(cur.I - offset), nil
 	case "DECIMAL":
+		ds := decDS(cur)
 		if following {
-			return decVal(cur.I + offset*decUnit), nil
+			return decValScaled(cur.I+offset*pow10Int64(ds), ds), nil
 		}
-		return decVal(cur.I - offset*decUnit), nil
+		return decValScaled(cur.I-offset*pow10Int64(ds), ds), nil
 	}
 	return Value{}, &SQLError{Msg: "RANGE frame with offset requires numeric ORDER BY key"}
 }
@@ -5013,7 +5045,7 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 			} else {
 				v = set.Val
 			}
-			v, err = coerceValue(meta.Columns[idx].Type, set.Col, v)
+			v, err = coerceValueScaled(meta.Columns[idx].Type, set.Col, meta.Columns[idx].Scale, v)
 			if err != nil {
 				return nil, err
 			}
@@ -5377,7 +5409,7 @@ func defaultColumnValue(c ColumnDef) Value {
 // coerceRow 按列类型做值类型强制（支持 INT/TEXT/DATE/DECIMAL/BLOB）。
 func (e *Executor) coerceRow(meta *TableMeta, vals []Value) ([]Value, error) {
 	for i, c := range meta.Columns {
-		v, err := coerceValue(c.Type, c.Name, vals[i])
+		v, err := coerceValueScaled(c.Type, c.Name, c.Scale, vals[i])
 		if err != nil {
 			return nil, err
 		}
@@ -5796,11 +5828,16 @@ func blobBytes(v Value) []byte {
 	return []byte(v.S)
 }
 
-// compareDec DECIMAL 与 INT/DECIMAL 数值比较。
+// compareDec DECIMAL 与 INT/DECIMAL 数值比较（v1.12.0：跨 scale 对齐比较）。
 func compareDec(a, b Value) int {
-	av, aDec := decScaledOf(a)
-	bv, bDec := decScaledOf(b)
-	if aDec && bDec {
+	if a.Kind == "DECIMAL" && b.Kind == "DECIMAL" {
+		dsA, dsB := decDS(a), decDS(b)
+		ds := dsA
+		if dsB > ds {
+			ds = dsB
+		}
+		av := a.I * pow10Int64(ds-dsA)
+		bv := b.I * pow10Int64(ds-dsB)
 		if av < bv {
 			return -1
 		}
@@ -5809,18 +5846,10 @@ func compareDec(a, b Value) int {
 		}
 		return 0
 	}
-	if aDec {
-		return compareDecInt(av, bv)
+	if a.Kind == "DECIMAL" {
+		return compareDecScaledInt(a.I, decDS(a), b.I)
 	}
-	return -compareDecInt(bv, av)
-}
-
-// decScaledOf 返回值的 scale=4 缩放表示（INT 直接放大；DECIMAL 取自身）。
-func decScaledOf(v Value) (int64, bool) {
-	if v.Kind == "DECIMAL" {
-		return v.I, true
-	}
-	return v.I * decUnit, false
+	return -compareDecScaledInt(b.I, decDS(b), a.I)
 }
 
 func colIndex(meta *TableMeta, name string) int {

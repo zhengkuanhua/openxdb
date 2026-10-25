@@ -48,17 +48,45 @@ func appendJSONValue(b []byte, v Value) []byte {
 	case "INT":
 		return strconv.AppendInt(b, v.I, 10)
 	case "DECIMAL":
-		// 规范化字符串（固定 4 位小数）经 ParseFloat 近似为数字，保持类型化标量。
-		f, err := strconv.ParseFloat(v.S, 64)
-		if err != nil {
-			return appendJSONString(b, v.S)
-		}
-		return strconv.AppendFloat(b, f, 'f', -1, 64)
+		// v1.12.0 高精度：直接输出规范化定点串（JSON number 字面量），
+		// 不再经 ParseFloat 近似，保留列声明小数位精度。
+		return append(b, decJSONNumber(v.S)...)
 	case "BLOB":
 		return appendJSONString(b, strings.ToUpper(v.S))
 	default:
 		return appendJSONString(b, v.S)
 	}
+}
+
+// decJSONNumber 将 DECIMAL 规范化字符串转为 JSON number 字面量
+// （去前导零，保留 scale 精度；"0.5000"→"0.5000"，"-0.0001"→"-0.0001"）。
+func decJSONNumber(s string) string {
+	if s == "" {
+		return "0"
+	}
+	i := 0
+	neg := false
+	if s[0] == '-' || s[0] == '+' {
+		neg = s[0] == '-'
+		i++
+	}
+	intStart := i
+	for i < len(s) && s[i] != '.' {
+		i++
+	}
+	intPart := s[intStart:i]
+	intPart = strings.TrimLeft(intPart, "0")
+	if intPart == "" {
+		intPart = "0"
+	}
+	out := intPart
+	if i < len(s) && s[i] == '.' {
+		out += s[i:]
+	}
+	if neg {
+		out = "-" + out
+	}
+	return out
 }
 
 // appendJSONString 将字符串编码为 JSON 字符串（含控制字符转义）。

@@ -462,15 +462,28 @@ func (p *parser) parseAlterModify(s *AlterTableStmt) (Stmt, error) {
 		typ = "TEXT"
 	}
 	// 类型精度参数：varchar(10)/char(2)/decimal(12,2)/int(11)——解析接受，暂不强制长度约束
+	// v1.12.0 DECIMAL 高精度：decimal(p,s) 的 s 生效为列小数位。
 	if p.cur().kind == tokLParen {
 		p.next()
-		if _, err := p.expect(tokNumber, "type precision"); err != nil {
+		nTok, err := p.expect(tokNumber, "type precision")
+		if err != nil {
 			return nil, err
 		}
+		n, _ := parseInt10(nTok.text)
+		s.Column.Params = append(s.Column.Params, int(n))
 		if p.cur().kind == tokComma {
 			p.next()
-			if _, err := p.expect(tokNumber, "type scale"); err != nil {
+			mTok, err := p.expect(tokNumber, "type scale")
+			if err != nil {
 				return nil, err
+			}
+			m, _ := parseInt10(mTok.text)
+			s.Column.Params = append(s.Column.Params, int(m))
+			if typ == "DECIMAL" {
+				if m < 0 || m > maxDecScale {
+					return nil, errf("DECIMAL scale %d out of range [0,%d] at %d", m, maxDecScale, mTok.pos)
+				}
+				s.Column.Scale = int(m)
 			}
 		}
 		if _, err := p.expect(tokRParen, ")"); err != nil {
@@ -1041,6 +1054,13 @@ func (p *parser) parseCreate() (Stmt, error) {
 				}
 				m, _ := parseInt10(mTok.text)
 				def.Params = append(def.Params, int(m))
+				// v1.12.0 DECIMAL 高精度：decimal(p,s) 的 s 生效为列小数位。
+				if typ == "DECIMAL" {
+					if m < 0 || m > maxDecScale {
+						return nil, errf("DECIMAL scale %d out of range [0,%d] at %d", m, maxDecScale, mTok.pos)
+					}
+					def.Scale = int(m)
+				}
 			}
 			if _, err := p.expect(tokRParen, ")"); err != nil {
 				return nil, err
@@ -2897,6 +2917,16 @@ func (p *parser) parseExprPrimary() (*Expr, error) {
 		text := p.cur().text
 		p.next()
 		if strings.Contains(text, ".") {
+			// v1.12.0 高精度：纯小数按字面量实际位数保留；科学计数走 scale=4 兼容路径。
+			if !strings.ContainsAny(text, "eE") {
+				ds := decimalLiteralScale(text)
+				scaled, canon, err := parseDecimalScaled(text, ds)
+				if err != nil {
+					return nil, err
+				}
+				v := Value{Kind: "DECIMAL", I: scaled, S: canon, DS: ds}
+				return &Expr{Val: &v, Raw: text}, nil
+			}
 			scaled, canon, err := parseDecimal(text)
 			if err != nil {
 				return nil, err
@@ -3656,6 +3686,15 @@ func (p *parser) parseValue() (Value, error) {
 		text := p.cur().text
 		p.next()
 		if strings.Contains(text, ".") {
+			// v1.12.0 高精度：纯小数按字面量实际位数保留；科学计数走 scale=4 兼容路径。
+			if !strings.ContainsAny(text, "eE") {
+				ds := decimalLiteralScale(text)
+				scaled, canon, err := parseDecimalScaled(text, ds)
+				if err != nil {
+					return Value{}, err
+				}
+				return Value{Kind: "DECIMAL", I: scaled, S: canon, DS: ds}, nil
+			}
 			// DECIMAL 字面量（如 12.34 / -0.5）
 			scaled, canon, err := parseDecimal(text)
 			if err != nil {

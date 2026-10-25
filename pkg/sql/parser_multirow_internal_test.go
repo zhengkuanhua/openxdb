@@ -111,7 +111,8 @@ func TestParseInsertMultiRowValueKinds(t *testing.T) {
 	if len(ins.Rows) != 2 {
 		t.Fatalf("rows: want 2, got %d", len(ins.Rows))
 	}
-	if ins.Rows[0][1].Kind != "DECIMAL" || ins.Rows[0][1].S != "12.3400" {
+	// v1.12.0 高精度：字面量按实际小数位保留（12.34 → 2 位），不再固定补 4 位。
+	if ins.Rows[0][1].Kind != "DECIMAL" || ins.Rows[0][1].S != "12.34" {
 		t.Errorf("row0 dec: got %+v", ins.Rows[0][1])
 	}
 	if ins.Rows[1][0].Kind != "INT" || ins.Rows[1][0].I != -2 {

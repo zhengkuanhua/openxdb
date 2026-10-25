@@ -318,7 +318,7 @@ func multiIndexBytes(t *TableMeta, row []Value, cols []string) ([]byte, error) {
 
 // encodeRow 行值 → JSON 字节（按列定义序）。
 // INT 存 number（兼容既有数据）；TEXT/DATE/DECIMAL/BLOB 存规范化字符串
-// （DECIMAL 存 scale=4 字符串，BLOB 存大写 hex）。
+// （DECIMAL 存按列 scale 的规范化字符串，v1.12.0 高精度，BLOB 存大写 hex）。
 func encodeRow(t *TableMeta, vals []Value) ([]byte, error) {
 	arr := make([]interface{}, len(vals))
 	for i, v := range vals {
@@ -360,11 +360,16 @@ func decodeRow(t *TableMeta, raw []byte) ([]Value, error) {
 			if !ok {
 				return nil, &SQLError{Msg: "corrupted row: decimal column"}
 			}
-			scaled, canon, err := parseDecimal(s)
+			// v1.12.0 高精度：按列声明小数位还原（旧数据无 Scale → 默认 4，兼容）。
+			scale := t.Columns[i].Scale
+			if scale <= 0 || scale > maxDecScale {
+				scale = decScale
+			}
+			scaled, canon, err := parseDecimalScaled(s, scale)
 			if err != nil {
 				return nil, &SQLError{Msg: "corrupted row: decimal column"}
 			}
-			vals[i] = Value{Kind: "DECIMAL", I: scaled, S: canon}
+			vals[i] = Value{Kind: "DECIMAL", I: scaled, S: canon, DS: scale}
 		case "DATE":
 			s, ok := a.(string)
 			if !ok {

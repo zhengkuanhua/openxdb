@@ -225,6 +225,7 @@ func (e *Executor) execImport(sess *Session, s *ImportStmt) (*Result, error) {
 		}
 	}
 	inserted, skipped, bad, batches := 0, 0, 0, 0
+	batchRows := 0 // v1.12.0：BATCH 按"数据行数"分批（此前按 kv 操作数，多索引宽表下批偏小）
 	var ops []kvOp
 	// seen 记录"本批（同事务）已收集但未 apply 的行主键"：避免 CSV 文件内
 	// 重复主键在事务唯一性检查盲区（未提交写不可见）下被后行覆盖，保证
@@ -243,6 +244,7 @@ func (e *Executor) execImport(sess *Session, s *ImportStmt) (*Result, error) {
 			return nil
 		}
 		batches++
+		batchRows = 0
 		nt, err := e.tm.Begin()
 		if err != nil {
 			return err
@@ -280,7 +282,7 @@ func (e *Executor) execImport(sess *Session, s *ImportStmt) (*Result, error) {
 		vals := make([]Value, len(rec))
 		badRow := false
 		for i, cell := range rec {
-			v, err := parseCell(meta.Columns[i].Type, cell)
+			v, err := parseCell(meta.Columns[i].Type, cell, meta.Columns[i].Scale)
 			if err != nil {
 				if s.IgnoreErrors {
 					badRow = true
@@ -328,7 +330,8 @@ func (e *Executor) execImport(sess *Session, s *ImportStmt) (*Result, error) {
 		if ok {
 			inserted++
 			ops = append(ops, rops...)
-			if s.Batch > 0 && len(ops) >= s.Batch {
+			batchRows++
+			if s.Batch > 0 && batchRows >= s.Batch {
 				if err := flush(); err != nil {
 					return nil, err
 				}
@@ -347,10 +350,11 @@ func (e *Executor) execImport(sess *Session, s *ImportStmt) (*Result, error) {
 	return &Result{Columns: []string{"inserted", "skipped", "errors", "batches"}, AffectedRows: inserted, Rows: [][]Value{{IntVal(int64(inserted)), IntVal(int64(skipped)), IntVal(int64(bad)), IntVal(int64(batches))}}}, nil
 }
 
-// parseCell CSV 字段 → 列类型值（P2-11 修订）。
+// parseCell CSV 字段 → 列类型值（P2-11 修订；v1.12.0 按列声明 scale）。
 // 所有类型统一识别 \N 为 NULL；TEXT 单元格 \\N 还原为字面 "\N"；
-// DECIMAL 导入拒绝超过 4 位小数（数据保真，不静默四舍五入）。
-func parseCell(typ, cell string) (Value, error) {
+// DECIMAL 导入拒绝超过列声明 scale 的小数位（数据保真，不静默四舍五入；
+// 未声明 scale 按默认 4 位，与旧版行为一致）。
+func parseCell(typ, cell string, scale int) (Value, error) {
 	if cell == nullToken {
 		return Value{Kind: "NULL"}, nil
 	}
@@ -372,15 +376,21 @@ func parseCell(typ, cell string) (Value, error) {
 		}
 		return Value{Kind: "DATE", S: cell}, nil
 	case "DECIMAL":
+		// v1.12.0 高精度：按列声明 scale 解析；超过列 scale 的小数位拒绝
+		// （数据保真，不静默四舍五入；与 INSERT 的 coerceValueScaled 四舍五入
+		// 策略区分：导入路径要求源数据精度完整还原）。
 		trimmed := strings.TrimSpace(cell)
-		if decimalFracDigits(trimmed) > decScale {
-			return Value{}, &SQLError{Msg: "import failed: DECIMAL exceeds " + strconv.Itoa(decScale) + " decimal places: " + cell}
+		if scale <= 0 || scale > maxDecScale {
+			scale = decScale
 		}
-		scaled, canon, err := parseDecimal(trimmed)
+		if decimalFracDigits(trimmed) > scale {
+			return Value{}, &SQLError{Msg: "import failed: DECIMAL exceeds " + strconv.Itoa(scale) + " decimal places: " + cell}
+		}
+		scaled, canon, err := parseDecimalScaled(trimmed, scale)
 		if err != nil {
 			return Value{}, &SQLError{Msg: "import failed: invalid DECIMAL: " + cell}
 		}
-		return Value{Kind: "DECIMAL", I: scaled, S: canon}, nil
+		return Value{Kind: "DECIMAL", I: scaled, S: canon, DS: scale}, nil
 	case "BLOB":
 		raw, err := decodeHex(cell)
 		if err != nil {

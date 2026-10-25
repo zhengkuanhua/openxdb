@@ -147,6 +147,15 @@ func tokenToValue(t token) (Value, error) {
 	switch t.kind {
 	case tokNumber:
 		if strings.Contains(t.text, ".") {
+			// v1.12.0 高精度：纯小数按字面量实际位数保留；科学计数走 scale=4 兼容路径。
+			if !strings.ContainsAny(t.text, "eE") {
+				ds := decimalLiteralScale(t.text)
+				scaled, canon, err := parseDecimalScaled(t.text, ds)
+				if err != nil {
+					return Value{}, err
+				}
+				return Value{Kind: "DECIMAL", I: scaled, S: canon, DS: ds}, nil
+			}
 			scaled, canon, err := parseDecimal(t.text)
 			if err != nil {
 				return Value{}, err
@@ -2117,7 +2126,7 @@ func (p *procExprParser) parseUnary() (Value, error) {
 		case "INT":
 			return IntVal(-v.I), nil
 		case "DECIMAL":
-			return decVal(-v.I), nil
+			return decValScaled(-v.I, decDS(v)), nil
 		}
 		return Value{}, &SQLError{Msg: "cannot apply unary minus to " + v.Kind + " value"}
 	}
@@ -2195,7 +2204,7 @@ func procToInt(v Value) (int64, bool) {
 	case "INT":
 		return v.I, true
 	case "DECIMAL":
-		return v.I / decUnit, true
+		return v.I / pow10Int64(decDS(v)), true
 	case "TEXT":
 		n, err := strconv.ParseInt(strings.TrimSpace(v.S), 10, 64)
 		return n, err == nil
@@ -2224,15 +2233,23 @@ func procCompareValue(a, b Value, op string) (Value, error) {
 	if isNumericKind(a.Kind) && isNumericKind(b.Kind) {
 		switch {
 		case a.Kind == "DECIMAL" && b.Kind == "DECIMAL":
-			if a.I < b.I {
+			// v1.12.0 高精度：跨 scale 对齐比较。
+			dsA, dsB := decDS(a), decDS(b)
+			ds := dsA
+			if dsB > ds {
+				ds = dsB
+			}
+			av := a.I * pow10Int64(ds-dsA)
+			bv := b.I * pow10Int64(ds-dsB)
+			if av < bv {
 				cmp = -1
-			} else if a.I > b.I {
+			} else if av > bv {
 				cmp = 1
 			}
 		case a.Kind == "DECIMAL":
-			cmp = compareDecInt(a.I, b.I)
+			cmp = compareDecScaledInt(a.I, decDS(a), b.I)
 		case b.Kind == "DECIMAL":
-			cmp = -compareDecInt(b.I, a.I)
+			cmp = -compareDecScaledInt(b.I, decDS(b), a.I)
 		default:
 			if a.I < b.I {
 				cmp = -1
