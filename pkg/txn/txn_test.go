@@ -49,12 +49,13 @@ type groupCommitWAL interface {
 	FsyncCount() uint64
 }
 
-// TestTxnConcurrentDefaultFsyncBaseline 基线：默认（每记录 fsync）并发提交，
-// fsync 次数 == 事务数，证明旧行为保持且重构无回归。
+// TestTxnConcurrentDefaultFsyncBaseline 基线：组提交显式关闭时并发提交，
+// fsync 次数 == 事务数，证明关闭路径保持旧行为（每记录 fsync）且无回归。
 func TestTxnConcurrentDefaultFsyncBaseline(t *testing.T) {
 	e := newEnv(t)
 	defer e.close()
 	gc := e.wal.(groupCommitWAL)
+	gc.SetGroupCommit(false) // v1.12.0：默认开启组提交，此处显式关闭验证旧基线
 
 	const n = 30
 	runConcurrentCommits(t, e.mgr, n)
@@ -68,6 +69,31 @@ func TestTxnConcurrentDefaultFsyncBaseline(t *testing.T) {
 		t.Fatalf("baseline fsync count = %d, want %d (per-append)", fs, n)
 	}
 	t.Logf("baseline (per-append fsync): %d txns -> %d fsyncs (1.00 fsync/txn)", n, fs)
+}
+
+// TestTxnConcurrentDefaultGroupCommitOn 默认模式（未显式开关）并发提交：
+// 组提交默认开启，fsync 应合并、不劣于逐条刷盘，且数据全部一致。
+func TestTxnConcurrentDefaultGroupCommitOn(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	gc := e.wal.(groupCommitWAL)
+
+	const n = 30
+	runConcurrentCommits(t, e.mgr, n)
+	for i := 0; i < n; i++ {
+		got, err := e.st.Get([]byte(fmt.Sprintf("ck%d", i)))
+		if err != nil || string(got) != fmt.Sprintf("cv%d", i) {
+			t.Fatalf("st.Get(ck%d) = %q, %v; want cv%d", i, got, err, i)
+		}
+	}
+	fs := gc.FsyncCount()
+	if fs > n {
+		t.Fatalf("default group fsync count = %d, want <= %d (merged, should not exceed per-append)", fs, n)
+	}
+	if fs >= n {
+		t.Fatalf("default group fsync count = %d, want < %d (group commit should merge fsyncs)", fs, n)
+	}
+	t.Logf("default group commit: %d txns -> %d fsyncs (%.1f%% reduction)", n, fs, 100*(1-float64(fs)/float64(n)))
 }
 
 // TestTxnConcurrentGroupCommit 组提交模式下并发提交：全部成功、数据一致、

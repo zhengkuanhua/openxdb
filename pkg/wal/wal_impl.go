@@ -45,7 +45,7 @@ func Open(path string) (WAL, error) {
 		f.Close()
 		return nil, err
 	}
-	w := &walImpl{f: f, path: path, syncOnAppend: true}
+	w := &walImpl{f: f, path: path, syncOnAppend: false}
 	w.cond = sync.NewCond(&w.mu)
 	if fi.Size() == 0 {
 		if err := w.writeHeader(); err != nil {
@@ -77,7 +77,8 @@ func Open(path string) (WAL, error) {
 	return w, nil
 }
 
-// Append 顺序追加并 fsync（D 保证：返回 = 已持久化）。
+// Append 顺序追加。组提交默认开启：仅写缓冲不 fsync，持久化由 SyncUpTo 兜底；
+// SetGroupCommit(false) 关闭后恢复每记录 fsync（D 保证：返回 = 已持久化）。
 func (w *walImpl) Append(entry *WalEntry) error {
 	if entry == nil || entry.Batch == nil {
 		return errors.New("wal: nil entry or batch")
@@ -110,8 +111,8 @@ func (w *walImpl) Append(entry *WalEntry) error {
 	return nil
 }
 
-// SetGroupCommit 开关组提交。默认关闭（Append 每记录 fsync）；
-// 开启后 Append 仅写缓冲，由 SyncUpTo 兜底刷盘。
+// SetGroupCommit 开关组提交。默认开启（Append 仅写缓冲，由 SyncUpTo 兜底刷盘）；
+// 关闭后恢复每记录 fsync（与旧版行为一致）。
 func (w *walImpl) SetGroupCommit(enabled bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

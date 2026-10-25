@@ -173,7 +173,7 @@ func TestWALCorruptionDetected(t *testing.T) {
 	// Open 阶段即失败也是可接受的（扫描末尾记录时 CRC 校验不过）
 }
 
-func TestWALGroupCommitDefaultOff(t *testing.T) {
+func TestWALGroupCommitDefaultOn(t *testing.T) {
 	_, w := newTestWAL(t)
 	defer w.Close()
 	for i := uint64(1); i <= 5; i++ {
@@ -184,16 +184,16 @@ func TestWALGroupCommitDefaultOff(t *testing.T) {
 		}
 	}
 	wi := w.(*walImpl)
-	// 默认模式：每记录一次 fsync（行为与旧版一致）
-	if got := wi.FsyncCount(); got != 5 {
-		t.Fatalf("default fsync count = %d, want 5 (per-append)", got)
+	// 默认模式（组提交开启）：Append 仅写缓冲，不触发 fsync
+	if got := wi.FsyncCount(); got != 0 {
+		t.Fatalf("default fsync count after append = %d, want 0 (buffered)", got)
 	}
-	// SyncUpTo 在默认模式下必须零额外 fsync（Append 已更新 lastSynced）
+	// SyncUpTo 合并刷盘：5 条记录一次 fsync
 	if err := w.SyncUpTo(5); err != nil {
 		t.Fatalf("syncupto: %v", err)
 	}
-	if got := wi.FsyncCount(); got != 5 {
-		t.Fatalf("fsync count after SyncUpTo = %d, want 5", got)
+	if got := wi.FsyncCount(); got != 1 {
+		t.Fatalf("fsync count after SyncUpTo = %d, want 1 (merged)", got)
 	}
 	// SyncUpTo(0) 立即返回
 	if err := w.SyncUpTo(0); err != nil {

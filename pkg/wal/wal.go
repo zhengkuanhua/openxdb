@@ -44,8 +44,8 @@ type WAL interface {
 	// 采用 leader 机制合并 fsync：首个等待者一次刷盘覆盖全部 pending 记录后广播，
 	// 后续等待者发现 lastSynced 已推进则零额外 fsync 直接返回；无后台定时器。
 	SyncUpTo(lsn storage.LSN) error
-	// SetGroupCommit 开关组提交。默认关闭：Append 每记录 fsync，行为与旧版完全一致；
-	// 开启后 Append 只写不刷，由 SyncUpTo（或 Close）保证落盘。
+	// SetGroupCommit 开关组提交。默认开启：Append 只写缓冲，由 SyncUpTo（或 Close）
+	// 合并 fsync 保证落盘；关闭后恢复每记录 fsync，行为与旧版完全一致。
 	SetGroupCommit(enabled bool)
 	// Replay 从文件头顺序重放全部记录，损坏时报错并中止。
 	Replay(apply func(*WalEntry)) error
