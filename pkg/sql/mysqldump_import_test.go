@@ -78,8 +78,8 @@ func TestM14ImportDumpBasic(t *testing.T) {
 	if v := mustSelectVal(t, e, "SELECT age FROM users WHERE id=3", 0); v.Kind != "INT" || v.I != 0 {
 		t.Fatalf("users.id=3 NULL age -> 0: %+v", v)
 	}
-	// orders 表数据：DECIMAL 规范化 4 位小数、DATE 原样、BLOB hex 大写
-	if v := mustSelectVal(t, e, "SELECT amount FROM orders WHERE id=1", 0); v.S != "12.5000" {
+	// orders 表数据：DECIMAL 按列声明 scale（DECIMAL(10,2) → 2 位）、DATE 原样、BLOB hex 大写
+	if v := mustSelectVal(t, e, "SELECT amount FROM orders WHERE id=1", 0); v.S != "12.50" {
 		t.Fatalf("orders.id=1 amount: %+v", v)
 	}
 	if v := mustSelectVal(t, e, "SELECT created FROM orders WHERE id=2", 0); v.S != "2024-02-20" {

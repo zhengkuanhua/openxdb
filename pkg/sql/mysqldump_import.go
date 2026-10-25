@@ -61,6 +61,7 @@ func (e *Executor) execImportDump(sess *Session, s *ImportStmt) (*Result, error)
 		defer func() { _ = e.rollbackTx(sess) }()
 	}
 	tables, inserted, skipped, bad, batches := 0, 0, 0, 0, 0
+	batchRows := 0 // v1.12.0：BATCH 按"数据行数"分批（与 CSV IMPORT 语义对齐，此前按 kv 操作数）
 	// flush：仅 BATCH 模式真正提交并开启新事务；原子模式为空操作（结尾统一提交）。
 	flush := func() error {
 		if !outer || s.Batch <= 0 {
@@ -73,6 +74,7 @@ func (e *Executor) execImportDump(sess *Session, s *ImportStmt) (*Result, error)
 			return err
 		}
 		batches++
+		batchRows = 0
 		return nil
 	}
 	// 1) DROP TABLE IF EXISTS（重建语义：目标库同名表被替换）
@@ -96,7 +98,7 @@ func (e *Executor) execImportDump(sess *Session, s *ImportStmt) (*Result, error)
 		cols := make([]ColumnDef, len(t.Columns))
 		pk := ""
 		for i, c := range t.Columns {
-			cols[i] = ColumnDef{Name: c.Name, Type: c.Type}
+			cols[i] = ColumnDef{Name: c.Name, Type: c.Type, Scale: c.Scale}
 			if c.Primary && pk == "" {
 				pk = c.Name
 			}
@@ -167,6 +169,7 @@ func (e *Executor) execImportDump(sess *Session, s *ImportStmt) (*Result, error)
 				}
 				ops = append(ops, rops...)
 				inserted++
+				batchRows++
 			} else {
 				rops, ok, oerr := e.insertRowOps(sess, tx, tabs, meta, nil, vals, true)
 				if oerr != nil {
@@ -182,8 +185,9 @@ func (e *Executor) execImportDump(sess *Session, s *ImportStmt) (*Result, error)
 				}
 				ops = append(ops, rops...)
 				inserted++
+				batchRows++
 			}
-			if s.Batch > 0 && len(ops) >= s.Batch {
+			if s.Batch > 0 && batchRows >= s.Batch {
 				if err := e.applyImportOps(tx, ops); err != nil {
 					return nil, err
 				}
@@ -543,7 +547,7 @@ func isHexLiteral(s string) bool {
 //   - INT：十进制字符串 → IntVal；解析失败报错（NULL → 0）
 //   - TEXT：字符串原样（NULL → 空串）
 //   - DATE：校验 YYYY-MM-DD（NULL → 1970-01-01）
-//   - DECIMAL：parseDecimal 规范化（NULL → 0.0000）
+//   - DECIMAL：按列声明 scale（DECIMAL(p,s)，未声明默认 4）规范化（NULL → 0.0000）
 //   - BLOB：解析层规范化文本（hex 字面量统一大写，普通字符串原样）（NULL → 空串）；
 //     P2-13 HexBlob=true 时强制校验 BLOB 内容为十六进制字面量（--hex-blob 语义），
 //     非 hex 内容报错。
@@ -565,11 +569,15 @@ func dumpRowValues(t *mysqldump.Table, r []mysqldump.Value, hexBlob bool) ([]Val
 			case "DATE":
 				vals[i] = Value{Kind: "DATE", S: "1970-01-01"}
 			case "DECIMAL":
-				scaled, canon, err := parseDecimal("0")
+				scale := c.Scale
+				if scale <= 0 || scale > maxDecScale {
+					scale = decScale
+				}
+				scaled, canon, err := parseDecimalScaled("0", scale)
 				if err != nil {
 					return nil, err
 				}
-				vals[i] = Value{Kind: "DECIMAL", I: scaled, S: canon}
+				vals[i] = Value{Kind: "DECIMAL", I: scaled, S: canon, DS: scale}
 			default:
 				return nil, &SQLError{Msg: "import failed: unsupported column type: " + c.Type}
 			}
@@ -590,11 +598,15 @@ func dumpRowValues(t *mysqldump.Table, r []mysqldump.Value, hexBlob bool) ([]Val
 			}
 			vals[i] = Value{Kind: "DATE", S: cell.Raw}
 		case "DECIMAL":
-			scaled, canon, err := parseDecimal(cell.Raw)
+			scale := c.Scale
+			if scale <= 0 || scale > maxDecScale {
+				scale = decScale
+			}
+			scaled, canon, err := parseDecimalScaled(cell.Raw, scale)
 			if err != nil {
 				return nil, err
 			}
-			vals[i] = Value{Kind: "DECIMAL", I: scaled, S: canon}
+			vals[i] = Value{Kind: "DECIMAL", I: scaled, S: canon, DS: scale}
 		case "BLOB":
 			// 解析层已把 hex 字面量（X''/0x）统一为大写文本；普通字符串按原样存储。
 			raw := cell.Raw

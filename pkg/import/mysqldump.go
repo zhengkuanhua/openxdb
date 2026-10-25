@@ -35,10 +35,12 @@ type Value struct {
 
 // Column 是解析出的列定义：Name 为去反引号后的列名，
 // Type 为 OpenXDB 列类型（INT/TEXT/DATE/DECIMAL/BLOB），Primary 标记主键。
+// Scale 为 DECIMAL(p,s) 声明的小数位数（v1.12.0 高精度导入；0=未声明/默认）。
 type Column struct {
 	Name    string
 	Type    string
 	Primary bool
+	Scale   int
 }
 
 // Table 是解析出的一张表：定义 + 全部行（行内值的顺序对应 Columns）。
@@ -660,16 +662,34 @@ func parseColumnDef(seg string) (*Column, error) {
 	if err != nil {
 		return nil, fmt.Errorf("missing column name: %q", seg)
 	}
-	typTok, _, err := parseIdent(seg, i)
+	typTok, next, err := parseIdent(seg, i)
 	if err != nil {
 		return nil, fmt.Errorf("missing type for column %s", name)
 	}
+	i = next
 	typ, err := mapType(typTok)
 	if err != nil {
 		return nil, err
 	}
+	scale := 0
+	if i < len(seg) && seg[i] == '(' {
+		end, perr := matchParenEnd(seg, i)
+		if perr == nil {
+			inner := seg[i+1 : end-1]
+			i = end
+			// v1.12.0：DECIMAL(p,s) 提取小数位数 s，供高精度导入还原列 scale。
+			if typ == "DECIMAL" {
+				parts := strings.Split(inner, ",")
+				if len(parts) == 2 {
+					if sv, aerr := strconv.Atoi(strings.TrimSpace(parts[1])); aerr == nil && sv > 0 && sv <= 12 {
+						scale = sv
+					}
+				}
+			}
+		}
+	}
 	primary := strings.Contains(strings.ToUpper(seg), "PRIMARY KEY")
-	return &Column{Name: name, Type: typ, Primary: primary}, nil
+	return &Column{Name: name, Type: typ, Primary: primary, Scale: scale}, nil
 }
 
 // mapType 把 MySQL 列类型映射到 OpenXDB 列类型。
