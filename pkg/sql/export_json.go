@@ -86,14 +86,20 @@ func appendJSONString(b []byte, s string) []byte {
 	return append(b, '"')
 }
 
-// exportParquet 将 Value 行集映射为 pkg/export 的 Field/Row 并写出。
-// 类型映射：INT/DECIMAL → INT64（scaled int64）；TEXT/DATE/BLOB → BYTE_ARRAY（UTF-8）。
-func exportParquet(w io.Writer, meta *TableMeta, cols []string, rows [][]Value) error {
+// parquetExporter 是流式 Parquet 导出器（v1.11.0 T32 增强）：分批喂行，
+// 达行组阈值（默认 65536 行）自动落盘一个 Row Group，峰值内存 O(行组大小)，
+// 适合大表导出。必须调用 close 结束写入（写 FileMetaData/footer）。
+type parquetExporter struct {
+	pw *export.ParquetWriter
+}
+
+// newParquetExporter 构造流式导出器并完成列映射（Field 映射与 exportParquet 相同）。
+func newParquetExporter(w io.Writer, meta *TableMeta, cols []string) (*parquetExporter, error) {
 	fields := make([]export.Field, len(cols))
 	for i, c := range cols {
 		idx := colIndex(meta, c)
 		if idx < 0 {
-			return &SQLError{Msg: "unknown column: " + c}
+			return nil, &SQLError{Msg: "unknown column: " + c}
 		}
 		switch strings.ToUpper(meta.Columns[idx].Type) {
 		case "INT", "DECIMAL":
@@ -101,12 +107,20 @@ func exportParquet(w io.Writer, meta *TableMeta, cols []string, rows [][]Value) 
 		case "TEXT", "DATE", "BLOB":
 			fields[i] = export.Field{Name: c, Type: export.TypeByteArray}
 		default:
-			return &SQLError{Msg: "unsupported parquet column type: " + meta.Columns[idx].Type}
+			return nil, &SQLError{Msg: "unsupported parquet column type: " + meta.Columns[idx].Type}
 		}
+	}
+	return &parquetExporter{pw: export.NewParquetWriter(w, fields)}, nil
+}
+
+// write 转换并写入一批行（Value 行集 → export.Row 行集，映射同 exportParquet）。
+func (pe *parquetExporter) write(rows [][]Value) error {
+	if len(rows) == 0 {
+		return nil
 	}
 	pr := make([]export.Row, len(rows))
 	for ri, row := range rows {
-		cr := make(export.Row, len(cols))
+		cr := make(export.Row, len(row))
 		for ci, v := range row {
 			switch v.Kind {
 			case "INT", "DECIMAL":
@@ -119,8 +133,32 @@ func exportParquet(w io.Writer, meta *TableMeta, cols []string, rows [][]Value) 
 		}
 		pr[ri] = cr
 	}
-	if _, err := export.WriteParquet(w, fields, pr); err != nil {
+	if _, err := pe.pw.WriteRows(pr); err != nil {
 		return &SQLError{Msg: "export parquet: " + err.Error()}
 	}
 	return nil
+}
+
+// close 结束写入并返回文件总行数。
+func (pe *parquetExporter) close() (int64, error) {
+	n, err := pe.pw.Close()
+	if err != nil {
+		return 0, &SQLError{Msg: "export parquet: " + err.Error()}
+	}
+	return n, nil
+}
+
+// exportParquet 将 Value 行集映射为 pkg/export 的 Field/Row 并写出（便捷封装，
+// 内部走流式 parquetExporter，单批即单次 WriteRows + Close）。
+// 类型映射：INT/DECIMAL → INT64（scaled int64）；TEXT/DATE/BLOB → BYTE_ARRAY（UTF-8）。
+func exportParquet(w io.Writer, meta *TableMeta, cols []string, rows [][]Value) error {
+	pe, err := newParquetExporter(w, meta, cols)
+	if err != nil {
+		return err
+	}
+	if err := pe.write(rows); err != nil {
+		return err
+	}
+	_, err = pe.close()
+	return err
 }

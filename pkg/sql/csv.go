@@ -61,66 +61,107 @@ func (e *Executor) execExport(sess *Session, s *ExportStmt) (*Result, error) {
 			}
 		}
 	}
-	pairs, err := e.scanMergedCluster(sess, tx, e.rowRanges(meta))
-	if err != nil {
-		return nil, err
+	// v1.11.0 T32 增强：分块流式导出。行集不再全量驻留内存，按
+	// exportChunkRanges 个物理区间为一块扫描、解码并立即写盘；CSV/JSON 逐块写，
+	// Parquet 由流式 ParquetWriter 按行组阈值（65536 行）落盘 Row Group。
+	// regionsOf 保证 ranges 按 StartKey 升序且键空间连续，分块顺序即全表内层键序
+	// （与全量 scanMergedCluster 合并语义一致）。
+	format := strings.ToUpper(s.Format)
+	if format == "" {
+		format = "CSV"
 	}
-	rows := make([][]Value, 0, len(pairs))
-	for _, kv := range pairs {
-		row, err := decodeRow(meta, kv.Value)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]Value, len(cols))
-		for i, c := range cols {
-			v, err := rowValue(meta, row, c)
-			if err != nil {
-				return nil, err
-			}
-			out[i] = v
-		}
-		rows = append(rows, out)
+	switch format {
+	case "CSV", "JSON", "PARQUET":
+	default:
+		return nil, &SQLError{Msg: "unsupported export format: " + format}
 	}
 	f, err := os.Create(s.Path)
 	if err != nil {
 		return nil, &SQLError{Msg: "export failed: " + err.Error()}
 	}
 	defer f.Close()
-	format := strings.ToUpper(s.Format)
-	if format == "" {
-		format = "CSV"
-	}
+
+	var cw *csv.Writer
+	var pe *parquetExporter
 	switch format {
 	case "CSV":
-		w := csv.NewWriter(f)
-		if err := w.Write(cols); err != nil {
+		cw = csv.NewWriter(f)
+		if err := cw.Write(cols); err != nil {
 			return nil, &SQLError{Msg: "export failed: " + err.Error()}
-		}
-		for _, row := range rows {
-			rec := make([]string, len(row))
-			for i, v := range row {
-				rec[i] = csvValue(v)
-			}
-			if err := w.Write(rec); err != nil {
-				return nil, &SQLError{Msg: "export failed: " + err.Error()}
-			}
-		}
-		w.Flush()
-		if err := w.Error(); err != nil {
-			return nil, &SQLError{Msg: "export failed: " + err.Error()}
-		}
-	case "JSON":
-		if err := exportJSON(f, cols, rows); err != nil {
-			return nil, err
 		}
 	case "PARQUET":
-		if err := exportParquet(f, meta, cols, rows); err != nil {
+		pe, err = newParquetExporter(f, meta, cols)
+		if err != nil {
 			return nil, err
 		}
-	default:
-		return nil, &SQLError{Msg: "unsupported export format: " + format}
+	case "JSON":
+		// exportJSON 分批调用（块粒度足够大，重建 bufio 开销可忽略；同一
+		// 文件句柄顺序写安全）。
 	}
-	return &Result{Columns: cols, AffectedRows: len(rows)}, nil
+
+	const exportChunkRanges = 64
+	ranges := e.rowRanges(meta)
+	var written int64
+	for start := 0; start < len(ranges); start += exportChunkRanges {
+		end := start + exportChunkRanges
+		if end > len(ranges) {
+			end = len(ranges)
+		}
+		pairs, err := e.scanMergedCluster(sess, tx, ranges[start:end])
+		if err != nil {
+			return nil, err
+		}
+		chunk := make([][]Value, 0, len(pairs))
+		for _, kv := range pairs {
+			row, err := decodeRow(meta, kv.Value)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]Value, len(cols))
+			for i, c := range cols {
+				v, err := rowValue(meta, row, c)
+				if err != nil {
+					return nil, err
+				}
+				out[i] = v
+			}
+			chunk = append(chunk, out)
+		}
+		if len(chunk) == 0 {
+			continue
+		}
+		switch format {
+		case "CSV":
+			for _, row := range chunk {
+				rec := make([]string, len(row))
+				for i, v := range row {
+					rec[i] = csvValue(v)
+				}
+				if err := cw.Write(rec); err != nil {
+					return nil, &SQLError{Msg: "export failed: " + err.Error()}
+				}
+			}
+			cw.Flush()
+			if err := cw.Error(); err != nil {
+				return nil, &SQLError{Msg: "export failed: " + err.Error()}
+			}
+		case "JSON":
+			if err := exportJSON(f, cols, chunk); err != nil {
+				return nil, err
+			}
+		case "PARQUET":
+			if err := pe.write(chunk); err != nil {
+				return nil, err
+			}
+		}
+		written += int64(len(chunk))
+	}
+	if format == "PARQUET" {
+		if _, err := pe.close(); err != nil {
+			return nil, err
+		}
+	}
+	return &Result{Columns: cols, AffectedRows: int(written)}, nil
 }
 
 // csvValue 值 → CSV 字段文本（P2-11：NULL 编码为 \N；字面 "\N" 转义为 "\\N"；

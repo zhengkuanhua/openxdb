@@ -626,3 +626,73 @@ func TestParquetNoColumns(t *testing.T) {
 		t.Fatal("want error for no columns")
 	}
 }
+
+// TestParquetWriterRoundtripMultiGroup 流式写入器：多列 + 多行组（组大小 2，
+// 5 行 → 3 个 Row Group）。列值各不相同以捕获列错位（全部取第 0 列）回归。
+func TestParquetWriterRoundtripMultiGroup(t *testing.T) {
+	fields := []Field{
+		{Name: "id", Type: TypeInt64},
+		{Name: "name", Type: TypeByteArray},
+		{Name: "amount", Type: TypeInt64},
+	}
+	rows := []Row{
+		{{I: 10}, {S: "a"}, {I: 100}},
+		{{I: 20}, {S: "b"}, {I: 200}},
+		{{I: 30}, {S: "c"}, {I: 300}},
+		{{I: 40}, {S: "d"}, {I: 400}},
+		{{I: 50}, {S: "e"}, {I: 500}},
+	}
+	var buf bytes.Buffer
+	pw := NewParquetWriterWithRowGroup(&buf, fields, 2)
+	written, err := pw.WriteRows(rows)
+	if err != nil {
+		t.Fatalf("write rows: %v", err)
+	}
+	if written != 5 {
+		t.Fatalf("written: got %d", written)
+	}
+	total, err := pw.Close()
+	if err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if total != 5 {
+		t.Fatalf("total rows: got %d", total)
+	}
+	numRows, cols, vals, err := miniRead(buf.Bytes())
+	if err != nil {
+		t.Fatalf("miniRead: %v", err)
+	}
+	if numRows != 5 {
+		t.Fatalf("num_rows: got %d", numRows)
+	}
+	// 3 个 Row Group × 3 列 = 9 个列 chunk；名称按 id/name/amount 循环。
+	if len(cols) != 9 || cols[0].name != "id" || cols[1].name != "name" || cols[2].name != "amount" ||
+		cols[3].name != "id" || cols[6].name != "id" {
+		t.Fatalf("cols: got %+v", cols)
+	}
+	if len(vals) != 9 {
+		t.Fatalf("val chunks: got %d", len(vals))
+	}
+	// 每列 chunk 各自含其行组内的列值（组1:2行, 组2:2行, 组3:1行）。
+	check := func(chunk int, want ...any) {
+		t.Helper()
+		got := vals[chunk]
+		if len(got) != len(want) {
+			t.Fatalf("chunk %d: got %v want %v", chunk, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("chunk %d[%d]: got %v want %v", chunk, i, got[i], want[i])
+			}
+		}
+	}
+	check(0, int64(10), int64(20))  // id 组1
+	check(1, "a", "b")              // name 组1
+	check(2, int64(100), int64(200)) // amount 组1
+	check(3, int64(30), int64(40))  // id 组2
+	check(4, "c", "d")              // name 组2
+	check(5, int64(300), int64(400)) // amount 组2
+	check(6, int64(50))             // id 组3
+	check(7, "e")                   // name 组3
+	check(8, int64(500))            // amount 组3
+}
