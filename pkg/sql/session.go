@@ -24,6 +24,11 @@ type Session struct {
 	// 显式事务状态（BEGIN 后置位，COMMIT/ROLLBACK 复位）。
 	inTx  bool
 	curTx txn.Txn
+	// forcedTx 内部透传事务（v1.9.0 物化视图刷新）：refreshMatViewRec
+	// 全量重算 SELECT 期间临时挂载当前刷新事务，使内部 execSelect 复用
+	// 同一事务读取依赖 MV 在同一事务内已写入的增量，避免读到旧快照。
+	// 仅覆盖 execSelect 调用窗口，挂载期间 autocommit 视为 false。
+	forcedTx txn.Txn
 	// M8 快照隔离版本：curBeginTS 为显式事务 BEGIN 时获取的快照版本；
 	// stmtBeginTS 为 autocommit 语句首次读时惰性获取的语句快照版本
 	// （每条语句独立，显式事务内不重置）。

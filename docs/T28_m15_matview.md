@@ -33,7 +33,7 @@ M15 SQL 功能增强簇按 Roadmap 依次落地三个子功能：物化视图（
 | 语句 | 行为 |
 |---|---|
 | `CREATE MATERIALIZED VIEW <name> AS <SELECT>` | 校验名称非空、不与表/虚拟视图/物化视图重名、定义不自引用、引用对象存在 → 事务内 `execSelect` 取快照 → 推断 schema → 注册影子表 → 落盘 → 持久化元数据 |
-| `REFRESH MATERIALIZED VIEW <name> [CONCURRENTLY]` | `CONCURRENTLY` 仅语法兼容，语义全量重算：事务内重算 → 若列集/类型变化则重建影子表 schema（保留 ID/PK）→ 差异删除残留行 + 全量写回新快照 → 提交；重算失败（源表被 DROP/改列）整体回滚，旧快照保持可读 |
+| `REFRESH MATERIALIZED VIEW <name> [CONCURRENTLY]` | v1.8.0 前为全量重算：事务内重算 → 若列集/类型变化则重建影子表 schema（保留 ID/PK）→ 差异删除残留行 + 全量写回新快照 → 提交；重算失败（源表被 DROP/改列）整体回滚，旧快照保持可读。v1.9.0 起：普通 REFRESH 优先走**增量刷新**（仅重算基表变更键，无变更幂等跳过）；`CONCURRENTLY` 语义化为**并行刷新 + 快照交换**（事务内重算新快照，期间并发读仍服务旧影子表，提交后原子切换新快照）；依赖链按依赖序递归刷新（依赖 MV 先刷） |
 | `DROP MATERIALIZED VIEW [IF EXISTS] <name>` | RESTRICT 语义：被虚拟视图或其它物化视图引用时拒绝；否则清空影子表行、从 `m:tables` 移除影子表、从 `m:matviews` 移除元数据，同名表/视图可重建 |
 
 ### 类型推断与归一化（`inferMatViewSchema`）
@@ -56,7 +56,31 @@ JOIN 等场景结果列名可能带表/别名限定前缀（如 `users.name`、`
 - 互相引用：物化视图可基于虚拟视图（`CREATE MATERIALIZED VIEW x AS SELECT * FROM v`），虚拟视图也可基于物化视图；虚拟视图即时反映源表，物化视图保持快照，语义各自独立；
 - RESTRICT 删除：被虚拟视图或其它物化视图引用时，`DROP MATERIALIZED VIEW` 报 `depends on it` 拒绝（先删依赖方可删除）。
 
-## 测试清单
+### v1.9.0 增量刷新（`matview_incremental.go`）
+
+#### 基表变更跟踪
+
+- 独立目录 `m:mv_dirty`（`mvDirtyKey`）持久化 `mvDirty{Ver uint64, Overflow bool, Rows []string}`：`Ver` 为全局变更版本（每个写事务 `recordMVDirtyKeys` 自增），`Rows` 为受影响主键 hex 键集，`Overflow` 表示写量超阈值（并发写聚合或批量插入超过单事务上限）时置位并清空 Rows，后续刷新走全量兜底；
+- `execInsert` / `execUpdate` / `execDelete` 在数据写路径末尾挂变更跟踪钩子：解析物化视图依赖集合（`buildMVDependencySet`，创建时登记）与基表匹配，命中则记录受影响主键键；`execDropTable` / `execAlterTable` 对依赖该表的物化视图标记 Overflow（结构变更无法定位行级键）；
+- 主键键集编码与影子表隐藏 PK 完全一致（`pkBytes`），保证增量定位与全量写回互不冲突。
+
+#### 增量合并（Simple 行级）
+
+- 定义满足 `simpleMatViewInfoOf`（单基表、无 JOIN/聚合/子查询/CTE、纯列投影含主键、基表主键 INT/DECIMAL/TEXT）时走增量：逐 dirty 主键重跑「定义 SELECT + 主键等值条件」，命中则按主键定位影子表行键 Put 新值，未命中（行已删/被 WHERE 过滤）则 Delete 影子表行；只重算变更键，AffectedRows = 变更键数；
+- 依赖 MV / 虚拟视图 / 非 Simple 定义 / `Overflow` 置位一律走全量路径，语义不破坏。
+
+#### CONCURRENTLY 并行刷新与快照交换
+
+- `REFRESH ... CONCURRENTLY` 不再全量语义：强制走全量重建路径，在单个写事务内重算新快照 → 差异写回影子表 → 提交；事务提交前并发读（其它会话/语句）仍读旧影子表快照，提交后原子读到新快照，读不阻塞；
+- 全量路径挂载会话透传事务（`Session.forcedTx` + `getTx`/`autocommit` 感知）：重算 SELECT 复用当前刷新事务，使依赖 MV 在同一事务内已写入的增量对重算可见（`execSelect` 新建临时事务会读到旧快照，导致依赖链结果不一致）。
+
+#### 多物化视图依赖管理
+
+- 创建时解析引用关系：`MatViewMeta.Deps`（依赖基表集合，经虚拟视图/物化视图定义递归展开）与 `DepMVs`（直接依赖的物化视图列表）；Executor 维护 `mvDepMu` / `mvDepSet` 依赖缓存供 DML 变更跟踪；
+- 刷新顺序：`refreshMatViewRec` 深度优先先刷新 `DepMVs`（其自身依赖递归处理），再判定当前 MV 失效（`maxVer` = max(依赖基表 dirty.Ver, 依赖 MV 刷新后 Version) > 自身 Version 才刷新），整体单事务提交，任一环失败整体回滚；
+- 失效传播：基表 DML 标记直接/间接依赖的物化视图为 stale；`DROP MATERIALIZED VIEW` 清空其 dirty 记录并重建依赖缓存。
+
+## 测试清单（v1.9.0 增量刷新）
 
 | 用例 | 覆盖点 |
 |---|---|
@@ -73,10 +97,14 @@ JOIN 等场景结果列名可能带表/别名限定前缀（如 `users.name`、`
 | `TestM15ReservedColumnName` | `__mv_` 保留列名拒绝 |
 | `TestM15MatViewSchemaEvolution` | 源表加列不影响快照列集；删定义列后 REFRESH 失败保留旧快照 |
 | `TestM15MatViewSelectWithLimit` / `TestM15MatViewJoin` | LIMIT / JOIN 定义落盘 |
+| `TestM19MatViewIncrementalRefresh` | 增量刷新只重算变更键（AffectedRows=变更键数）；无变更幂等跳过；单行 UPDATE/DELETE 只重算 1 行；数据正确性 |
+| `TestM19MatViewConcurrentlySnapshotSwap` | CONCURRENTLY 刷新期间并发读旧快照、提交后原子读到新快照（快照交换语义） |
+| `TestM19MatViewDependencyRefresh` | 依赖链（mv_a 依赖 mv_b 依赖基表）：只刷上层时按依赖序先刷下层（失效传播）；基表变更在链上可见；整链幂等 |
+| `TestM19MatViewFullRefreshRegression` | 非 Simple 定义（JOIN+聚合）走全量路径语义不破坏；幂等 |
 
-## 闭环
+## 闭环（v1.9.0 增量刷新）
 
-- 代码：`pkg/sql/matview.go`（新增，MatViewMeta / 三个执行器 / 类型推断 / 隐藏列过滤 / 快照读写）、`pkg/sql/ast.go`、`pkg/sql/parser.go`、`pkg/sql/lexer.go`、`pkg/sql/executor.go`（分发与 visibleColumns/visibleRow）；
-- 测试：`pkg/sql/matview_test.go`（17 个用例）；
-- 文档：本文档；README Status / Roadmap 已同步 M15 并勾选 T28。
+- 代码：`pkg/sql/matview_incremental.go`（新增：`mvDirty` 持久化 / `recordMVDirtyKeys` 变更跟踪 / `buildMVDependencySet`+`collectMatViewDeps` 依赖解析 / `applyIncrementalRefresh` 增量合并 / `refreshMatViewRec` 依赖递归刷新 / `writeMatViewRowsPK`+`refreshMatViewRowsPK` 全量快照写回）、`pkg/sql/matview.go`（创建/刷新/删除改造与依赖缓存）、`pkg/sql/executor.go`（getTx/autocommit 感知 `Session.forcedTx`、DML 变更跟踪钩子、DROP/ALTER 溢出标记）、`pkg/sql/session.go`（`forcedTx` 字段）；
+- 测试：`pkg/sql/matview_incremental_test.go`（4 个用例，与 M15 老用例共 21 个物化视图用例全绿）；
+- 文档：本文档；`docs/DEV_PLAN_2026Q6.md` 3.3 节执行状态补完成说明（DEV_PLAN 不入库）。
 *（内容由AI生成，仅供参考）*

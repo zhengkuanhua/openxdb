@@ -144,6 +144,11 @@ type Executor struct {
 	// <=0 表示未显式指定，backupCore 使用默认自动并发度
 	// （min(GOMAXPROCS, 4)，见 backup.go）。
 	backupConcurrency int
+	// v1.9.0 物化视图增量刷新：依赖表集合缓存（DML 钩子 O(1) 判定是否记录
+	// 变更键）。nil = 未构建，tableTrackedByMVs 惰性从 m:matviews 目录加载；
+	// create/drop 物化视图后重建。
+	mvDepMu  sync.RWMutex
+	mvDepSet map[string]bool
 }
 
 // splitConfig M7 自动分裂配置。
@@ -938,9 +943,14 @@ func (e *Executor) resetStmtSnapshot(sess *Session) {
 }
 
 // getTx 获取当前语句的事务：会话事务内复用 curTx；否则新建临时事务。
+// forcedTx 非空时（v1.9.0 物化视图刷新全量重算窗口）优先透传该事务，
+// 使内部 SELECT 复用当前刷新事务读取同事务内已写入的依赖 MV 增量。
 func (e *Executor) getTx(sess *Session) (txn.Txn, error) {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+	if sess.forcedTx != nil {
+		return sess.forcedTx, nil
+	}
 	if sess.inTx {
 		return sess.curTx, nil
 	}
@@ -948,9 +958,13 @@ func (e *Executor) getTx(sess *Session) (txn.Txn, error) {
 }
 
 // autocommit 判断当前语句是否以隐式事务提交（不在显式事务中时为 true）。
+// forcedTx 挂载窗口视为事务内（仅透传读取，不自动提交/回滚）。
 func (e *Executor) autocommit(sess *Session) bool {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+	if sess.forcedTx != nil {
+		return false
+	}
 	return !sess.inTx
 }
 
@@ -1245,6 +1259,11 @@ func (e *Executor) execDropTable(sess *Session, s *DropTableStmt) (*Result, erro
 		return nil, err
 	}
 	if err := tx.Put(rolesMetaKey, rraw2); err != nil {
+		return nil, err
+	}
+	// v1.9.0：表 DROP 属结构变更，无法用变更键集合表示，标记依赖该表的
+	// 物化视图全部失效（下次 REFRESH 走全量路径）；与 DROP 同事务原子落盘。
+	if err := e.markMVDirtyOverflow(tx, s.Name); err != nil {
 		return nil, err
 	}
 	if auto {
@@ -1632,6 +1651,11 @@ func (e *Executor) execAlterTable(sess *Session, s *AlterTableStmt) (*Result, er
 	if meta == nil {
 		return nil, &SQLError{Msg: "table not exists: " + s.Table}
 	}
+	// v1.9.0：ALTER 属结构变更，变更键无法表达，标记依赖该表的物化视图
+	// 全量失效（与 ALTER 同事务原子落盘；回滚时一并回滚）。
+	if err := e.markMVDirtyOverflow(tx, s.Table); err != nil {
+		return nil, err
+	}
 	affected := 0
 	switch s.Action {
 	case "ADD_COLUMN":
@@ -1963,6 +1987,13 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 	if e.anyRowTrigger(sess, s.Table) {
 		rowSnaps = make([]triggerRow, 0)
 	}
+	// v1.9.0 物化视图变更跟踪：表被 MV 依赖时逐行收集受影响行主键，
+	// 语句成功后合并进 dirty 日志（同事务原子落盘）；无依赖时零开销。
+	var dirtyPks [][]byte
+	tracked, terr := e.tableTrackedByMVs(tx, s.Table)
+	if terr != nil {
+		return nil, terr
+	}
 	// M10 UPSERT：语句内已计划写入的最终行（含 REPLACE 删旧插新后的新行、
 	// ON DUPLICATE 更新后的目标行），用于语句内主键/唯一键冲突判定。
 	var pending [][]Value
@@ -1990,6 +2021,17 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 					}
 					rowSnaps = append(rowSnaps, triggerRow{meta: meta, newRow: snap})
 				}
+				if tracked {
+					vals, verr := e.buildRow(meta, s.Columns, row, tx)
+					if verr != nil {
+						return nil, verr
+					}
+					pk, perr := e.pkOf(meta, vals)
+					if perr != nil {
+						return nil, perr
+					}
+					dirtyPks = append(dirtyPks, pk)
+				}
 			}
 		}
 	} else {
@@ -2008,6 +2050,17 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 					}
 					rowSnaps = append(rowSnaps, triggerRow{meta: meta, newRow: snap})
 				}
+				if tracked {
+					vals, verr := e.buildRow(meta, s.Columns, row, tx)
+					if verr != nil {
+						return nil, verr
+					}
+					pk, perr := e.pkOf(meta, vals)
+					if perr != nil {
+						return nil, perr
+					}
+					dirtyPks = append(dirtyPks, pk)
+				}
 			}
 		}
 	}
@@ -2023,6 +2076,13 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 	// 主 DML 失败不回滚体写，已按 v1.8.0 设计变更）。
 	if affected > 0 {
 		if err := e.fireTriggers(sess, tx, "AFTER", s.Table, "INSERT", rowSnaps); err != nil {
+			return nil, err
+		}
+	}
+	// v1.9.0：记录物化视图变更键（同事务原子落盘；触发器等体写入的后续
+	// DML 会各自记录自己的依赖表，无需在此展开）。
+	if tracked && len(dirtyPks) > 0 {
+		if err := e.recordMVDirtyKeys(tx, s.Table, dirtyPks); err != nil {
 			return nil, err
 		}
 	}
@@ -4907,6 +4967,13 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 	if e.anyRowTrigger(sess, s.Table) {
 		rowSnaps = make([]triggerRow, 0)
 	}
+	// v1.9.0 物化视图变更跟踪：表被 MV 依赖时逐行收集受影响行主键
+	//（主键变化时新旧键都失效），语句成功后合并进 dirty 日志。
+	var dirtyPks [][]byte
+	tracked, terr := e.tableTrackedByMVs(tx, s.Table)
+	if terr != nil {
+		return nil, terr
+	}
 	// M10 UPSERT：语句内已计划更新的最终行（唯一索引语句内冲突判定）
 	var pending [][]Value
 	for _, kv := range pairs {
@@ -4999,6 +5066,12 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 		if rowSnaps != nil {
 			rowSnaps = append(rowSnaps, triggerRow{meta: meta, oldRow: oldRow, newRow: append([]Value{}, row...)})
 		}
+		if tracked {
+			dirtyPks = append(dirtyPks, pk)
+			if !bytes.Equal(pk, newPK) {
+				dirtyPks = append(dirtyPks, newPK)
+			}
+		}
 	}
 	// M15-2/v1.8.0：BEFORE 触发器（写入提交前执行；失败则整个 DML 随事务回滚）。
 	if affected > 0 {
@@ -5009,6 +5082,12 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 	// v1.8.0：AFTER 触发器移入主事务提交前执行（同事务原子性，见 execInsert）。
 	if affected > 0 {
 		if err := e.fireTriggers(sess, tx, "AFTER", s.Table, "UPDATE", rowSnaps); err != nil {
+			return nil, err
+		}
+	}
+	// v1.9.0：记录物化视图变更键（同事务原子落盘）。
+	if tracked && len(dirtyPks) > 0 {
+		if err := e.recordMVDirtyKeys(tx, s.Table, dirtyPks); err != nil {
 			return nil, err
 		}
 	}
@@ -5116,6 +5195,13 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 	if e.anyRowTrigger(sess, s.Table) {
 		rowSnaps = make([]triggerRow, 0)
 	}
+	// v1.9.0 物化视图变更跟踪：表被 MV 依赖时逐行收集受影响行主键，
+	// 语句成功后合并进 dirty 日志。
+	var dirtyPks [][]byte
+	tracked, terr := e.tableTrackedByMVs(tx, s.Table)
+	if terr != nil {
+		return nil, terr
+	}
 	for _, kv := range pairs {
 		row, err := decodeRow(meta, kv.Value)
 		if err != nil {
@@ -5129,6 +5215,7 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 			continue
 		}
 		rid := ridOf(kv.Key)
+		pk := pkSuffixOf(meta, innerOf(kv.Key))
 		dops, err := e.delIndexKeyOps(meta, row, pkSuffixOf(meta, innerOf(kv.Key)), rid)
 		if err != nil {
 			return nil, err
@@ -5146,6 +5233,9 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 		if rowSnaps != nil {
 			rowSnaps = append(rowSnaps, triggerRow{meta: meta, oldRow: row})
 		}
+		if tracked {
+			dirtyPks = append(dirtyPks, pk)
+		}
 	}
 	// M15-2/v1.8.0：BEFORE 触发器（写入提交前执行；失败则整个 DML 随事务回滚）。
 	if affected > 0 {
@@ -5156,6 +5246,12 @@ func (e *Executor) execDelete(sess *Session, s *DeleteStmt) (*Result, error) {
 	// v1.8.0：AFTER 触发器移入主事务提交前执行（同事务原子性，见 execInsert）。
 	if affected > 0 {
 		if err := e.fireTriggers(sess, tx, "AFTER", s.Table, "DELETE", rowSnaps); err != nil {
+			return nil, err
+		}
+	}
+	// v1.9.0：记录物化视图变更键（同事务原子落盘）。
+	if tracked && len(dirtyPks) > 0 {
+		if err := e.recordMVDirtyKeys(tx, s.Table, dirtyPks); err != nil {
 			return nil, err
 		}
 	}

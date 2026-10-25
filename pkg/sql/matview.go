@@ -11,10 +11,19 @@ import (
 // MatViewMeta 物化视图元数据：名称 + 定义（SELECT AST）+ 影子表 ID。
 // 定义以 SelectStmt JSON 持久化；物化视图的 SELECT 直接读同名影子表，
 // 不走虚拟视图展开（m:views），因此与虚拟视图互不干扰。
+// v1.9.0 增量刷新扩展字段（旧目录反序列化为零值，向后兼容）：
+//   - Deps：直接依赖的基表名（虚拟视图引用已递归展开为基表/物化视图）；
+//   - DepMVs：直接依赖的物化视图名（依赖链刷新顺序与失效传播用）；
+//   - Version：上次刷新消费的变更版本号（无新变更时 REFRESH 幂等跳过）；
+//   - Simple：定义是否为"直接投影"（单基表纯列引用，可走行级增量 apply）。
 type MatViewMeta struct {
 	Name     string      `json:"name"`
 	Select   *SelectStmt `json:"select"`
 	ShadowID uint64      `json:"shadow_id"`
+	Deps     []string    `json:"deps,omitempty"`
+	DepMVs   []string    `json:"dep_mvs,omitempty"`
+	Version  uint64      `json:"version,omitempty"`
+	Simple   bool        `json:"simple,omitempty"`
 }
 
 // matViewsKey 物化视图目录键（独立于 m:views）。
@@ -178,10 +187,26 @@ func (e *Executor) execCreateMatView(sess *Session, s *CreateMatViewStmt) (*Resu
 	if err != nil {
 		return nil, err
 	}
+	// v1.9.0：解析定义依赖（基表 deps + 物化视图 depMVs，虚拟视图引用递归展开）
+	// 与 Simple 行级增量判定；Version 初始化为当前全局变更版本（创建即最新，
+	// 后续无新变更时 REFRESH 幂等跳过）。
+	deps, depMVs := collectMatViewDeps(s.Select, tabs, views, mvs)
+	info, err := simpleMatViewInfoOf(s.Select, tabs, mvs, views)
+	if err != nil {
+		return nil, err
+	}
+	ver, err := currentMVVersion(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	pkType := "INT"
+	if info != nil {
+		pkType = info.pkType
+	}
 	shadow := &TableMeta{
 		ID:      nextTableID(tabs),
 		Name:    s.Name,
-		Columns: append(defs, ColumnDef{Name: mvHiddenPK, Type: "INT"}),
+		Columns: append(defs, ColumnDef{Name: mvHiddenPK, Type: pkType}),
 		PK:      mvHiddenPK,
 	}
 	tabs = append(tabs, shadow)
@@ -192,11 +217,17 @@ func (e *Executor) execCreateMatView(sess *Session, s *CreateMatViewStmt) (*Resu
 	if err := tx.Put(metaKey, raw); err != nil {
 		return nil, err
 	}
-	n, err := e.writeMatViewRows(tx, shadow, normRows)
+	var n int
+	if info != nil {
+		n, err = e.writeMatViewRowsPK(tx, shadow, normRows, info.pkIdx)
+	} else {
+		n, err = e.writeMatViewRows(tx, shadow, normRows)
+	}
 	if err != nil {
 		return nil, err
 	}
-	mvs = append(mvs, &MatViewMeta{Name: s.Name, Select: s.Select, ShadowID: shadow.ID})
+	mvs = append(mvs, &MatViewMeta{Name: s.Name, Select: s.Select, ShadowID: shadow.ID, Deps: deps, DepMVs: depMVs, Version: ver, Simple: info != nil})
+	e.buildMVDependencySet(mvs)
 	raw, err = saveMatViews(mvs)
 	if err != nil {
 		return nil, err
@@ -213,8 +244,10 @@ func (e *Executor) execCreateMatView(sess *Session, s *CreateMatViewStmt) (*Resu
 }
 
 // execRefreshMatView REFRESH MATERIALIZED VIEW <name> [CONCURRENTLY]（M15）。
-// CONCURRENTLY 仅做语法兼容，语义为全量重算。整个刷新在单个事务内完成：
-// 重算 SELECT → 若列集/类型变化则重建影子表 schema → 清空旧快照 → 写回新快照。
+// v1.9.0 语义化：依赖链刷新 + 变更版本幂等跳过 + Simple 行级增量 + 快照交换。
+// 整体在单个事务内完成：依赖 MV 深度优先先刷新 → 失效检测（依赖侧版本无新
+// 变更时跳过）→ Simple 行级增量 apply 或全量重建（差异写回，提交前读请求
+// 看到旧快照、提交后原子看到新快照，即快照交换，不阻塞读写）。
 // 重算失败（如源表被 DDL 删除/改列）时整个事务回滚，旧快照保持不变。
 func (e *Executor) execRefreshMatView(sess *Session, s *RefreshMatViewStmt) (*Result, error) {
 	tx, err := e.getTx(sess)
@@ -229,47 +262,22 @@ func (e *Executor) execRefreshMatView(sess *Session, s *RefreshMatViewStmt) (*Re
 	if err != nil {
 		return nil, err
 	}
-	mv := findMatView(mvs, s.Name)
-	if mv == nil {
+	if findMatView(mvs, s.Name) == nil {
 		return nil, &SQLError{Msg: "materialized view not exists: " + s.Name}
 	}
 	tabs, err := loadTables(tx.Get)
 	if err != nil {
 		return nil, err
 	}
-	shadow := findTable(tabs, mv.Name)
-	if shadow == nil {
-		return nil, &SQLError{Msg: "materialized view shadow table missing: " + s.Name}
-	}
-	// 整个刷新在同一事务内完成：重算 SELECT → 重建 schema（若变化）→
-	// 清空旧快照 → 写回新快照。重算失败时 defer Rollback 整体回滚，旧快照不变。
-	res, err := e.execSelect(sess, mv.Select)
+	views, err := loadViews(tx.Get)
 	if err != nil {
 		return nil, err
 	}
-	cols, err := matViewColumnNames(res.Columns)
+	n, err := e.refreshMatViewRec(sess, tx, mvs, tabs, views, s.Name, s.Concurrently, map[string]bool{})
 	if err != nil {
 		return nil, err
 	}
-	defs, normRows, err := inferMatViewSchema(cols, res.Rows)
-	if err != nil {
-		return nil, err
-	}
-	// 列集/类型变化时更新影子表 schema（保留 ID/PK），否则仅重写数据。
-	if matViewSchemaChanged(shadow, defs) {
-		shadow.Columns = append(defs, ColumnDef{Name: mvHiddenPK, Type: "INT"})
-		raw, err := saveTables(tabs)
-		if err != nil {
-			return nil, err
-		}
-		if err := tx.Put(metaKey, raw); err != nil {
-			return nil, err
-		}
-	}
-	n, err := e.refreshMatViewRows(sess, tx, shadow, normRows)
-	if err != nil {
-		return nil, err
-	}
+	e.buildMVDependencySet(mvs)
 	if auto {
 		if err := tx.Commit(); err != nil {
 			return nil, err
@@ -363,6 +371,9 @@ func (e *Executor) execDropMatView(sess *Session, s *DropMatViewStmt) (*Result, 
 			return nil, err
 		}
 	}
+	// 事务提交后重建依赖表缓存（显式事务由用户 COMMIT 后同样生效；
+	// 回滚场景缓存超前仅造成无害的冗余跟踪，正确性不受影响）。
+	e.buildMVDependencySet(outM)
 	return &Result{AffectedRows: 0}, nil
 }
 
@@ -575,4 +586,89 @@ func matViewSchemaChanged(shadow *TableMeta, defs []ColumnDef) bool {
 		}
 	}
 	return false
+}
+
+// writeMatViewRowsPK Simple 物化视图写快照（v1.9.0）：隐藏 PK 列与基表主键
+// 同值，行键按主键值定位——与增量 apply 的 key 完全一致，保证增量/全量路径
+// 可相互切换且互不冲突。仅用于 create 等无旧行冲突的场景。
+func (e *Executor) writeMatViewRowsPK(tx txn.Txn, shadow *TableMeta, rows [][]Value, pkIdx int) (int, error) {
+	for _, row := range rows {
+		if len(row) <= pkIdx {
+			return 0, &SQLError{Msg: "corrupted materialized view row"}
+		}
+		pkV := row[pkIdx]
+		vals := make([]Value, 0, len(row)+1)
+		vals = append(vals, row...)
+		vals = append(vals, pkV)
+		raw, err := encodeRow(shadow, vals)
+		if err != nil {
+			return 0, err
+		}
+		pk, err := pkBytes(shadow, pkV)
+		if err != nil {
+			return 0, err
+		}
+		rid, err := e.locateRow(shadow, pk)
+		if err != nil {
+			return 0, err
+		}
+		key := e.rowKeyAt(shadow, rid, pk)
+		if err := tx.Put(key, raw); err != nil {
+			return 0, err
+		}
+	}
+	return len(rows), nil
+}
+
+// refreshMatViewRowsPK Simple 物化视图全量重写（v1.9.0）：同 refreshMatViewRows
+// 的「差异删除 + 全量写回」防同 key 冲突结构，但行键按基表主键定位
+// （隐藏 PK 列 = 主键值），与增量路径共享同一 key 空间。
+func (e *Executor) refreshMatViewRowsPK(sess *Session, tx txn.Txn, shadow *TableMeta, rows [][]Value, pkIdx int) (int, error) {
+	keys := make([][]byte, len(rows))
+	rawRows := make([][]byte, len(rows))
+	newKeys := make(map[string]struct{}, len(rows))
+	for i, row := range rows {
+		if len(row) <= pkIdx {
+			return 0, &SQLError{Msg: "corrupted materialized view row"}
+		}
+		pkV := row[pkIdx]
+		vals := make([]Value, 0, len(row)+1)
+		vals = append(vals, row...)
+		vals = append(vals, pkV)
+		raw, err := encodeRow(shadow, vals)
+		if err != nil {
+			return 0, err
+		}
+		pk, err := pkBytes(shadow, pkV)
+		if err != nil {
+			return 0, err
+		}
+		rid, err := e.locateRow(shadow, pk)
+		if err != nil {
+			return 0, err
+		}
+		key := e.rowKeyAt(shadow, rid, pk)
+		keys[i] = key
+		rawRows[i] = raw
+		newKeys[string(key)] = struct{}{}
+	}
+	// 删除旧快照中不在新快照的残留行（避免与后续 Put 同 key 冲突）。
+	oldPairs, err := e.scanMergedCluster(sess, tx, e.rowRanges(shadow))
+	if err != nil {
+		return 0, err
+	}
+	for _, kv := range oldPairs {
+		if _, ok := newKeys[string(kv.Key)]; !ok {
+			if err := tx.Delete(kv.Key); err != nil {
+				return 0, err
+			}
+		}
+	}
+	// 全量写回新快照。
+	for i, key := range keys {
+		if err := tx.Put(key, rawRows[i]); err != nil {
+			return 0, err
+		}
+	}
+	return len(rows), nil
 }
