@@ -32,7 +32,7 @@ AIGC:
 [![GitHub stars](https://img.shields.io/github/stars/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 [![GitHub issues](https://img.shields.io/github/issues/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 
-OpenXDB 是从零自研的单机/分布式关系型数据库内核（Go + RocksDB），定位于学习与工程实践并重的开源数据库项目。内核自底向上实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务与带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA 故障转移、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动（JDBC/Python）、运维工具链、认证权限（审计 + RBAC）与生态导出（JSON/Parquet）等能力，当前版本 **v1.3.0**。
+OpenXDB 是从零自研的单机/分布式关系型数据库内核（Go + RocksDB），定位于学习与工程实践并重的开源数据库项目。内核自底向上实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务与带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA 故障转移、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动（JDBC/Python）、运维工具链、认证权限（审计 + RBAC）与生态导出（JSON/Parquet）等能力，当前版本 **v1.10.0**。
 
 ## 快速开始
 
@@ -99,11 +99,11 @@ SELECT name FROM users WHERE age >= 25 AND age < 35 ORDER BY age;
 | **Storage** | RocksDB cgo 桥存储引擎 + 内存 B+Tree 参考实现（LSM comparator） |
 | **WAL** | 追加式 WAL + 崩溃重放恢复，group commit 批量 fsync |
 | **事务** | 本地快照隔离事务 + 分布式事务（TSO 全局时间戳 + 2PC + 分布式快照隔离） |
-| **SQL** | SELECT/JOIN/GROUP BY/子查询/CTE/窗口函数/upsert/视图/物化视图/触发器/存储过程/INSERT INTO SELECT 等 |
-| **RBAC 与安全** | 细粒度角色/权限体系、审计日志、TLS 加密传输、监控告警 |
-| **集群** | 复制（异步/半同步/同步）、region 分片、多节点 2PC、HA 故障转移、自动分裂与负载均衡 |
-| **备份恢复** | 一致性快照备份、幂等恢复、LSN 基 PITR、分布式一致备份 |
-| **生态导出** | JDBC/Python 驱动、mysqldump 导入、binlog CDC、JSON/Parquet 导出 |
+| **SQL** | SELECT/JOIN/GROUP BY/子查询/CTE/窗口函数（含多列 ORDER BY）/upsert/视图/物化视图（增量刷新）/触发器（行级语义）/存储过程（受限子集）/ALTER 列级/CREATE DATABASE/INSERT INTO SELECT 等 |
+| **RBAC 与安全** | 细粒度角色/权限体系、审计日志、TLS 加密传输（AutoTLS + 证书热轮换）、监控告警（规则级 webhook） |
+| **集群** | 复制（异步/半同步/同步）、region 分片、多节点 2PC、HA 故障转移（epoch 脑裂防护 + 回迁自动化）、自动分裂与负载均衡 |
+| **备份恢复** | 一致性快照备份（并发分片）、幂等恢复、LSN 基 PITR、分布式一致备份、备份调度/远程 push-pull |
+| **生态导出** | JDBC/Python 驱动（pipeline 批量）、mysqldump 导入（全选项）、binlog CDC、JSON/Parquet 流式导出（大结果集分片写） |
 
 ## 架构总览
 
@@ -144,7 +144,21 @@ Protocol / CLI (REPL · TCP server · JDBC/Python 驱动 · MySQL wire protocol 
 
 **v1.3.0（2026-10-23 发布）**：**全局会话锁消除** —— 以会话级细粒度锁替代全局锁（`e.mu` → `sess.mu`），并发度显著提升；**备份 / 导入并行化** —— `BACKUP CONCURRENCY k` 分片并行与 mysqldump 导入并行；**Serializable 隔离级别** —— `SET TRANSACTION/SESSION` 切换，提交前 rw-antidependency 检测（读集 ∩ 活跃/窗口写集）返回 `ErrConflict`；**行协议语义修订** —— NULL（`\N`）与空串严格区分、RFC4180 换行引用、DECIMAL 行协议导入拒绝小数位 > 4；**仓库清理**与 `.gitignore` 防再跟踪。
 
+**v1.4.0（2026-10-23 落地）**：**工程债与稳定性** —— waitEverUp 心跳竞态防护与路由视图契约对齐（`c77bdab`）；cmd/fixregions 离线路由修复工具纳入版本库并补全测试（`b7796fc`）；D 混合事务性能复测回正（会话锁消除收益确认 +1032.5%，清理热路径调试残留）；根目录调试残留清理与 `.gitignore` 加固。
+
+**v1.5.0（2026-10-23/24 落地）**：**协议与吞吐** —— 客户端 pipeline 协议（Python/JDBC 驱动批量流水线执行，`e1515b8`）；行协议 NULL/空串二义消除与单元格换行/反斜杠转义（`d26695b`）；mysqlproto 高级协议测试正式化（`06f37d4`）。
+
+**v1.6.0 阶段二（2026-10-24 落地）**：**SQL/兼容补齐收官** —— P1-2 MySQL wire binlog/mysqldump 全选项推进（COM_REGISTER_SLAVE / COM_BINLOG_DUMP 订阅位点语义、整库 dump 导入、`db.tbl` 反引号前缀保留）与复制协议测试正式化（T44）；P1-3 存储过程受限子集补齐（DECLARE/IF/WHILE/LOOP/FOR/REPEAT/游标/OUT 参数回写）；P2-4 HA 回迁自动化（补偿帧回灌旧主未复制段、旧主识别新主 epoch 重置基线、binlog 损坏走全量对齐兜底）；P1-1 补充 `db.tbl` 库前缀解析与空表 SUM/AVG 类型化零值语义。
+
 **v1.6.0 阶段一（2026-10-24 落地）**：**P1 核心 SQL 硬缺口补齐** —— ① `ALTER TABLE` 列级操作补全（新增 `MODIFY COLUMN`：列类型/默认值修改，存量行按类型转换规则重写，DECIMAL/INT/TEXT/DATE/BLOB 互转，索引/PK 列类型变更校验）；② **CREATE DATABASE / 库级管理**（`CREATE DATABASE [IF NOT EXISTS]`、`DROP DATABASE`（级联删库内表）、`SHOW DATABASES`、`USE <db>`（会话级默认库 `Session.CurrentDB`）；库目录元数据 `m:databases` 持久化；表名支持 `db.tbl` 前缀，未限定归默认库 `default`，存量数据零迁移兼容；DML/DDL 全链路库前缀解析与库存在校验；`information_schema` 保留虚拟库语义）；③ **多列窗口扩展**（`WindowSpec.OrderBy` 由单列扩展为多列 `[]*OrderBy`，`ORDER BY col [ASC|DESC], ...` 多列键比较，RANK/DENSE_RANK 多列同键处理，RANGE 帧多列 ORDER BY 按首列键域计算）。对应测试见 `pkg/sql/t39_sql_subset_test.go`，`go build ./...` 与 `go test ./pkg/sql` 全绿。
+
+**v1.7.0（2026-10-24 落地）**：**HA 全量对齐兜底联动** —— SQL 层 region push 接通回迁降级路径，主从数据最终一致兜底（`5389303`）；空表 AVG 语义转正与 M6 心跳时序竞态修复随版本回归。
+
+**v1.8.0（2026-10-24 落地）**：**触发器行级语义** —— `FOR EACH ROW` 触发、`NEW`/`OLD` 行引用、触发器体回滚与递归策略（`f7bb1f4`）。
+
+**v1.9.0（2026-10-24 落地）**：**物化视图增量刷新** —— 基表变更跟踪、`CONCURRENTLY` 快照交换、依赖链管理（`b73bb9a`）。
+
+**v1.10.0（2026-10-25 落地）**：**HA 脑裂防护生产化** —— `ha.epochEnabled` 默认开启（quorum 保持默认关闭，评估结论见 docs/HA_BRAIN_SPLIT_DESIGN.md §5.5）；三节点组网脑裂演练 TestP1BrainSplitDrill；HA_BRAIN_SPLIT_DESIGN.md Draft→已落地 v1.0；backup_schedule 测试补齐与 dup_repro 并发正确性测试入库（`7aba976`）。
 
 ### 完整特性
 

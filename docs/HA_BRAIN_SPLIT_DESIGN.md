@@ -220,6 +220,7 @@ OpenXDB 现有 HA 由两条相对独立的链路构成，均**不包含 quorum /
 - 结论：**`ha.epochEnabled` 可直接默认开启**——三包全量回归（pkg/db 37.0s / pkg/replication 11.9s / pkg/sql 51.9s）全绿，既有基线（TestM6DownNodeReadFailover、TestM6AutoReassignRegionAfterDown、TestDBSyncRepl* 等）无破坏；`TestM6AutoReassignRegionAfterDown` 按 P1 持有校验适配后 PASS。`ha.quorumEnabled` 保持默认关闭：quorum 仲裁改变升主竞争语义（单/两节点无多数派时自动升主行为变化），需在组网环境灰度后再全量开启；
 - 落地动作：`pkg/db/db.go` DB.Open 默认 `epochEnabled = true`（quorum 仍默认 false）；`ha_config.go` 配置项保持可覆盖；
 - 建议：v1.11.0 在真实组网灰度 quorum 开关后评估全量开启。
+- **v1.11.0 全量开启评估结论**（单机/测试框架）：对 `quorumGuard`（pkg/db/epoch.go）做代码级影响面核对——开启后 ① `Cluster == nil`（单机未组网）直接返回 ErrQuorumNotMet；② 注册节点数 n<2 拒绝升主（`cluster size N, need >= 2`）；③ 两节点主从场景 quorum=N/2+1=2，从节点升主时旧主已探活失败，`up=1<2` 拒绝升主。**结论：全量开启将破坏单节点自动升主与两节点主从自动升主语义，保持默认关闭**；三节点及以上真实组网灰度后再评估开启（结论同步至 KNOWN_LIMITATIONS §3.4）。
 
 **演练覆盖矩阵**（组网级脑裂演练 `TestP1BrainSplitDrill` 对第 6 节 T 编号的覆盖映射）：
 
