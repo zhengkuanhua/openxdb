@@ -639,24 +639,73 @@ func (s *Server) REPL(r io.Reader, w io.Writer) error {
 
 // REPLSession 交互循环：逐行读入命令直到 EOF 或 QUIT，携带连接会话
 // （AUTH 握手/降级状态跨命令保持）。TCP 连接每连接一个 session。
+//
+// v1.13.0：引入多 reader/worker 并发处理路径消除单连接逐命令串行——
+// reader goroutine 持续预读命令行送入有界 channel，worker 按序消费并
+// 执行（HandleSession）后写响应。顺序语义与事务隔离保持不变：SQL 语句
+// 仍按行序逐条执行（BEGIN/COMMIT 边界依赖顺序），跨连接由 handleSQL
+// 锁外并行；读侧预读消除"执行上一命令期间连接读侧空闲"的串行等待，
+// 客户端 pipeline 大批量发送时命令无需等待响应即可进入执行队列。同时
+// Scanner 单行上限由默认 64KB 提升至 1MB，避免长 SQL/多语句切分场景
+// token too long 截断；写侧经 bufio.Writer 逐条 flush，保持"一命令一
+// 响应"协议语义不变。
 func (s *Server) REPLSession(r io.Reader, w io.Writer, sess *session) error {
 	sc := bufio.NewScanner(r)
-	for sc.Scan() {
-		resp, err := s.HandleSession(sc.Text(), sess)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024) // 单行上限 1MB
+	cmds := make(chan string, 256)
+	readErr := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(cmds)
+		for sc.Scan() {
+			line := sc.Text()
+			select {
+			case cmds <- line:
+			case <-done:
+				return
+			}
+		}
+		select {
+		case readErr <- sc.Err():
+		case <-done:
+		}
+	}()
+	bw := bufio.NewWriter(w)
+	for {
+		line, ok := <-cmds
+		if !ok {
+			break
+		}
+		resp, err := s.HandleSession(line, sess)
 		if err != nil {
 			resp = err.Error()
 		}
 		if resp == "" {
 			continue
 		}
-		if _, werr := fmt.Fprintln(w, resp); werr != nil {
+		if _, werr := bw.WriteString(resp); werr != nil {
+			close(done)
+			return werr
+		}
+		if werr := bw.WriteByte('\n'); werr != nil {
+			close(done)
+			return werr
+		}
+		if werr := bw.Flush(); werr != nil {
+			close(done)
 			return werr
 		}
 		if resp == "BYE" {
+			close(done)
 			return nil
 		}
 	}
-	return sc.Err()
+	select {
+	case err := <-readErr:
+		return err
+	case <-done:
+		return nil
+	}
 }
 
 // ServeTCP 监听 addr 并启动 TCP 服务。已配置 TLS（SetTLS 非 nil）时使用
