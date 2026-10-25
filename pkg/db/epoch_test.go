@@ -123,14 +123,15 @@ func TestP0AllowWriteFencing(t *testing.T) {
 	}
 }
 
-// TestP0EpochDisabledZeroRegression 开关默认关闭零回归：复制升主、
-// 存储与 SQL 写路径均不受影响（M6 既有行为不变）。
-func TestP0EpochDisabledZeroRegression(t *testing.T) {
+// TestP0EpochDefaultOnZeroRegression 开关默认开启零破坏（v1.10.0 落地）：
+// epoch 默认开启、quorum 默认关闭；未授权主（masterEpoch=0）写路径放行，
+// 复制升主、存储与 SQL 写路径均不受影响（M6 既有行为不变）。
+func TestP0EpochDefaultOnZeroRegression(t *testing.T) {
 	d := openTestDB(t)
 
-	// 默认开关状态：双双关闭。
-	if d.EpochEnabled() || d.QuorumEnabled() {
-		t.Fatalf("default switches: epoch=%v quorum=%v, want both off", d.EpochEnabled(), d.QuorumEnabled())
+	// 默认开关状态：epoch 开启、quorum 关闭。
+	if !d.EpochEnabled() || d.QuorumEnabled() {
+		t.Fatalf("default switches: epoch=%v quorum=%v, want epoch on / quorum off", d.EpochEnabled(), d.QuorumEnabled())
 	}
 
 	// 写路径放行。

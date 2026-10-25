@@ -191,8 +191,10 @@ func TestP2T3ReconcileDemoteStaleMaster(t *testing.T) {
 		t.Fatal("INSERT on demoted stale master: want error, got nil")
 	}
 
-	// 开关关闭：NoteEpoch 不触发降级、冲突标记恒 0（T8 零回归）。
+	// 开关显式关闭（v1.10.0 后 epoch 默认开启，此处显式关以验证关闭路径
+	// 零回归）：NoteEpoch 不触发降级、冲突标记恒 0（T8）。
 	d2 := openTestDB(t)
+	d2.SetEpochEnabled(false)
 	if err := d2.StartReplication(":0"); err != nil {
 		t.Fatalf("d2 StartReplication: %v", err)
 	}
@@ -202,13 +204,14 @@ func TestP2T3ReconcileDemoteStaleMaster(t *testing.T) {
 	}
 }
 
-// TestP2T8DisabledZeroRegression 开关关闭零回归（T8）：
-// 默认 epoch/quorum 双双关闭；写路径放行、无降级、冲突标记恒 0；
+// TestP2T8DisabledZeroRegression 开关显式关闭零回归（T8）：
+// epoch/quorum 关闭时写路径放行、无降级、冲突标记恒 0；
 // 复制升主不受影响（M6 既有行为不变）。
 func TestP2T8DisabledZeroRegression(t *testing.T) {
 	d := openTestDB(t)
+	d.SetEpochEnabled(false) // v1.10.0 后 epoch 默认开启；本测试显式关闭验证零回归
 	if d.EpochEnabled() || d.QuorumEnabled() {
-		t.Fatalf("default switches: epoch=%v quorum=%v, want both off", d.EpochEnabled(), d.QuorumEnabled())
+		t.Fatalf("switches after disable: epoch=%v quorum=%v, want both off", d.EpochEnabled(), d.QuorumEnabled())
 	}
 	if err := d.AllowWrite(); err != nil {
 		t.Fatalf("AllowWrite = %v, want nil", err)

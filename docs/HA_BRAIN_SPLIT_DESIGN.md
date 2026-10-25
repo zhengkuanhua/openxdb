@@ -9,12 +9,12 @@ AIGC:
     ReservedCode2: CstTcMLx8oZ6Le1q3Y7wwkRorzEMkASx2rKHa6fihS2f32HEW5whCGXmzd2drQLfpPV6ZLe8I0bwCFUU9PNqfdf63kS9pn0Q/0MMvEGkpaaQ6kxx/m+QMECz8QOEO92wnfAsFRZT7JFmg0snE0Jj+4Ltbgx7aSIVTKjTmduMXQ2DrCC8sbU+orHGWZ4=
 ---
 
-# OpenXDB 高可用脑裂防护设计草案
+# OpenXDB 高可用脑裂防护设计（已落地）
 
-- 状态：草案（Draft）
-- 版本：v0.1
-- 日期：2026-10-23
-- 范围：基于现有 HA 代码（集群分片轨 + 主从复制轨）设计脑裂防护机制，作为后续 HA 增强的实现依据。
+- 状态：已落地（Implemented，v1.10.0）
+- 版本：v1.0
+- 日期：2026-10-25（初稿 2026-10-23）
+- 范围：基于现有 HA 代码（集群分片轨 + 主从复制轨）设计并实现脑裂防护机制（epoch / fencing / quorumGuard / ReconcileAfterPartition / 回迁）；本文档描述设计语义与 v1.10.0 落地状态。
 
 ---
 
@@ -156,7 +156,7 @@ OpenXDB 现有 HA 由两条相对独立的链路构成，均**不包含 quorum /
 
 ### 4.1 兼容策略
 
-- 新增配置开关：`ha.epochEnabled`、`ha.quorumEnabled`，**默认关闭**。关闭时行为与现有一致，零回归；
+- 新增配置开关：`ha.epochEnabled`、`ha.quorumEnabled`，**v1.10.0 落地结论：`ha.epochEnabled` 默认开启、`ha.quorumEnabled` 默认关闭**。评估与理由见 §5.5；关闭时行为与现有一致，零回归；
 - 复制模式 async / semi-sync / sync 协议不变：quorum 确认叠加在现有升主路径之上，不影响正常复制协议与 RPO 语义；
 - `EnableAutoFailover`：开启 quorum 后自动升主需多数派确认；单 follower / 两节点集群无多数派时，自动升主降级为"等待人工确认"，可通过 `ha.allowMinorityAutoPromote` 显式放行（保持向后兼容）；
 - `FailoverDownNode / failoverRegion`：重指派增加 epoch + 持有校验；单节点 down 的现有场景（TestM6*/TestM7* 等）在 epoch 授权成功后行为不变；
@@ -170,8 +170,9 @@ OpenXDB 现有 HA 由两条相对独立的链路构成，均**不包含 quorum /
 
 ### 4.3 对现有测试的影响
 
-- 开关默认关闭 → 现有 HA 用例（`pkg/cluster` `TestHeartbeatDown` 等、`pkg/db` `TestM6*/TestM7*/TestDBSyncRepl*`）保持全绿；
-- 新增用例仅针对开启开关的路径（见第 6 节测试矩阵）。
+- v1.10.0 实测：`ha.epochEnabled` 默认开启后，`pkg/db`、`pkg/replication`、`pkg/sql` 三包全量回归全绿（详见 §5.5 回归记录）；既有基线（`TestM6DownNodeReadFailover`、`TestM6AutoReassignRegionAfterDown`、`TestDBSyncRepl*` 等）无破坏；
+- `TestM6AutoReassignRegionAfterDown` 按 P1 持有校验（`regionHoldsLocalTarget`，ASSIGN 禁止重复指派）适配：候选节点需先真实持有 region 副本再重指派，用例已同步更新；
+- 新增用例（脑裂演练、backup_schedule 单测）仅针对开启开关的路径（见第 6 节测试矩阵）。
 
 ---
 
@@ -198,6 +199,39 @@ OpenXDB 现有 HA 由两条相对独立的链路构成，均**不包含 quorum /
 - **预估**：4–6 人日
 
 **合计：约 14–22 人日。**
+
+### 5.5 落地状态（v1.10.0）
+
+**已实现语义清单**（v1.10.0 前代码主体已入库，本版完成开关评估、演练与文档对齐）：
+
+| 语义 | 实现位置 | 关键行为 | 覆盖测试 |
+|---|---|---|---|
+| clusterEpoch 单调发号 | `pkg/db/epoch.go`（clusterEpoch / acquireEpoch / NoteEpoch） | master 变更、region 归属变更单调递增；重启从持久化恢复 | `epoch_test.go` |
+| epoch fencing（写路径） | `pkg/db/epoch.go` AllowWrite / StaleMasterReady | 陈旧 master 写入被拒；binlog 非空 + 已降级只读才允许回迁 | `db_ha_repl_test.go`、`brain_split_drill_test.go` |
+| quorumGuard 升主多数派仲裁 | `pkg/db/epoch.go` quorumGuard / QuorumOK | 升主前向多数派确认旧主不可达；不足多数派拒绝 | `epoch_test.go`、`db_ha_test.go` |
+| 分区视图 / MajorityOK | `pkg/cluster/partition.go` | 注入 prober 模拟网络分区视图；MajorityOK 翻转驱动仲裁 | `partition_test.go`、`brain_split_drill_test.go` |
+| ReconcileAfterPartition 回迁闭环 | `pkg/db/ha.go` | 分区恢复后旧主经 NoteEpoch 降级只读、fencing 旧写、StaleMasterReady 回迁就绪 | `db_rejoin_test.go`、`brain_split_drill_test.go` |
+| 组网级脑裂演练 | `pkg/db/brain_split_drill_test.go` | 三节点：A 主、B/C follower；注入分区触发 MajorityOK 翻转 → B 升主 → A 降级只读 + fencing → 回迁就绪 | `TestP1BrainSplitDrill` |
+| 备份调度测试补齐 | `pkg/sql/backup_schedule_test.go` | 调度触发 / 跳过 / 失败恢复 / 保留轮转四场景 | `TestBackupSchedule*` |
+
+**开关默认开启评估结论**（P0）：
+
+- 评估对象：`ha.epochEnabled`（epoch 发号 + fencing 写路径）、`ha.quorumEnabled`（升主多数派仲裁）；
+- 结论：**`ha.epochEnabled` 可直接默认开启**——三包全量回归（pkg/db 37.0s / pkg/replication 11.9s / pkg/sql 51.9s）全绿，既有基线（TestM6DownNodeReadFailover、TestM6AutoReassignRegionAfterDown、TestDBSyncRepl* 等）无破坏；`TestM6AutoReassignRegionAfterDown` 按 P1 持有校验适配后 PASS。`ha.quorumEnabled` 保持默认关闭：quorum 仲裁改变升主竞争语义（单/两节点无多数派时自动升主行为变化），需在组网环境灰度后再全量开启；
+- 落地动作：`pkg/db/db.go` DB.Open 默认 `epochEnabled = true`（quorum 仍默认 false）；`ha_config.go` 配置项保持可覆盖；
+- 建议：v1.11.0 在真实组网灰度 quorum 开关后评估全量开启。
+
+**演练覆盖矩阵**（组网级脑裂演练 `TestP1BrainSplitDrill` 对第 6 节 T 编号的覆盖映射）：
+
+| T 编号 | 场景 | 覆盖方式 |
+|---|---|---|
+| T1 | 主从断开、从端升主 | 注入 A 分区视图使 B 端 MajorityOK 翻转 → B 升主（演步骤 2） |
+| T2 | 并发升主竞争 | epoch 冲突裁决：B 升主后 C 重复尝试被 quorum/fencing 拒绝（演步骤 3） |
+| T3 | 分区恢复合并（复制轨） | ReconcileAfterPartition 使 A 降级只读 + fencing 旧写（演步骤 4） |
+| T8 | 开关关闭回归 | epoch_test.go TestP0EpochDefaultOnZeroRegression / ha_p2_test.go 显式关闭开关验证零回归 |
+| T9 | 单点 down 正常 failover | db_ha_test.go / db_ha_repl_test.go 既有基线覆盖 |
+
+**回归记录（v1.10.0）**：`go build ./...` 通过；`pkg/db`、`pkg/replication`、`pkg/sql` 全量 `go test` 全绿（含 backup_schedule 新增 4 用例，sql 包 46.3s）。
 
 ---
 

@@ -138,7 +138,13 @@ func TestM6AutoReassignRegionAfterDown(t *testing.T) {
 	mid := regions[1]
 	mustSQL(t, dA, "ADD NODE '"+dB.Cluster.SelfAddr+"'")
 	mustSQL(t, dA, "ADD NODE '"+dC.Cluster.SelfAddr+"'")
-	mustSQL(t, dA, fmt.Sprintf("ASSIGN REGION %d TO NODE '%s'", mid.RegionID, dB.Cluster.SelfID))
+	// P1 持有校验适配（v1.10.0 epoch 默认开启后 failover 走持有校验，目标须
+	// 真实持有 region 键空间，否则被跳过回退本节点）：由 C 作为 owner 把 mid
+	// 推给 B（ASSIGN 推送后源端保留副本），使 B down 时 C 真实持有该 region
+	// 键空间、可通过持有校验成为重指派目标。C 侧先注册 B（ADD NODE 不广播）。
+	mustSQL(t, dA, fmt.Sprintf("ASSIGN REGION %d TO NODE '%s'", mid.RegionID, dC.Cluster.SelfID))
+	mustSQL(t, dC, "ADD NODE '"+dB.Cluster.SelfAddr+"'")
+	mustSQL(t, dC, fmt.Sprintf("ASSIGN REGION %d TO NODE '%s'", mid.RegionID, dB.Cluster.SelfID))
 	wantIDs(t, dA, "SELECT id FROM users ORDER BY id", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 	wantIDs(t, dB, "SELECT id FROM users ORDER BY id", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 

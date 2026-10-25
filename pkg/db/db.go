@@ -249,6 +249,11 @@ func Open(dir string) (*DB, error) {
 		return nil, fmt.Errorf("db: load persisted config: %w", err)
 	}
 	db := &DB{Dir: dir, Storage: st, WAL: w, Txn: tm, SQL: eng, Cluster: mgr, TSO: ts, FailoverCatchupTimeout: 2 * time.Second}
+	// P0 HA v1.10.0：epoch 授权与写入 fencing 默认开启（评估结论：对未授权
+	// 主/单机零回归——masterEpoch=0 时 AllowWrite 放行、无广播不触发降级；
+	// 仅已授权主被更高 epoch 取代时才 fencing）。quorum 升主仲裁保留默认
+	// 关闭（需集群注册表，无集群环境直接拒绝升主，见 HA_BRAIN_SPLIT_DESIGN.md）。
+	db.epochEnabled = true
 	// P0 HA：加载 epoch.meta（已知最大 clusterEpoch 单调下限，防回退）。
 	db.epochFilePath = filepath.Join(dir, EpochMetaFile)
 	db.loadEpochMeta()
