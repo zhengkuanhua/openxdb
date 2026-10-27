@@ -333,6 +333,54 @@ func encodeRow(t *TableMeta, vals []Value) ([]byte, error) {
 	return json.Marshal(arr)
 }
 
+// decodeRowValue 还原 JSON 元素为第 i 列的 Value（类型强制，按列定义）。
+func decodeRowValue(t *TableMeta, a interface{}, i int) (Value, error) {
+	if a == nil {
+		return Value{Kind: "NULL"}, nil
+	}
+	switch t.Columns[i].Type {
+	case "INT":
+		f, ok := a.(float64)
+		if !ok {
+			return Value{}, &SQLError{Msg: "corrupted row: int column"}
+		}
+		return IntVal(int64(f)), nil
+	case "DECIMAL":
+		s, ok := a.(string)
+		if !ok {
+			return Value{}, &SQLError{Msg: "corrupted row: decimal column"}
+		}
+		// v1.12.0 高精度：按列声明小数位还原（旧数据无 Scale → 默认 4，兼容）。
+		scale := t.Columns[i].Scale
+		if scale <= 0 || scale > maxDecScale {
+			scale = decScale
+		}
+		scaled, canon, err := parseDecimalScaled(s, scale)
+		if err != nil {
+			return Value{}, &SQLError{Msg: "corrupted row: decimal column"}
+		}
+		return Value{Kind: "DECIMAL", I: scaled, S: canon, DS: scale}, nil
+	case "DATE":
+		s, ok := a.(string)
+		if !ok {
+			return Value{}, &SQLError{Msg: "corrupted row: date column"}
+		}
+		return Value{Kind: "DATE", S: s}, nil
+	case "BLOB":
+		s, ok := a.(string)
+		if !ok {
+			return Value{}, &SQLError{Msg: "corrupted row: blob column"}
+		}
+		return Value{Kind: "BLOB", S: s}, nil
+	default: // TEXT
+		s, ok := a.(string)
+		if !ok {
+			return Value{}, &SQLError{Msg: "corrupted row: text column"}
+		}
+		return StrVal(s), nil
+	}
+}
+
 // decodeRow JSON 字节 → 行值（按列定义序，类型强制还原）。
 func decodeRow(t *TableMeta, raw []byte) ([]Value, error) {
 	var arr []interface{}
@@ -344,51 +392,33 @@ func decodeRow(t *TableMeta, raw []byte) ([]Value, error) {
 	}
 	vals := make([]Value, len(arr))
 	for i, a := range arr {
-		if a == nil {
-			vals[i] = Value{Kind: "NULL"}
-			continue
+		v, err := decodeRowValue(t, a, i)
+		if err != nil {
+			return nil, err
 		}
-		switch t.Columns[i].Type {
-		case "INT":
-			f, ok := a.(float64)
-			if !ok {
-				return nil, &SQLError{Msg: "corrupted row: int column"}
-			}
-			vals[i] = IntVal(int64(f))
-		case "DECIMAL":
-			s, ok := a.(string)
-			if !ok {
-				return nil, &SQLError{Msg: "corrupted row: decimal column"}
-			}
-			// v1.12.0 高精度：按列声明小数位还原（旧数据无 Scale → 默认 4，兼容）。
-			scale := t.Columns[i].Scale
-			if scale <= 0 || scale > maxDecScale {
-				scale = decScale
-			}
-			scaled, canon, err := parseDecimalScaled(s, scale)
-			if err != nil {
-				return nil, &SQLError{Msg: "corrupted row: decimal column"}
-			}
-			vals[i] = Value{Kind: "DECIMAL", I: scaled, S: canon, DS: scale}
-		case "DATE":
-			s, ok := a.(string)
-			if !ok {
-				return nil, &SQLError{Msg: "corrupted row: date column"}
-			}
-			vals[i] = Value{Kind: "DATE", S: s}
-		case "BLOB":
-			s, ok := a.(string)
-			if !ok {
-				return nil, &SQLError{Msg: "corrupted row: blob column"}
-			}
-			vals[i] = Value{Kind: "BLOB", S: s}
-		default: // TEXT
-			s, ok := a.(string)
-			if !ok {
-				return nil, &SQLError{Msg: "corrupted row: text column"}
-			}
-			vals[i] = StrVal(s)
+		vals[i] = v
+	}
+	return vals, nil
+}
+
+// decodeRowSelected JSON 字节 → 行值，仅还原 idxs 指定列（结果与 idxs 对齐）。
+// W3 列投影下推：跳过未投影列的类型还原（含高精度 DECIMAL 解析等重操作），
+// 未选列即使编码损坏也不会触发解析错误——语义上不会被访问。
+func decodeRowSelected(t *TableMeta, raw []byte, idxs []int) ([]Value, error) {
+	var arr []interface{}
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return nil, err
+	}
+	if len(arr) != len(t.Columns) {
+		return nil, &SQLError{Msg: "corrupted row"}
+	}
+	vals := make([]Value, len(idxs))
+	for j, i := range idxs {
+		v, err := decodeRowValue(t, arr[i], i)
+		if err != nil {
+			return nil, err
 		}
+		vals[j] = v
 	}
 	return vals, nil
 }
