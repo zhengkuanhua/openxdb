@@ -88,6 +88,13 @@ type Executor struct {
 	slowQueries   []SlowQueryRecord
 	slowQueryMax  int // 内存保留条数（默认 slowQueryMaxDefault，可 SetSlowQueryMax 调整）
 	slowLog       *SlowLog
+	// v1.14.0 P0：只读 SELECT 并行开关（服务端 REPLSession 批内 autocommit
+	// 只读 SELECT 并发执行 + 按序重组 + 批尾 flush）。默认开启；关闭回退
+	// v1.13.0 逐条串行执行行为。经 e.mu 保护读写，热路径读开销可忽略。
+	roParallel bool
+	// v1.14.0 P1：WAL 组提交定时刷盘窗口（毫秒，0=关闭回退被动攒批）。
+	// 经 SetGroupCommitWindow 同步透传底层 WAL；SHOW CONFIG 读取同锁保护。
+	groupCommitWindowMs float64
 	// M17-1 审计日志：auditEnabled 总开关（默认开，安全默认）；
 	// auditThreshold 慢审计阈值毫秒（<=0 不标记 slow）；auditRecords 内存环
 	// 缓冲（保留最近 auditMax 条，SHOW AUDITLOG 查询）；auditLog 落盘器
@@ -167,6 +174,10 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 		p1Epoch:       map[storage.ID]p1RegionEpoch{},
 		splitAcc:      map[uint64]int64{},
 		qc:            NewQueryCache(),
+		// v1.14.0 P0：只读 SELECT 并行默认开启（SET ro_parallel=off 回退串行）。
+		roParallel:    true,
+		// v1.14.0 P1：WAL 组提交定时刷盘窗口默认 0.5ms（SET group_commit_window_ms=0 回退被动攒批）。
+		groupCommitWindowMs: groupCommitWindowMsDefault,
 		slowThreshold: slowThresholdDefault, // M13：默认 100ms
 		slowQueryMax:  slowQueryMaxDefault,
 		slowLog:       NewSlowLog(),
@@ -187,6 +198,8 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 	// T37 商用档：告警规则评估引擎单点装配（需引用 Executor 取指标快照，
 	// 故构造后单独初始化；cmd/main 启动/停止评估循环亦依赖此字段非 nil）。
 	e.initAlertRulesEngine()
+	// v1.14.0 P1：与底层 WAL 默认窗口保持一致（wal_impl 默认 500µs）。
+	e.SetGroupCommitWindow(time.Duration(groupCommitWindowMsDefault * float64(time.Millisecond)))
 	return e
 }
 
@@ -198,6 +211,44 @@ func (e *Executor) initBackupScheduler() {
 	if e.backupSched == nil {
 		e.backupSched = newBackupScheduler(e)
 	}
+}
+
+// SetROParallel 设置只读 SELECT 并行开关（v1.14.0 P0）：批内 autocommit
+// 只读 SELECT 并发执行 + 按序重组。关闭回退 v1.13.0 逐条串行执行行为。
+// 运行时调用即时生效（SET ro_parallel=on|off 热切换）。
+func (e *Executor) SetROParallel(enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.roParallel = enabled
+}
+
+// ROParallel 返回只读 SELECT 并行开关当前状态（服务端 REPLSession 热路径
+// 判定是否启用并行批收集）。
+func (e *Executor) ROParallel() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.roParallel
+}
+
+// SetGroupCommitWindow 设置 WAL 组提交定时刷盘窗口（v1.14.0 P1），
+// 透传至事务管理器底层 WAL；d<=0 关闭定时窗口（回退 v1.13.0 被动攒批）。
+// 经 SET group_commit_window_ms 热切换即时生效。
+func (e *Executor) SetGroupCommitWindow(d time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.groupCommitWindowMs = float64(d) / float64(time.Millisecond)
+	// tm 可能为 nil（测试/未装配场景）：与 writeFence 等注入点同模式，零开销放行。
+	if e.tm != nil {
+		e.tm.SetGroupCommitWindow(d)
+	}
+}
+
+// groupCommitWindowMsText 返回 WAL 组提交定时刷盘窗口当前值（毫秒，0=已关闭）。
+// 供 SHOW CONFIG 展示；线程安全（随 SetGroupCommitWindow 同锁保护）。
+func (e *Executor) groupCommitWindowMsText() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return strconv.FormatFloat(e.groupCommitWindowMs, 'f', 3, 64)
 }
 
 // SetSlowThreshold 设置慢查询阈值（毫秒，<=0 关闭记录）。运行时调用即时生效。
@@ -2649,6 +2700,14 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
 		}
 		return execInfoSchema(s, tabs)
 	}
+	// v1.15.0 W2：COUNT(*)/COUNT(1) 快速路径（无 WHERE/GROUP/HAVING/ORDER/
+	// DISTINCT/JOIN/窗口/OFFSET 且事务支持 RangeCounter 时逐 region 计数求和，
+	// 避免全表物化 + 逐行计数；条件不满足一律回退原路径）。
+	if res, ok, err := e.tryCountFastPath(sess, tx, s); err != nil {
+		return nil, err
+	} else if ok {
+		return res, nil
+	}
 	// M10 CTE：执行前展开语句级 WITH 子句（引用 CTE 名替换为定义子查询），
 	// 先于视图展开执行（语句内作用域优先）；循环引用在此阶段报错。
 	if err := e.expandCTEs(s); err != nil {
@@ -2748,32 +2807,60 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
 	if rows == nil {
 		// M12-2 分布式排序分页捷径（无 WHERE：窗口截断正确性前提）
 		if e.canDistributedOrder(meta, s) {
+			// v1.15.0 W4：ORDER BY 单列主键（TEXT/DATE/BLOB，编码序恒=比较序）时
+			// 各分片按物理键序取足量即可免排序（无 WHERE 已由 canDistributedOrder
+			// 保证；截断前丢行无法事后验证，故仅限静态安全类型）。
+			if orderBySinglePKSafe(meta, s) {
+				pairs, err := e.scanMergedClusterTop(sess, tx, e.rowRanges(meta), s.Offset+s.Limit)
+				if err != nil {
+					return nil, err
+				}
+				rows = make([][]Value, 0, len(pairs))
+				for _, kv := range pairs {
+					row, err := decodeRow(meta, kv.Value)
+					if err != nil {
+						return nil, err
+					}
+					rows = append(rows, row)
+				}
+				return e.finishSelect(meta, s, rows, true)
+			}
 			return e.execDistributedOrder(sess, tx, meta, s)
 		}
-		// 全表扫描 + 过滤（跨 region/跨节点展开后按内层键序合并，等价单 region 全表序）
-		var pairs []storage.KVPair
-		var err error
-		if e.canDistributedTop(meta, s) {
-			// M12-2 无 ORDER BY 仅 LIMIT/OFFSET：各分片取足量再截断
-			pairs, err = e.scanMergedClusterTop(sess, tx, e.rowRanges(meta), s.Offset+s.Limit)
+		// v1.15.0 W4：ORDER BY 二级索引顺序扫描（无 WHERE 索引条件时按索引序全范围
+		// 扫描回表；索引序 = 索引列升序，finishSelect 内已序验证兜底）。
+		if idx := orderByIndexCandidate(meta, s); idx != nil {
+			rows, err = e.indexScanRowsForOrderBy(sess, tx, meta, idx, s)
+			if err != nil {
+				return nil, err
+			}
+			ordered = true
 		} else {
-			pairs, err = e.scanMergedCluster(sess, tx, e.rowRanges(meta))
-		}
-		if err != nil {
-			return nil, err
-		}
-		rows = make([][]Value, 0, len(pairs))
-		for _, kv := range pairs {
-			row, err := decodeRow(meta, kv.Value)
+			// 全表扫描 + 过滤（跨 region/跨节点展开后按内层键序合并，等价单 region 全表序）
+			var pairs []storage.KVPair
+			var err error
+			if e.canDistributedTop(meta, s) {
+				// M12-2 无 ORDER BY 仅 LIMIT/OFFSET：各分片取足量再截断
+				pairs, err = e.scanMergedClusterTop(sess, tx, e.rowRanges(meta), s.Offset+s.Limit)
+			} else {
+				pairs, err = e.scanMergedCluster(sess, tx, e.rowRanges(meta))
+			}
 			if err != nil {
 				return nil, err
 			}
-			ok, err := matchWhere(meta, row, s.Where)
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				rows = append(rows, row)
+			rows = make([][]Value, 0, len(pairs))
+			for _, kv := range pairs {
+				row, err := decodeRow(meta, kv.Value)
+				if err != nil {
+					return nil, err
+				}
+				ok, err := matchWhere(meta, row, s.Where)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					rows = append(rows, row)
+				}
 			}
 		}
 	}
@@ -2900,18 +2987,33 @@ func (e *Executor) indexLookup(sess *Session, tx txn.Txn, meta *TableMeta, s *Se
 // finishSelect 聚合 / 排序 / 限行 / 投影。
 // ordered=true 表示 rows 已按 ORDER BY 列升序（来自索引序），跳过重复排序。
 func (e *Executor) finishSelect(meta *TableMeta, s *SelectStmt, rows [][]Value, ordered bool) (*Result, error) {
-	// 排序
-	if s.OrderBy != nil && !ordered {
-		ob := s.OrderBy
-		sort.SliceStable(rows, func(i, j int) bool {
-			a, _ := rowValue(meta, rows[i], ob.Col)
-			b, _ := rowValue(meta, rows[j], ob.Col)
-			cmp := compareVal(a, b)
-			if ob.Desc {
-				return cmp > 0
+	// 排序（v1.15.0 W4：ORDER BY 索引顺序扫描免排序）
+	// 命中主键/单列索引候选时先做 O(n) 已序验证（比较基准 compareVal），验证通过
+	// 才免排序；ordered=true（既有索引序/分布式归并序）也统一验证兜底——单列主键
+	// INT 负值、复合主键/索引首列长度前缀序等编码序可能偏离比较序，验证失败一律
+	// 回退原排序路径，保证语义严格等价。
+	if s.OrderBy != nil {
+		if ordered {
+			if !rowsSortedByValue(meta, rows, s.OrderBy) {
+				ordered = false
 			}
-			return cmp < 0
-		})
+		} else if orderByScanCandidate(meta, s) || orderByIndexCandidate(meta, s) != nil {
+			if rowsSortedByValue(meta, rows, s.OrderBy) {
+				ordered = true
+			}
+		}
+		if !ordered {
+			ob := s.OrderBy
+			sort.SliceStable(rows, func(i, j int) bool {
+				a, _ := rowValue(meta, rows[i], ob.Col)
+				b, _ := rowValue(meta, rows[j], ob.Col)
+				cmp := compareVal(a, b)
+				if ob.Desc {
+					return cmp > 0
+				}
+				return cmp < 0
+			})
+		}
 	}
 	// LIMIT / OFFSET（M12-2：OFFSET 在排序后截断，与 LIMIT 同一语义位置）
 	if s.Offset > 0 {
@@ -3249,8 +3351,166 @@ func baseColName(name string) string {
 	return name
 }
 
+// ---- W3 列投影下推：SELECT 所需列收集 ----
+
+// collectExprCols 递归收集算术表达式树中的列引用（裸列名）。
+func collectExprCols(e *Expr, set map[string]bool) {
+	if e == nil {
+		return
+	}
+	if e.Op == "" {
+		if e.Val == nil && e.Col != "" {
+			set[e.Col] = true
+		}
+		return
+	}
+	collectExprCols(e.Left, set)
+	collectExprCols(e.Right, set)
+}
+
+// collectCaseCols 收集 CASE WHEN 分支条件中的列引用。
+func collectCaseCols(cc *CaseWhenClause, set map[string]bool) {
+	if cc == nil {
+		return
+	}
+	for i := range cc.Branches {
+		for j := range cc.Branches[i].Conds.Conds {
+			collectCondCols(&cc.Branches[i].Conds.Conds[j], set)
+		}
+	}
+}
+
+// collectCondCols 收集过滤条件（WHERE/HAVING/CASE WHEN）中的列引用。
+// IN 子查询（c.Sub）内部列由子查询自身执行，不收集。
+func collectCondCols(c *Cond, set map[string]bool) {
+	if c.Col != "" {
+		set[c.Col] = true
+	}
+	if c.RightRef != "" {
+		set[baseColName(c.RightRef)] = true
+	}
+	for _, tl := range c.TupleLeft {
+		if tl != "" {
+			set[baseColName(tl)] = true
+		}
+	}
+	if c.LeftCase != nil {
+		collectCaseCols(c.LeftCase, set)
+	}
+	if c.LeftExpr != nil {
+		collectExprCols(c.LeftExpr, set)
+	}
+	if c.RightExpr != nil {
+		collectExprCols(c.RightExpr, set)
+	}
+	if c.LeftAgg != nil {
+		collectSelectColRefs(c.LeftAgg, set)
+	}
+}
+
+// collectSelectColRefs 收集单个 SELECT 列的列引用（聚合/窗口参数、表达式、
+// CASE、裸列）。返回 false 表示含无法下推形态（星号等），调用方须回退全列。
+func collectSelectColRefs(c *SelectColumn, set map[string]bool) bool {
+	if c.Name == "*" {
+		return false
+	}
+	if c.Var != "" {
+		return true // 用户变量：无表列引用
+	}
+	if c.Window != nil {
+		for _, p := range c.Window.PartitionBy {
+			if p != "" {
+				set[baseColName(p)] = true
+			}
+		}
+		if c.Window.OrderBy != nil && c.Window.OrderBy.Col != "" {
+			set[c.Window.OrderBy.Col] = true
+		}
+		for _, ob := range c.Window.OrderBys {
+			if ob.Col != "" {
+				set[ob.Col] = true
+			}
+		}
+	}
+	if c.Case != nil {
+		collectCaseCols(c.Case, set)
+	}
+	if c.Expr != nil {
+		collectExprCols(c.Expr, set)
+	}
+	if c.Col != "" {
+		set[c.Col] = true
+	}
+	return true
+}
+
+// collectSelectCols 收集 SELECT 语句执行所需的全部表列（裸列名去重）。
+// 覆盖：投影列、WHERE、HAVING、GROUP BY、ORDER BY、窗口分区/排序/聚合参数、
+// 表达式/CASE/聚合参数。返回 (列集合, 是否可下推)；false 时调用方必须全列解码。
+func collectSelectCols(s *SelectStmt) (map[string]bool, bool) {
+	set := make(map[string]bool)
+	for i := range s.Columns {
+		if !collectSelectColRefs(&s.Columns[i], set) {
+			return nil, false
+		}
+	}
+	if s.Where != nil {
+		for i := range s.Where.Conds {
+			collectCondCols(&s.Where.Conds[i], set)
+		}
+	}
+	if s.Having != nil {
+		for i := range s.Having.Conds {
+			collectCondCols(&s.Having.Conds[i], set)
+		}
+	}
+	for _, g := range s.GroupBy {
+		if g != "" {
+			set[baseColName(g)] = true
+		}
+	}
+	if s.OrderBy != nil && s.OrderBy.Col != "" {
+		set[s.OrderBy.Col] = true
+	}
+	for _, ob := range s.OrderBys {
+		if ob.Col != "" {
+			set[ob.Col] = true
+		}
+	}
+	return set, true
+}
+
+// selectNeeded 计算 SELECT 的投影下推列（裸列名列表，按表可见列序）。
+// 返回 nil 表示回退全列：星号/JOIN/子查询/无引用/引用覆盖全部可见列等场景。
+// 不存在的列引用不进入 needed（由下游 relValue 报 unknown column，保持报错语义）。
+func (e *Executor) selectNeeded(meta *TableMeta, s *SelectStmt) []string {
+	// JOIN 场景保守回退全列（左右列定位复杂，保证语义等价优先）。
+	if len(s.Joins) > 0 || s.Subquery != nil {
+		return nil
+	}
+	colSet, ok := collectSelectCols(s)
+	if !ok || len(colSet) == 0 {
+		return nil
+	}
+	vis := visibleColumns(meta)
+	needed := make([]string, 0, len(vis))
+	coveredAll := true
+	for _, c := range vis {
+		if colSet[c.Name] {
+			needed = append(needed, c.Name)
+		} else {
+			coveredAll = false
+		}
+	}
+	if coveredAll {
+		return nil // 全部可见列都要：与全列等价，无收益
+	}
+	return needed
+}
+
 // relFromTable 解析 FROM / JOIN 右侧关系：物理表或子查询派生表。
-func (e *Executor) relFromTable(sess *Session, tx txn.Txn, tabs []*TableMeta, table, alias string, sub *SelectStmt, subAlias string) (*Rel, error) {
+// needed 为投影下推列（裸列名，nil/空 = 全列解码），仅主查询 FROM 单表路径传入。
+func (e *Executor) relFromTable(sess *Session, tx txn.Txn, tabs []*TableMeta, table, alias string, sub *SelectStmt, subAlias string, needed []string) (*Rel, error) {
 	if sub != nil {
 		subRes, err := e.execSelect(sess, sub)
 		if err != nil {
@@ -3272,17 +3532,60 @@ func (e *Executor) relFromTable(sess *Session, tx txn.Txn, tabs []*TableMeta, ta
 	if meta == nil {
 		return nil, &SQLError{Msg: "table not exists: " + table}
 	}
-	return e.relFromScan(sess, tx, meta, alias)
+	return e.relFromScan(sess, tx, meta, alias, needed)
 }
 
 // relFromScan 全表扫描生成 Rel（列名限定为 alias.col；跨 region/跨节点展开）。
-func (e *Executor) relFromScan(sess *Session, tx txn.Txn, meta *TableMeta, alias string) (*Rel, error) {
+// needed 非空时启用 W3 列投影下推：仅解码所需列并仅保留这些列到 rel
+// （未投影列跳过类型还原；Cols/Rows/Types 与 needed 对齐，语义与全列等价）。
+func (e *Executor) relFromScan(sess *Session, tx txn.Txn, meta *TableMeta, alias string, needed []string) (*Rel, error) {
 	pairs, err := e.scanMergedCluster(sess, tx, e.rowRanges(meta))
 	if err != nil {
 		return nil, err
 	}
-	rel := &Rel{Cols: make([]string, 0, len(meta.Columns)), Rows: make([][]Value, 0, len(pairs)), Types: make([]string, 0, len(meta.Columns))}
-	for _, c := range visibleColumns(meta) {
+	vis := visibleColumns(meta)
+	if len(needed) > 0 && len(needed) < len(vis) {
+		// W3：投影下推——仅解码 needed 列。
+		idxs := make([]int, 0, len(needed))   // meta.Columns 索引（decode 用）
+		visIdx := make([]int, 0, len(needed)) // visibleColumns 索引（rel 对齐用）
+		for _, n := range needed {
+			mi := colIndex(meta, n)
+			if mi < 0 {
+				continue // 引用列不存在：保持既有语义，交给下游报 unknown column
+			}
+			vi := -1
+			for i, c := range vis {
+				if c.Name == n {
+					vi = i
+					break
+				}
+			}
+			if vi < 0 {
+				continue // 隐藏列（__mv_*）不进结果 rel，语义同全列路径
+			}
+			idxs = append(idxs, mi)
+			visIdx = append(visIdx, vi)
+		}
+		if len(idxs) > 0 {
+			rel := &Rel{Cols: make([]string, 0, len(idxs)), Rows: make([][]Value, 0, len(pairs)), Types: make([]string, 0, len(idxs))}
+			for _, vi := range visIdx {
+				rel.Cols = append(rel.Cols, alias+"."+vis[vi].Name)
+				rel.Types = append(rel.Types, vis[vi].Type)
+			}
+			for _, kv := range pairs {
+				row, err := decodeRowSelected(meta, kv.Value, idxs)
+				if err != nil {
+					return nil, err
+				}
+				rel.Rows = append(rel.Rows, row)
+			}
+			dbgLog("projpush table=%s cols=%d/%d pairs=%d", meta.Name, len(idxs), len(vis), len(rel.Rows))
+			return rel, nil
+		}
+	}
+	// 全列路径（原逻辑）
+	rel := &Rel{Cols: make([]string, 0, len(vis)), Rows: make([][]Value, 0, len(pairs)), Types: make([]string, 0, len(vis))}
+	for _, c := range vis {
 		rel.Cols = append(rel.Cols, alias+"."+c.Name)
 		rel.Types = append(rel.Types, c.Type)
 	}
@@ -3591,6 +3894,59 @@ func evalArith(a, b Value, op string) (Value, error) {
 	return decValScaled(as.Int64(), ds), nil
 }
 
+// tryCountFastPath 尝试走 COUNT(*)/COUNT(1) 快速路径（v1.15.0 W2）：
+// 仅当单物理表 + 单列 COUNT + 无 WHERE/GROUP BY/HAVING/ORDER BY/DISTINCT/
+// JOIN/窗口/OFFSET，且当前事务实现 storage.RangeCounter 时，按 meta.rowRanges
+// 逐 region CountRange 求和，返回单行单列结果（列名/类型与既有 COUNT 路径一致，
+// 避免全表物化 + 逐行计数）。
+// 任一条件不满足（含 COUNT(列名)、COUNT(DISTINCT ...)、COUNT(NULL)、
+// 事务不支持 RangeCounter）返回 ok=false，由调用方回退原全量物化路径。
+func (e *Executor) tryCountFastPath(sess *Session, tx txn.Txn, s *SelectStmt) (*Result, bool, error) {
+	if s.Subquery != nil || s.SubAlias != "" || len(s.Joins) != 0 || s.Distinct ||
+		s.Where != nil || s.Having != nil || len(s.GroupBy) != 0 || s.Offset > 0 ||
+		s.OrderBy != nil || len(s.OrderBys) != 0 || len(s.Columns) != 1 {
+		return nil, false, nil
+	}
+	c := &s.Columns[0]
+	if c.Agg != "COUNT" || c.Distinct || c.Window != nil {
+		return nil, false, nil
+	}
+	// 参数必须为 COUNT(*)（Col=="" 且 Expr==nil）或 COUNT(1)/COUNT('x')
+	// 等纯字面量（Col=="" 且 Expr 为字面量叶子）；COUNT(NULL) 恒为 0，
+	// 不能走快速路径（旧路径逐行 COUNT 的语义）。
+	if c.Col != "" || (c.Expr != nil && (!c.Expr.isLiteral() || c.Expr.Val == nil || c.Expr.Val.Kind == "NULL")) {
+		return nil, false, nil
+	}
+	tabs, err := loadTables(tx.Get)
+	if err != nil {
+		return nil, false, err
+	}
+	meta := findTable(tabs, s.From)
+	if meta == nil {
+		return nil, false, nil
+	}
+	rc, ok := tx.(storage.RangeCounter)
+	if !ok {
+		return nil, false, nil
+	}
+	var total int64
+	for _, rng := range e.rowRanges(meta) {
+		n, err := rc.CountRange(rng, 0)
+		if err != nil {
+			return nil, false, err
+		}
+		total += int64(n)
+	}
+	res := &Result{
+		Columns:     []string{c.Name},
+		ColTypes:    []string{"INT"},
+		ColNullable: []bool{false},
+		Rows:        [][]Value{{IntVal(total)}},
+	}
+	res.Rows = applyOffsetLimit(res.Rows, 0, s.Limit)
+	return res, true, nil
+}
+
 // execSelectRel 增强路径主流程：FROM（表/子查询）→ JOIN → WHERE → 聚合/分组 → 排序/投影。
 func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Result, error) {
 	tabs, err := loadTables(tx.Get)
@@ -3743,8 +4099,30 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 			}
 		}
 	}
+	// v1.15.0 W4：ORDER BY 二级索引顺序扫描——单物理表（无 JOIN/子查询）且 ORDER BY
+	// 裸列升序有单列索引时，按索引序全范围扫描构建 Rel（索引序=索引列升序），
+	// 后续 WHERE 过滤保序，finishRel 免排序；DISTINCT 相邻去重亦受益。
+	// 主键前缀等值/范围（pkCondPlan）已在上方优先，此分支仅兜底无主键条件场景。
+	if rel == nil && s.Subquery == nil && len(s.Joins) == 0 && s.OrderBy != nil {
+		if m := findTable(tabs, s.From); m != nil {
+			if idx := orderByIndexCandidate(m, s); idx != nil {
+				rel, err = e.relFromIndexScan(sess, tx, m, alias, idx)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 	if rel == nil {
-		rel, err = e.relFromTable(sess, tx, tabs, s.From, alias, s.Subquery, s.SubAlias)
+		// W3 列投影下推：单物理表（无 JOIN/子查询）时计算所需列，
+		// 让 relFromScan 按需解码投影列；其余场景传 nil 走全列解码。
+		var needed []string
+		if s.Subquery == nil && len(s.Joins) == 0 {
+			if m := findTable(tabs, s.From); m != nil {
+				needed = e.selectNeeded(m, s)
+			}
+		}
+		rel, err = e.relFromTable(sess, tx, tabs, s.From, alias, s.Subquery, s.SubAlias, needed)
 		if err != nil {
 			return nil, err
 		}
@@ -3772,7 +4150,7 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 				}
 			}
 		}
-		right, err := e.relFromTable(sess, tx, tabs, jc.Table, orAlias(jc.Table, jc.Alias), jc.Subquery, jc.Alias)
+		right, err := e.relFromTable(sess, tx, tabs, jc.Table, orAlias(jc.Table, jc.Alias), jc.Subquery, jc.Alias, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3826,7 +4204,19 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 	if hasAgg {
 		return e.aggRel(sess, tx, s, rel)
 	}
-	return e.finishRel(sess, tx, s, rel, rel.Rows)
+	// v1.15.0 W4：ORDER BY 索引顺序扫描免排序（Rel 路径）——单物理表（无 JOIN/
+	// 子查询）+ ORDER BY 裸列升序命中主键/单列索引候选时，运行时验证扫描序已
+	// 按 ORDER BY 列有序（比较基准 compareVal），通过则 finishRel 免排序，
+	// 且 DISTINCT 可走相邻去重；验证失败保持 ordered=false 回退原排序路径。
+	obOrdered := false
+	if s.OrderBy != nil && s.Subquery == nil && len(s.Joins) == 0 {
+		if m := findTable(tabs, s.From); m != nil {
+			if (orderByScanCandidate(m, s) || orderByIndexCandidate(m, s) != nil) && rowsSortedByRel(rel, rel.Rows, s.OrderBy) {
+				obOrdered = true
+			}
+		}
+	}
+	return e.finishRel(sess, tx, s, rel, rel.Rows, obOrdered)
 }
 
 // matchWhereRel 对 Rel 行执行 WHERE（支持限定列/右列引用/BETWEEN/IN/IN 子查询）。
@@ -4752,7 +5142,7 @@ func inGroupBy(groups []string, qname string) bool {
 
 // finishRel 排序 / LIMIT / 投影（非聚合场景）。
 // SELECT * 输出列名为限定名（t.col），避免多表重名歧义。
-func (e *Executor) finishRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel, rows [][]Value) (*Result, error) {
+func (e *Executor) finishRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel, rows [][]Value, ordered bool) (*Result, error) {
 	// P0-4：无 GROUP BY/聚合的 HAVING 等价于行过滤（仅支持列/表达式条件；聚合调用报错）。
 	if s.Having != nil {
 		var filtered [][]Value
@@ -4777,7 +5167,9 @@ func (e *Executor) finishRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel,
 		}
 		rows = filtered
 	}
-	if s.OrderBy != nil {
+	// 排序（v1.15.0 W4：ordered=true 表示 execSelectRel 已验证扫描序=ORDER BY 序，
+	// 跳过全量内存排序；验证失败或未命中候选时保持 false 走原排序路径）。
+	if s.OrderBy != nil && !ordered {
 		ob := s.OrderBy
 		sort.SliceStable(rows, func(i, j int) bool {
 			a, _ := relValue(rel, rows[i], qualifiedName(ob.Ref, ob.Col))
@@ -4853,25 +5245,57 @@ func (e *Executor) finishRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel,
 		projAll[ri] = out
 	}
 	// SELECT DISTINCT（T40）：对投影后全行去重，保持首次出现顺序。
+	// v1.15.0 W4：DISTINCT 免排序——仅当 ordered（行序已按 ORDER BY 列有序）且
+	// 单列裸投影与 ORDER BY 列一致时，去重键维度 = 有序维度，相邻去重即可
+	// （保留首现，与无序 map 首现语义等价）；多列/表达式/星号投影时行序未必按
+	// 去重键有序，相邻去重会漏删重复项，保守走既有 map 路径。
 	keep := make([]int, len(projAll))
 	for i := range keep {
 		keep[i] = i
 	}
 	if s.Distinct {
 		keep = keep[:0]
-		seen := make(map[string]struct{}, len(projAll))
-		for i, row := range projAll {
-			var kb strings.Builder
-			for _, v := range row {
-				kb.WriteString(v.String())
-				kb.WriteByte(0xff)
+		adj := false
+		if ordered && s.OrderBy != nil && len(s.Columns) == 1 {
+			c := &s.Columns[0]
+			if c.Name == "*" || c.Expr != nil || c.Case != nil || c.Window != nil || c.Agg != "" || c.Alias != "" || c.Var != "" {
+				adj = false
+			} else if c.Col == s.OrderBy.Col && c.Ref == s.OrderBy.Ref {
+				adj = true
 			}
-			key := kb.String()
-			if _, ok := seen[key]; ok {
-				continue
+		}
+		if adj {
+			var prev string
+			first := true
+			for i, row := range projAll {
+				var kb strings.Builder
+				for _, v := range row {
+					kb.WriteString(v.String())
+					kb.WriteByte(0xff)
+				}
+				key := kb.String()
+				if !first && key == prev {
+					continue
+				}
+				first = false
+				prev = key
+				keep = append(keep, i)
 			}
-			seen[key] = struct{}{}
-			keep = append(keep, i)
+		} else {
+			seen := make(map[string]struct{}, len(projAll))
+			for i, row := range projAll {
+				var kb strings.Builder
+				for _, v := range row {
+					kb.WriteString(v.String())
+					kb.WriteByte(0xff)
+				}
+				key := kb.String()
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				keep = append(keep, i)
+			}
 		}
 	}
 	// LIMIT / OFFSET（M12-2；DISTINCT 时作用于去重后的结果行）
@@ -5887,6 +6311,10 @@ func itoa(n int64) string {
 
 // slowThresholdDefault 默认慢查询阈值（毫秒，M13 默认 100ms）。
 const slowThresholdDefault int64 = 100
+
+// groupCommitWindowMsDefault v1.14.0 P1 默认 WAL 组提交定时刷盘窗口（毫秒）。
+// 0.5ms 与 wal_impl.defaultGroupCommitWindow(500µs) 保持一致。
+const groupCommitWindowMsDefault = 0.5
 
 // slowQueryMaxDefault 内存慢查询记录默认上限（可 SetSlowQueryMax 调整）。
 const slowQueryMaxDefault = 64

@@ -640,7 +640,7 @@ func (s *Server) REPL(r io.Reader, w io.Writer) error {
 // REPLSession 交互循环：逐行读入命令直到 EOF 或 QUIT，携带连接会话
 // （AUTH 握手/降级状态跨命令保持）。TCP 连接每连接一个 session。
 //
-// v1.13.0：引入多 reader/worker 并发处理路径消除单连接逐命令串行——
+// v1.13.0：引入多 reader/worker 并发处理路径消除单连接逐命令串行——  // 保留原注释
 // reader goroutine 持续预读命令行送入有界 channel，worker 按序消费并
 // 执行（HandleSession）后写响应。顺序语义与事务隔离保持不变：SQL 语句
 // 仍按行序逐条执行（BEGIN/COMMIT 边界依赖顺序），跨连接由 handleSQL
@@ -649,6 +649,14 @@ func (s *Server) REPL(r io.Reader, w io.Writer) error {
 // Scanner 单行上限由默认 64KB 提升至 1MB，避免长 SQL/多语句切分场景
 // token too long 截断；写侧经 bufio.Writer 逐条 flush，保持"一命令一
 // 响应"协议语义不变。
+//
+// v1.14.0 P0：在保持"一命令一响应"语义下新增只读 SELECT 并行批路径——
+// 主循环判定连续 autocommit 只读 SELECT（开关 ro_parallel 默认 on）时
+// 收集为一批（上限 roMaxBatch=64），批内经 worker 池（roMaxConcurrency=8）
+// 并发执行，响应按原始行序重组后一次性写回并批尾 flush（消除队头阻塞
+// 与逐条 flush）；批中遇到非只读 SELECT / BEGIN / 写语句立即中断并退回
+// 串行路径，保证事务边界与命令顺序语义不变。显式事务内 SELECT 不进入
+// 并行批（InTx 判定）；未鉴权连接保持串行（避免并行写会话鉴权字段）。
 func (s *Server) REPLSession(r io.Reader, w io.Writer, sess *session) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024) // 单行上限 1MB
@@ -671,10 +679,72 @@ func (s *Server) REPLSession(r io.Reader, w io.Writer, sess *session) error {
 		}
 	}()
 	bw := bufio.NewWriter(w)
+	var pending string
 	for {
-		line, ok := <-cmds
-		if !ok {
-			break
+		line := pending
+		pending = ""
+		if line == "" {
+			var ok bool
+			line, ok = <-cmds
+			if !ok {
+				break
+			}
+		}
+		if s.roSelectEligible(sess, line) {
+			// v1.14.0 P0：收集连续只读 SELECT 为一批并行执行。
+			batch := []string{line}
+		collect:
+			for len(batch) < roMaxBatch {
+				select {
+				case l, ok := <-cmds:
+					if !ok {
+						break collect // reader 已关闭：执行完当前批后主循环退出
+					}
+					if s.roSelectEligible(sess, l) {
+						batch = append(batch, l)
+						continue
+					}
+					pending = l // 非只读 SELECT：退回串行路径保序
+					break collect
+				default:
+					break collect // 连接读侧暂无更多命令：立即执行当前批
+				}
+			}
+			results := make([]string, len(batch))
+			sem := make(chan struct{}, roMaxConcurrency)
+			var wg sync.WaitGroup
+			for i, bl := range batch {
+				wg.Add(1)
+				go func(i int, bl string) {
+					defer wg.Done()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+					resp, err := s.HandleSession(bl, sess)
+					if err != nil {
+						resp = err.Error()
+					}
+					results[i] = resp
+				}(i, bl)
+			}
+			wg.Wait() // 批内全部完成后再按序写回（响应重组，消除队头阻塞）
+			for _, resp := range results {
+				if resp == "" {
+					continue
+				}
+				if _, werr := bw.WriteString(resp); werr != nil {
+					close(done)
+					return werr
+				}
+				if werr := bw.WriteByte('\n'); werr != nil {
+					close(done)
+					return werr
+				}
+			}
+			if werr := bw.Flush(); werr != nil {
+				close(done)
+				return werr
+			}
+			continue
 		}
 		resp, err := s.HandleSession(line, sess)
 		if err != nil {
@@ -706,6 +776,37 @@ func (s *Server) REPLSession(r io.Reader, w io.Writer, sess *session) error {
 	case <-done:
 		return nil
 	}
+}
+
+// v1.14.0 P0 只读 SELECT 并行批参数。
+const (
+	roMaxBatch       = 64 // 单批最大 SELECT 数（超限自动分批，保持有界）
+	roMaxConcurrency = 8  // 批内最大并发 worker 数
+)
+
+// roSelectEligible 判定 line 是否为可安全并行的 autocommit 只读 SELECT。
+// 需同时满足：（1）引擎已装配且 ro_parallel 开关开启；（2）非全局会话
+// （CLI/Handle 旧路径保持串行）；（3）会话不处于显式事务内（事务内 SELECT
+// 保序串行）；（4）解析为只读 SELECT（无写副作用）；（5）无鉴权降级
+// （Auth 启用且未鉴权时保持串行路径，避免并行 worker 并发写 sess.user）。
+// 首个判定在串行上下文懒创建 sqlSess，避免后续并行 worker 并发创建会话。
+func (s *Server) roSelectEligible(sess *session, line string) bool {
+	if s.SQL == nil || !s.SQL.ROParallel() {
+		return false
+	}
+	if sess.useGlobalSQL {
+		return false
+	}
+	if s.Auth != nil && !sess.authed {
+		return false
+	}
+	if sess.sqlSess == nil {
+		sess.sqlSess = s.SQL.NewSession()
+	}
+	if sess.sqlSess.InTx() {
+		return false
+	}
+	return s.SQL.IsROSelect(line)
 }
 
 // ServeTCP 监听 addr 并启动 TCP 服务。已配置 TLS（SetTLS 非 nil）时使用

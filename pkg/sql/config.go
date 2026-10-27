@@ -4,6 +4,8 @@ package sql
 //
 // 支持键均为真实存在的运行时配置（源码 grep 确认，禁止虚构）：
 //   - query_cache           查询结果缓存开关（M9，query_cache.go）
+//   - ro_parallel           只读 SELECT 并行开关（v1.14.0 P0，executor.go roParallel）
+//   - group_commit_window_ms WAL 组提交定时刷盘窗口毫秒（v1.14.0 P1，wal_impl.go）
 //   - slow_query_threshold  慢查询阈值毫秒（M13，executor.go slowThreshold）
 //   - slow_query_log        慢查询落盘开关（M13，slowlog.go）
 //   - shutdown_timeout      优雅停机超时秒（M16-2，executor.go shutdownTimeoutSec）
@@ -18,6 +20,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/logx"
 )
@@ -55,6 +58,39 @@ var configSpecs = []*configSpec{
 			return nil
 		},
 		read: func(e *Executor) string { return boolValStr(e.qc.Enabled()) },
+	},
+	{
+		key:  "ro_parallel",
+		desc: "只读 SELECT 并行开关（v1.14.0 P0）：on/off/1/0，批内 autocommit 只读 SELECT 并发执行+按序重组，默认 on",
+		def:  "on",
+		apply: func(e *Executor, v string) error {
+			on := false
+			switch v {
+			case "on", "true", "1":
+				on = true
+			case "off", "false", "0":
+				on = false
+			default:
+				return &SQLError{Msg: "invalid value for ro_parallel: " + v + " (expected on/off/1/0)"}
+			}
+			e.SetROParallel(on)
+			return nil
+		},
+		read: func(e *Executor) string { return boolValStr(e.ROParallel()) },
+	},
+	{
+		key:  "group_commit_window_ms",
+		desc: "WAL 组提交定时刷盘窗口毫秒（v1.14.0 P1）：0.1~1ms 建议区间，0 关闭定时窗口回退被动攒批，默认 0.5",
+		def:  "0.5",
+		apply: func(e *Executor, v string) error {
+			ms, err := strconv.ParseFloat(v, 64)
+			if err != nil || ms < 0 {
+				return &SQLError{Msg: "invalid value for group_commit_window_ms: " + v + " (expected non-negative number of ms, 0=disabled)"}
+			}
+			e.SetGroupCommitWindow(time.Duration(ms * float64(time.Millisecond)))
+			return nil
+		},
+		read: func(e *Executor) string { return e.groupCommitWindowMsText() },
 	},
 	{
 		key:  "slow_query_threshold",

@@ -69,6 +69,26 @@ func (r *rocks) Scan(rng storage.KeyRange, limit int) ([]storage.KVPair, error) 
 		C.int(limit), &errmsg), rng, errmsg)
 }
 
+// CountRange 范围计数 [Start, End)：只数 key 不拷贝 value，避免全量物化
+// （Storage 接口之外的可选能力，通过类型断言使用：st.(storage.RangeCounter)）。
+func (r *rocks) CountRange(rng storage.KeyRange, limit int) (int, error) {
+	if r.h == nil {
+		return 0, fmt.Errorf("rocksdb: count: closed")
+	}
+	var errmsg *C.char
+	n := int(C.xdb_count(
+		r.h,
+		cBytesOrNil(rng.Start), C.size_t(len(rng.Start)),
+		cBytesOrNil(rng.End), C.size_t(len(rng.End)),
+		C.int(limit), &errmsg))
+	if n < 0 {
+		err := fmt.Errorf("rocksdb: count: %s", cString(errmsg))
+		freeStr(errmsg)
+		return 0, err
+	}
+	return n, nil
+}
+
 func (r *rocks) Write(batch *storage.WriteBatch) error {
 	if batch == nil {
 		return nil
@@ -199,6 +219,26 @@ func (sn *snapshot) Scan(rng storage.KeyRange, limit int) ([]storage.KVPair, err
 		cBytesOrNil(rng.Start), C.size_t(len(rng.Start)),
 		cBytesOrNil(rng.End), C.size_t(len(rng.End)),
 		C.int(limit), &errmsg), rng, errmsg)
+}
+
+// CountRange 快照范围计数 [Start, End)：只数 key 不拷贝 value
+// （Snapshot 接口之外的可选能力，通过类型断言使用：sn.(storage.RangeCounter)）。
+func (sn *snapshot) CountRange(rng storage.KeyRange, limit int) (int, error) {
+	if sn.s == nil {
+		return 0, fmt.Errorf("rocksdb: snapshot count: released")
+	}
+	var errmsg *C.char
+	n := int(C.xdb_snapshot_count(
+		sn.s,
+		cBytesOrNil(rng.Start), C.size_t(len(rng.Start)),
+		cBytesOrNil(rng.End), C.size_t(len(rng.End)),
+		C.int(limit), &errmsg))
+	if n < 0 {
+		err := fmt.Errorf("rocksdb: snapshot count: %s", cString(errmsg))
+		freeStr(errmsg)
+		return 0, err
+	}
+	return n, nil
 }
 
 func (sn *snapshot) MGet(keys [][]byte) (map[string][]byte, error) {

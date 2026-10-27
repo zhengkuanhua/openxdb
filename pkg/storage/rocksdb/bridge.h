@@ -38,6 +38,13 @@ int xscan_item(xscan* s, int i, unsigned char** key, size_t* klen,
                unsigned char** val, size_t* vlen);
 void xscan_free(xscan* s);
 
+/* 范围计数 [start,end)，只数 key 不拷贝 value（迭代器 count 循环，无 ToString/malloc）。
+   返回 >=0 的命中条数；-1=错误（errmsg 置位）。limit<=0 表示不限制。 */
+int xdb_count(xdb* h, const unsigned char* start, size_t slen,
+              const unsigned char* end, size_t elen, int limit, char** errmsg);
+int xdb_snapshot_count(xsnap* s, const unsigned char* start, size_t slen,
+                       const unsigned char* end, size_t elen, int limit, char** errmsg);
+
 /* 一致性快照（备份/迁移复用）。 */
 xsnap* xdb_snapshot_create(xdb* h);
 int xdb_snapshot_get(xsnap* s, const unsigned char* key, size_t klen,

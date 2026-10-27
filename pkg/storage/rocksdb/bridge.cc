@@ -158,10 +158,42 @@ static xscan* do_scan(rocksdb::DB* db, rocksdb::ReadOptions ro,
     return out;
 }
 
+// 范围计数：与 do_scan 同语义（[start,end)，limit<=0 不限），但只数 key，
+// 不拷贝 value、不 ToString、不 malloc，避免全量物化。
+static int do_count(rocksdb::DB* db, rocksdb::ReadOptions ro,
+                    const unsigned char* start, size_t slen,
+                    const unsigned char* end, size_t elen,
+                    int limit, char** errmsg) {
+    std::unique_ptr<rocksdb::Iterator> it(db->NewIterator(ro));
+    if (start) {
+        it->Seek(rocksdb::Slice(reinterpret_cast<const char*>(start), slen));
+    } else {
+        it->SeekToFirst();
+    }
+    int count = 0;
+    for (; it->Valid(); it->Next()) {
+        rocksdb::Slice k = it->key();
+        if (end && k.compare(rocksdb::Slice(reinterpret_cast<const char*>(end), elen)) >= 0) break;
+        count++;
+        if (limit > 0 && count >= limit) break;
+    }
+    if (!it->status().ok()) {
+        if (errmsg) *errmsg = dup_status(it->status());
+        return -1;
+    }
+    return count;
+}
+
 xscan* xdb_scan(xdb* h, const unsigned char* start, size_t slen,
                 const unsigned char* end, size_t elen, int limit, char** errmsg) {
     rocksdb::ReadOptions ro;
     return do_scan(h->db, ro, start, slen, end, elen, limit, errmsg);
+}
+
+int xdb_count(xdb* h, const unsigned char* start, size_t slen,
+              const unsigned char* end, size_t elen, int limit, char** errmsg) {
+    rocksdb::ReadOptions ro;
+    return do_count(h->db, ro, start, slen, end, elen, limit, errmsg);
 }
 
 int xscan_count(xscan* s) { return static_cast<int>(s->items.size()); }
@@ -211,6 +243,13 @@ xscan* xdb_snapshot_scan(xsnap* s, const unsigned char* start, size_t slen,
     rocksdb::ReadOptions ro;
     ro.snapshot = s->snap;
     return do_scan(s->db, ro, start, slen, end, elen, limit, errmsg);
+}
+
+int xdb_snapshot_count(xsnap* s, const unsigned char* start, size_t slen,
+                       const unsigned char* end, size_t elen, int limit, char** errmsg) {
+    rocksdb::ReadOptions ro;
+    ro.snapshot = s->snap;
+    return do_count(s->db, ro, start, slen, end, elen, limit, errmsg);
 }
 
 void xdb_snapshot_release(xsnap* s) {
