@@ -30,10 +30,12 @@ int xdb_write_batch(xdb* h,
                     const unsigned char* delkeys, const size_t* del_sizes, int ndeletes,
                     char** errmsg);
 
-/* 范围扫描 [start,end)，end 为 NULL 或空表示无限；limit<=0 表示不限制。 */
+/* 范围扫描 [start,end)，end 为 NULL 或空表示无限；limit<=0 表示不限制。
+   结果数据集中在单块 arena 内，xscan_free 整体释放（key/val 指针不单独 free）。 */
 xscan* xdb_scan(xdb* h, const unsigned char* start, size_t slen,
                 const unsigned char* end, size_t elen, int limit, char** errmsg);
 int xscan_count(xscan* s);
+/* 返回第 i 行 key/value 指针与长度（指向 xscan 内部 arena，0 拷贝；整体由 xscan_free 释放）。 */
 int xscan_item(xscan* s, int i, unsigned char** key, size_t* klen,
                unsigned char** val, size_t* vlen);
 void xscan_free(xscan* s);

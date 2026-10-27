@@ -32,8 +32,20 @@ struct xdb {
     rocksdb::DB* db;
 };
 
+// xscan：范围扫描结果。C5 优化：数据集中放在单块 arena（连续内存），
+// items 各数组记录每行 key/value 在 arena 中的偏移与长度。
+// 相比旧实现（std::vector<std::pair<std::string,std::string>> + xscan_item 逐行
+// malloc/memcpy），消除每行 ToString 的 std::string 分配与逐行 2 次 malloc，
+// 扫描结果只需一次大块分配 + 每行 2 次 memcpy（RocksDB 内部 buffer -> arena），
+// 再由 Go 侧 C.GoBytes 拷贝到 Go heap，拷贝链从 3 次降为 2 次。
 struct xscan {
-    std::vector<std::pair<std::string, std::string>> items;
+    unsigned char* arena;  // 连续数据块：[k0][v0][k1][v1]...，malloc 分配，整体释放
+    size_t arena_len;      // arena 实际使用字节数
+    size_t* koffs;         // 每行 key 在 arena 中的偏移（n 项）
+    size_t* klens;         // 每行 key 长度（n 项）
+    size_t* voffs;         // 每行 value 在 arena 中的偏移（n 项）
+    size_t* vlens;         // 每行 value 长度（n 项）
+    size_t n;              // 条目数
 };
 
 struct xsnap {
@@ -131,6 +143,10 @@ int xdb_write_batch(xdb* h,
     return 0;
 }
 
+// 范围扫描 [start,end)，limit<=0 不限。C5 优化：两趟迭代，第一趟只统计
+// 条目数与总字节（不拷贝），第二趟一次性 memcpy 到单块 arena；
+// 消除旧实现每行 k.ToString()/value().ToString() 的 std::string 分配与
+// xscan_item 逐行 2 次 malloc+memcpy，拷贝链 3 次降为 2 次。
 static xscan* do_scan(rocksdb::DB* db, rocksdb::ReadOptions ro,
                       const unsigned char* start, size_t slen,
                       const unsigned char* end, size_t elen,
@@ -142,17 +158,71 @@ static xscan* do_scan(rocksdb::DB* db, rocksdb::ReadOptions ro,
         it->SeekToFirst();
     }
     auto* out = new xscan;
-    int count = 0;
+    out->arena = nullptr;
+    out->arena_len = 0;
+    out->koffs = out->klens = out->voffs = out->vlens = nullptr;
+    out->n = 0;
+
+    // 第一趟：统计 n 与总字节数，不拷贝数据。
+    size_t total = 0;
+    size_t count = 0;
     for (; it->Valid(); it->Next()) {
         rocksdb::Slice k = it->key();
         if (end && k.compare(rocksdb::Slice(reinterpret_cast<const char*>(end), elen)) >= 0) break;
-        out->items.emplace_back(k.ToString(), it->value().ToString());
+        total += k.size() + it->value().size();
         count++;
-        if (limit > 0 && count >= limit) break;
+        if (limit > 0 && count >= static_cast<size_t>(limit)) break;
     }
     if (!it->status().ok()) {
         if (errmsg) *errmsg = dup_status(it->status());
         delete out;
+        return nullptr;
+    }
+
+    out->n = count;
+    if (count == 0) return out;
+
+    out->arena = static_cast<unsigned char*>(std::malloc(total == 0 ? 1 : total));
+    out->koffs = static_cast<size_t*>(std::malloc(count * sizeof(size_t)));
+    out->klens = static_cast<size_t*>(std::malloc(count * sizeof(size_t)));
+    out->voffs = static_cast<size_t*>(std::malloc(count * sizeof(size_t)));
+    out->vlens = static_cast<size_t*>(std::malloc(count * sizeof(size_t)));
+    if (!out->arena || !out->koffs || !out->klens || !out->voffs || !out->vlens) {
+        if (errmsg) *errmsg = dup_status(rocksdb::Status::IOError("xscan arena alloc failed"));
+        xscan_free(out);
+        return nullptr;
+    }
+
+    // 第二趟：从起点重新迭代，直接 memcpy 到 arena。
+    if (start) {
+        it->Seek(rocksdb::Slice(reinterpret_cast<const char*>(start), slen));
+    } else {
+        it->SeekToFirst();
+    }
+    size_t off = 0;
+    size_t i = 0;
+    for (; it->Valid(); it->Next()) {
+        rocksdb::Slice k = it->key();
+        if (end && k.compare(rocksdb::Slice(reinterpret_cast<const char*>(end), elen)) >= 0) break;
+        rocksdb::Slice v = it->value();
+        out->koffs[i] = off;
+        out->klens[i] = k.size();
+        if (!k.empty()) std::memcpy(out->arena + off, k.data(), k.size());
+        off += k.size();
+        out->voffs[i] = off;
+        out->vlens[i] = v.size();
+        if (!v.empty()) std::memcpy(out->arena + off, v.data(), v.size());
+        off += v.size();
+        i++;
+        if (i >= count) break;
+    }
+    out->arena_len = off;
+    // 以第二趟实际拷贝行数为准：无快照实时视图在并发写下两趟行数可能不同，
+    // 若仍用第一趟 count 会让 Go 侧读到未初始化数组项（崩溃/脏数据风险）。
+    out->n = i;
+    if (!it->status().ok()) {
+        if (errmsg) *errmsg = dup_status(it->status());
+        xscan_free(out);
         return nullptr;
     }
     return out;
@@ -196,23 +266,28 @@ int xdb_count(xdb* h, const unsigned char* start, size_t slen,
     return do_count(h->db, ro, start, slen, end, elen, limit, errmsg);
 }
 
-int xscan_count(xscan* s) { return static_cast<int>(s->items.size()); }
+int xscan_count(xscan* s) { return static_cast<int>(s->n); }
 
+// 返回第 i 行 key/value 在 arena 中的指针与长度（0 拷贝，不 malloc）。
 int xscan_item(xscan* s, int i, unsigned char** key, size_t* klen,
                unsigned char** val, size_t* vlen) {
-    if (i < 0 || i >= static_cast<int>(s->items.size())) return -1;
-    const std::string& k = s->items[i].first;
-    const std::string& v = s->items[i].second;
-    *klen = k.size();
-    *vlen = v.size();
-    *key = static_cast<unsigned char*>(std::malloc(k.empty() ? 1 : k.size()));
-    *val = static_cast<unsigned char*>(std::malloc(v.empty() ? 1 : v.size()));
-    if (!k.empty()) std::memcpy(*key, k.data(), k.size());
-    if (!v.empty()) std::memcpy(*val, v.data(), v.size());
+    if (i < 0 || i >= static_cast<int>(s->n)) return -1;
+    *klen = s->klens[i];
+    *vlen = s->vlens[i];
+    *key = s->arena + s->koffs[i];
+    *val = s->arena + s->voffs[i];
     return 0;
 }
 
-void xscan_free(xscan* s) { delete s; }
+void xscan_free(xscan* s) {
+    if (!s) return;
+    std::free(s->arena);
+    std::free(s->koffs);
+    std::free(s->klens);
+    std::free(s->voffs);
+    std::free(s->vlens);
+    delete s;
+}
 
 xsnap* xdb_snapshot_create(xdb* h) {
     auto* s = new xsnap;

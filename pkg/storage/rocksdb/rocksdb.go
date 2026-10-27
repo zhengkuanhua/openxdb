@@ -344,8 +344,7 @@ func doScan(s *C.xscan, rng storage.KeyRange, errmsg *C.char) ([]storage.KVPair,
 		}
 		k := C.GoBytes(unsafe.Pointer(key), C.int(klen))
 		v := C.GoBytes(unsafe.Pointer(val), C.int(vlen))
-		C.free(unsafe.Pointer(key))
-		C.free(unsafe.Pointer(val))
+		// C5: key/val 指向 xscan 内部 arena（整体由 xscan_free 释放），不再逐行 free。
 		out = append(out, storage.KVPair{Key: k, Value: v})
 	}
 	_ = rng
