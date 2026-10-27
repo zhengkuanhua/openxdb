@@ -4,11 +4,30 @@ import (
 	"bytes"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 	"github.com/zhengkuanhua/openxdb/pkg/wal"
 )
+
+// pendingApply 提交应用组提交（C4）的待应用事务：事务完成 WAL SyncUpTo 后
+// 在阶段 3 注册；leader 合并整批 st.Write 后填写 err/errFilled，follower
+// 醒来据此读取结果（nil=合并成功，非 nil=整批应用失败）。
+type pendingApply struct {
+	seq       uint64
+	lsn       storage.LSN
+	batch     *storage.WriteBatch
+	err       error
+	errFilled bool
+}
+
+// defaultApplyWindow 提交应用聚合窗口默认值：0 = 不主动等待候补注册，
+// 依赖 C1 组提交的天然聚簇（一批 SyncUpTo 完成的事务几乎同时注册，leader
+// 直接收集合并）。实测在 2 conns OLTP 下主动等待窗口（20-200µs）会引入
+// 固定延迟与时序抖动（探针：window=0 → 1884 TPS，20µs → 1048 TPS），
+// 故默认关闭；SetApplyGroupWindow 保留供高并发/长事务场景按需调优。
+const defaultApplyWindow = 0
 
 type txnManager struct {
 	mu        sync.Mutex
@@ -19,6 +38,16 @@ type txnManager struct {
 	applied   uint64     // 已成功应用到存储的最大提交序号
 	applyCond *sync.Cond // 关联 mu，等待轮到自己按序应用
 
+	// C4 提交应用组提交（流水线化）：消除阶段 3 st.Write 全局单写者逐事务
+	// 串行瓶颈——leader 把按 seq 连续就绪的多个事务合并为一次原子 st.Write，
+	// 合并顺序 = seq 顺序 = WAL 顺序，崩溃恢复重放结果与逐事务串行等价。
+	applyPending map[uint64]*pendingApply // seq -> 已就绪待应用事务（锁内读写）
+	syncDone     uint64                   // 完成 WAL SyncUpTo 的累计事务数（atomic，锁外写）
+	applyWindow  time.Duration            // 应用聚合窗口；<=0 关闭（回退逐事务串行 st.Write）
+	applyWrites  uint64                   // 累计 st.Write 次数（观测）
+	applyTxns    uint64                   // 累计应用事务数（观测）
+	applyBypass  uint64                   // 累计直通（无候补零开销）应用事务数（观测，返工回归用）
+
 	commitHook    func(lsn storage.LSN, seq uint64, batch *storage.WriteBatch) error // M2 复制挂接点（锁内，异步推送）
 	hookErr       error                                                              // 最近一次 hook 错误
 	commitWaitHook func(lsn storage.LSN, seq uint64) error // T33 复制确认挂接点（锁外，同步/半同步等待 ACK）
@@ -26,7 +55,7 @@ type txnManager struct {
 
 // New 创建事务管理器并执行启动恢复（重放 WAL 已 Commit 记录）。
 func New(st storage.Storage, w wal.WAL) (TxnManager, error) {
-	m := &txnManager{st: st, wal: w}
+	m := &txnManager{st: st, wal: w, applyPending: map[uint64]*pendingApply{}, applyWindow: defaultApplyWindow}
 	m.applyCond = sync.NewCond(&m.mu)
 	if err := m.Recover(); err != nil {
 		return nil, err
@@ -149,6 +178,33 @@ func (m *txnManager) HookErr() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.hookErr
+}
+
+// SetApplyGroupWindow 实现 txn.ApplyGroupObserver：设置提交应用聚合窗口。
+// d<=0 关闭聚合（回退逐事务串行 st.Write，保持旧行为）；d>0 时仅在检测到
+// 候补时才等待窗口收集合并。须在提交负载开始前调用（与 SetCommitWaitHook
+// 同级配置窗口），运行期修改对已注册批次尽力而为。
+func (m *txnManager) SetApplyGroupWindow(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.applyWindow = d
+}
+
+// ApplyGroupStats 实现 txn.ApplyGroupObserver：返回累计 st.Write 次数与
+// 累计应用事务数（观测合并度：txns/writes 即平均合并批次大小）。
+func (m *txnManager) ApplyGroupStats() (writes, txns uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.applyWrites, m.applyTxns
+}
+
+// ApplyBypassCount 返回累计直通应用事务数（无真实候补时零开销直通原
+// st.Write 的次数）。C4 返工退化回归用：串行提交场景下该值应等于事务数，
+// 证明低并发路径未进入注册/聚合/等待机制。
+func (m *txnManager) ApplyBypassCount() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.applyBypass
 }
 
 // SetGroupCommitWindow 设置 WAL 组提交定时刷盘窗口（v1.14.0 P1），透传底层 WAL。
@@ -482,24 +538,196 @@ func (t *txnImpl) Commit() error {
 		m.mu.Unlock()
 		return err
 	}
+	// 阶段 2.5：无锁记录 SyncUpTo 完成（C4 应用聚合的候补检测依据；仅观测/聚合用）。
+	atomic.AddUint64(&m.syncDone, 1)
 
-	// 阶段 3：重新加锁，按提交序号串行应用存储（避免锁重新获取顺序打乱 WAL 顺序）。
+	// 阶段 3：提交应用（C4 组提交，返工版）。
+	// 语义不变：合并 WriteBatch 按 seq 顺序排列 = WAL 顺序，一次原子 st.Write
+	// 应用整批，崩溃恢复重放结果与逐事务串行等价（「最后提交者胜」）。
+	// 低并发性能返工：无真实候补（syncDone - applied - 1 <= 0，即没有事务
+	// 完成 WAL SyncUpTo 却尚未应用）时，当前事务必为 leader 位（seq ==
+	// applied+1）且无等待中的 follower，直通原 C3 逐事务 st.Write 路径——
+	// 零注册、零等待、零广播，仅保留 applied 推进与观测计数，低并发零额外
+	// 开销。两个条件缺一不可：seq 必须恰好是 leader 位，否则靠前 seq 空缺
+	// 未应用时直通会破坏 WAL 应用顺序。
 	m.mu.Lock()
-	for seq != m.applied+1 {
+	if seq == m.applied+1 && atomic.LoadUint64(&m.syncDone) <= m.applied+1 {
+		applyErr := m.st.Write(t.batch)
+		if applyErr != nil {
+			m.mu.Unlock()
+			return applyErr
+		}
+		m.applied++
+		m.applyWrites++
+		m.applyTxns++
+		m.applyBypass++
+		if m.commitHook != nil {
+			if herr := m.commitHook(lsn, seq, t.batch); herr != nil {
+				m.hookErr = herr
+			}
+		}
+		t.finish(TxnCommitted)
+		m.mu.Unlock()
+		// T33 同步/半同步复制（M20）：锁外、Commit 返回前执行复制 ACK 等待。
+		if m.commitWaitHook != nil {
+			if herr := m.commitWaitHook(lsn, seq); herr != nil {
+				return herr
+			}
+		}
+		return nil
+	}
+
+	// 聚合路径：检测到真实候补（syncDone > applied+1）才启用注册+组提交。
+	pa := &pendingApply{seq: seq, lsn: lsn, batch: t.batch}
+	m.applyPending[seq] = pa
+	// 等待自己成为 leader（m.applied+1 == seq，轮到自己应用）或已被合并
+	// 跳过（m.applied >= seq）。两种情况下 m.applied < seq 为假或
+	// m.applied+1 == seq 为真，循环退出。
+	for m.applied < seq && m.applied+1 != seq {
 		m.applyCond.Wait()
 	}
-	if err := m.st.Write(t.batch); err != nil {
-		// 应用失败：跳过该序号让后续事务继续（该记录已落 WAL，崩溃恢复会补齐）。
-		m.applied++
-		m.applyCond.Broadcast()
+	if pa.errFilled {
+		// follower：批次已被 leader 合并应用（或整批失败跳过），读取结果。
+		err := pa.err
 		m.mu.Unlock()
-		return err
+		if err != nil {
+			return err
+		}
+		t.finish(TxnCommitted)
+		if m.commitWaitHook != nil {
+			if herr := m.commitWaitHook(lsn, seq); herr != nil {
+				return herr
+			}
+		}
+		return nil
 	}
-	m.applied++
+	// 自己是 leader（m.applied+1 == seq）：pending 仅自己且候补 >=2
+	// （syncDone - (applied+1) > 1，即至少两个已完成 SyncUpTo 的事务排队）
+	// 时才等待聚合窗口收集注册者扩大合并批次；候补 ==1 免窗口直接应用
+	// （C1「单等待者免窗口」精神，杜绝 follower 等待引入的延迟）。
+	if m.applyWindow > 0 && len(m.applyPending) == 1 &&
+		atomic.LoadUint64(&m.syncDone) > m.applied+2 {
+		m.mu.Unlock()
+		time.Sleep(m.applyWindow)
+		m.mu.Lock()
+		// 窗口期间仅 follower 会注册/等待，不会推进 applied；防御性确认未被合并。
+		if pa.errFilled {
+			err := pa.err
+			m.mu.Unlock()
+			if err != nil {
+				return err
+			}
+			t.finish(TxnCommitted)
+			if m.commitWaitHook != nil {
+				if herr := m.commitWaitHook(lsn, seq); herr != nil {
+					return herr
+				}
+			}
+			return nil
+		}
+	}
+	// 快速路径：候补已检测但尚未注册（批大小仍为 1）时直接应用原始
+	// batch——单事务 batch 内 Puts/Deletes 顺序由 WAL 记录固定，等价性不变。
+	if _, hasNext := m.applyPending[seq+1]; !hasNext {
+		applyErr := m.st.Write(t.batch)
+		pa.err = applyErr
+		pa.errFilled = true
+		delete(m.applyPending, seq) // 本批不合并，立即摘除本条目防 map 泄漏
+		m.applied++
+		m.applyWrites++
+		m.applyTxns++
+		m.applyCond.Broadcast()
+		if applyErr != nil {
+			m.mu.Unlock()
+			return applyErr
+		}
+		if m.commitHook != nil {
+			if herr := m.commitHook(lsn, seq, t.batch); herr != nil {
+				m.hookErr = herr
+			}
+		}
+		t.finish(TxnCommitted)
+		m.mu.Unlock()
+		if m.commitWaitHook != nil {
+			if herr := m.commitWaitHook(lsn, seq); herr != nil {
+				return herr
+			}
+		}
+		return nil
+	}
+	// 聚合路径：收集从 seq 起连续已注册的待应用事务，合并为一次原子写。
+	// 等价性约束：storage.WriteBatch 的 Puts/Deletes 分组应用模型无法保持
+	// 跨记录的「先 Put 后 Delete / 先 Delete 后 Put」顺序；检测到同 key
+	// 跨记录类型冲突时在本条记录处截断批次，冲突记录留给下一 leader 单独
+	// 应用（C1 组提交聚簇下无冲突批仍整体合并，冲突场景退化但语义严格等价）。
+	merged := []*pendingApply{}
+	mb := &storage.WriteBatch{}
+	putKeys := map[string]struct{}{}
+	delKeys := map[string]struct{}{}
+	first := true
+	s := seq
+	for {
+		p, ok := m.applyPending[s]
+		if !ok {
+			break
+		}
+		if !first && (len(delKeys) > 0 || len(p.batch.Deletes) > 0) {
+			// 仅当批内含 Delete（可能被后续 Put 反转）或新记录含 Delete
+			// （可能反转已收集 Put）时才做冲突检测；纯 Put 批同 key 多次
+			// 写入顺序安全（后写覆盖），无需检测——省去低并发下的固定开销。
+			bad := false
+			for _, kv := range p.batch.Puts {
+				if _, inDel := delKeys[string(kv.Key)]; inDel {
+					bad = true
+					break
+				}
+			}
+			if !bad {
+				for _, k := range p.batch.Deletes {
+					if _, inPut := putKeys[string(k)]; inPut {
+						bad = true
+						break
+					}
+				}
+			}
+			if bad {
+				break // 冲突：截断本批，冲突点留给下一 leader
+			}
+		}
+		merged = append(merged, p)
+		mb.Puts = append(mb.Puts, p.batch.Puts...)
+		mb.Deletes = append(mb.Deletes, p.batch.Deletes...)
+		for _, kv := range p.batch.Puts {
+			putKeys[string(kv.Key)] = struct{}{}
+		}
+		for _, k := range p.batch.Deletes {
+			delKeys[string(k)] = struct{}{}
+		}
+		delete(m.applyPending, s)
+		first = false
+		s++
+	}
+	applyErr := m.st.Write(mb)
+	n := uint64(len(merged))
+	for _, p := range merged {
+		p.err = applyErr
+		p.errFilled = true
+	}
+	m.applied += n
+	m.applyWrites++
+	m.applyTxns += n
 	m.applyCond.Broadcast()
+	if applyErr != nil {
+		// 应用失败：整批跳过该序号段让后续事务继续（记录已落 WAL，崩溃恢复会补齐）。
+		m.mu.Unlock()
+		return applyErr
+	}
 	if m.commitHook != nil {
-		if herr := m.commitHook(lsn, seq, t.batch); herr != nil {
-			m.hookErr = herr
+		for _, p := range merged {
+			if herr := m.commitHook(p.lsn, p.seq, p.batch); herr != nil {
+				m.hookErr = herr
+				break
+			}
 		}
 	}
 	t.finish(TxnCommitted)

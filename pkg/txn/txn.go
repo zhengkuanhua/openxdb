@@ -63,6 +63,18 @@ type TxnManager interface {
 	Close() error
 }
 
+// ApplyGroupObserver 提交应用组提交（C4）观测/控制可选接口。
+// 不属于 TxnManager 基础接口语义，通过类型断言使用（如 m.(txn.ApplyGroupObserver)）。
+type ApplyGroupObserver interface {
+	// SetApplyGroupWindow 设置提交应用聚合窗口（v1.16.0 C4）：
+	// d<=0 关闭聚合（回退逐事务串行 st.Write，保持旧行为）；
+	// d>0 时仅当检测到已完成 WAL SyncUpTo 的候补事务时才等待窗口收集合并，
+	// 单事务场景候补为 0，不引入额外延迟。
+	SetApplyGroupWindow(d time.Duration)
+	// ApplyGroupStats 返回累计 st.Write 次数与累计应用事务数（观测合并度，测试辅助）。
+	ApplyGroupStats() (writes, txns uint64)
+}
+
 // 标准错误。
 var (
 	ErrTxnClosed = errors.New("txn: transaction already finished")

@@ -1,7 +1,9 @@
 package txn_test
 
 import (
+	"bytes"
 	"fmt"
+	"math/rand"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -826,5 +828,376 @@ func TestTxnBeginSnapshotIsolationConcurrent(t *testing.T) {
 	case msg := <-bad:
 		t.Fatalf("snapshot violation: %s", msg)
 	default:
+	}
+}
+
+// ===== v1.16.0 C4：提交应用组提交（流水线化）专项测试 =====
+
+// applyGroupObserver 暴露 C4 应用聚合观测/控制接口（TxnManager 可选接口，类型断言）。
+type applyGroupObserver interface {
+	SetApplyGroupWindow(d time.Duration)
+	ApplyGroupStats() (writes, txns uint64)
+	ApplyBypassCount() uint64
+}
+
+// dumpStore 全量扫描存储为 key->value 映射（C4 等价性对比辅助）。
+func dumpStore(t *testing.T, st storage.Storage) map[string][]byte {
+	t.Helper()
+	pairs, err := st.Scan(storage.KeyRange{}, 0)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	m := make(map[string][]byte, len(pairs))
+	for _, p := range pairs {
+		m[string(p.Key)] = append([]byte(nil), p.Value...)
+	}
+	return m
+}
+
+// assertStoresEqual 逐 key 对比两个存储状态（C4 崩溃恢复等价断言）。
+func assertStoresEqual(t *testing.T, got, want map[string][]byte) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("key count mismatch: got %d, want %d", len(got), len(want))
+	}
+	for k, v := range want {
+		gv, ok := got[k]
+		if !ok {
+			t.Fatalf("key %q missing in got", k)
+		}
+		if !bytes.Equal(gv, v) {
+			t.Fatalf("key %q value mismatch: got %q, want %q", k, gv, v)
+		}
+	}
+}
+
+// TestC4ConcurrentCommitOrder 并发提交（聚合默认开）：全部成功、seq 连续、
+// 数据一致、应用统计不劣化（writes <= txns）、合并度观测记录日志。
+func TestC4ConcurrentCommitOrder(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	ago := e.mgr.(applyGroupObserver)
+
+	const n = 200
+	runConcurrentCommits(t, e.mgr, n)
+	for i := 0; i < n; i++ {
+		got, err := e.st.Get([]byte(fmt.Sprintf("ck%d", i)))
+		if err != nil || string(got) != fmt.Sprintf("cv%d", i) {
+			t.Fatalf("st.Get(ck%d) = %q, %v; want cv%d", i, got, err, i)
+		}
+	}
+	writes, txns := ago.ApplyGroupStats()
+	if txns != n {
+		t.Fatalf("apply txns = %d, want %d", txns, n)
+	}
+	if writes > txns {
+		t.Fatalf("apply writes %d > txns %d (merge must not increase st.Write)", writes, txns)
+	}
+	t.Logf("C4 group apply: %d txns -> %d st.Write (avg batch %.2f)", txns, writes, float64(txns)/float64(writes))
+}
+
+// TestC4GroupApplyMergesWrites 放大聚合窗口确定性验证合并：高并发 + 大窗口
+// 时 st.Write 次数必须显著小于事务数（消除逐事务串行写），数据全部一致。
+func TestC4GroupApplyMergesWrites(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	ago := e.mgr.(applyGroupObserver)
+	ago.SetApplyGroupWindow(20 * time.Millisecond) // 放大窗口，确定性触发候选聚合
+
+	const n = 100
+	runConcurrentCommits(t, e.mgr, n)
+	for i := 0; i < n; i++ {
+		got, err := e.st.Get([]byte(fmt.Sprintf("ck%d", i)))
+		if err != nil || string(got) != fmt.Sprintf("cv%d", i) {
+			t.Fatalf("st.Get(ck%d) = %q, %v; want cv%d", i, got, err, i)
+		}
+	}
+	writes, txns := ago.ApplyGroupStats()
+	if txns != n {
+		t.Fatalf("apply txns = %d, want %d", txns, n)
+	}
+	if writes >= txns {
+		t.Fatalf("C4 expected merged st.Write: %d writes >= %d txns", writes, txns)
+	}
+	t.Logf("C4 merged: %d txns -> %d st.Write (avg batch %.2f)", txns, writes, float64(txns)/float64(writes))
+}
+
+// TestC4WALReplayEquivalence 并发提交（聚合开）后，用同一 WAL 重放到全新
+// 存储：重放状态与运行期最终状态逐 key 一致（崩溃恢复等价核心证据）。
+func TestC4WALReplayEquivalence(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, "wal.log")
+	st, err := rocksdb.Open(filepath.Join(dir, "data"), true)
+	if err != nil {
+		t.Fatalf("open rocksdb: %v", err)
+	}
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	mgr, err := txn.New(st, w)
+	if err != nil {
+		t.Fatalf("new txn manager: %v", err)
+	}
+
+	const n = 100
+	runConcurrentCommits(t, mgr, n)
+	live := dumpStore(t, st)
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close mgr: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close st: %v", err)
+	}
+
+	// 全新存储 + 同一 WAL：txn.New 自动执行 Recover 重放。
+	st2, err := rocksdb.Open(filepath.Join(dir, "data2"), true)
+	if err != nil {
+		t.Fatalf("open rocksdb2: %v", err)
+	}
+	w2, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatalf("open wal2: %v", err)
+	}
+	mgr2, err := txn.New(st2, w2)
+	if err != nil {
+		t.Fatalf("new txn manager2: %v", err)
+	}
+	replayed := dumpStore(t, st2)
+	assertStoresEqual(t, replayed, live)
+	if err := mgr2.Close(); err != nil {
+		t.Fatalf("close mgr2: %v", err)
+	}
+	if err := st2.Close(); err != nil {
+		t.Fatalf("close st2: %v", err)
+	}
+}
+
+// c4Op 崩溃恢复等价负载中的单事务操作（固定生成、两模式复用同一序列）。
+type c4Op struct {
+	isDelete bool
+	key      string
+	val      string
+}
+
+// genC4Ops 单线程生成固定随机负载（seed 固定）：30 个事务，每事务 1-5 个
+// 随机 Put/Delete。disjoint=true 时每事务独占 10 个 key（操作集合可交换，
+// 最终状态与提交顺序无关，用于聚合开/关两模式对比）；
+// disjoint=false 时 key 池 k0..k19（同 key 多次写/删交错，最终状态依赖
+// WAL 顺序，用于 WAL 重放等价验证）。
+func genC4Ops(seed int64, disjoint bool) [][]c4Op {
+	rng := rand.New(rand.NewSource(seed))
+	opsSeq := make([][]c4Op, 30)
+	for i := range opsSeq {
+		ops := 1 + rng.Intn(5)
+		opsSeq[i] = make([]c4Op, 0, ops)
+		for j := 0; j < ops; j++ {
+			op := c4Op{}
+			if disjoint {
+				op.key = fmt.Sprintf("k%d", i*10+rng.Intn(10))
+			} else {
+				op.key = fmt.Sprintf("k%d", rng.Intn(20))
+			}
+			if rng.Intn(3) == 0 {
+				op.isDelete = true
+			} else {
+				op.val = fmt.Sprintf("v%d", rng.Intn(100))
+			}
+			opsSeq[i] = append(opsSeq[i], op)
+		}
+	}
+	return opsSeq
+}
+
+// runC4Load 按给定聚合窗口执行固定并发负载，返回最终存储状态。
+func runC4Load(t *testing.T, dir string, applyWindow time.Duration, opsSeq [][]c4Op) map[string][]byte {
+	t.Helper()
+	st, err := rocksdb.Open(filepath.Join(dir, "data"), true)
+	if err != nil {
+		t.Fatalf("open rocksdb: %v", err)
+	}
+	w, err := wal.Open(filepath.Join(dir, "wal.log"))
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	mgr, err := txn.New(st, w)
+	if err != nil {
+		t.Fatalf("new txn manager: %v", err)
+	}
+	mgr.(applyGroupObserver).SetApplyGroupWindow(applyWindow)
+
+	const n = 30
+	errs := make([]error, n)
+	start := make(chan struct{})
+	prepared := make(chan struct{}, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			tx, err := mgr.Begin()
+			if err != nil {
+				errs[i] = err
+				prepared <- struct{}{}
+				<-start
+				return
+			}
+			for _, op := range opsSeq[i] {
+				if op.isDelete {
+					err = tx.Delete([]byte(op.key))
+				} else {
+					err = tx.Put([]byte(op.key), []byte(op.val))
+				}
+				if err != nil {
+					break
+				}
+			}
+			prepared <- struct{}{}
+			<-start
+			if err == nil {
+				err = tx.Commit()
+			}
+			errs[i] = err
+		}(i)
+	}
+	for i := 0; i < n; i++ {
+		<-prepared
+	}
+	close(start)
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("txn %d: %v", i, err)
+		}
+	}
+	state := dumpStore(t, st)
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close mgr: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close st: %v", err)
+	}
+	return state
+}
+
+// replayToNewStore 用同一 WAL 重放到全新存储，返回重放后的状态
+// （C4 崩溃恢复等价：串行重放应用 vs 运行期聚合应用结果对比）。
+func replayToNewStore(t *testing.T, walPath, dataDir string) map[string][]byte {
+	t.Helper()
+	st, err := rocksdb.Open(filepath.Join(dataDir, "data"), true)
+	if err != nil {
+		t.Fatalf("open rocksdb replay: %v", err)
+	}
+	w, err := wal.Open(walPath)
+	if err != nil {
+		t.Fatalf("open wal replay: %v", err)
+	}
+	mgr, err := txn.New(st, w) // 自动执行 Recover 重放
+	if err != nil {
+		t.Fatalf("new txn manager replay: %v", err)
+	}
+	state := dumpStore(t, st)
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close mgr replay: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close st replay: %v", err)
+	}
+	return state
+}
+
+// TestC4CrashRecoveryEquivalence 崩溃恢复等价（核心）：同一固定随机并发负载
+// （无 key 重叠、操作集合可交换），分别在「聚合开（批量 st.Write）」与
+// 「聚合关（纯串行 st.Write）」两模式下执行，最终存储状态必须逐 key 一致
+// ——证明合并应用在任何并发交错下不改变可恢复的最终状态。
+func TestC4CrashRecoveryEquivalence(t *testing.T) {
+	opsSeq := genC4Ops(42, true)
+	dirAgg := t.TempDir()
+	dirSer := t.TempDir()
+	agg := runC4Load(t, dirAgg, 50*time.Microsecond, opsSeq) // 聚合开
+	ser := runC4Load(t, dirSer, 0, opsSeq)                   // 聚合关（纯串行，旧行为）
+	assertStoresEqual(t, agg, ser)
+}
+
+// TestC4WALReplayOverlapKeys 重叠 key 随机负载（同 key 多次写/删、最终状态
+// 依赖 WAL 顺序）：聚合开模式运行期状态与同一 WAL 串行重放状态逐 key 一致
+// ——验证「同 WAL 顺序下串行应用 == 聚合应用」的崩溃恢复等价。
+func TestC4WALReplayOverlapKeys(t *testing.T) {
+	opsSeq := genC4Ops(7, false)
+	dir := t.TempDir()
+	state := runC4Load(t, dir, 50*time.Microsecond, opsSeq) // 聚合开
+	replayed := replayToNewStore(t, filepath.Join(dir, "wal.log"), t.TempDir())
+	assertStoresEqual(t, replayed, state)
+}
+
+// TestC4SingleTxnNoExtraDelay 单事务提交：候补为 0，不得触发聚合窗口等待；
+// 提交快速完成、统计精确 1 次 st.Write（零额外延迟与零合并副作用）。
+func TestC4SingleTxnNoExtraDelay(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	ago := e.mgr.(applyGroupObserver)
+
+	tx, err := e.mgr.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := tx.Put([]byte("solo"), []byte("sv")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	start := time.Now()
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("single txn commit took %v, want no window delay", elapsed)
+	}
+	got, err := e.st.Get([]byte("solo"))
+	if err != nil || string(got) != "sv" {
+		t.Fatalf("st.Get(solo) = %q, %v; want sv", got, err)
+	}
+	writes, txns := ago.ApplyGroupStats()
+	if writes != 1 || txns != 1 {
+		t.Fatalf("apply stats = %d/%d, want 1/1 (single txn, no merge)", writes, txns)
+	}
+	if bypass := ago.ApplyBypassCount(); bypass != 1 {
+		t.Fatalf("apply bypass = %d, want 1 (single txn must take zero-overhead fast path)", bypass)
+	}
+}
+
+// TestC4SerialBypassNoGroupOverhead 退化回归（返工核心）：串行提交 N 个
+// 单事务（每个 Commit 返回后才开启下一个，天然无候补），必须全部走直通
+// 路径——bypass == N 且 writes == txns == N（每次提交恰好一次 st.Write，
+// 零注册/零聚合/零等待开销），证明低并发路径已恢复到与基线逐事务串行
+// 应用完全一致的执行形态。
+func TestC4SerialBypassNoGroupOverhead(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	ago := e.mgr.(applyGroupObserver)
+
+	const n = 50
+	for i := 0; i < n; i++ {
+		tx, err := e.mgr.Begin()
+		if err != nil {
+			t.Fatalf("begin %d: %v", i, err)
+		}
+		if err := tx.Put([]byte(fmt.Sprintf("bk%d", i)), []byte(fmt.Sprintf("bv%d", i))); err != nil {
+			t.Fatalf("put %d: %v", i, err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit %d: %v", i, err)
+		}
+	}
+	for i := 0; i < n; i++ {
+		got, err := e.st.Get([]byte(fmt.Sprintf("bk%d", i)))
+		if err != nil || string(got) != fmt.Sprintf("bv%d", i) {
+			t.Fatalf("st.Get(bk%d) = %q, %v; want bv%d", i, got, err, i)
+		}
+	}
+	writes, txns := ago.ApplyGroupStats()
+	if txns != n || writes != n {
+		t.Fatalf("apply stats = %d/%d, want %d/%d (serial commits, one st.Write each)", writes, txns, n, n)
+	}
+	if bypass := ago.ApplyBypassCount(); bypass != n {
+		t.Fatalf("apply bypass = %d, want %d (all serial commits must bypass group machinery)", bypass, n)
 	}
 }
