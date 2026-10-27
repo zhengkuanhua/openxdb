@@ -1297,7 +1297,7 @@ func TestP2CaseJoinGroup(t *testing.T) {
 func TestM13SlowQueryPublic(t *testing.T) {
 	e := newEngine(t)
 	mustExec(t, e, "CREATE TABLE big (id INT, v TEXT, PRIMARY KEY (id))")
-	vals := make([]string, 300)
+	vals := make([]string, 20000)
 	for i := range vals {
 		vals[i] = fmt.Sprintf("(%d, 'x')", i)
 	}
@@ -1319,7 +1319,7 @@ func TestM13SlowQueryPublic(t *testing.T) {
 		t.Fatal("want slow rows")
 	}
 	row := res.Rows[0]
-	if len(row) != 6 || row[1].S != "alice" || row[3].I != 300 || row[4].S != "" {
+	if len(row) != 6 || row[1].S != "alice" || row[3].I != 20000 || row[4].S != "" {
 		t.Fatalf("slow row: %+v", row)
 	}
 	data, err := os.ReadFile(logPath)
@@ -1328,7 +1328,7 @@ func TestM13SlowQueryPublic(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "SELECT * FROM big") ||
 		!strings.Contains(string(data), "| alice |") ||
-		!strings.Contains(string(data), "rows=300") {
+		!strings.Contains(string(data), "rows=20000") {
 		t.Fatalf("slow.log content: %q", string(data))
 	}
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 	"github.com/zhengkuanhua/openxdb/pkg/wal"
@@ -33,16 +34,26 @@ func New(st storage.Storage, w wal.WAL) (TxnManager, error) {
 	return m, nil
 }
 
+// Begin 创建新事务。
+// v1.16.0 C2 快照创建锁外化：锁内仅分配事务 ID（保持单调递增、与旧版一致），
+// 快照创建移出锁外——RocksDB Snapshot 线程安全，锁外创建显著缩短 Begin 临界区，
+// 缓解点查/autocommit 密集场景的 Begin 锁竞争。
+// 语义等价性：快照创建时刻 = Begin 生效时刻（返回前固定一致性视图），锁外创建
+// 仅把视图固定点从「持锁时刻」推迟到「解锁后瞬间」，对已提交数据仍是一致快照；
+// TSO/beginTS 由调用方（executor）另行取号，与本层 ID/序号解耦，保持不变。
+// ID 消耗语义不变：快照创建失败时 ID 已分配、不回收（与旧版锁内失败行为一致）。
 func (m *txnManager) Begin() (Txn, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.nextID++
+	id := m.nextID
+	m.mu.Unlock()
+
 	snap, err := m.st.Snapshot()
 	if err != nil {
 		return nil, err
 	}
 	return &txnImpl{
-		id:    m.nextID,
+		id:    id,
 		mgr:   m,
 		batch: &storage.WriteBatch{},
 		snap:  snap,
@@ -140,6 +151,12 @@ func (m *txnManager) HookErr() error {
 	return m.hookErr
 }
 
+// SetGroupCommitWindow 设置 WAL 组提交定时刷盘窗口（v1.14.0 P1），透传底层 WAL。
+// d<=0 关闭定时窗口（回退 v1.13.0 被动攒批行为）；调用方需持 m.mu 或串行访问。
+func (m *txnManager) SetGroupCommitWindow(d time.Duration) {
+	m.wal.SetGroupCommitWindow(d)
+}
+
 type txnImpl struct {
 	id    uint64
 	mgr   *txnManager
@@ -235,6 +252,24 @@ func (t *txnImpl) Scan(r storage.KeyRange, limit int) ([]storage.KVPair, error) 
 	if err != nil {
 		return nil, err
 	}
+	// v1.15.0 W1 快路径：事务内无未提交写（ops 为空）时，快照结果即为最终结果
+	// （无 read-your-writes 合并需求），直接透传快照有序结果并应用 limit 截断，
+	// 跳过 byKey/dirty/merged map 全量物化 + sort 重建（SQL 层全量物化+重复排序
+	// 瓶颈的主要来源）。前提：快照 Scan 保证按 Key 升序（RocksDB/btree 迭代器语义）。
+	if len(t.ops) == 0 {
+		out := base
+		if limit > 0 && len(out) > limit {
+			out = out[:limit]
+		}
+		// P2-13：Serializable 读集记录（以实际返回行为准，与旧路径等价；
+		// limit 截断的未读行不记）。
+		if t.serEnabled {
+			for _, kv := range out {
+				t.readSet[string(kv.Key)] = true
+			}
+		}
+		return out, nil
+	}
 	// 1) 快照结果映射 + 记录被事务写覆盖的键
 	byKey := make(map[string]storage.KVPair, len(base))
 	dirty := make(map[string]bool, len(base))
@@ -291,6 +326,34 @@ func (t *txnImpl) Scan(r storage.KeyRange, limit int) ([]storage.KVPair, error) 
 	}
 	return out, nil
 }
+
+// CountRange 范围计数 [Start, End)：storage.RangeCounter 可选接口实现
+// （v1.15.0 W2 COUNT(*) 快速路径）。不写入 Txn 接口，调用方以类型断言
+// （tx.(storage.RangeCounter)）探测使用。
+//
+// 快速路径：ops 为空且非 Serializable 时直接走快照 CountRange（存储层
+// 只数 key 不拷贝 value）；快照不支持 CountRange 时回退 Scan 计数。
+// 回退路径：ops 非空或 Serializable 时调用 t.Scan 后计数，保证
+// read-your-writes 合并与 phantom 读集记录与既有 Scan 语义完全等价。
+// 结果与「同范围 Scan 的行数」一致（limit<=0 不限制；limit>0 至多返回 limit）。
+func (t *txnImpl) CountRange(r storage.KeyRange, limit int) (int, error) {
+	if t.state != TxnActive {
+		return 0, ErrTxnClosed
+	}
+	if len(t.ops) == 0 && !t.serEnabled {
+		if rc, ok := storage.SnapshotCountRangeOf(t.snap); ok {
+			return rc.CountRange(r, limit)
+		}
+	}
+	kvs, err := t.Scan(r, limit)
+	if err != nil {
+		return 0, err
+	}
+	return len(kvs), nil
+}
+
+// 编译期断言：txnImpl 实现 storage.RangeCounter（可选接口，不改动 Txn 契约）。
+var _ storage.RangeCounter = (*txnImpl)(nil)
 
 // RefreshSnapshot 锁内刷新一致性快照（读改写读旧值前调用）：
 // 丢弃旧快照，重新固定为当前已提交视图，保证后拿锁事务

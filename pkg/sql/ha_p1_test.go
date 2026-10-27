@@ -24,6 +24,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
@@ -81,6 +82,7 @@ func (m *p1TxnMgr) SetCommitHook(func(lsn storage.LSN, seq uint64, batch *storag
 }
 func (m *p1TxnMgr) SetCommitWaitHook(func(lsn storage.LSN, seq uint64) error) {}
 func (m *p1TxnMgr) HookErr() error                                           { return nil }
+func (m *p1TxnMgr) SetGroupCommitWindow(time.Duration)                        {}
 func (m *p1TxnMgr) Close() error                                             { return nil }
 
 type p1TxnT struct{ rows []storage.KVPair }

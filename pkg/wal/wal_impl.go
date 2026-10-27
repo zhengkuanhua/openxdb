@@ -32,6 +32,15 @@ type walImpl struct {
 	fsyncCount uint64
 	// 测试辅助：注入人工 fsync 延迟（模拟慢盘，放大组提交合并效果；0 = 不延迟）。
 	fsyncDelay time.Duration
+
+	// v1.14.0 P1 组提交定时刷盘窗口：leader 在 fsync 前等待该时长，窗口内
+	// 新 Append 并入本次 fsync（事务稀疏时也合并）。0 = 关闭（被动攒批）。
+	groupCommitWindow time.Duration
+
+	// v1.16.0 C1 批量刷盘增强：组提交开启时 Append 仅写入内存缓冲（不逐条
+	// 调文件写系统调用），由 SyncUpTo/Close/Replay/Truncate 在持锁时一次性
+	// flush 到文件——高并发下文件写调用与 fsync 合并更充分，持久化语义不变。
+	pendingBuf bytes.Buffer
 }
 
 // Open 打开（或创建）WAL 文件，并扫描末尾确定 nextLSN。
@@ -45,7 +54,7 @@ func Open(path string) (WAL, error) {
 		f.Close()
 		return nil, err
 	}
-	w := &walImpl{f: f, path: path, syncOnAppend: false}
+	w := &walImpl{f: f, path: path, syncOnAppend: false, groupCommitWindow: defaultGroupCommitWindow}
 	w.cond = sync.NewCond(&w.mu)
 	if fi.Size() == 0 {
 		if err := w.writeHeader(); err != nil {
@@ -77,8 +86,9 @@ func Open(path string) (WAL, error) {
 	return w, nil
 }
 
-// Append 顺序追加。组提交默认开启：仅写缓冲不 fsync，持久化由 SyncUpTo 兜底；
-// SetGroupCommit(false) 关闭后恢复每记录 fsync（D 保证：返回 = 已持久化）。
+// Append 顺序追加。组提交默认开启：v1.16.0 C1 起仅写入内存缓冲（不再逐条
+// 写文件），持久化由 SyncUpTo 一次性 flush+fsync 兜底；SetGroupCommit(false)
+// 关闭后恢复每记录写文件+fsync（D 保证：返回 = 已持久化）。
 func (w *walImpl) Append(entry *WalEntry) error {
 	if entry == nil || entry.Batch == nil {
 		return errors.New("wal: nil entry or batch")
@@ -98,30 +108,73 @@ func (w *walImpl) Append(entry *WalEntry) error {
 	if err != nil {
 		return err
 	}
-	if _, err := w.f.Write(data); err != nil {
-		return err
-	}
 	if w.syncOnAppend {
+		// 组提交关闭（每记录持久化）：先冲刷缓冲中遗留记录（防御开关切换
+		// 残留，保证文件顺序与 LSN 顺序一致），再写当前记录并 fsync。
+		if err := w.flushPendingLocked(); err != nil {
+			return err
+		}
+		if _, err := w.f.Write(data); err != nil {
+			return err
+		}
 		if err := w.f.Sync(); err != nil {
 			return err
 		}
 		w.fsyncCount++
 		w.lastSynced = w.nextLSN - 1
+		return nil
 	}
+	// 组提交开启（v1.16.0 C1 批量刷盘增强）：仅追加内存缓冲，不触发
+	// 文件写系统调用；批量 flush 与 fsync 由 SyncUpTo 合并完成。
+	w.pendingBuf.Write(data)
 	return nil
 }
 
-// SetGroupCommit 开关组提交。默认开启（Append 仅写缓冲，由 SyncUpTo 兜底刷盘）；
-// 关闭后恢复每记录 fsync（与旧版行为一致）。
+// SetGroupCommit 开关组提交。默认开启（Append 仅写内存缓冲，由 SyncUpTo 兜底
+// 批量 flush+刷盘）；关闭后恢复每记录写文件+fsync（与旧版行为一致）。
+// v1.16.0 C1：关闭前先冲刷内存缓冲，避免缓冲内记录滞留导致顺序不一致。
 func (w *walImpl) SetGroupCommit(enabled bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if !enabled {
+		_ = w.flushPendingLocked()
+	}
 	w.syncOnAppend = !enabled
+}
+
+// defaultGroupCommitWindow 组提交定时窗口默认值（v1.14.0 P1）。
+// 500µs 在事务稀疏（毫秒级间隔）场景可捕获相邻事务合并 fsync，
+// 同时对高吞吐批量场景仅增加可忽略延迟；推荐配置区间 100µs~1ms。
+const defaultGroupCommitWindow = 500 * time.Microsecond
+
+// SetGroupCommitWindow 设置组提交定时刷盘窗口（v1.14.0 P1）：
+// leader 在 fsync 前额外等待窗口，窗口内新追加记录一并并入本次 fsync，
+// 事务稀疏时也合并（避免每事务一次 fsync）。d <= 0 关闭定时窗口，
+// 回退被动攒批（仅并发等待者合并，行为与 v1.13.0 一致）。
+func (w *walImpl) SetGroupCommitWindow(d time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if d < 0 {
+		d = 0
+	}
+	w.groupCommitWindow = d
 }
 
 // SyncUpTo 阻塞直至 lsn 及之前所有已追加记录 fsync 落盘。
 // leader 机制：首个等待者成为 leader，一次 fsync 覆盖当前已写末尾后广播唤醒；
-// 后续等待者发现 lastSynced 已推进则零额外 fsync 直接返回。无后台定时器。
+// 后续等待者发现 lastSynced 已推进则零额外 fsync 直接返回。
+// v1.14.0 P1：leader 在 fsync 前先等待组提交定时窗口（默认 500µs，可配
+// 100µs~1ms，0 关闭），窗口内新 Append 并入缓冲；窗口结束后重新读取最新
+// 已写末尾再 fsync——事务稀疏（相邻提交间隔小于窗口）时同样合并为一次
+// fsync，避免每事务一次刷盘。
+// v1.16.0 C1 单等待者免窗口：定时窗口仅用于合并「已到达的并发等待者」。
+// leader 释放锁后立即重检——无其他等待者（waiters==1，仅 leader 自己）时
+// 跳过 sleep 直接刷盘，消除单写事务固定 0.5ms 延迟；存在 follower 时才保留
+// 窗口等待后续 Append 并入，维持高并发合并能力。
+// v1.16.0 C1 批量刷盘增强：leader 在取刷盘末尾前先 flushPendingLocked 将
+// 缓冲内累积记录一次性写入文件，再以 flush 后最新末尾 fsync，覆盖全部已分配
+// LSN（tail = flush 时刻 nextLSN-1），解锁后新 Append 的 LSN > tail 不在此次
+// 承诺范围，由后续 SyncUpTo 循环兜底。
 // 契约：调用方必须先 Append 得到 lsn（事务层在锁内先 Append 再释放锁调本方法）。
 func (w *walImpl) SyncUpTo(lsn storage.LSN) error {
 	w.mu.Lock()
@@ -142,7 +195,9 @@ func (w *walImpl) SyncUpTo(lsn storage.LSN) error {
 			}
 			continue
 		}
-		// leader：记录进入刷盘前的已写末尾，释放锁执行 fsync（期间 Append 仍可继续写入）。
+		// leader：记录进入刷盘前的已写末尾，释放锁等待定时窗口（期间
+		// Append 仍可继续写入缓冲），窗口结束后重新加锁 flush 并取最新
+		// 末尾再 fsync，使窗口内到达的记录并入本次刷盘。
 		tail := w.lastLSNLocked()
 		if lsn > tail {
 			w.mu.Unlock()
@@ -150,6 +205,26 @@ func (w *walImpl) SyncUpTo(lsn storage.LSN) error {
 		}
 		w.waiters = 1
 		w.syncErr = nil
+		w.mu.Unlock()
+		if w.groupCommitWindow > 0 {
+			// v1.16.0 C1 单等待者免窗口：释放锁后立即重检是否有并发等待者
+			// 已到达（waiters>1 表示有 follower）。无则跳过定时窗口直接刷盘。
+			w.mu.Lock()
+			hasFollower := w.waiters > 1
+			w.mu.Unlock()
+			if hasFollower {
+				time.Sleep(w.groupCommitWindow)
+			}
+		}
+		w.mu.Lock()
+		if err := w.flushPendingLocked(); err != nil {
+			w.syncErr = err
+			w.waiters = 0
+			w.cond.Broadcast()
+			w.mu.Unlock()
+			return err
+		}
+		tail = w.lastLSNLocked() // flush 后最新末尾（含缓冲内全部记录）
 		w.mu.Unlock()
 		if w.fsyncDelay > 0 {
 			time.Sleep(w.fsyncDelay)
@@ -170,6 +245,20 @@ func (w *walImpl) SyncUpTo(lsn storage.LSN) error {
 		// 循环条件 lsn > lastSynced 已为假（tail >= lsn），下一轮退出。
 	}
 	w.mu.Unlock()
+	return nil
+}
+
+// flushPendingLocked 把组提交内存缓冲中累积的记录一次性写入文件（调用方须持
+// w.mu）。不 fsync：持久化由 SyncUpTo/Close 兜底，保持组提交的刷盘合并语义。
+// v1.16.0 C1 批量刷盘增强核心：Append 不再逐条触发文件写系统调用。
+func (w *walImpl) flushPendingLocked() error {
+	if w.pendingBuf.Len() == 0 {
+		return nil
+	}
+	if _, err := w.f.Write(w.pendingBuf.Bytes()); err != nil {
+		return err
+	}
+	w.pendingBuf.Reset()
 	return nil
 }
 
@@ -194,12 +283,16 @@ func (w *walImpl) lastLSNLocked() storage.LSN {
 	return w.nextLSN - 1
 }
 
-// Replay 顺序重放全部记录。
+// Replay 顺序重放全部记录。v1.16.0 C1：重放前先冲刷内存缓冲，保证运行期
+// Replay 能看到全部已 Append 记录（缓冲模式记录的落盘视图与文件一致）。
 func (w *walImpl) Replay(apply func(*WalEntry)) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
 		return ErrClosed
+	}
+	if err := w.flushPendingLocked(); err != nil {
+		return err
 	}
 	return w.replayLocked(apply)
 }
@@ -210,6 +303,10 @@ func (w *walImpl) Truncate(lsn storage.LSN) error {
 	defer w.mu.Unlock()
 	if w.closed {
 		return ErrClosed
+	}
+	// v1.16.0 C1：先把内存缓冲刷入文件，确保保留/截断判定覆盖缓冲内记录。
+	if err := w.flushPendingLocked(); err != nil {
+		return err
 	}
 	var keep []*WalEntry
 	if err := w.replayLocked(func(e *WalEntry) {
@@ -287,6 +384,12 @@ func (w *walImpl) Close() error {
 		return nil
 	}
 	w.closed = true
+	// v1.16.0 C1：关闭前冲刷内存缓冲再 fsync，缓冲模式未显式 SyncUpTo 的
+	// 记录也能随 Close 落盘（持久化语义不变，reopen 可恢复全部记录）。
+	if err := w.flushPendingLocked(); err != nil {
+		w.f.Close()
+		return err
+	}
 	if err := w.f.Sync(); err != nil {
 		w.f.Close()
 		return err

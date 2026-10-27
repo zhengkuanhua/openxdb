@@ -49,6 +49,7 @@ var (
 	dur   = flag.Int("duration", 30, "G 场景 OLTP 运行时长（秒）")
 	orows = flag.Int("oltp-rows", 100000, "G 场景 OLTP 预装载行数（5-20 万行）")
 	orat  = flag.String("oltp-ratio", "8:2", "G 场景 OLTP 读写比（8:2 或 5:5；每事务 4 个操作按该比例采样）")
+	roPar = flag.Bool("ro-parallel", true, "G 场景 OLTP 只读 SELECT 并行开关（C3 批接口），默认 on；off 时批接口整批回退串行（逐条 ExecuteAsSession）")
 )
 
 // opStat 收集单场景操作耗时（微秒）并输出统计。
@@ -242,6 +243,11 @@ func (o *oltpStats) pct99() int64 {
 // 读操作（点查/范围查各半）命中 [0, rows+已插入) 的随机键；
 // 写操作（插入/更新各半）插入全局唯一新 id（atomic 分配），更新随机已有行。
 // 统计整体事务 TPS 与事务级 P50/P95/P99；错误计数单独记录，不影响主统计。
+//
+// v1.16.0 C3：显式事务内连续无依赖只读 SELECT 攒批调用引擎层批接口
+// （e.ExecuteAsSessionBatch）并行执行，直调场景享只读并行；写语句保持
+// 串行（写前先冲刷只读批，保持事务内读写顺序语义不变）。批接口对混入
+// 非只读/含用户变量/SERIALIZABLE 等语句保守回退串行，正确性与串行一致。
 func runOltpWorkers(e *sql.Engine, conns, durationSec, rows int, readP float64, out *oltpStats) {
 	deadline := time.Now().Add(time.Duration(durationSec) * time.Second)
 	var wg sync.WaitGroup
@@ -258,30 +264,40 @@ func runOltpWorkers(e *sql.Engine, conns, durationSec, rows int, readP float64, 
 					continue
 				}
 				// 每事务 4 个操作：按 readP 概率选读（点查/范围查各半），否则写（插入/更新各半）。
+				// 读操作先攒批（连续只读 SELECT），遇写操作或 COMMIT 前统一冲刷并行执行。
+				pendingRO := make([]string, 0, 4)
+				flushRO := func() {
+					if len(pendingRO) == 0 {
+						return
+					}
+					results, errs := e.ExecuteAsSessionBatch(pendingRO, sql.SuperUser, sess)
+					for idx, err := range errs {
+						if err != nil {
+							out.addErr()
+						} else if results[idx] != nil {
+							out.addRead()
+						}
+					}
+					pendingRO = pendingRO[:0]
+				}
 				for j := 0; j < 4; j++ {
 					op := rng() % 1000
 					if uint64(readP*1000) > op {
-						// 读：点查或范围查
+						// 读：点查或范围查，攒入只读批（不立即执行）
 						maxID := int64(rows) + atomic.LoadInt64(&out.inserted)
 						if rng()%2 == 0 {
 							k := rng() % uint64(maxInt64(maxID, 1))
-							if _, err := e.ExecuteAsSession(fmt.Sprintf("SELECT * FROM oltp_t WHERE id = %d", k), sql.SuperUser, sess); err != nil {
-								out.addErr()
-							} else {
-								out.addRead()
-							}
+							pendingRO = append(pendingRO, fmt.Sprintf("SELECT * FROM oltp_t WHERE id = %d", k))
 						} else if maxID > 101 {
 							// 范围查取表尾窗口：SQL 层二级索引范围读为单边界 [a, 表尾)+回表，
 							// 随机 a 会触发全表扫描；窗口化后实际读取行数≈100（与 C2 口径一致）。
 							lo := maxInt64(maxID-500, 0)
 							a := lo + int64(rng()%uint64(maxInt64(maxID-100-lo, 1)))
-							if _, err := e.ExecuteAsSession(fmt.Sprintf("SELECT * FROM oltp_t WHERE id >= %d AND id < %d", a, a+100), sql.SuperUser, sess); err != nil {
-								out.addErr()
-							} else {
-								out.addRead()
-							}
+							pendingRO = append(pendingRO, fmt.Sprintf("SELECT * FROM oltp_t WHERE id >= %d AND id < %d", a, a+100))
 						}
 					} else {
+						// 写：先冲刷只读批（写前保持读-写顺序），再串行执行写
+						flushRO()
 						// 写：插入新行或更新已有行
 						if rng()%2 == 0 {
 							id := atomic.AddInt64(&out.inserted, 1) + int64(rows) - 1
@@ -301,6 +317,8 @@ func runOltpWorkers(e *sql.Engine, conns, durationSec, rows int, readP float64, 
 						}
 					}
 				}
+				// COMMIT 前冲刷剩余只读批（保持事务内全部读在写后/提交前完成）。
+				flushRO()
 				if _, err := e.ExecuteAsSession("COMMIT", sql.SuperUser, sess); err != nil {
 					out.addErr()
 					continue
@@ -330,6 +348,7 @@ func main() {
 	}
 	defer d.Close()
 	e := d.SQL
+	e.SetROParallel(*roPar)
 
 	// 准备表：旧目录残留表先 DROP（忽略不存在错误）。
 	_, _ = e.Execute("DROP TABLE bench")
@@ -338,7 +357,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	fmt.Printf("OpenXDB SQL layer benchmark: n=%d, dir=%s, go=%s, conns=%d\n", *n, *dir, runtime.Version(), *conns)
+	fmt.Printf("OpenXDB SQL layer benchmark: n=%d, dir=%s, go=%s, conns=%d, ro-parallel=%v\n", *n, *dir, runtime.Version(), *conns, *roPar)
 
 	// A. 单点写入（INSERT，逐条 autocommit：解析+事务+WAL+存储 全链路）
 	// 按 -conns 个独立 SQL 会话并发（默认 1 串行；每连接写不重叠键，见

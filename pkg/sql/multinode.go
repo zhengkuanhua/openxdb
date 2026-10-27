@@ -73,6 +73,9 @@ func (e *Executor) checkWritable(rid storage.ID) error {
 // M8 快照隔离：读路径携带 begin_ts，本地/远端均按版本过滤。
 func (e *Executor) getKVCluster(sess *Session, tx txn.Txn, key []byte) ([]byte, error) {
 	bs := e.snapshotTS(sess)
+	if !e.clusterEnabled() {
+		bs = 0
+	}
 	if e.mgr == nil {
 		e.incLocal()
 		return e.getKVVisible(tx, key, bs)
@@ -110,6 +113,9 @@ func (e *Executor) getKVCluster(sess *Session, tx txn.Txn, key []byte) ([]byte, 
 // 未命中键不出现在结果中，M8 快照版本过滤行为一致。
 func (e *Executor) mgetKVCluster(sess *Session, tx txn.Txn, keys [][]byte) (map[string][]byte, error) {
 	bs := e.snapshotTS(sess)
+	if !e.clusterEnabled() {
+		bs = 0
+	}
 	got := make(map[string][]byte, len(keys))
 	if e.mgr == nil {
 		e.incLocal()
@@ -223,6 +229,9 @@ func (e *Executor) scanMergedVisible(tx txn.Txn, ranges []storage.KeyRange, begi
 //   - 远端 region → QUERY_REQ 转发区间扫描（携带 beginTS，归属节点按版本过滤）。
 func (e *Executor) scanMergedCluster(sess *Session, tx txn.Txn, ranges []storage.KeyRange) ([]storage.KVPair, error) {
 	bs := e.snapshotTS(sess)
+	if !e.clusterEnabled() {
+		bs = 0
+	}
 	if e.mgr == nil {
 		e.incLocal()
 		return e.scanMergedVisible(tx, ranges, bs)

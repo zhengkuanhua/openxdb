@@ -252,6 +252,21 @@ func (e *Engine) ExecuteAsSession(stmt, user string, sess *Session) (*Result, er
 	return e.ex.ExecuteTextAsSession(ast, stmt, user, sess)
 }
 
+// ExecuteAsSessionBatch 批量执行一组只读 SELECT（v1.16.0 C3：ro_parallel
+// 下沉 executor）。返回结果与错误按输入 stmts 原始顺序一一对应，批内
+// 语句级并发执行后按序重组；任一条不满足保守并行条件（非只读 SELECT、
+// 读取用户变量 @var、Serializable 隔离、ro_parallel 关闭、forcedTx 挂载）
+// 时整批回退串行，行为与逐条调用 ExecuteAsSession 完全等价。
+//
+// 适用场景：E5 直调 / tests/bench/sql_bench 等绕过 server REPL 批的
+// 调用方，把显式事务内（或 autocommit 下）连续无依赖只读 SELECT 攒批
+// 并行执行；显式事务内批共享事务快照，autocommit 批内每条独立临时
+// 事务 + 独立快照。server 层 REPL 批路径（v1.14.0）原样保留，二者
+// 并存不冲突。混入写语句的批由本接口保守回退串行，正确性不受影响。
+func (e *Engine) ExecuteAsSessionBatch(stmts []string, user string, sess *Session) ([]*Result, []error) {
+	return e.ex.ExecuteBatchAsSession(stmts, user, sess)
+}
+
 // ExecuteAs 解析并以指定用户身份执行一条 SQL 语句：执行前经权限校验
 // （管理语句仅 root；DML 需对应表级授权；SHOW/EXPLAIN/SET/事务控制放行）。
 // 空用户（降级 guest）视为无任何授权。校验规则详见 authz.go 与
@@ -262,6 +277,31 @@ func (e *Engine) ExecuteAs(stmt, user string) (*Result, error) {
 		return nil, err
 	}
 	return e.ex.ExecuteTextAs(ast, stmt, user)
+}
+
+// SetROParallel 设置只读 SELECT 并行开关（v1.14.0 P0），透传至执行器。
+// 服务端 REPLSession 批内 autocommit 只读 SELECT 并发执行 + 按序重组；
+// 关闭回退 v1.13.0 逐条串行行为。可经 SET ro_parallel = on|off 热切换。
+func (e *Engine) SetROParallel(enabled bool) { e.ex.SetROParallel(enabled) }
+
+// ROParallel 返回只读 SELECT 并行开关当前状态。
+func (e *Engine) ROParallel() bool { return e.ex.ROParallel() }
+
+// SetGroupCommitWindow 设置 WAL 组提交定时刷盘窗口（v1.14.0 P1），透传至执行器。
+// d<=0 关闭定时窗口（回退 v1.13.0 被动攒批行为）；经 SET group_commit_window_ms 热切换。
+func (e *Engine) SetGroupCommitWindow(d time.Duration) { e.ex.SetGroupCommitWindow(d) }
+
+// IsROSelect 判断语句是否为可安全并行的只读 SELECT：解析后类型为
+// *SelectStmt。OpenXDB 的 SELECT 无 INTO/变量副作用，FOR UPDATE 仅语法
+// 兼容无行锁语义，因此 SELECT 并发执行安全；显式事务内的 SELECT 由
+// 服务端另行以 InTx() 排除，保持事务串行语义。解析失败返回 false。
+func (e *Engine) IsROSelect(line string) bool {
+	ast, err := Parse(line)
+	if err != nil {
+		return false
+	}
+	_, ok := ast.(*SelectStmt)
+	return ok
 }
 
 // SetSlowThreshold 设置慢查询阈值（毫秒，<=0 关闭记录），透传至执行器。

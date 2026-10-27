@@ -443,3 +443,388 @@ func TestTxnStateErrors(t *testing.T) {
 		t.Fatalf("put after rollback err = %v, want ErrTxnClosed", err)
 	}
 }
+
+// ---- v1.14.0 P0：Scan 快路径 + CountRange（COUNT(*) 快速路径底层） ----
+
+// seedSortedKeys 写入 n 个有序键（k00..k(n-1)）并提交。
+func seedSortedKeys(t *testing.T, mgr txn.TxnManager, n int) {
+	t.Helper()
+	tx, err := mgr.Begin()
+	if err != nil {
+		t.Fatalf("begin seed: %v", err)
+	}
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("k%02d", i)
+		if err := tx.Put([]byte(k), []byte("v"+k)); err != nil {
+			t.Fatalf("seed put %s: %v", k, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("seed commit: %v", err)
+	}
+}
+
+// scanKeys 便捷封装：Scan 返回的键列表。
+func scanKeys(t *testing.T, tx txn.Txn, r storage.KeyRange, limit int) []string {
+	t.Helper()
+	kvs, err := tx.Scan(r, limit)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	out := make([]string, 0, len(kvs))
+	for _, kv := range kvs {
+		out = append(out, string(kv.Key))
+	}
+	return out
+}
+
+// serializableTxn 断言 Serializable 读集接口（P2-13）。
+type serializableTxn interface {
+	EnableSerializable()
+	ReadSet() map[string]bool
+}
+
+// TestTxnScanFastPathEmptyOps 快路径（ops 为空）：直接透传快照有序结果，
+// 与旧实现升序输出等价（全量 / limit 截断 / 子区间）。
+func TestTxnScanFastPathEmptyOps(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	seedSortedKeys(t, e.mgr, 5)
+
+	tx, err := e.mgr.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback()
+
+	wantAll := []string{"k00", "k01", "k02", "k03", "k04"}
+	got := scanKeys(t, tx, storage.KeyRange{}, 0)
+	if fmt.Sprint(got) != fmt.Sprint(wantAll) {
+		t.Fatalf("fast scan full = %v, want %v", got, wantAll)
+	}
+	got = scanKeys(t, tx, storage.KeyRange{}, 2)
+	if fmt.Sprint(got) != fmt.Sprint(wantAll[:2]) {
+		t.Fatalf("fast scan limit2 = %v, want %v", got, wantAll[:2])
+	}
+	got = scanKeys(t, tx, storage.KeyRange{Start: []byte("k01"), End: []byte("k04")}, 0)
+	if fmt.Sprint(got) != fmt.Sprint(wantAll[1:4]) {
+		t.Fatalf("fast scan range = %v, want %v", got, wantAll[1:4])
+	}
+}
+
+// TestTxnScanFastPathWriteMerge ops 非空保留原合并路径（read-your-writes）：
+// 新键可见、Delete 生效、覆盖键以事务值为准，结果仍升序。
+func TestTxnScanFastPathWriteMerge(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	seedSortedKeys(t, e.mgr, 5)
+
+	tx, err := e.mgr.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback()
+	if err := tx.Put([]byte("k02new"), []byte("x")); err != nil { // 区间中部新键
+		t.Fatalf("put: %v", err)
+	}
+	if err := tx.Delete([]byte("k01")); err != nil { // 删除既有键
+		t.Fatalf("delete: %v", err)
+	}
+	if err := tx.Put([]byte("k03"), []byte("overwritten")); err != nil { // 覆盖既有键
+		t.Fatalf("put overwrite: %v", err)
+	}
+	got := scanKeys(t, tx, storage.KeyRange{}, 0)
+	want := []string{"k00", "k02", "k02new", "k03", "k04"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("merge scan = %v, want %v", got, want)
+	}
+	v, err := tx.Get([]byte("k03"))
+	if err != nil || string(v) != "overwritten" {
+		t.Fatalf("get k03 = %q, %v; want overwritten", v, err)
+	}
+}
+
+// TestTxnScanFastPathSerializableReadSet Serializable 下快路径读集与旧实现等价：
+// 记录实际返回键，limit 截断的未读行不记，phantom 读集不被破坏。
+func TestTxnScanFastPathSerializableReadSet(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	seedSortedKeys(t, e.mgr, 5)
+
+	tx, err := e.mgr.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback()
+	ser, ok := tx.(serializableTxn)
+	if !ok {
+		t.Fatalf("tx does not implement serializable read set")
+	}
+	ser.EnableSerializable()
+
+	scanKeys(t, tx, storage.KeyRange{}, 0)
+	rs := ser.ReadSet()
+	for i := 0; i < 5; i++ {
+		if !rs[fmt.Sprintf("k%02d", i)] {
+			t.Fatalf("readSet missing k%02d: %v", i, rs)
+		}
+	}
+
+	// limit 截断：未读行不记（与旧路径一致）
+	tx2, err := e.mgr.Begin()
+	if err != nil {
+		t.Fatalf("begin tx2: %v", err)
+	}
+	defer tx2.Rollback()
+	ser2, _ := tx2.(serializableTxn)
+	ser2.EnableSerializable()
+	scanKeys(t, tx2, storage.KeyRange{}, 2)
+	rs2 := ser2.ReadSet()
+	if len(rs2) != 2 || !rs2["k00"] || !rs2["k01"] || rs2["k02"] {
+		t.Fatalf("limit readSet = %v, want exactly {k00,k01}", rs2)
+	}
+}
+
+// TestTxnCountRangeMatchesScan CountRange 与同范围 Scan 行数一致：
+// 空 ops 快路径（走快照 CountRange）与 ops 非空回退（read-your-writes）。
+func TestTxnCountRangeMatchesScan(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	seedSortedKeys(t, e.mgr, 5)
+
+	tx, err := e.mgr.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback()
+	rc, ok := tx.(storage.RangeCounter)
+	if !ok {
+		t.Fatalf("tx does not implement storage.RangeCounter")
+	}
+	n, err := rc.CountRange(storage.KeyRange{}, 0)
+	if err != nil || n != 5 {
+		t.Fatalf("count full = %d, %v; want 5", n, err)
+	}
+	n, err = rc.CountRange(storage.KeyRange{Start: []byte("k01"), End: []byte("k04")}, 0)
+	if err != nil || n != 3 {
+		t.Fatalf("count [k01,k04) = %d, %v; want 3", n, err)
+	}
+	n, err = rc.CountRange(storage.KeyRange{}, 2)
+	if err != nil || n != 2 {
+		t.Fatalf("count limit2 = %d, %v; want 2", n, err)
+	}
+	if got := len(scanKeys(t, tx, storage.KeyRange{}, 0)); got != 5 {
+		t.Fatalf("scan count = %d, want 5", got)
+	}
+
+	// ops 非空：回退 Scan 计数，read-your-writes 正确
+	tx2, err := e.mgr.Begin()
+	if err != nil {
+		t.Fatalf("begin tx2: %v", err)
+	}
+	defer tx2.Rollback()
+	rc2, _ := tx2.(storage.RangeCounter)
+	if err := tx2.Put([]byte("k99"), []byte("x")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	n, err = rc2.CountRange(storage.KeyRange{}, 0)
+	if err != nil || n != 6 {
+		t.Fatalf("count with pending put = %d, %v; want 6", n, err)
+	}
+	if err := tx2.Delete([]byte("k00")); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	n, err = rc2.CountRange(storage.KeyRange{}, 0)
+	if err != nil || n != 5 {
+		t.Fatalf("count with pending delete = %d, %v; want 5", n, err)
+	}
+	if err := tx2.Put([]byte("k02"), []byte("over")); err != nil { // 覆盖不增行
+		t.Fatalf("put overwrite: %v", err)
+	}
+	n, err = rc2.CountRange(storage.KeyRange{}, 0)
+	if err != nil || n != 5 {
+		t.Fatalf("count with overwrite = %d, %v; want 5", n, err)
+	}
+	if got := len(scanKeys(t, tx2, storage.KeyRange{}, 0)); got != n {
+		t.Fatalf("scan count = %d, want %d", got, n)
+	}
+}
+
+// TestTxnCountRangeSerializableFallback Serializable 下 CountRange 回退 Scan 计数：
+// 结果与 Scan 一致，且 phantom 读集不被破坏（范围内键全部记入 readSet）。
+func TestTxnCountRangeSerializableFallback(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	seedSortedKeys(t, e.mgr, 5)
+
+	tx, err := e.mgr.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback()
+	ser, ok := tx.(serializableTxn)
+	if !ok {
+		t.Fatalf("tx does not implement serializable read set")
+	}
+	ser.EnableSerializable()
+	rc, ok := tx.(storage.RangeCounter)
+	if !ok {
+		t.Fatalf("tx does not implement storage.RangeCounter")
+	}
+
+	n, err := rc.CountRange(storage.KeyRange{}, 0)
+	if err != nil || n != 5 {
+		t.Fatalf("ser count = %d, %v; want 5", n, err)
+	}
+	rs := ser.ReadSet()
+	for i := 0; i < 5; i++ {
+		if !rs[fmt.Sprintf("k%02d", i)] {
+			t.Fatalf("ser readSet missing k%02d: %v", i, rs)
+		}
+	}
+	if got := len(scanKeys(t, tx, storage.KeyRange{}, 0)); got != n {
+		t.Fatalf("ser scan count = %d, want %d", got, n)
+	}
+}
+
+// TestTxnBeginConcurrentIDsUnique v1.16.0 C2 快照创建锁外化：并发 Begin 的
+// 事务 ID 仍单调唯一（锁内分配 nextID），且每个事务快照可用（Get 种子 key
+// 成功），锁外创建快照不破坏 ID 语义与快照可用性。
+func TestTxnBeginConcurrentIDsUnique(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	seedSortedKeys(t, e.mgr, 3)
+
+	const n = 200
+	var wg sync.WaitGroup
+	ids := make([]uint64, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			tx, err := e.mgr.Begin()
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			ids[i] = tx.ID()
+			if _, err := tx.Get([]byte("k00")); err != nil {
+				errs[i] = err
+				return
+			}
+			errs[i] = tx.Rollback()
+		}(i)
+	}
+	wg.Wait()
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("begin/get/rollback %d: %v", i, errs[i])
+		}
+	}
+	seen := make(map[uint64]bool, n)
+	for _, id := range ids {
+		// seedSortedKeys 已消耗 id=1，并发 Begin 的 id ∈ [2, n+1]
+		if id < 2 || id > uint64(n)+1 {
+			t.Fatalf("txn id %d out of range [2,%d]", id, n+1)
+		}
+		if seen[id] {
+			t.Fatalf("duplicate txn id %d", id)
+		}
+		seen[id] = true
+	}
+	if len(seen) != n {
+		t.Fatalf("unique ids = %d, want %d", len(seen), n)
+	}
+}
+
+// TestTxnBeginIDsMonotonic v1.16.0 C2：顺序 Begin 的事务 ID 严格递增且连续
+// （nextID 锁内单调分配语义与 v1.15.0 完全一致）。
+func TestTxnBeginIDsMonotonic(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	prev := uint64(0)
+	const n = 20
+	for i := 0; i < n; i++ {
+		tx, err := e.mgr.Begin()
+		if err != nil {
+			t.Fatalf("begin %d: %v", i, err)
+		}
+		if tx.ID() != prev+1 {
+			t.Fatalf("txn id = %d, want %d (monotonic)", tx.ID(), prev+1)
+		}
+		prev = tx.ID()
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("rollback %d: %v", i, err)
+		}
+	}
+}
+
+// TestTxnBeginSnapshotIsolationConcurrent v1.16.0 C2：并发提交与 Begin 交错时，
+// 每个事务的快照仍是创建时刻的一致性视图——读到的值要么是快照前已提交的旧值、
+// 要么是已提交的新值，绝无中间态或未提交值；锁外化不破坏快照隔离语义。
+func TestTxnBeginSnapshotIsolationConcurrent(t *testing.T) {
+	e := newEnv(t)
+	defer e.close()
+	// 种子：k0=old
+	if err := e.st.Write(&storage.WriteBatch{Puts: []storage.KVPair{{Key: []byte("k0"), Value: []byte("old")}}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// 后台持续提交 k0=new 覆盖（走完整事务路径）
+	stop := make(chan struct{})
+	var bg sync.WaitGroup
+	bg.Add(1)
+	go func() {
+		defer bg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			tx, err := e.mgr.Begin()
+			if err != nil {
+				return
+			}
+			if err := tx.Put([]byte("k0"), []byte("new")); err != nil {
+				return
+			}
+			if err := tx.Commit(); err != nil {
+				return
+			}
+		}
+	}()
+	// 主流程：并发 Begin+Get，验证快照一致性
+	const n = 200
+	var wg sync.WaitGroup
+	bad := make(chan string, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tx, err := e.mgr.Begin()
+			if err != nil {
+				bad <- fmt.Sprintf("begin: %v", err)
+				return
+			}
+			defer tx.Rollback()
+			v, err := tx.Get([]byte("k0"))
+			if err != nil {
+				bad <- fmt.Sprintf("get: %v", err)
+				return
+			}
+			s := string(v)
+			if s != "old" && s != "new" {
+				bad <- fmt.Sprintf("inconsistent snapshot value %q", s)
+			}
+		}()
+	}
+	wg.Wait()
+	close(stop)
+	bg.Wait()
+	select {
+	case msg := <-bad:
+		t.Fatalf("snapshot violation: %s", msg)
+	default:
+	}
+}

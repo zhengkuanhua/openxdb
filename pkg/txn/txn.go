@@ -4,6 +4,7 @@ package txn
 
 import (
 	"errors"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 )
@@ -56,6 +57,9 @@ type TxnManager interface {
 	SetCommitWaitHook(hook func(lsn storage.LSN, seq uint64) error)
 	// HookErr 返回最近一次提交后回调的错误（无错误返回 nil）。
 	HookErr() error
+	// SetGroupCommitWindow 设置 WAL 组提交定时刷盘窗口（v1.14.0 P1）：
+	// 透传至底层 WAL；d<=0 关闭定时窗口（回退 v1.13.0 被动攒批行为）。
+	SetGroupCommitWindow(d time.Duration)
 	Close() error
 }
 

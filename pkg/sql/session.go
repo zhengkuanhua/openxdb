@@ -12,6 +12,14 @@ import (
 // 串行执行、跨连接并行；SQL 层 autocommit 语句不使用显式事务状态，
 // 各自构造独立临时事务，天然可并发。
 //
+// v1.16.0 C3 例外：引擎层只读 SELECT 批接口 ExecuteBatchAsSession 在
+// 判定通过后会在同一会话上并发执行多条只读 SELECT（语句级并行 + 按序
+// 重组）。该路径仅包含无用户变量、非 Serializable 的纯只读 SELECT，
+// 事务快照共享 / autocommit 独立临时事务下读路径均为只读，会话锁内
+// 状态（inTx/curTx/stmtBeginTS）的临界区短且只读，故安全；批内不含
+// 写语句与会话状态变更。除该专用批路径外，同一 Session 仍不得被多个
+// goroutine 并发使用（连接内串行语义）。
+//
 // 兼容性：旧 API（Engine.Execute / ExecuteAs 等单会话调用方，含 CLI、
 // 既有测试与 sql_bench）使用 Executor 内置的全局会话 globalSess，
 // 行为与旧版完全一致（显式事务状态全局共享，无并发隔离要求）。
@@ -79,7 +87,9 @@ type Session struct {
 }
 
 // NewSession 创建独立会话。服务端每 TCP 连接调用一次；
-// 同一 Session 不应被多个 goroutine 同时使用（连接内串行语义）。
+// 同一 Session 不应被多个 goroutine 同时使用（连接内串行语义）；
+// v1.16.0 C3 引擎层只读 SELECT 批接口（ExecuteBatchAsSession）是唯一
+// 例外：判定通过后批内并发执行多条纯只读 SELECT，见 Session 并发模型注释。
 func (e *Executor) NewSession() *Session {
 	return &Session{
 		prepared:  map[string]string{},
@@ -87,4 +97,13 @@ func (e *Executor) NewSession() *Session {
 		isolation: IsoSnapshot, // P2-13：会话级默认快照隔离
 		CurrentDB: defaultDB,   // T39：新会话默认库为 default（存量兼容）
 	}
+}
+
+// InTx 返回会话当前是否处于显式事务内（BEGIN 后 true，COMMIT/ROLLBACK 复位）。
+// v1.14.0 P0 服务端只读 SELECT 并行路径用于判定 autocommit 状态（显式事务
+// 内的 SELECT 保持串行语义）。线程安全：内部经会话锁读取。
+func (s *Session) InTx() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inTx
 }

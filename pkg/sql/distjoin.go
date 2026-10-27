@@ -120,7 +120,7 @@ func (e *Executor) joinRel(sess *Session, tx txn.Txn, tabs []*TableMeta, left, r
 				// 键值类型与右主键编码不兼容 → 回退全量 JOIN 保证语义一致。
 				dbgLog("  routedJoin unroutable -> fallback joinRels")
 				if len(right.Rows) == 0 {
-					right, err = e.relFromTable(sess, tx, tabs, jc.Table, orAlias(jc.Table, jc.Alias), nil, jc.Alias)
+					right, err = e.relFromTable(sess, tx, tabs, jc.Table, orAlias(jc.Table, jc.Alias), nil, jc.Alias, nil)
 					if err != nil {
 						return nil, err
 					}
@@ -138,7 +138,7 @@ func (e *Executor) joinRel(sess *Session, tx txn.Txn, tabs []*TableMeta, left, r
 			if err == errJoinUnroutable {
 				dbgLog("  routedJoinRange unroutable -> fallback joinRels")
 				if len(right.Rows) == 0 {
-					right, err = e.relFromTable(sess, tx, tabs, jc.Table, orAlias(jc.Table, jc.Alias), nil, jc.Alias)
+					right, err = e.relFromTable(sess, tx, tabs, jc.Table, orAlias(jc.Table, jc.Alias), nil, jc.Alias, nil)
 					if err != nil {
 						return nil, err
 					}
@@ -152,8 +152,13 @@ func (e *Executor) joinRel(sess *Session, tx txn.Txn, tabs []*TableMeta, left, r
 	return joinRels(left, right, jc)
 }
 
-// dbgLog 临时调试日志（验证后删除）。
+// dbgLog 临时调试日志：默认关闭（零开销），设置环境变量 OPENXDB_DEBUG_LOG=1 开启。
+// 说明：此前无条件写盘导致每个调用点 open/write/close 三次文件 IO，
+// SQL 高频读路径（主键点查/范围扫描/2PC LOCK）延迟放大到毫秒级。
 func dbgLog(format string, args ...interface{}) {
+	if os.Getenv("OPENXDB_DEBUG_LOG") == "" {
+		return
+	}
 	f, err := os.OpenFile("D:/AI项目/OpenXDB开源数据库开发/openxdb/joinrng_debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return

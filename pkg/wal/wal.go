@@ -3,6 +3,7 @@ package wal
 
 import (
 	"errors"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 )
@@ -47,6 +48,12 @@ type WAL interface {
 	// SetGroupCommit 开关组提交。默认开启：Append 只写缓冲，由 SyncUpTo（或 Close）
 	// 合并 fsync 保证落盘；关闭后恢复每记录 fsync，行为与旧版完全一致。
 	SetGroupCommit(enabled bool)
+	// SetGroupCommitWindow 设置组提交定时刷盘窗口（v1.14.0 P1）。默认开启
+	// （500µs）：leader 在 fsync 前额外等待窗口，窗口内新追加记录一并并入
+	// 本次 fsync——事务稀疏（相邻事务间隔小于窗口）时也能合并 fsync，避免
+	// 每事务一次 fsync。设为 0 关闭定时窗口，回退被动攒批（仅并发等待者
+	// 合并），行为与 v1.13.0 完全一致。
+	SetGroupCommitWindow(d time.Duration)
 	// Replay 从文件头顺序重放全部记录，损坏时报错并中止。
 	Replay(apply func(*WalEntry)) error
 	// Truncate 截断 lsn 之前的记录（保留 lsn 及之后；checkpoint 后调用）。

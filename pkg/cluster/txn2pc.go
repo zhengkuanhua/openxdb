@@ -39,9 +39,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
-	"os"
 	"sort"
 	"time"
 
@@ -249,12 +247,6 @@ func BatchVersionVisible(scanFn func(r storage.KeyRange, limit int) ([]storage.K
 	if err != nil {
 		return nil, err
 	}
-	dbgBVV := func(k []byte, maxTS uint64, hasVer, vis bool) {
-		if len(k) >= 9 && k[0] == 'r' {
-			rid := binary.BigEndian.Uint64(k[1:9])
-			fmt.Fprintf(os.Stderr, "BVV keylen=%d rid=%d beginTS=%d scanRows=%d maxTS=%d hasVer=%v vis=%v\n", len(k), rid, beginTS, len(rows), maxTS, hasVer, vis)
-		}
-	}
 	ri := 0
 	for _, ki := range idx {
 		key := keys[ki]
@@ -278,7 +270,6 @@ func BatchVersionVisible(scanFn func(r storage.KeyRange, limit int) ([]storage.K
 		if hasVer && maxTS > beginTS {
 			vis[ki] = false
 		}
-		dbgBVV(key, maxTS, hasVer, vis[ki])
 	}
 	return vis, nil
 }

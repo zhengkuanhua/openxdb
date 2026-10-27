@@ -22,9 +22,9 @@ AIGC:
 
 # OpenXDB Known Limitations
 
-版本：v1.13.0（2026-10-25）
+版本：v1.15.0（2026-10-27）
 
-本文档列出 OpenXDB v1.10.0 的已知限制与边界。每条目给出限制描述、影响与建议，帮助用户在选型、部署与使用时做出合理判断。详细功能范围请以 [docs/product_manual_zh.md](docs/product_manual_zh.md)（第 4 章 SQL 参考）与设计文档 docs/ 为准。
+本文档列出 OpenXDB v1.15.0 的已知限制与边界。每条目给出限制描述、影响与建议，帮助用户在选型、部署与使用时做出合理判断。详细功能范围请以 [docs/product_manual_zh.md](docs/product_manual_zh.md)（第 4 章 SQL 参考）与设计文档 docs/ 为准。
 
 ---
 
@@ -56,10 +56,12 @@ AIGC:
 
 ## 2. 性能边界
 
-### 2.1 协议/解析性能边界（v1.13.0 已落地 P1 并发处理）
+### 2.1 协议/解析性能边界（v1.13.0 已落地 P1 并发处理；v1.14.0 落地 P0 只读并行 + P1 组提交定时窗口）
 
 - **限制描述**：v1.3.0 已将全局会话锁消除为会话级细粒度锁，v1.5.0 起 Python/JDBC 驱动支持客户端 pipeline 批量流水线执行；v1.12.0 完成协议解析两项 P1 优化（① 全量对话边界 bufio 读覆层，mysqlConn 外层 bufio.Reader 减少逐字节读系统调用；② COM_QUERY 多语句在线切分执行，splitSQLStatements 安全跳过引号/注释内分号，多结果以 `serverStatusMoreResults=0x0008` 状态位串行返回，单语句行为完全兼容）；v1.13.0 完成服务端多连接并发处理：协议读侧 REPLSession 改造为 reader goroutine 预读 + 有界 channel + 主循环顺序执行，消除单连接逐命令串行读等待，每连接独立 goroutine 使多连接请求可并行进入执行层；会话级隔离保持（connSession 独立 SQL 会话），既有 server/mysqlproto 测试与单节点部署零回归。E5 脚本侧 bench_oltp.py / bench_tpcc.py 事务内语句启用客户端 pipeline 批量发送（整事务一次往返），并新增连接超时防护（--timeout 默认 120s、连接级异常自动重建并计数）。
 - **影响**：E5 受控复测（干净数据重置 + 3 轮取中位数，8 连接）：OLTP read 0.40 / write 0.40 / read-write 0.40 TPS（errs=0 / reconnects=0）；TPC-C 5 仓 tpmC 78.00 / tpm_total 164.50（errs=0 / reconnects=0，较 v1.12.0 的 41.00 / 88.50 提升约 90%）。说明：OLTP read 侧仍受引擎聚合/范围查询执行开销制约（SUM/GROUP BY/ORDER BY 范围查询单条约 560ms、COUNT 全表约 580ms、点查约 3ms；SQL 执行层 v1.12→v1.13 零改动，属既有引擎特征），单连接 pipeline 与串行对照无差异证明瓶颈在服务端执行而非网络往返；v1.12.0 记录的 read 1.33 TPS 与当前受控复测不一致，以本次为准。TPC-C 高并发连接超时问题已修复：客户端默认超时提升至 120s 且连接级异常自动重建，3 轮复测 errs=0 / reconnects=0。
+- **v1.14.0 更新**：落地 P0 只读 SELECT 并行（REPLSession 批内连续 autocommit 只读 SELECT 经 worker pool 并发执行、按序重组、批尾统一 Flush，开关 `ro_parallel` 默认 on 可回退）与 P1 WAL 组提交定时窗口（SyncUpTo 窗口内合并 fsync，配置 `group_commit_window_ms` 默认 0.5ms、0=关闭回退 v1.13.0 被动攒批）。E6 受控复测（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read 0.43 / write 0.43 / read-write 0.43 TPS（较 v1.13.0 +7.5%），TPC-C tpmC 85.50（较 v1.13.0 +9.6%，3 轮原始 80.00 / 85.50 / 114.50，errs=0）。边界：read 模式仍受引擎聚合/范围查询执行开销制约（执行内核未并行，P3 写语句并行不在 v1.14.0 范围）；组提交窗口对延迟敏感单写事务附加 ≤0.5ms 同步等待（可配 0 关闭）；tpmC 轮 3 出现 114.50 高值，波动来源待查（候选 GC / RocksDB compaction / Python GIL 释放时序）。详见 [docs/experiments/E6_v1140_ro_parallel_wal_groupcommit.md](docs/experiments/E6_v1140_ro_parallel_wal_groupcommit.md)。
+- **v1.15.0 更新**：落地 SQL 执行层四项优化——W1 Scan 快路径（txn 无未提交写时快照直透，跳过全量物化+重建排序）、W2 COUNT(*)/COUNT(1) 快速路径（无 WHERE/GROUP 等时走存储层 RangeCounter 逐 region 计数求和）、W3 SELECT 列投影下推（按需解码列，JOIN/子查询/星号保守全列回退）、W4 ORDER BY 索引顺序扫描免排序 + DISTINCT 相邻去重免排序（单列二级索引/主键 + 运行时 O(n) 已序验证）。E5 受控复测（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read 0.38 / write 0.40 / read-write 0.40 TPS（errs=0，与 v1.14.0 持平、无回归），TPC-C tpmC 81.50（3 轮原始 63.50 / 81.50 / 102.00，errs=0，与 v1.14.0 的 85.50 持平）。单语句专项压测（PEP 249 驱动，N=7-9 取中位数，sbtest 10,000 行）：COUNT(*) 全表 **580ms → 5.18ms（约 103-112 倍）**、全表扫描多列 613.51ms（基线 780-900ms，约 1.27-1.47 倍）、全表扫描单列 532.33ms（约 1.47-1.69 倍）、点查 2.09-3.25ms（基线 ~3ms，持平）、范围聚合 525.36ms（基线 ~560ms，约 1.07 倍）；ORDER BY 主键 548.51ms 与 DISTINCT 619.88ms 均与无排序/无去重投影持平（免排序生效），ORDER BY 二级索引 764.39ms 为索引扫描+批量回表开销但免去全量 sort。边界：OLTP 事务级吞吐仍受全局会话锁与单机端侧网络往返制约（个位数 TPS 量级）；ORDER BY 二级索引快速路径在 10k 行量级显示索引+回表开销高于排序收益，仅在更大数据量/索引覆盖场景收益为正；免排序/DISTINCT 相邻去重仅限单列裸列场景，多列/表达式 ORDER BY 仍走原路径。详见 [docs/experiments/E5_standard_bench_alignment.md](docs/experiments/E5_standard_bench_alignment.md)。
 - **建议**：将上述数值视为**单机端侧功能基准**，非生产级吞吐承诺；生产负载请先按真实数据量/并发做压测，评估是否需要单机优化或集群扩展。
 
 ### 2.2 备份/恢复与大批量导入耗时

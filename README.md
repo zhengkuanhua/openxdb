@@ -32,7 +32,7 @@ AIGC:
 [![GitHub stars](https://img.shields.io/github/stars/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 [![GitHub issues](https://img.shields.io/github/issues/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 
-OpenXDB 是从零自研的单机/分布式关系型数据库内核（Go + RocksDB），定位于学习与工程实践并重的开源数据库项目。内核自底向上实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务与带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA 故障转移、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动（JDBC/Python）、运维工具链、认证权限（审计 + RBAC）与生态导出（JSON/Parquet）等能力，当前版本 **v1.13.0**。
+OpenXDB 是从零自研的单机/分布式关系型数据库内核（Go + RocksDB），定位于学习与工程实践并重的开源数据库项目。内核自底向上实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务与带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA 故障转移、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动（JDBC/Python）、运维工具链、认证权限（审计 + RBAC）与生态导出（JSON/Parquet）等能力，当前版本 **v1.14.0**。
 
 ## 快速开始
 
@@ -165,6 +165,8 @@ Protocol / CLI (REPL · TCP server · JDBC/Python 驱动 · MySQL wire protocol 
 **v1.12.0（2026-10-25 落地）**：**性能与精度优化** —— ① P1 协议解析优化：全量对话边界 bufio 读覆层（减少逐字节系统调用）+ COM_QUERY 多语句在线切分执行（引号/注释内分号安全，`serverStatusMoreResults=0x0008`，单语句行为兼容）；② P2 DECIMAL 高精度扩展：4 位小数 → 按列声明 scale 可配置精度（值对象 DS 字段、跨 scale 对齐比较/舍入、行协议与 JSON 导出联动）；③ P2 备份导入提速：IMPORT BATCH 语义强化（事务分批提交、失败回滚边界清晰）；④ P2 组提交默认开启评估：WAL 组提交默认开（Append 仅写缓冲、SyncUpTo 合并 fsync），E5 实测 TPC-C tpmC 13.5→41.0、OLTP write 0.93→1.25 TPS。
 
 **v1.13.0（2026-10-25 落地）**：**服务端并发与 E5 pipeline 化** —— ① P1 服务端多连接并发处理：协议读侧 REPLSession 改 reader goroutine 预读 + 有界 channel + 主循环顺序执行，消除单连接逐命令串行读等待，会话级隔离不变、既有 server/mysqlproto 测试与单节点部署零回归；② P1 E5 脚本 pipeline 化：bench_oltp.py / bench_tpcc.py 事务内语句改客户端 pipeline 批量发送（整事务一次往返）；③ P1 E5 受控复测：干净重置 + 3 轮取中位数，TPC-C tpmC 41.00→78.00 / tpm_total 88.50→164.50（提升约 90%）、OLTP read 0.40 / write 0.40 / read-write 0.40 TPS（read 受引擎聚合/范围查询执行开销制约，SQL 执行层零改动），连接超时 errs 根因修复（--timeout 120s + 连接级异常重建，3 轮 errs=0 / reconnects=0）；④ P2 文档同步（README / KNOWN_LIMITATIONS 至 v1.13.0、DEV_PLAN 2026Q7 补 v1.13.0 排期标完成，DEV_PLAN 不入库）。
+
+**v1.14.0（2026-10-25 落地）**：**只读 SELECT 并行 + WAL 组提交定时窗口** —— ① P0 只读 SELECT 并行：REPLSession pipeline 批内对连续 autocommit 只读 SELECT 并发执行（worker pool，默认并发 8、批上限 64），响应按序重组消除队头阻塞；非只读/事务内/未鉴权语句即时中断退回串行；qc 查询缓存 Get/Put 由既有互斥锁并发控制；开关 `ro_parallel`（默认 on，SET ro_parallel=0 回退 v1.13.0 串行行为）；② P1 WAL 组提交定时窗口：SyncUpTo leader 路径在记录尾部后按窗口 sleep 再刷新最新已写末尾，事务稀疏时也合并 fsync；配置 `group_commit_window_ms`（默认 0.5ms，0=回退 v1.13.0 被动攒批，100µs~1ms 可配）；③ 全仓回归 22 包全绿，新增 server_roparallel_test.go（批序重组/开关回退/事务隔离/配置热切换）+ wal_test.go 组提交窗口测试（默认窗口/稀疏合并/关闭基线）+ P1 配置接线测试；④ E5 受控复测（8 连接 3 轮中位数）：OLTP read 0.40→0.43 / write 0.40→0.43 / read-write 0.40→0.43 TPS，TPC-C tpmC 78.00→85.50（详情见 docs/experiments/E6_v1140_ro_parallel_wal_groupcommit.md）。
 
 ### 完整特性
 
