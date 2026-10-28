@@ -116,6 +116,10 @@ type DB struct {
 	readOnly     bool   // 陈旧主降级后的只读标记（分区恢复收敛）
 	conflictCount uint64 // 数据冲突标记：陈旧主写尝试被拒 / 恢复合并降级计数
 	demoteHook   func() // 降级观察回调（测试/上层通知用，nil 忽略）
+
+	// v1.16.0 WAL 自动 checkpoint：周期检查 WAL 大小，在安全位点截断已
+	// 持久化记录，防止 wal.log 随提交单调增长。Open 启动、Close 停止。
+	checkpoint *checkpointController
 }
 
 // Init 初始化数据目录：创建 data/ 子目录与 openxdb.conf。
@@ -243,12 +247,21 @@ func Open(dir string) (*DB, error) {
 	// 并加载合并（优先级：内存 > 持久化 > 默认值）。文件缺失 = 首次启动空表；
 	// 损坏/非法键/非法值明确报错，绝不静默忽略。
 	eng.SetPersistedConfigPath(filepath.Join(dir, PersistedConfigFile))
+	db := &DB{Dir: dir, Storage: st, WAL: w, Txn: tm, SQL: eng, Cluster: mgr, TSO: ts, FailoverCatchupTimeout: 2 * time.Second}
+	// v1.16.0 WAL 自动 checkpoint：启动后台检查协程，并向 SQL 引擎装配
+	// 配置入口（SET wal_auto_checkpoint / wal_checkpoint_interval_ms /
+	// wal_checkpoint_max_mb 热更新，见 pkg/sql/wal_checkpoint_config.go）。
+	// 必须在 LoadPersistedConfig 之前装配：SET PERSIST 的 wal_* 键重启时
+	// 依赖控制器非 nil 才能热应用到运行参数。
+	cc := newCheckpointController(db)
+	db.checkpoint = cc
+	cc.Start()
+	eng.SetCheckpointController(cc)
 	if err := eng.LoadPersistedConfig(); err != nil {
 		_ = tm.Close()
 		_ = st.Close()
 		return nil, fmt.Errorf("db: load persisted config: %w", err)
 	}
-	db := &DB{Dir: dir, Storage: st, WAL: w, Txn: tm, SQL: eng, Cluster: mgr, TSO: ts, FailoverCatchupTimeout: 2 * time.Second}
 	// P0 HA v1.10.0：epoch 授权与写入 fencing 默认开启（评估结论：对未授权
 	// 主/单机零回归——masterEpoch=0 时 AllowWrite 放行、无广播不触发降级；
 	// 仅已授权主被更高 epoch 取代时才 fencing）。quorum 升主仲裁保留默认
@@ -522,6 +535,12 @@ func (d *DB) BinlogLSN() (uint64, error) {
 // Close 关闭事务管理器、存储与 WAL（顺序与 Open 相反）。
 func (d *DB) Close() error {
 	var errs []error
+	// v1.16.0 WAL 自动 checkpoint：最先停止后台检查协程，避免 Close 过程中
+	// 并发访问 WAL/Txn/Storage。
+	if d.checkpoint != nil {
+		d.checkpoint.Stop()
+		d.checkpoint = nil
+	}
 	if d.Cluster != nil {
 		d.Cluster.Stop() // 停止心跳并关闭复用连接
 	}
