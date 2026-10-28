@@ -27,7 +27,7 @@ import (
 	"github.com/zhengkuanhua/openxdb/pkg/storage/rocksdb"
 )
 
-const version = "v1.0.0"
+const version = "v1.16.0"
 
 func main() {
 	if len(os.Args) < 2 {

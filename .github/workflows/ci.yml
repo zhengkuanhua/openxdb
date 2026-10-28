@@ -3,10 +3,12 @@ name: CI
 on:
   push:
     branches: [ main ]
+    tags:
+      - 'v*'
   pull_request:
 
 jobs:
-  test:
+  test-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,7 +58,6 @@ jobs:
           }
           if (-not $env:MSYS2_ROOT) { Write-Error "MSYS2 UCRT64 g++ not found (searched: $($candidates -join ', '))"; exit 1 }
           Write-Host "MSYS2 location: $env:MSYS2_ROOT"
-          # 统一使用 MSYS2 UCRT64 工具链（RocksDB 静态库由其编译，避免与 runner 自带 MinGW 混用导致 libstdc++ 符号缺失）
           $env:CC = "$env:MSYS2_ROOT/ucrt64/bin/gcc.exe"
           $env:CXX = "$env:MSYS2_ROOT/ucrt64/bin/g++.exe"
           if (-not (Test-Path $env:CXX)) { Write-Error "MSYS2 UCRT64 g++ not found: $env:CXX"; exit 1 }
@@ -84,10 +85,56 @@ jobs:
           }
           if (-not $env:MSYS2_ROOT) { Write-Error "MSYS2 UCRT64 g++ not found (searched: $($candidates -join ', '))"; exit 1 }
           Write-Host "MSYS2 location: $env:MSYS2_ROOT"
-          # 与 Build 步骤一致的 MSYS2 UCRT64 工具链
           $env:CC = "$env:MSYS2_ROOT/ucrt64/bin/gcc.exe"
           $env:CXX = "$env:MSYS2_ROOT/ucrt64/bin/g++.exe"
           $env:CGO_CFLAGS = "-IC:/rocksdb-src/include"
           $env:CGO_CXXFLAGS = "-IC:/rocksdb-src/include"
           $env:CGO_LDFLAGS = "-LC:/rocksdb-build -L$env:MSYS2_ROOT/ucrt64/lib -lrocksdb -lshlwapi -lrpcrt4 -lws2_32 -lstdc++ -lwinpthread -static"
+          go test ./...
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build git
+
+      - name: Build RocksDB static library
+        run: |
+          git clone --depth 1 --branch v11.8.1 https://github.com/facebook/rocksdb.git /tmp/rocksdb-src
+          cmake -S /tmp/rocksdb-src -B /tmp/rocksdb-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_CXX_FLAGS="-Wno-error=maybe-uninitialized" \
+            -DROCKSDB_BUILD_SHARED=OFF -DWITH_TESTS=OFF -DWITH_TOOLS=OFF \
+            -DWITH_BENCHMARK_TOOLS=OFF -DWITH_JNI=OFF \
+            -DWITH_GFLAGS=OFF -DWITH_ZLIB=OFF -DWITH_LZ4=OFF \
+            -DWITH_SNAPPY=OFF -DWITH_ZSTD=OFF -DWITH_BZ2=OFF
+          cmake --build /tmp/rocksdb-build -j$(nproc)
+
+      - name: Build
+        env:
+          CGO_ENABLED: '1'
+          CGO_CFLAGS: '-I/tmp/rocksdb-src/include'
+          CGO_CXXFLAGS: '-I/tmp/rocksdb-src/include'
+          CGO_LDFLAGS: '-L/tmp/rocksdb-build -lrocksdb'
+        run: |
+          go version
+          go build -x ./cmd/openxdb
+          go build ./...
+
+      - name: Test
+        env:
+          CGO_ENABLED: '1'
+          CGO_CFLAGS: '-I/tmp/rocksdb-src/include'
+          CGO_CXXFLAGS: '-I/tmp/rocksdb-src/include'
+          CGO_LDFLAGS: '-L/tmp/rocksdb-build -lrocksdb'
+        run: |
           go test ./...

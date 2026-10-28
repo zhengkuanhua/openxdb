@@ -15,6 +15,52 @@ OpenXDB 版本变更记录。
 
 > 版本线说明：历史版本以仓库 README Status 行、docs/ 设计文档头部标注与 git 提交记录为准。早期部分中间 -alpha 版本未单独打标（git 与文档均无显式版本号），按里程碑区间归纳，版本号不做臆造。
 
+## v1.16.0 (2026-10-28)
+
+v1.16.0（SQL 执行内核并发模型优化 + WAL 持久化增强）正式发布。按 DEV_PLAN_2026Q8 完成 C1-C7 六项内核并发优化与 E5 受控复测，并落地 WAL 自动 checkpoint / truncate 持久化收敛；全仓回归全绿。
+
+**Added**
+
+- **C1 WAL 组提交增强**：单等待者免 0.5ms 窗口 + 批量刷盘，写事务 COMMIT 延迟显著下降；`group_commit_window_ms` 可回退。
+- **C2 Begin 快照创建锁外化**：快照创建移至锁外，ID / 序号仍单调；点查 / autocommit 密集场景 Begin 锁竞争消除。
+- **C3 ro_parallel 下沉 executor + 显式事务只读并行**：只读并行覆盖 REPL 批与 autocommit 直调场景，显式事务内纯只读语句并行执行（MVCC 快照语义）；`ro_parallel` 默认 on 可回退。
+- **C4 提交应用流水线化 / 组提交**：阶段 3 按 seq 排队改写为注册聚合，WAL 重放结果严格等价、复制 / 2PC 顺序不变。
+- **C5 cgo 扫描拷贝优化**：arena 单块 xscan + 两趟 do_scan + 零拷贝 xscan_item（unsafe 边界专项测试）；全表 / 范围读加速。
+- **C6 连接内语句 pipeline / 快照复用**：autocommit 顶层纯只读 SELECT 共享快照 + 连接内 pipeline flush；`snapshot_share` / `pipeline_flush` 独立 flag 默认开。
+- **WAL 自动 checkpoint / truncate**：新增安全位点模型（safe = min(LastSyncedLSN, AppliedLSN)，截断前 RocksDB Flush 落 SST），后台周期检查自动截断，长期运行 wal.log 大小受控；配置 `wal_auto_checkpoint`（默认 on）/ `wal_checkpoint_interval_ms`（60000）/ `wal_checkpoint_max_mb`（64）；新增 LastSyncedLSN / AppliedLSN 位点基础设施与 storage.Flusher 接口。
+- **C7 E5 受控复测**（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read / write / read-write **10.37 / 8.33 / 8.15 TPS**（QPS 145.13 / 33.33 / 146.70，errs=0 / reconnects=0），较 v1.15.0（0.38 / 0.40 / 0.40 TPS）TPS 提升约 **20-27 倍**、QPS 提升约 **22-27 倍**，达成验收目标（TPS≥1.5、QPS≥30）；TPC-C 5 仓 tpmC **254.00** / tpm_total 581.00（较 v1.15.0 81.50 / 170.50 提升约 3.1-3.4 倍）。详见 [docs/experiments/C7_e5_controlled_retest.md](docs/experiments/C7_e5_controlled_retest.md)。
+
+**边界声明**
+
+- TPS/QPS 受全局会话锁与单机端侧往返制约，数值为**单机端侧功能基准**，非生产级吞吐承诺；write 模式为吞吐下限（QPS 中位 33.33）。
+- 所有优化均有独立 feature flag 可灰度回退；与 C1-C6 兼容、可回退。
+
+## v1.15.0 (2026-10-27)
+
+v1.15.0（SQL 执行层单语句路径优化）落地四项优化：W1 Scan 快路径、W2 COUNT 快速路径、W3 列投影下推、W4 ORDER BY 索引顺序扫描免排序 + DISTINCT 相邻去重免排序。
+
+**Added**
+
+- **W1 Scan 快路径**：txn 无未提交写时快照直透，跳过全量物化 + 重建排序。
+- **W2 COUNT(*)/COUNT(1) 快速路径**：无 WHERE/GROUP 等时走存储层 RangeCounter 逐 region 计数求和。
+- **W3 SELECT 列投影下推**：按需解码列，JOIN / 子查询 / 星号保守全列回退。
+- **W4 ORDER BY 索引顺序扫描免排序 + DISTINCT 相邻去重免排序**：单列二级索引 / 主键 + 运行时 O(n) 已序验证。
+- **E5 受控复测**（3 轮取中位数，8 连接）：OLTP read 0.38 / write 0.40 / read-write 0.40 TPS（与 v1.14.0 持平、无回归）；TPC-C tpmC 81.50。单语句专项：COUNT(*) 全表 580ms → **5.18ms**（约 103-112 倍）、全表扫描多列 613.51ms（约 1.27-1.47 倍）、全表扫描单列 532.33ms（约 1.47-1.69 倍）、ORDER BY 主键 / DISTINCT 免排序生效（详见 [docs/experiments/E5_standard_bench_alignment.md](docs/experiments/E5_standard_bench_alignment.md)）。
+
+## v1.6.0 ~ v1.14.0（里程碑区间摘要）
+
+介于 v1.5.0 与 v1.15.0 之间的正式版本按里程碑区间归纳（细节见 README 版本状态节）：
+
+- **v1.6.0 阶段一/二（2026-10-24）**：ALTER TABLE 列级操作补全（MODIFY COLUMN）、CREATE DATABASE / 库级管理（`db.tbl` 前缀）、多列窗口扩展、binlog / mysqldump 全选项、存储过程受限子集补齐（DECLARE/游标/OUT 参数）、HA 回迁自动化。
+- **v1.7.0（2026-10-24）**：HA 全量对齐兜底联动；空表 AVG 语义转正。
+- **v1.8.0（2026-10-24）**：触发器行级语义（FOR EACH ROW、NEW/OLD、体回滚与递归策略）。
+- **v1.9.0（2026-10-24）**：物化视图增量刷新（CONCURRENTLY 快照交换、依赖链管理）。
+- **v1.10.0（2026-10-25）**：HA 脑裂防护生产化（ha.epochEnabled 默认开启）。
+- **v1.11.0（2026-10-25）**：商业生态增强与文档对齐（Parquet 多 RowGroup、告警 webhook、TLS 证书热轮换）。
+- **v1.12.0（2026-10-25）**：性能与精度优化（bufio 读覆层 + COM_QUERY 多语句、DECIMAL 按列 scale、IMPORT BATCH 强化、WAL 组提交默认开启，E5 tpmC 13.5→41.0）。
+- **v1.13.0（2026-10-25）**：服务端多连接并发处理 + E5 pipeline 化，TPC-C tpmC 41.00→78.00。
+- **v1.14.0（2026-10-25）**：只读 SELECT 并行（ro_parallel）+ WAL 组提交定时窗口，E5 tpmC 78.00→85.50。
+
 ## v1.5.0-dev (2026-10-23)
 
 v1.5.0（协议与吞吐）第 1 项「客户端 pipeline 协议」先行启动落地。服务端 `REPLSession` 本就逐行按序处理，改造集中在驱动层。

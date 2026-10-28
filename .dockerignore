@@ -1,0 +1,29 @@
+# 版本控制
+.git
+.gitignore
+
+# 构建产物
+*.exe
+*.a
+*.o
+*.obj
+*.so
+*.dll
+*.lib
+*.out
+bin/
+
+# 运行时数据
+data/
+**/data
+
+# 基准实验数据（大文件，不入构建上下文）
+tests/bench/
+
+# 文档与站点（构建不需要）
+docs/
+site/
+
+# 日志与临时文件
+*.log
+temp/
