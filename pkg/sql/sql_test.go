@@ -1122,6 +1122,9 @@ func planContains(rows [][]sql.Value, sub string) bool {
 
 func TestP2SlowQueries(t *testing.T) {
 	e := newEngine(t)
+	// 数据准备阶段也关闭阈值：避免大 INSERT 在默认 100ms 阈值下被误记为慢查询
+	// （慢查询记录为实例级且无清空接口，阈值关闭断言依赖准备阶段零记录）
+	e.SetSlowThreshold(0)
 	mustExec(t, e, "CREATE TABLE big (id INT, v TEXT, PRIMARY KEY (id))")
 	var sb strings.Builder
 	sb.WriteString("INSERT INTO big (id, v) VALUES ")
@@ -1134,7 +1137,6 @@ func TestP2SlowQueries(t *testing.T) {
 	mustExec(t, e, sb.String())
 
 	// 阈值关闭：执行再多次也不记录
-	e.SetSlowThreshold(0)
 	for i := 0; i < 3; i++ {
 		mustRows(t, e, "SELECT * FROM big")
 	}

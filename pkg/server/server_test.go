@@ -20,7 +20,14 @@ func newTestServer(t *testing.T) (*Server, func()) {
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
-	return New(d.Txn), func() { _ = d.Close() }
+	s := New(d.Txn)
+	return s, func() {
+		// v1.16.0 C6：连接结束才释放 autocommit 共享只读快照（ReleaseAutoResources）。
+		// 先优雅停机等连接 goroutine 退出（快照释放完成）再关 RocksDB，避免
+		// xdb_close 与 xdb_snapshot_release 并发导致 CGO 崩溃（C7 全仓回归定位）。
+		_ = s.GracefulShutdown(time.Second)
+		_ = d.Close()
+	}
 }
 
 func mustResp(t *testing.T, s *Server, line string) string {

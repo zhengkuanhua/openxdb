@@ -578,6 +578,7 @@ func (t *txnImpl) Commit() error {
 		}
 		m.notifyCommittedLocked()
 		m.applied++
+		m.applyCond.Broadcast() // C4 修复：bypass 应用推进 applied 后必须唤醒 register 的 follower，否则并发下 follower 永久等待
 		m.applyWrites++
 		m.applyTxns++
 		m.applyBypass++
@@ -800,3 +801,4 @@ func (t *txnImpl) finish(s TxnState) {
 		t.snap = nil
 	}
 }
+
