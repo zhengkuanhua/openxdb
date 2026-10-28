@@ -37,6 +37,12 @@ type txnManager struct {
 	seqNext   uint64     // 下一个待分配的提交序号（锁内分配；仅 Commit 事务占位）
 	applied   uint64     // 已成功应用到存储的最大提交序号
 	applyCond *sync.Cond // 关联 mu，等待轮到自己按序应用
+	// appliedLSN 已成功应用到存储的最大提交记录 LSN（v1.16.0 WAL 自动
+	// checkpoint 用）。与 applied（处理序号）不同：fsync/st.Write 失败的
+	// 事务会跳号推进 applied，但 appliedLSN 只记录真正落到存储的提交位点，
+	// checkpoint 依据 min(appliedLSN, WAL.LastSyncedLSN) 截断，失败事务的
+	// 记录永不截断（崩溃恢复可补齐）。
+	appliedLSN storage.LSN
 
 	// C4 提交应用组提交（流水线化）：消除阶段 3 st.Write 全局单写者逐事务
 	// 串行瓶颈——leader 把按 seq 连续就绪的多个事务合并为一次原子 st.Write，
@@ -63,6 +69,13 @@ func (m *txnManager) CommitSeq() uint64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.commitSeq
+}
+
+// AppliedLSN 返回已成功应用到存储的最大提交记录 LSN（txn.AppliedLSNProvider）。
+func (m *txnManager) AppliedLSN() storage.LSN {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.appliedLSN
 }
 
 // notifyCommittedLocked 在产生存储可见写的成功提交后递增全局提交序列
@@ -117,6 +130,7 @@ func (m *txnManager) Recover() error {
 	defer m.mu.Unlock()
 	var applyErr error
 	var commits uint64
+	var lastCommitted storage.LSN // 最后一条成功应用到存储的 StateCommit 记录 LSN（checkpoint 位点）
 	// 路由元数据键：m:regions / m:tables 以落盘快照为准，WAL 重放不得覆盖。
 	// 根因：SplitTable/Failover 的 m:regions 写入、DDL/表目录变更（m:tables）
 	// 会进入 WAL，崩溃重启后 Recover 重放会把历史/被污染的快照覆盖回 storage，
@@ -133,6 +147,7 @@ func (m *txnManager) Recover() error {
 	err := m.wal.Replay(func(e *wal.WalEntry) {
 		if e.State == wal.StateCommit && applyErr == nil {
 			commits++
+			lastCommitted = e.LSN
 			if e.Batch != nil && (len(e.Batch.Puts) > 0 || len(e.Batch.Deletes) > 0) {
 				hasMeta := false
 				fb := &storage.WriteBatch{}
@@ -166,6 +181,7 @@ func (m *txnManager) Recover() error {
 	if applyErr == nil {
 		m.seqNext = commits + 1
 		m.applied = commits
+		m.appliedLSN = lastCommitted
 	}
 	return applyErr
 }
@@ -578,6 +594,7 @@ func (t *txnImpl) Commit() error {
 		}
 		m.notifyCommittedLocked()
 		m.applied++
+		m.appliedLSN = lsn // checkpoint 位点：仅成功应用到存储后推进
 		m.applyCond.Broadcast() // C4 修复：bypass 应用推进 applied 后必须唤醒 register 的 follower，否则并发下 follower 永久等待
 		m.applyWrites++
 		m.applyTxns++
@@ -656,6 +673,9 @@ func (t *txnImpl) Commit() error {
 		delete(m.applyPending, seq) // 本批不合并，立即摘除本条目防 map 泄漏
 		m.notifyCommittedLocked()
 		m.applied++
+		if applyErr == nil {
+			m.appliedLSN = lsn // checkpoint 位点：仅成功应用到存储后推进
+		}
 		m.applyWrites++
 		m.applyTxns++
 		m.applyCond.Broadcast()
@@ -737,6 +757,9 @@ func (t *txnImpl) Commit() error {
 	}
 	m.notifyCommittedLocked()
 	m.applied += n
+	if applyErr == nil && n > 0 {
+		m.appliedLSN = merged[n-1].lsn // checkpoint 位点：整批成功应用后推进到最后一条记录
+	}
 	m.applyWrites++
 	m.applyTxns += n
 	m.applyCond.Broadcast()

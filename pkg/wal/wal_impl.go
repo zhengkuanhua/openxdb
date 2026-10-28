@@ -298,6 +298,13 @@ func (w *walImpl) Replay(apply func(*WalEntry)) error {
 }
 
 // Truncate 保留 lsn 及之后的记录，重建文件（checkpoint 后调用）。
+// v1.16.0 WAL 自动 checkpoint：修复截断后 nextLSN 计算——原实现将
+// nextLSN 直接置为 lsn，当保留记录存在（保留记录 LSN 可大于 lsn）时，
+// 新 Append 会重复分配与文件中已存在记录冲突的 LSN，导致 Replay 出现
+// 重复 LSN、崩溃恢复结果错乱。现改为取「保留记录最大 LSN+1」与 lsn
+// 的较大值；全截断（无保留记录）时 nextLSN=lsn，与原语义一致。保留
+// 记录写入 tmp 后已 fsync，lastSynced 同步推进为 nextLSN-1，保证
+// checkpoint 位点判定（LastSyncedLSN）在截断后依然准确。
 func (w *walImpl) Truncate(lsn storage.LSN) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -309,9 +316,13 @@ func (w *walImpl) Truncate(lsn storage.LSN) error {
 		return err
 	}
 	var keep []*WalEntry
+	var keepLast storage.LSN
 	if err := w.replayLocked(func(e *WalEntry) {
 		if e.LSN >= lsn {
 			keep = append(keep, e)
+			if e.LSN > keepLast {
+				keepLast = e.LSN
+			}
 		}
 	}); err != nil {
 		return err
@@ -361,11 +372,24 @@ func (w *walImpl) Truncate(lsn storage.LSN) error {
 		return err
 	}
 	w.f = f
+	// 修复：nextLSN 取保留记录末尾与截断点的较大值，避免与保留记录冲突。
 	w.nextLSN = lsn
+	if keepLast+1 > w.nextLSN {
+		w.nextLSN = keepLast + 1
+	}
+	// 保留记录均已在 tmp 中 fsync，视为已刷盘位点推进到文件末尾。
+	w.lastSynced = w.nextLSN - 1
 	if _, err := w.f.Seek(0, io.SeekEnd); err != nil {
 		return err
 	}
 	return nil
+}
+
+// LastSyncedLSN 返回已 fsync 落盘的最大 LSN（0 = 无已刷记录）。
+func (w *walImpl) LastSyncedLSN() storage.LSN {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.lastSynced
 }
 
 func (w *walImpl) LastLSN() storage.LSN {

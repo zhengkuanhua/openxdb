@@ -98,6 +98,10 @@ typedef struct xdb_stats {
 /* 采集 RocksDB 内部统计。返回 0=成功；-1=失败（errmsg 置位）。 */
 int xdb_stats_get(xdb* h, xdb_stats* out, char** errmsg);
 
+/* 强制 flush memtable 到 SST（WAL 自动 checkpoint 用，保证截断位点数据落盘）。
+   返回 0=成功；-1=失败（errmsg 置位）。 */
+int xdb_flush(xdb* h, char** errmsg);
+
 #ifdef __cplusplus
 }
 #endif

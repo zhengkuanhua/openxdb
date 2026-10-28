@@ -125,6 +125,21 @@ func (r *rocks) Write(batch *storage.WriteBatch) error {
 	return nil
 }
 
+// Flush 强制 memtable 刷盘（storage.Flusher 可选接口；WAL 自动 checkpoint 用）。
+// 返回时此前所有成功 Write 的数据均已落 SST，WAL 截断后崩溃恢复不依赖被截记录。
+func (r *rocks) Flush() error {
+	if r.h == nil {
+		return fmt.Errorf("rocksdb: flush: closed")
+	}
+	var errmsg *C.char
+	if ret := C.xdb_flush(r.h, &errmsg); ret != 0 {
+		err := fmt.Errorf("rocksdb: flush: %s", cString(errmsg))
+		freeStr(errmsg)
+		return err
+	}
+	return nil
+}
+
 // WriteSeq 返回存储级写提交序列（C6 窗口过期检测；storage.WriteSeqProvider）。
 func (r *rocks) WriteSeq() uint64 {
 	return r.writeSeq.Load()

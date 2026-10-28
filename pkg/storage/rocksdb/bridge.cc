@@ -432,6 +432,24 @@ long long get_int_property(rocksdb::DB* db, const char* prop) {
 
 }  // namespace
 
+// xdb_flush 强制 flush memtable 到 SST（WAL 自动 checkpoint 用）。
+// wait=true：返回时本次 flush 全部完成，此前 Write 的数据均已落 SST；
+// checkpoint 截断 OpenXDB WAL 前调用，保证截断位点数据不依赖被截记录。
+int xdb_flush(xdb* h, char** errmsg) {
+    if (!h || !h->db) {
+        if (errmsg) *errmsg = dup_status(rocksdb::Status::InvalidArgument("xdb_flush: null handle"));
+        return -1;
+    }
+    rocksdb::FlushOptions opts;
+    opts.wait = true;
+    rocksdb::Status st = h->db->Flush(opts);
+    if (!st.ok()) {
+        if (errmsg) *errmsg = dup_status(st);
+        return -1;
+    }
+    return 0;
+}
+
 int xdb_stats_get(xdb* h, xdb_stats* out, char** errmsg) {
     if (!h || !h->db || !out) {
         if (errmsg) *errmsg = dup_status(rocksdb::Status::InvalidArgument("xdb_stats_get: null handle/out"));

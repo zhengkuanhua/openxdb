@@ -59,3 +59,13 @@ var (
 type WriteSeqProvider interface {
 	WriteSeq() uint64
 }
+
+// Flusher 提供存储层强制落盘能力（WAL 自动 checkpoint 用）。
+// Storage 接口之外的可选能力，通过类型断言使用：st.(storage.Flusher)。
+// Flush 返回时，此前所有成功 Write 的数据均已持久化（memtable 已刷盘 /
+// 内部 WAL 已落盘），保证 WAL 截断后崩溃恢复不依赖被截断的 OpenXDB WAL
+// 记录。不实现该接口的存储实现由 checkpoint 调用方跳过（其 Write 自身
+// 已保证持久化语义）。
+type Flusher interface {
+	Flush() error
+}

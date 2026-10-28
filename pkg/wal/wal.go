@@ -57,9 +57,16 @@ type WAL interface {
 	// Replay 从文件头顺序重放全部记录，损坏时报错并中止。
 	Replay(apply func(*WalEntry)) error
 	// Truncate 截断 lsn 之前的记录（保留 lsn 及之后；checkpoint 后调用）。
+	// 截断后 nextLSN 取「保留记录最大 LSN+1」与 lsn 的较大值（避免与保留
+	// 记录冲突或重复分配）；无保留记录时 nextLSN=lsn。保留记录均已 fsync，
+	// lastSynced 同步推进为 nextLSN-1。
 	Truncate(lsn storage.LSN) error
 	// LastLSN 返回已分配的最大 LSN（无记录时为 0）。
 	LastLSN() storage.LSN
+	// LastSyncedLSN 返回已 fsync 落盘的最大 LSN（0 = 无已刷记录）。
+	// 供 checkpoint 判定「已持久化位点」：只可截断 <= LastSyncedLSN 的记录，
+	// 保证截断后崩溃恢复不会丢失任何已提交记录。
+	LastSyncedLSN() storage.LSN
 	Close() error
 }
 

@@ -86,6 +86,17 @@ type CommitSeqProvider interface {
 	CommitSeq() uint64
 }
 
+// AppliedLSNProvider 已应用位点观测可选接口（v1.16.0 WAL 自动 checkpoint）。
+// 不属于 TxnManager 基础接口语义，通过类型断言使用（如 m.(txn.AppliedLSNProvider)）。
+// 供 DB 层 checkpoint 判定「已安全应用到存储的最大 WAL LSN」：只可截断
+// <= AppliedLSN() 且 <= WAL.LastSyncedLSN() 的记录，保证截断后崩溃恢复
+// 既不丢已提交数据，也不因截断尚未落盘/未应用的记录而破坏恢复一致性。
+type AppliedLSNProvider interface {
+	// AppliedLSN 返回已成功应用到存储的最大提交记录 LSN（0 = 尚无）。
+	// 单调递增，线程安全；Recover 重放结束后推进到最后重放的提交记录。
+	AppliedLSN() storage.LSN
+}
+
 // 标准错误。
 var (
 	ErrTxnClosed = errors.New("txn: transaction already finished")
