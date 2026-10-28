@@ -18,6 +18,7 @@ import "C"
 import (
 	"fmt"
 	"runtime"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
@@ -25,6 +26,10 @@ import (
 
 type rocks struct {
 	h *C.xdb
+	// C6 存储级写提交序列：每次成功 Write 后递增，供 executor 共享快照
+	// 窗口过期检测（storage.WriteSeqProvider）。存储重建（Close 后重新
+	// Open）后新实例序列复位，executor 随 storage 重建时窗口一并关闭。
+	writeSeq atomic.Uint64
 }
 
 // Open 打开（或创建）RocksDB 数据库目录。
@@ -116,7 +121,13 @@ func (r *rocks) Write(batch *storage.WriteBatch) error {
 		freeStr(errmsg)
 		return err
 	}
+	r.writeSeq.Add(1)
 	return nil
+}
+
+// WriteSeq 返回存储级写提交序列（C6 窗口过期检测；storage.WriteSeqProvider）。
+func (r *rocks) WriteSeq() uint64 {
+	return r.writeSeq.Load()
 }
 
 func (r *rocks) Snapshot() (storage.Snapshot, error) {

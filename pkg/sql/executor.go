@@ -92,6 +92,17 @@ type Executor struct {
 	// 只读 SELECT 并发执行 + 按序重组 + 批尾 flush）。默认开启；关闭回退
 	// v1.13.0 逐条串行执行行为。经 e.mu 保护读写，热路径读开销可忽略。
 	roParallel bool
+	// v1.16.0 C6：autocommit 只读语句共享快照开关。开启时连续 autocommit
+	// 只读 SELECT 复用同一临时只读事务（RocksDB 快照），免逐语句
+	// tm.Begin/Snapshot/Release 固定开销（延迟隐藏）；关闭回退逐语句独立
+	// 快照（原语义）。仅 autocommit 只读 SELECT 生效，显式事务边界与错误
+	// 传播语义不变。经 e.mu 保护读写（与 roParallel 同锁）。
+	snapshotShare bool
+	// v1.16.0 C6：连接内 pipeline 条件 flush 开关。服务端 REPLSession 串行
+	// 路径开启时，通道仍有后续命令则合并响应 flush（隐藏逐条 flush 延迟）；
+	// 通道空/读侧关闭/语句出错时立即 flush（保持逐条交互与错误传播语义）。
+	// 关闭回退 v1.14.0 每命令 flush 行为。经 e.mu 保护读写。
+	pipelineFlush bool
 	// v1.14.0 P1：WAL 组提交定时刷盘窗口（毫秒，0=关闭回退被动攒批）。
 	// 经 SetGroupCommitWindow 同步透传底层 WAL；SHOW CONFIG 读取同锁保护。
 	groupCommitWindowMs float64
@@ -176,6 +187,11 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 		qc:            NewQueryCache(),
 		// v1.14.0 P0：只读 SELECT 并行默认开启（SET ro_parallel=off 回退串行）。
 		roParallel:    true,
+		// v1.16.0 C6：autocommit 只读共享快照 / 连接内 pipeline 条件 flush
+		// 默认开启（SET snapshot_share=off / pipeline_flush=off 回退逐语句
+		// 独立快照 / 逐命令 flush 原语义）。
+		snapshotShare: true,
+		pipelineFlush: true,
 		// v1.14.0 P1：WAL 组提交定时刷盘窗口默认 0.5ms（SET group_commit_window_ms=0 回退被动攒批）。
 		groupCommitWindowMs: groupCommitWindowMsDefault,
 		slowThreshold: slowThresholdDefault, // M13：默认 100ms
@@ -228,6 +244,43 @@ func (e *Executor) ROParallel() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.roParallel
+}
+
+// SetSnapshotShare 设置 autocommit 只读语句共享快照开关（v1.16.0 C6）：
+// 开启时连续 autocommit 只读 SELECT 复用同一临时只读事务（RocksDB 快照），
+// 免逐语句 Begin/Snapshot/Release 固定开销；关闭回退逐语句独立快照（原
+// 语义）。运行时调用即时生效（SET snapshot_share=on|off 热切换）。显式
+// 事务边界与错误传播语义不受影响。
+func (e *Executor) SetSnapshotShare(enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.snapshotShare = enabled
+}
+
+// SnapshotShare 返回 autocommit 只读语句共享快照开关当前状态（SHOW
+// CONFIG 与测试观测用）。
+func (e *Executor) SnapshotShare() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.snapshotShare
+}
+
+// SetPipelineFlush 设置连接内 pipeline 条件 flush 开关（v1.16.0 C6）：
+// 开启时服务端 REPLSession 串行路径在通道仍有后续命令时合并响应 flush
+// （延迟隐藏）；关闭回退 v1.14.0 每命令 flush 行为。运行时调用即时生效
+// （SET pipeline_flush=on|off 热切换）。
+func (e *Executor) SetPipelineFlush(enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.pipelineFlush = enabled
+}
+
+// PipelineFlush 返回连接内 pipeline 条件 flush 开关当前状态（服务端
+// REPLSession 热路径判定与 SHOW CONFIG 用）。
+func (e *Executor) PipelineFlush() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.pipelineFlush
 }
 
 // SetGroupCommitWindow 设置 WAL 组提交定时刷盘窗口（v1.14.0 P1），
@@ -492,8 +545,17 @@ func isWriteStmt(stmt Stmt) bool {
 
 // execStmt 语句分发（不计时/不记录慢查询，供 ExecuteText 包装）。
 func (e *Executor) execStmt(sess *Session, stmt Stmt) (*Result, error) {
+	// C6 顶层 SELECT 标记：仅 execStmt 分发的 SelectStmt 为顶层只读语句，
+	// 允许进入共享快照窗口；内部触发的 SELECT（子查询/物化视图重算/
+	// 过程触发器等）不经此处，保持 false，禁止开窗/复用窗口。
+	_, isTopSelect := stmt.(*SelectStmt)
+	sess.mu.Lock()
+	sess.stmtTopLevel = isTopSelect
+	sess.mu.Unlock()
 	// M8：每条语句独立快照（显式事务内不重置，复用 BEGIN 快照）。
-	e.resetStmtSnapshot(sess)
+	// v1.16.0 C6：可共享 autocommit 只读 SELECT 保持共享窗口快照；
+	// 其余语句关闭窗口恢复独立快照。
+	e.resetStmtSnapshot(sess, stmt)
 	switch s := stmt.(type) {
 	case *CreateTableStmt:
 		return e.execCreateTable(sess, s)
@@ -908,6 +970,8 @@ func (e *Executor) resetSessionTxState(sess *Session) {
 	sess.pendingRemote = map[string][]kvOp{}
 	// P2-13：异常复位清空 Serializable 远端读集累积。
 	sess.serialRemoteReads = nil
+	// v1.16.0 C6：异常复位一并关闭共享快照窗口（释放窗口事务/快照）。
+	sess.closeSharedROTxLocked()
 	sess.mu.Unlock()
 	// 临时提升事务若持过写锁（如 INSERT...SELECT 场景），一并释放避免泄漏。
 	e.releaseHeldLocks(sess)
@@ -925,6 +989,9 @@ func (e *Executor) SetTSO(src tso.Source) {
 	// globalSess 字段由会话锁保护（与语句路径一致）。
 	e.globalSess.mu.Lock()
 	e.globalSess.stmtBeginTS = 0
+	// v1.16.0 C6：TSO 重装配时关闭共享快照窗口（旧快照版本与新 TSO
+	// 语义不兼容，避免快照/取号不一致）。
+	e.globalSess.closeSharedROTxLocked()
 	e.globalSess.mu.Unlock()
 }
 
@@ -985,17 +1052,128 @@ func (e *Executor) snapshotTS(sess *Session) uint64 {
 
 // resetStmtSnapshot 在每条语句执行入口重置 autocommit 语句快照，
 // 保证每条语句拥有独立快照（显式事务内不重置）。
-func (e *Executor) resetStmtSnapshot(sess *Session) {
+//
+// v1.16.0 C6（snapshot_share）：语句为可共享 autocommit 只读 SELECT 时——
+// 共享窗口（sharedROTx）已开且窗口期间无对外可见提交（全局提交序列
+// 未变）则保持 stmtBeginTS（复用窗口快照）；窗口已过期（期间其他连接
+// 写提交/2PC 参与方提交）或未开则关闭并重置为 0（窗口起点，本语句独立
+// 取号后由 execSelect 挂载新窗口）。其余语句（写语句/事务控制/不可共享
+// SELECT）关闭共享窗口并重置，恢复逐语句独立快照原语义。
+func (e *Executor) resetStmtSnapshot(sess *Session, stmt Stmt) {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
-	if !sess.inTx {
-		sess.stmtBeginTS = 0
+	if sess.inTx {
+		return
 	}
+	if e.snapshotShare && e.stmtROShareableLocked(sess, stmt) {
+		if sess.sharedROTx == nil {
+			sess.stmtBeginTS = 0 // 窗口起点：本语句独立取号
+			return
+		}
+		// 窗口已开：窗口期间若发生对外可见提交则窗口过期，关闭并重置，
+		// 本语句重新独立取号（保持 autocommit 写后读语义）。
+		if sess.sharedROSeq != e.commitSeqLocked() {
+			sess.closeSharedROTxLocked()
+			sess.stmtBeginTS = 0
+		}
+		return // 窗口未过期：保持 stmtBeginTS（共享快照）
+	}
+	sess.closeSharedROTxLocked()
+	sess.stmtBeginTS = 0
+}
+
+// commitSeqLocked 读取全局写提交序列（C6 窗口过期检测）。优先存储级
+// （storage.WriteSeqProvider：本地事务提交、2PC 参与方提交、恢复重放等
+// 一切经 Write 落盘的可见写入都计数）；存储不支持时回退事务级
+// （txn.CommitSeqProvider）；均未实现（测试 mock）返回 0：窗口复用比对
+// 恒等，即退化为纯共享窗口（与无对外提交场景等价，mock 只读测试语义
+// 一致）。调用方须持 sess.mu（窗口字段与提交序列一致性由会话锁串行化）。
+func (e *Executor) commitSeqLocked() uint64 {
+	if p, ok := e.st.(storage.WriteSeqProvider); ok {
+		return p.WriteSeq()
+	}
+	if p, ok := e.tm.(txn.CommitSeqProvider); ok {
+		return p.CommitSeq()
+	}
+	return 0
+}
+
+// stmtROShareableLocked 判定 autocommit 语句是否可进入 C6 只读共享快照
+// 窗口（调用方须持 sess.mu）。判定保守对齐 C3 批判定（roBatchEligible）：
+// 仅纯只读 SELECT，排除读取用户变量（@var）、forcedTx 挂载窗口、
+// Serializable 隔离、非顶层 SELECT（内部子查询/物化视图重算等）；
+// C3 批接口并行段（batchExec）禁止共享，保持批内
+// "每条独立临时事务 + 独立快照"语义。
+func (e *Executor) stmtROShareableLocked(sess *Session, stmt Stmt) bool {
+	sel, ok := stmt.(*SelectStmt)
+	if !ok {
+		return false
+	}
+	if !sess.stmtTopLevel {
+		return false
+	}
+	if sess.forcedTx != nil || sess.batchExec {
+		return false
+	}
+	if sess.txIso == IsoSerializable {
+		return false
+	}
+	return !selectHasUserVar(sel)
+}
+
+// stmtROShareable 为 stmtROShareableLocked 的加锁版本（execSelect 无锁
+// 上下文调用）。
+func (e *Executor) stmtROShareable(sess *Session, stmt Stmt) bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return e.stmtROShareableLocked(sess, stmt)
+}
+
+// enterSharedROWindow 将 autocommit 只读语句挂载/复用共享快照窗口：
+// 窗口已开（sharedROTx 非空）直接返回窗口事务（快照共享）；未开则将
+// 本语句新建的临时事务挂载为窗口事务（快照由窗口持有，语句结束不释放，
+// 由下一条共享语句复用或非共享语句/错误关闭）。挂载时记录当前全局提交
+// 序列，供后续语句比对检测窗口期间的外部提交。
+func (e *Executor) enterSharedROWindow(sess *Session, tx txn.Txn) (txn.Txn, error) {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.sharedROTx != nil {
+		if tx != nil && tx != sess.sharedROTx {
+			_ = tx.Rollback() // 防御竞态：本语句新建事务未被挂载，释放
+		}
+		return sess.sharedROTx, nil
+	}
+	sess.sharedROTx = tx
+	sess.sharedROSeq = e.commitSeqLocked()
+	return tx, nil
+}
+
+// exitSharedROWindow 关闭共享快照窗口并释放窗口事务（RocksDB 快照）。
+// 仅在共享语句出错时调用（成功路径保持窗口供后续语句复用）。窗口关闭
+// 后 stmtBeginTS 归零，下一条只读语句重新独立取号（错误传播语义不变）。
+func (e *Executor) exitSharedROWindow(sess *Session) {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	sess.closeSharedROTxLocked()
+	sess.stmtBeginTS = 0
+}
+
+// isSharedROTx 判定 tx 是否为当前会话共享窗口事务（防御：嵌套不可共享
+// 语句触达窗口事务时不得 Rollback——窗口由外层语句管理，只读执行语义
+// 一致）。
+func (e *Executor) isSharedROTx(sess *Session, tx txn.Txn) bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return tx != nil && tx == sess.sharedROTx
 }
 
 // getTx 获取当前语句的事务：会话事务内复用 curTx；否则新建临时事务。
 // forcedTx 非空时（v1.9.0 物化视图刷新全量重算窗口）优先透传该事务，
 // 使内部 SELECT 复用当前刷新事务读取同事务内已写入的依赖 MV 增量。
+// v1.16.0 C6：本方法供非 execSelect 调用点（DDL/写语句/ListRegions 等
+// 元数据辅助函数）使用，始终返回独立临时事务，不触碰共享快照窗口——
+// 窗口复用仅限 execSelect 的 getTxForSelect，保证窗口事务生命周期由
+// execSelect 独占管理（辅助函数 auto defer Rollback 不会误结束窗口）。
 func (e *Executor) getTx(sess *Session) (txn.Txn, error) {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
@@ -1004,6 +1182,31 @@ func (e *Executor) getTx(sess *Session) (txn.Txn, error) {
 	}
 	if sess.inTx {
 		return sess.curTx, nil
+	}
+	return e.tm.Begin()
+}
+
+// getTxForSelect 获取 SELECT 语句的事务（仅 execSelect 调用）：显式事务/
+// forcedTx 语义与 getTx 一致；autocommit 场景优先复用 C6 共享快照窗口
+// 事务（窗口已开且未过期：窗口期间无对外可见提交），过期则关闭窗口由
+// 本语句新建独立事务（下一条共享语句挂载新窗口），未开则新建临时事务。
+func (e *Executor) getTxForSelect(sess *Session) (txn.Txn, error) {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.forcedTx != nil {
+		return sess.forcedTx, nil
+	}
+	if sess.inTx {
+		return sess.curTx, nil
+	}
+	if sess.sharedROTx != nil {
+		if sess.sharedROSeq != e.commitSeqLocked() {
+			// 窗口过期：窗口期间发生了对外可见提交（其他连接/2PC 参与方），
+			// 关闭窗口，本语句新建独立快照（保持写后读语义）。
+			sess.closeSharedROTxLocked()
+		} else {
+			return sess.sharedROTx, nil
+		}
 	}
 	return e.tm.Begin()
 }
@@ -2613,7 +2816,7 @@ func (e *Executor) resolveWhereVars(sess *Session, w *Where) error {
 	return nil
 }
 
-func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
+func (e *Executor) execSelect(sess *Session, s *SelectStmt) (res *Result, err error) {
 	// 无 FROM 常量投影：SELECT 1 / SELECT 'x' / SELECT 1+2 / SELECT @var（M18-C / T45）。
 	// 兼容 mysql CLI 的 SELECT 1、Connector/J 连接探测等无表查询。
 	// 注意：FROM 为子查询时 s.From 为空但 s.Subquery 非空，必须走正常执行路径。
@@ -2669,13 +2872,32 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (*Result, error) {
 		}
 		return &Result{Columns: cols, Rows: [][]Value{row}}, nil
 	}
-	tx, err := e.getTx(sess)
+	tx, err := e.getTxForSelect(sess)
 	if err != nil {
 		return nil, err
 	}
 	auto := e.autocommit(sess)
 	if auto {
-		defer tx.Rollback()
+		// v1.16.0 C6：autocommit 只读 SELECT 共享快照窗口（snapshot_share）。
+		// 可共享语句：窗口未开时挂载本语句事务（快照由窗口持有），窗口已开
+		// 时复用窗口事务（共享快照），成功路径不关闭窗口（供连续只读语句
+		// 复用，延迟隐藏）；出错时关闭窗口并释放（错误传播语义不变）。
+		// 其余 autocommit 语句：独立临时事务 + 语句结束 Rollback（原语义）。
+		if e.snapshotShare && e.stmtROShareable(sess, s) {
+			tx, err = e.enterSharedROWindow(sess, tx)
+			if err != nil {
+				return nil, err
+			}
+			defer func() {
+				if err != nil {
+					e.exitSharedROWindow(sess)
+				}
+			}()
+		} else if !e.isSharedROTx(sess, tx) {
+			defer tx.Rollback()
+		}
+		// 防御：嵌套不可共享语句触达窗口事务（isSharedROTx=true）时不
+		// Rollback、不新建——窗口由外层语句管理，只读执行语义一致。
 	}
 	// M18-C：WHERE 中的 @var 用户变量在查询执行前替换为会话值（未设置报错）。
 	if err := e.resolveWhereVars(sess, s.Where); err != nil {

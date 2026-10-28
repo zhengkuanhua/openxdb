@@ -5,6 +5,8 @@ package sql
 // 支持键均为真实存在的运行时配置（源码 grep 确认，禁止虚构）：
 //   - query_cache           查询结果缓存开关（M9，query_cache.go）
 //   - ro_parallel           只读 SELECT 并行开关（v1.14.0 P0，executor.go roParallel）
+//   - snapshot_share        autocommit 只读语句共享快照开关（v1.16.0 C6，executor.go）
+//   - pipeline_flush        连接内 pipeline 条件 flush 开关（v1.16.0 C6，server.go REPLSession）
 //   - group_commit_window_ms WAL 组提交定时刷盘窗口毫秒（v1.14.0 P1，wal_impl.go）
 //   - slow_query_threshold  慢查询阈值毫秒（M13，executor.go slowThreshold）
 //   - slow_query_log        慢查询落盘开关（M13，slowlog.go）
@@ -77,6 +79,44 @@ var configSpecs = []*configSpec{
 			return nil
 		},
 		read: func(e *Executor) string { return boolValStr(e.ROParallel()) },
+	},
+	{
+		key:  "snapshot_share",
+		desc: "autocommit 只读语句共享快照开关（v1.16.0 C6）：on/off/1/0，连续 autocommit 只读 SELECT 复用同一快照（延迟隐藏），默认 on；off 回退逐语句独立快照",
+		def:  "on",
+		apply: func(e *Executor, v string) error {
+			on := false
+			switch v {
+			case "on", "true", "1":
+				on = true
+			case "off", "false", "0":
+				on = false
+			default:
+				return &SQLError{Msg: "invalid value for snapshot_share: " + v + " (expected on/off/1/0)"}
+			}
+			e.SetSnapshotShare(on)
+			return nil
+		},
+		read: func(e *Executor) string { return boolValStr(e.SnapshotShare()) },
+	},
+	{
+		key:  "pipeline_flush",
+		desc: "连接内 pipeline 条件 flush 开关（v1.16.0 C6）：on/off/1/0，REPL 串行路径通道仍有后续命令时合并响应 flush（延迟隐藏），默认 on；off 回退逐命令 flush",
+		def:  "on",
+		apply: func(e *Executor, v string) error {
+			on := false
+			switch v {
+			case "on", "true", "1":
+				on = true
+			case "off", "false", "0":
+				on = false
+			default:
+				return &SQLError{Msg: "invalid value for pipeline_flush: " + v + " (expected on/off/1/0)"}
+			}
+			e.SetPipelineFlush(on)
+			return nil
+		},
+		read: func(e *Executor) string { return boolValStr(e.PipelineFlush()) },
 	},
 	{
 		key:  "group_commit_window_ms",

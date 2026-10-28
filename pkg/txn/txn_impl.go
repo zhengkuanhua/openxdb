@@ -51,6 +51,25 @@ type txnManager struct {
 	commitHook    func(lsn storage.LSN, seq uint64, batch *storage.WriteBatch) error // M2 复制挂接点（锁内，异步推送）
 	hookErr       error                                                              // 最近一次 hook 错误
 	commitWaitHook func(lsn storage.LSN, seq uint64) error // T33 复制确认挂接点（锁外，同步/半同步等待 ACK）
+
+	// C6 全局提交序列：产生存储可见写的成功提交（st.Write 应用成功）时递增
+	// （锁内递增）。executor 的 autocommit 只读共享快照窗口复用前比对，
+	// 窗口期间检测到新提交即关闭窗口重新取快照，保持写后读语义。
+	commitSeq uint64
+}
+
+// CommitSeq 返回产生可见写的成功提交次数（C6，见 CommitSeqProvider 注释）。
+func (m *txnManager) CommitSeq() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.commitSeq
+}
+
+// notifyCommittedLocked 在产生存储可见写的成功提交后递增全局提交序列
+// （调用方须持有 m.mu）。纯读事务（空批次提交）与应用失败不递增——只读
+// 不改变对外可见状态，失败提交未落存储。
+func (m *txnManager) notifyCommittedLocked() {
+	m.commitSeq++
 }
 
 // New 创建事务管理器并执行启动恢复（重放 WAL 已 Commit 记录）。
@@ -557,6 +576,7 @@ func (t *txnImpl) Commit() error {
 			m.mu.Unlock()
 			return applyErr
 		}
+		m.notifyCommittedLocked()
 		m.applied++
 		m.applyWrites++
 		m.applyTxns++
@@ -633,6 +653,7 @@ func (t *txnImpl) Commit() error {
 		pa.err = applyErr
 		pa.errFilled = true
 		delete(m.applyPending, seq) // 本批不合并，立即摘除本条目防 map 泄漏
+		m.notifyCommittedLocked()
 		m.applied++
 		m.applyWrites++
 		m.applyTxns++
@@ -713,6 +734,7 @@ func (t *txnImpl) Commit() error {
 		p.err = applyErr
 		p.errFilled = true
 	}
+	m.notifyCommittedLocked()
 	m.applied += n
 	m.applyWrites++
 	m.applyTxns += n

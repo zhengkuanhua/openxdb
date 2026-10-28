@@ -35,8 +35,10 @@ func TestM13ServerSlowQueryView(t *testing.T) {
 
 	logPath := filepath.Join(t.TempDir(), "slow.log")
 	mustResp(t, s, "CREATE TABLE big (id INT PRIMARY KEY, name TEXT)")
-	// 造 200 行数据，保证 SELECT 跨阈值
-	vals := make([]string, 200)
+	// 造 500 行数据，保证 SELECT 跨阈值
+	// （v1.16.0 C6 共享快照使 200 行全表扫描降至 ~1ms 阈值临界，偶发不记录，
+	// 抬高数据量使慢查询判定稳定）。
+	vals := make([]string, 500)
 	for i := range vals {
 		vals[i] = fmt.Sprintf("(%d, 'x')", i)
 	}
@@ -73,7 +75,7 @@ func TestM13ServerSlowQueryDisable(t *testing.T) {
 
 	logPath := filepath.Join(t.TempDir(), "slow.log")
 	mustResp(t, s, "CREATE TABLE big (id INT PRIMARY KEY, name TEXT)")
-	vals := make([]string, 300)
+	vals := make([]string, 500)
 	for i := range vals {
 		vals[i] = fmt.Sprintf("(%d, 'x')", i)
 	}

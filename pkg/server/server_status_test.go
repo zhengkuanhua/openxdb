@@ -150,8 +150,10 @@ func TestM13StatusSlowSummary(t *testing.T) {
 	for i := range vals {
 		vals[i] = "(" + strings.Repeat("x", 10) + ")" // 占位由下方真实 INSERT 覆盖
 	}
-	// 造 200 行数据，保证 SELECT 跨阈值
-	rows := make([]string, 200)
+	// 造 500 行数据，保证 SELECT 跨阈值
+	// （v1.16.0 C6 共享快照使 200 行全表扫描降至 ~1ms 阈值临界，偶发不记录，
+	// 抬高数据量使慢查询判定稳定，与 server_slowlog_test.go 同口径）。
+	rows := make([]string, 500)
 	for i := range rows {
 		rows[i] = "(" + itoa(i) + ", 'x')"
 	}

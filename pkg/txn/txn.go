@@ -75,6 +75,17 @@ type ApplyGroupObserver interface {
 	ApplyGroupStats() (writes, txns uint64)
 }
 
+// CommitSeqProvider 全局提交序列观测可选接口（v1.16.0 C6）。
+// 不属于 TxnManager 基础接口语义，通过类型断言使用（如 m.(txn.CommitSeqProvider)）。
+// 供 executor 的 autocommit 只读共享快照窗口检测「窗口期间是否发生了对外可见
+// 的提交」：任何产生存储可见写的成功提交（含 2PC 参与方）递增序列，窗口复用
+// 前比对序列，不一致即关闭窗口重新取快照，保持 autocommit 每条语句独立快照
+// 语义（写后读正确性）。
+type CommitSeqProvider interface {
+	// CommitSeq 返回自启动以来产生可见写的成功提交次数（单调递增，线程安全）。
+	CommitSeq() uint64
+}
+
 // 标准错误。
 var (
 	ErrTxnClosed = errors.New("txn: transaction already finished")

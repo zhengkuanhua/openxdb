@@ -42,6 +42,28 @@ type Session struct {
 	// （每条语句独立，显式事务内不重置）。
 	curBeginTS  uint64
 	stmtBeginTS uint64
+	// v1.16.0 C6：autocommit 只读共享快照窗口。sharedROTx 为连续
+	// autocommit 只读 SELECT 之间复用的临时只读事务（持有 RocksDB
+	// 快照，免逐语句 tm.Begin/Snapshot/Release 固定开销，延迟隐藏）；
+	// batchExec 标记 C3 批接口（ExecuteBatchAsSession）并行执行段——
+	// 批内语句禁止进入共享窗口，保持"批内每条独立临时事务 + 独立
+	// 快照"语义（见 ro_batch.go）。窗口仅覆盖 autocommit 只读 SELECT，
+	// 显式事务边界与错误传播语义不变（写语句/事务控制/不可共享语句
+	// 关闭窗口后恢复独立快照）。
+	sharedROTx txn.Txn
+	batchExec  bool
+	// stmtTopLevel 标记当前 execStmt 分发的语句是否为顶层 SELECT（SelectStmt）。
+	// 共享窗口仅对顶层 autocommit 只读 SELECT 开放；executor 内部触发的
+	// SELECT（INSERT...SELECT 子查询、物化视图重算、存储过程/触发器展开、
+	// VIEW 展开等）一律视为非顶层，禁止开窗/复用窗口，保证内部读使用
+	// 独立快照（如 REFRESH 重算必须读到最新已提交数据）。
+	// 同一 Session 串行执行，仅 execStmt 入口写、resetStmtSnapshot/
+	// execSelect 持锁读；C3 批接口并行段各 goroutine 加锁写，无数据竞争。
+	stmtTopLevel bool
+	// sharedROSeq 记录共享窗口打开时刻的全局提交序列（txn.CommitSeqProvider）。
+	// 窗口复用前比对当前序列，窗口期间发生对外可见提交（其他连接写提交/
+	// 2PC 参与方提交）即关闭窗口重新取快照，保持 autocommit 写后读语义。
+	sharedROSeq uint64
 	// M18-A 显式事务 ID：BEGIN 时生成，COMMIT/ROLLBACK 清零；
 	// 随 QUERY_REQ 等集群帧跨节点传播（事务上下文），供参与者识别
 	// 写请求所属会话事务；空串表示无显式事务上下文（零回归）。
@@ -97,6 +119,27 @@ func (e *Executor) NewSession() *Session {
 		isolation: IsoSnapshot, // P2-13：会话级默认快照隔离
 		CurrentDB: defaultDB,   // T39：新会话默认库为 default（存量兼容）
 	}
+}
+
+// closeSharedROTxLocked 关闭 C6 共享快照窗口并释放窗口事务（RocksDB
+// 快照）。调用方须持 s.mu。窗口已关（sharedROTx==nil）时为空操作。
+// 用于：不可共享语句入口（resetStmtSnapshot）、共享语句出错（exitShared
+// ROWindow）、会话异常复位（resetSessionTxState）、TSO 重装配（SetTSO）、
+// 连接结束（ReleaseAutoResources）。
+func (s *Session) closeSharedROTxLocked() {
+	if s.sharedROTx != nil {
+		_ = s.sharedROTx.Rollback()
+		s.sharedROTx = nil
+	}
+}
+
+// ReleaseAutoResources 释放会话持有的自动资源（v1.16.0 C6）：关闭
+// autocommit 只读共享快照窗口（窗口事务/快照）。服务端连接结束
+// （REPLSession 退出）时调用，避免窗口事务与 RocksDB 快照泄漏。
+func (s *Session) ReleaseAutoResources() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeSharedROTxLocked()
 }
 
 // InTx 返回会话当前是否处于显式事务内（BEGIN 后 true，COMMIT/ROLLBACK 复位）。

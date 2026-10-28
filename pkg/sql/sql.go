@@ -287,6 +287,22 @@ func (e *Engine) SetROParallel(enabled bool) { e.ex.SetROParallel(enabled) }
 // ROParallel 返回只读 SELECT 并行开关当前状态。
 func (e *Engine) ROParallel() bool { return e.ex.ROParallel() }
 
+// SetSnapshotShare 设置 autocommit 只读语句共享快照开关（v1.16.0 C6），
+// 透传至执行器。开启时连续 autocommit 只读 SELECT 复用同一快照窗口
+// （延迟隐藏）；关闭回退逐语句独立快照。可经 SET snapshot_share 热切换。
+func (e *Engine) SetSnapshotShare(enabled bool) { e.ex.SetSnapshotShare(enabled) }
+
+// SnapshotShare 返回 autocommit 只读语句共享快照开关当前状态。
+func (e *Engine) SnapshotShare() bool { return e.ex.SnapshotShare() }
+
+// SetPipelineFlush 设置连接内 pipeline 条件 flush 开关（v1.16.0 C6），
+// 透传至执行器。开启时 REPL 串行路径在通道仍有后续命令时合并响应
+// flush（延迟隐藏）；关闭回退逐命令 flush。可经 SET pipeline_flush 热切换。
+func (e *Engine) SetPipelineFlush(enabled bool) { e.ex.SetPipelineFlush(enabled) }
+
+// PipelineFlush 返回连接内 pipeline 条件 flush 开关当前状态。
+func (e *Engine) PipelineFlush() bool { return e.ex.PipelineFlush() }
+
 // SetGroupCommitWindow 设置 WAL 组提交定时刷盘窗口（v1.14.0 P1），透传至执行器。
 // d<=0 关闭定时窗口（回退 v1.13.0 被动攒批行为）；经 SET group_commit_window_ms 热切换。
 func (e *Engine) SetGroupCommitWindow(d time.Duration) { e.ex.SetGroupCommitWindow(d) }

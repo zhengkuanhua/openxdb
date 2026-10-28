@@ -680,6 +680,12 @@ func (s *Server) REPLSession(r io.Reader, w io.Writer, sess *session) error {
 	}()
 	bw := bufio.NewWriter(w)
 	var pending string
+	// v1.16.0 C6：pipeline 条件 flush 状态。开关 pipeline_flush 开启且
+	// 读侧通道仍有后续命令时延迟 Flush（合并连续命令响应为一次写），
+	// 通道耗尽/BYE/连接结束兜底 Flush——pipeline 批量发送场景减少
+	// 逐条 syscall（延迟隐藏）；同步逐条客户端通道为空立即 Flush，
+	// "一命令一响应"时序语义不变（off 回退原逐命令 flush）。
+	var needFlush bool
 	for {
 		line := pending
 		pending = ""
@@ -744,6 +750,7 @@ func (s *Server) REPLSession(r io.Reader, w io.Writer, sess *session) error {
 				close(done)
 				return werr
 			}
+			needFlush = false
 			continue
 		}
 		resp, err := s.HandleSession(line, sess)
@@ -761,14 +768,38 @@ func (s *Server) REPLSession(r io.Reader, w io.Writer, sess *session) error {
 			close(done)
 			return werr
 		}
+		if resp == "BYE" {
+			// BYE 必须立即 flush（连接随即关闭，延迟会丢响应）。
+			if werr := bw.Flush(); werr != nil {
+				close(done)
+				return werr
+			}
+			close(done)
+			return nil
+		}
+		if s.SQL != nil && s.SQL.PipelineFlush() && len(cmds) > 0 {
+			// pipeline 场景：通道仍有后续命令，延迟 flush 合并响应。
+			needFlush = true
+		} else {
+			// 同步/命令耗尽：立即 flush，保持逐命令交付语义。
+			if werr := bw.Flush(); werr != nil {
+				close(done)
+				return werr
+			}
+			needFlush = false
+		}
+	}
+	// 主循环结束（reader EOF/QUIT 外路径）：兜底 flush 残留延迟响应。
+	if needFlush {
 		if werr := bw.Flush(); werr != nil {
 			close(done)
 			return werr
 		}
-		if resp == "BYE" {
-			close(done)
-			return nil
-		}
+	}
+	// v1.16.0 C6：连接结束释放会话自动资源（关闭 autocommit 只读共享
+	// 快照窗口，防窗口事务/RocksDB 快照泄漏）。
+	if sess.sqlSess != nil {
+		sess.sqlSess.ReleaseAutoResources()
 	}
 	select {
 	case err := <-readErr:

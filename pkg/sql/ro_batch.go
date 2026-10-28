@@ -93,6 +93,17 @@ func (e *Executor) ExecuteBatchAsSession(stmts []string, user string, sess *Sess
 	}
 
 	// 并行执行：语句级并发 + 按原始行序重组。
+	// v1.16.0 C6：并行段挂 batchExec 标记，批内语句禁止进入 autocommit
+	// 只读共享快照窗口（保持"批内每条独立临时事务 + 独立快照"语义）；
+	// 并行段结束立即复位。
+	sess.mu.Lock()
+	sess.batchExec = true
+	sess.mu.Unlock()
+	defer func() {
+		sess.mu.Lock()
+		sess.batchExec = false
+		sess.mu.Unlock()
+	}()
 	sem := make(chan struct{}, roBatchMaxConcurrency)
 	var wg sync.WaitGroup
 	for i, s := range stmts {
