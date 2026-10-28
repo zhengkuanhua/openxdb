@@ -106,6 +106,9 @@ type Executor struct {
 	// v1.14.0 P1：WAL 组提交定时刷盘窗口（毫秒，0=关闭回退被动攒批）。
 	// 经 SetGroupCommitWindow 同步透传底层 WAL；SHOW CONFIG 读取同锁保护。
 	groupCommitWindowMs float64
+	// v1.16.0：WAL 自动 checkpoint 控制器（nil = 未装配，SET wal_* 返回
+	// 明确错误，DB 行为零回归）。由 db.Open 注入（sql 包不依赖 db 包）。
+	chkCtl CheckpointSetter
 	// M17-1 审计日志：auditEnabled 总开关（默认开，安全默认）；
 	// auditThreshold 慢审计阈值毫秒（<=0 不标记 slow）；auditRecords 内存环
 	// 缓冲（保留最近 auditMax 条，SHOW AUDITLOG 查询）；auditLog 落盘器

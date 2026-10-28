@@ -97,6 +97,10 @@ func (e *Engine) SetWriteFence(wf WriteFence) { e.ex.SetWriteFence(wf) }
 // SetHAConfigSetter 装配 P0 HA 开关节流控制器（db.Open 调用，转发至 Executor）。
 func (e *Engine) SetHAConfigSetter(hc HAConfigSetter) { e.ex.SetHAConfigSetter(hc) }
 
+// SetCheckpointController 装配 v1.16.0 WAL 自动 checkpoint 控制器
+//（db.Open 调用，转发至 Executor；nil = 不启用，SET wal_* 返回明确错误）。
+func (e *Engine) SetCheckpointController(cc CheckpointSetter) { e.ex.SetCheckpointController(cc) }
+
 // SetEpochSource 装配 P1 HA clusterEpoch 取号源（db.Open 调用，转发至 Executor；
 // nil = 不启用，M6 旧行为零回归）。
 func (e *Engine) SetEpochSource(src EpochSource) { e.ex.SetEpochSource(src) }
