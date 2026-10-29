@@ -56,7 +56,7 @@ def rand_int(rng, lo, hi):
 # ---------------------------------------------------------------------------
 # prepare
 # ---------------------------------------------------------------------------
-def prepare(port):
+def prepare(port, rows=TABLE_ROWS):
     conn = connect(HOST, port)
     cur = conn.cursor()
     try:
@@ -68,7 +68,7 @@ def prepare(port):
     cur.execute('CREATE INDEX k_1 ON sbtest (k)')
     rng = random.Random(20261015)
     batch = []
-    for i in range(1, TABLE_ROWS + 1):
+    for i in range(1, rows + 1):
         batch.append((i, rand_int(rng, 1, 2 ** 31 - 1), rand_text(rng), rand_text(rng)))
         if len(batch) >= 500:
             cur.executemany('INSERT INTO sbtest (id, k, c, pad) VALUES (?, ?, ?, ?)', batch)
@@ -116,19 +116,19 @@ WRITE_OPS = 4                          # index_update + non_index_update + delet
 MODE_OPS = {'read': READ_OPS, 'write': WRITE_OPS, 'read_write': READ_OPS + WRITE_OPS}
 
 
-def run_txn(conn, mode, rng):
+def run_txn(conn, mode, rng, table_rows=TABLE_ROWS):
     cur = conn.cursor()
     # v1.13.0：整个事务（BEGIN + 全部操作 + COMMIT）一次 pipeline 批量发送，
     # 客户端单次 sendall + 服务端按行序逐条执行并批量读回，消除逐语句往返。
     queries = ['BEGIN']
     params = [None]
-    a = rng.randint(1, TABLE_ROWS)
-    b = rng.randint(1, TABLE_ROWS)
+    a = rng.randint(1, table_rows)
+    b = rng.randint(1, table_rows)
     if b < a:
         a, b = b, a
     for _ in range(10):
         queries.append('SELECT c FROM sbtest WHERE id=?')
-        params.append([rng.randint(1, TABLE_ROWS)])
+        params.append([rng.randint(1, table_rows)])
     queries.append('SELECT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY id')
     params.append([a, b])
     queries.append('SELECT SUM(k) AS s FROM sbtest WHERE id BETWEEN ? AND ?')
@@ -139,7 +139,7 @@ def run_txn(conn, mode, rng):
     queries.append('SELECT k FROM sbtest WHERE id BETWEEN ? AND ? GROUP BY k ORDER BY k')
     params.append([a, b])
     if mode in ('write', 'read_write'):
-        did = rng.randint(1, TABLE_ROWS)
+        did = rng.randint(1, table_rows)
         # 引擎不支持算术表达式 k+1（见 E5 文档口径差异），index_update 等价实现为
         # 直接写随机 k 值：同为随机行上的索引列写放大，保持 4 ops 结构。
         queries.append('UPDATE sbtest SET k = ? WHERE id=?')
@@ -158,13 +158,13 @@ def run_txn(conn, mode, rng):
             raise StmtError('pipeline stmt error: %s' % (r.error,))
 
 
-def worker(port, mode, duration_s, stats, stop_event, timeout):
+def worker(port, mode, duration_s, stats, stop_event, timeout, rows=TABLE_ROWS):
     rng = random.Random()
     conn = connect(HOST, port, timeout=timeout)
     while not stop_event.is_set():
         t0 = time.perf_counter()
         try:
-            run_txn(conn, mode, rng)
+            run_txn(conn, mode, rng, rows)
             lat = (time.perf_counter() - t0) * 1e6
             with stats['lock']:
                 stats['txns'] += 1
@@ -216,11 +216,11 @@ def percentile(sorted_lat, p):
     return sorted_lat[idx]
 
 
-def run(mode, port, threads, duration_s, timeout=DEFAULT_TIMEOUT):
+def run(mode, port, threads, duration_s, timeout=DEFAULT_TIMEOUT, rows=TABLE_ROWS):
     stats = {'txns': 0, 'errs': 0, 'reconnects': 0, 'latencies': [], 'err_msgs': [], 'lock': threading.Lock()}
     stop_event = threading.Event()
     with ThreadPoolExecutor(max_workers=threads) as ex:
-        futs = [ex.submit(worker, port, mode, duration_s, stats, stop_event, timeout) for _ in range(threads)]
+        futs = [ex.submit(worker, port, mode, duration_s, stats, stop_event, timeout, rows) for _ in range(threads)]
         time.sleep(duration_s)
         stop_event.set()
         for f in futs:
@@ -250,14 +250,15 @@ def main():
     ap.add_argument('--mode', choices=['read', 'write', 'read_write'], default='read_write')
     ap.add_argument('--threads', type=int, default=8)
     ap.add_argument('--time', type=int, default=60)
+    ap.add_argument('--rows', type=int, default=TABLE_ROWS, help='sbtest 表预装载行数（prepare 装载；事务内随机键范围为 1..rows）')
     ap.add_argument('--timeout', type=float, default=DEFAULT_TIMEOUT, help='socket timeout seconds per worker connection')
     ap.add_argument('--prepare', action='store_true')
     args = ap.parse_args()
     if args.prepare:
-        prepare(args.port)
+        prepare(args.port, args.rows)
         return
     capability_probe(args.port)
-    run(args.mode, args.port, args.threads, args.time, args.timeout)
+    run(args.mode, args.port, args.threads, args.time, args.timeout, args.rows)
 
 
 if __name__ == '__main__':

@@ -18,6 +18,7 @@ param(
     [int]$Port = 7797,
     [int]$OltpThreads = 8,
     [int]$OltpTime = 60,
+    [int]$OltpRows = 10000,
     [int]$TpccThreads = 8,
     [int]$TpccTime = 120,
     [int]$TpccWarmup = 10,
@@ -84,7 +85,7 @@ function Invoke-Start {
 
 function Invoke-Prepare {
     Write-Host '[prepare] oltp ...'
-    & python (Join-Path $E5 'bench_oltp.py') --port $Port --prepare
+    & python (Join-Path $E5 'bench_oltp.py') --port $Port --rows $OltpRows --prepare
     if ($LASTEXITCODE -ne 0) { throw 'oltp prepare failed' }
     Write-Host '[prepare] tpcc ...'
     & python (Join-Path $E5 'bench_tpcc.py') --port $Port --prepare
@@ -95,7 +96,7 @@ function Invoke-Prepare {
 function Invoke-Run {
     foreach ($mode in @('read', 'write', 'read_write')) {
         Write-Host "[run] oltp mode=$mode ..."
-        & python (Join-Path $E5 'bench_oltp.py') --port $Port --mode $mode --threads $OltpThreads --time $OltpTime --timeout $Timeout
+        & python (Join-Path $E5 'bench_oltp.py') --port $Port --mode $mode --threads $OltpThreads --time $OltpTime --rows $OltpRows --timeout $Timeout
         if ($LASTEXITCODE -ne 0) { throw "oltp $mode failed" }
     }
     Write-Host "[run] tpcc (${TpccThreads} threads, ${TpccTime}s, warmup ${TpccWarmup}s) ..."

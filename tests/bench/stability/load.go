@@ -175,7 +175,7 @@ func runLoad(e *sql.Engine, duration time.Duration, connsN, rowsN int, readP flo
 	segMu.Lock()
 	defer segMu.Unlock()
 	fmt.Printf("E4 区间趋势（每 %v，%d 连接，读写比 %s，总 %v）：\n", interval, connsN, *ratio, duration)
-	fmt.Println("区间 | 事务数 | TPS | P50(us) | P95(us) | P99(us) | 平均(us) | 错误 | 读/插/改")
+	fmt.Println("区间 | 事务数 | TPS | P50(us) | P95(us) | P99(us) | 平均(us) | 错误 | 读/插/改 | goroutines | heapMB")
 	for i, s := range segs {
 		s.mu.Lock()
 		sort.Slice(s.lats, func(a, b int) bool { return s.lats[a] < s.lats[b] })
@@ -191,11 +191,17 @@ func runLoad(e *sql.Engine, duration time.Duration, connsN, rowsN int, readP flo
 			}
 			avg = sum / int64(len(s.lats))
 		}
-		fmt.Printf("%d | %d | %.1f | %d | %d | %d | %d | %d | %d/%d/%d\n",
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		fmt.Printf("%d | %d | %.1f | %d | %d | %d | %d | %d | %d/%d/%d | %d | %d\n",
 			i+1, s.txns, rate, pct(s.lats, 0.50), pct(s.lats, 0.95), pct(s.lats, 0.99),
-			avg, s.errs, s.reads, s.inserts, s.updates)
+			avg, s.errs, s.reads, s.inserts, s.updates, runtime.NumGoroutine(), ms.HeapAlloc/1048576)
 		s.mu.Unlock()
 	}
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	fmt.Printf("E4 runtime: goroutines=%d heap_alloc=%dMB sys=%dMB\n",
+		runtime.NumGoroutine(), ms.HeapAlloc/1048576, ms.Sys/1048576)
 	fmt.Printf("E4 累计：插入=%d 期望行数=%d\n", inserted, int64(rowsN)+inserted)
 	fmt.Println("E4 LOAD DONE")
 }
