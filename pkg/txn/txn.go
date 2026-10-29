@@ -66,6 +66,12 @@ type TxnManager interface {
 	// SetGroupCommitWindow 设置 WAL 组提交定时刷盘窗口（v1.14.0 P1）：
 	// 透传至底层 WAL；d<=0 关闭定时窗口（回退 v1.13.0 被动攒批行为）。
 	SetGroupCommitWindow(d time.Duration)
+	// SetActiveWindow 设置 WAL 组提交主动定时窗口开关（v1.17.0 D1.3）：
+	// 透传至底层 WAL；开启时 leader 无并发等待者也等待组提交窗口（收集
+	// 稀疏到达 Append 合并 fsync）；关闭回退 v1.16.0 C1 单等待者免窗口。
+	SetActiveWindow(enabled bool)
+	// ActiveWindow 返回 WAL 组提交主动定时窗口开关当前状态（v1.17.0 D1.3）。
+	ActiveWindow() bool
 	// FlushDeferredSync 统一刷盘延迟持久化的提交（v1.17.0 D1.2）：对
 	// deferredLSN 水位执行一次 WAL SyncUpTo。幂等；批尾响应写回前调用。
 	FlushDeferredSync() error

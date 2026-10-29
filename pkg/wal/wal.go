@@ -54,6 +54,14 @@ type WAL interface {
 	// 每事务一次 fsync。设为 0 关闭定时窗口，回退被动攒批（仅并发等待者
 	// 合并），行为与 v1.13.0 完全一致。
 	SetGroupCommitWindow(d time.Duration)
+	// SetActiveWindow 设置组提交主动定时窗口开关（v1.17.0 D1.3）。开启时
+	// leader 无论是否已有并发等待者都等待组提交窗口（收集后续稀疏到达的
+	// Append 并入本次 fsync，进一步降低低并发写路径 fsync 频率）；关闭回退
+	// v1.16.0 C1 单等待者免窗口（仅存在 follower 时才等待，消除单事务固定
+	// 窗口延迟）。默认关闭（与 v1.16.0 行为一致，零回归）。
+	SetActiveWindow(enabled bool)
+	// ActiveWindow 返回组提交主动定时窗口开关当前状态（SHOW CONFIG 读取）。
+	ActiveWindow() bool
 	// Replay 从文件头顺序重放全部记录，损坏时报错并中止。
 	Replay(apply func(*WalEntry)) error
 	// Truncate 截断 lsn 之前的记录（保留 lsn 及之后；checkpoint 后调用）。

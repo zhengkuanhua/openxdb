@@ -9,6 +9,7 @@ package sql
 //   - pipeline_flush        连接内 pipeline 条件 flush 开关（v1.16.0 C6，server.go REPLSession）
 //   - snapshot_lock_external 显式事务 UPDATE 快照刷新锁外化开关（v1.17.0 D1.1，executor.go）
 //   - write_pipeline        autocommit 写 pipeline 开关（v1.17.0 D1.2，server.go REPLSession）
+//   - group_commit_active_window WAL 组提交主动定时窗口开关（v1.17.0 D1.3，wal_impl.go）
 //   - group_commit_window_ms WAL 组提交定时刷盘窗口毫秒（v1.14.0 P1，wal_impl.go）
 //   - slow_query_threshold  慢查询阈值毫秒（M13，executor.go slowThreshold）
 //   - slow_query_log        慢查询落盘开关（M13，slowlog.go）
@@ -152,6 +153,25 @@ var configSpecs = []*configSpec{
 			return nil
 		},
 		read: func(e *Executor) string { return e.groupCommitWindowMsText() },
+	},
+	{
+		key:  "group_commit_active_window",
+		desc: "WAL 组提交主动定时窗口开关（v1.17.0 D1.3）：on/off/1/0，开启时 leader 无并发等待者也等待组提交窗口（收集稀疏 Append 合并 fsync，降低低并发写路径 fsync 频率），默认 off（与 v1.16.0 C1 单等待者免窗口一致，零回归）",
+		def:  "off",
+		apply: func(e *Executor, v string) error {
+			on := false
+			switch v {
+			case "on", "true", "1":
+				on = true
+			case "off", "false", "0":
+				on = false
+			default:
+				return &SQLError{Msg: "invalid value for group_commit_active_window: " + v + " (expected on/off/1/0)"}
+			}
+			e.SetGroupCommitActiveWindow(on)
+			return nil
+		},
+		read: func(e *Executor) string { return boolValStr(e.GroupCommitActiveWindow()) },
 	},
 	{
 		key:  "write_pipeline",

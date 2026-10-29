@@ -258,6 +258,18 @@ func (m *txnManager) SetGroupCommitWindow(d time.Duration) {
 	m.wal.SetGroupCommitWindow(d)
 }
 
+// SetActiveWindow 设置 WAL 组提交主动定时窗口开关（v1.17.0 D1.3），透传底层 WAL。
+// 开启时 leader 无并发等待者也等待组提交窗口（收集稀疏到达 Append 合并 fsync）；
+// 关闭回退 v1.16.0 C1 单等待者免窗口。
+func (m *txnManager) SetActiveWindow(enabled bool) {
+	m.wal.SetActiveWindow(enabled)
+}
+
+// ActiveWindow 返回 WAL 组提交主动定时窗口开关当前状态（v1.17.0 D1.3）。
+func (m *txnManager) ActiveWindow() bool {
+	return m.wal.ActiveWindow()
+}
+
 // FlushDeferredSync 统一刷盘延迟持久化的事务（v1.17.0 D1.2）：对
 // deferredLSN 水位执行一次 WAL SyncUpTo，覆盖整批未 fsync 的提交记录。
 // 幂等：无延迟事务或已覆盖到该 LSN 时立即返回。批尾必须在响应写回前调用，

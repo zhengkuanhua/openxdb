@@ -114,6 +114,12 @@ type Executor struct {
 	// v1.14.0 P1：WAL 组提交定时刷盘窗口（毫秒，0=关闭回退被动攒批）。
 	// 经 SetGroupCommitWindow 同步透传底层 WAL；SHOW CONFIG 读取同锁保护。
 	groupCommitWindowMs float64
+	// v1.17.0 D1.3：WAL 组提交主动定时窗口开关。开启时 leader 无并发等待
+	// 者也等待 groupCommitWindow（收集稀疏到达的 Append 合并 fsync，降低
+	// 低并发写路径 fsync 频率）；关闭回退 v1.16.0 C1 单等待者免窗口（仅
+	// 存在 follower 时等待，无固定窗口延迟）。默认 false（零回归）。
+	// 经 SetGroupCommitActiveWindow 同步透传底层 WAL。
+	activeGroupCommitWindow bool
 	// v1.17.0 D1.2：autocommit 写 pipeline 开关。开启时服务端 REPLSession
 	// 收集连续 autocommit 写语句批，executor 层 Commit 走 defer sync（批内
 	// 跳过 WAL fsync，批尾 FlushWritePipeline 一次性 SyncUpTo 覆盖整批，把
@@ -334,6 +340,27 @@ func (e *Executor) SetGroupCommitWindow(d time.Duration) {
 	if e.tm != nil {
 		e.tm.SetGroupCommitWindow(d)
 	}
+}
+
+// SetGroupCommitActiveWindow 设置 WAL 组提交主动定时窗口开关（v1.17.0
+// D1.3），透传至事务管理器底层 WAL。开启时 leader 无并发等待者也等待
+// 组提交窗口（收集稀疏 Append 合并 fsync）；关闭回退 v1.16.0 C1 单等待
+// 者免窗口（零回归）。经 SET group_commit_active_window 热切换即时生效。
+func (e *Executor) SetGroupCommitActiveWindow(enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.activeGroupCommitWindow = enabled
+	if e.tm != nil {
+		e.tm.SetActiveWindow(enabled)
+	}
+}
+
+// GroupCommitActiveWindow 返回 WAL 组提交主动定时窗口开关当前状态
+// （v1.17.0 D1.3；SHOW CONFIG 与测试观测用）。
+func (e *Executor) GroupCommitActiveWindow() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.activeGroupCommitWindow
 }
 
 // SetWritePipeline 设置 autocommit 写 pipeline 开关（v1.17.0 D1.2）。

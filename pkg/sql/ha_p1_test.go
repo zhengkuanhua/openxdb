@@ -84,6 +84,8 @@ func (m *p1TxnMgr) SetCommitWaitHook(func(lsn storage.LSN, seq uint64) error) {}
 func (m *p1TxnMgr) HookErr() error                                           { return nil }
 func (m *p1TxnMgr) FlushDeferredSync() error                               { return nil }
 func (m *p1TxnMgr) SetGroupCommitWindow(time.Duration)                        {}
+func (m *p1TxnMgr) ActiveWindow() bool                                         { return false }
+func (m *p1TxnMgr) SetActiveWindow(bool)                                       {}
 func (m *p1TxnMgr) Close() error                                             { return nil }
 
 type p1TxnT struct{ rows []storage.KVPair }

@@ -37,6 +37,12 @@ type walImpl struct {
 	// 新 Append 并入本次 fsync（事务稀疏时也合并）。0 = 关闭（被动攒批）。
 	groupCommitWindow time.Duration
 
+	// v1.17.0 D1.3 组提交主动定时窗口：开启时 leader 无论是否已有并发
+	// 等待者都等待 groupCommitWindow（无 follower 也等待，收集稀疏到达的
+	// Append 合并 fsync）；关闭回退 v1.16.0 C1 单等待者免窗口（仅存在
+	// follower 时等待）。默认关闭（零回归）。
+	activeWindow bool
+
 	// v1.16.0 C1 批量刷盘增强：组提交开启时 Append 仅写入内存缓冲（不逐条
 	// 调文件写系统调用），由 SyncUpTo/Close/Replay/Truncate 在持锁时一次性
 	// flush 到文件——高并发下文件写调用与 fsync 合并更充分，持久化语义不变。
@@ -160,6 +166,23 @@ func (w *walImpl) SetGroupCommitWindow(d time.Duration) {
 	w.groupCommitWindow = d
 }
 
+// SetActiveWindow 设置组提交主动定时窗口开关（v1.17.0 D1.3）：
+// 开启时 leader 无并发等待者也等待 groupCommitWindow（收集稀疏到达的
+// Append 并入本次 fsync）；关闭回退 v1.16.0 C1 单等待者免窗口（仅存在
+// follower 时等待）。默认关闭（零回归）。
+func (w *walImpl) SetActiveWindow(enabled bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.activeWindow = enabled
+}
+
+// ActiveWindow 返回组提交主动定时窗口开关当前状态（v1.17.0 D1.3）。
+func (w *walImpl) ActiveWindow() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.activeWindow
+}
+
 // SyncUpTo 阻塞直至 lsn 及之前所有已追加记录 fsync 落盘。
 // leader 机制：首个等待者成为 leader，一次 fsync 覆盖当前已写末尾后广播唤醒；
 // 后续等待者发现 lastSynced 已推进则零额外 fsync 直接返回。
@@ -209,10 +232,14 @@ func (w *walImpl) SyncUpTo(lsn storage.LSN) error {
 		if w.groupCommitWindow > 0 {
 			// v1.16.0 C1 单等待者免窗口：释放锁后立即重检是否有并发等待者
 			// 已到达（waiters>1 表示有 follower）。无则跳过定时窗口直接刷盘。
+			// v1.17.0 D1.3 主动定时窗口：开启时无 follower 也等待窗口（收集
+			// 稀疏到达的后续 Append 并入本次 fsync，降低低并发写路径 fsync
+			// 频率）；关闭保持 v1.16.0 行为（仅 follower 触发窗口，单事务
+			// 无固定窗口延迟，零回归）。
 			w.mu.Lock()
 			hasFollower := w.waiters > 1
 			w.mu.Unlock()
-			if hasFollower {
+			if w.activeWindow || hasFollower {
 				time.Sleep(w.groupCommitWindow)
 			}
 		}

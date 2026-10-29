@@ -333,6 +333,14 @@ func (e *Engine) FlushWritePipeline() error { return e.ex.FlushWritePipeline() }
 // d<=0 关闭定时窗口（回退 v1.13.0 被动攒批行为）；经 SET group_commit_window_ms 热切换。
 func (e *Engine) SetGroupCommitWindow(d time.Duration) { e.ex.SetGroupCommitWindow(d) }
 
+// SetGroupCommitActiveWindow 设置 WAL 组提交主动定时窗口开关（v1.17.0 D1.3），
+// 透传至执行器。开启时 leader 无并发等待者也等待组提交窗口（收集稀疏 Append
+// 合并 fsync）；关闭回退 v1.16.0 C1 单等待者免窗口。经 SET group_commit_active_window 热切换。
+func (e *Engine) SetGroupCommitActiveWindow(enabled bool) { e.ex.SetGroupCommitActiveWindow(enabled) }
+
+// GroupCommitActiveWindow 返回 WAL 组提交主动定时窗口开关当前状态（v1.17.0 D1.3）。
+func (e *Engine) GroupCommitActiveWindow() bool { return e.ex.GroupCommitActiveWindow() }
+
 // IsROSelect 判断语句是否为可安全并行的只读 SELECT：解析后类型为
 // *SelectStmt。OpenXDB 的 SELECT 无 INTO/变量副作用，FOR UPDATE 仅语法
 // 兼容无行锁语义，因此 SELECT 并发执行安全；显式事务内的 SELECT 由
