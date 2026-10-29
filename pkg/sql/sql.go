@@ -307,6 +307,14 @@ func (e *Engine) SetPipelineFlush(enabled bool) { e.ex.SetPipelineFlush(enabled)
 // PipelineFlush 返回连接内 pipeline 条件 flush 开关当前状态。
 func (e *Engine) PipelineFlush() bool { return e.ex.PipelineFlush() }
 
+// SetSnapshotLockExternal 设置显式事务 UPDATE 快照刷新锁外化开关
+// （v1.17.0 D1.1），透传至执行器。开启时显式事务内已持锁行跳过
+// refreshWriteSnapshot（仅新锁定行锁内刷新）；关闭回退 v1.16.0 每次
+// 写语句锁内刷新。可经 SET snapshot_lock_external 热切换。
+func (e *Engine) SetSnapshotLockExternal(enabled bool) { e.ex.SetSnapshotLockExternal(enabled) }
+
+// SnapshotLockExternal 返回显式事务 UPDATE 快照刷新锁外化开关当前状态。
+func (e *Engine) SnapshotLockExternal() bool { return e.ex.SnapshotLockExternal() }
 // SetGroupCommitWindow 设置 WAL 组提交定时刷盘窗口（v1.14.0 P1），透传至执行器。
 // d<=0 关闭定时窗口（回退 v1.13.0 被动攒批行为）；经 SET group_commit_window_ms 热切换。
 func (e *Engine) SetGroupCommitWindow(d time.Duration) { e.ex.SetGroupCommitWindow(d) }
