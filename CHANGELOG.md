@@ -37,6 +37,10 @@ v1.17.0（显式事务写路径优化）正式发布。按 DEV_PLAN_v1.17.0 Phas
 - **D1.3 WAL 组提交主动定时窗口**：`group_commit_active_window`（默认 off 回退 v1.16.0 C1 单等待者免窗口）在写密集下主动定时刷新合并 fsync，降低 fsync 次数与写放大；不影响 WAL 重放 / 崩溃恢复 / 复制 2PC 顺序。
 - **E5 受控复测**（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read / write / read-write **11.85 / 12.03 / 12.40 TPS**（QPS 165.90 / 48.13 / 223.20，errs=0 / reconnects=0），较 v1.16.0（10.37 / 8.33 / 8.15 TPS，QPS 145.13 / 33.33 / 146.70）**write QPS +44%**、read-write TPS +52%、read 无回归 +14%；TPC-C 5 仓 tpmC **776.00** / tpm_total 1720.50（较 v1.16.0 的 254.00 / 581.00 提升约 **3.1-3.0 倍**）。**达成 D1 验收目标：write QPS 中位 ≥40（48.13）、TPS write ≥9（12.03）、tpmC ≥300（776.00），其余指标无回归、errs=0 / reconnects=0**。详见 [docs/experiments/E5_standard_bench_alignment.md](docs/experiments/E5_standard_bench_alignment.md)。
 
+**回退记录（D2）**
+
+- **D2 会话锁与调度精细化已回退**：D2.1 session lock granularity split（d7660f5）与 D2.2 read-parallel in write txn（442c4cb）因并发伸缩验收未达标（D2.3 复测 16 连接 read TPS 10.80 较 8 连接 11.85 为 -8.9%、read-write 10.28 较基线 12.40 为 -17.1%，未达"16 连接较 8 连接提升 ≥20%"验收目标）而整体回退，恢复 D1 基线行为（等价 cdd62e7）；D2.3 并发伸缩 bench 数据与实验文档（e1ba367）保留作为记录。回退后全仓回归全绿（`go test ./... -count=1 -p 1`），E5 受控复测（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read / write / read-write **12.75 / 12.63 / 10.97 TPS**（QPS 178.50 / 50.53 / 197.40，errs=0 / reconnects=0），TPC-C 5 仓 tpmC **709.00** / tpm_total 1568.00。**D1 指标复测仍达标：write QPS 中位 ≥40（50.53）、TPS write ≥9（12.63）、tpmC ≥300（709.00），read / read-write 无回归，errs=0 / reconnects=0**。
+
 **边界声明**
 
 - TPS/QPS 受全局会话锁与单机端侧往返制约，数值为**单机端侧功能基准**，非生产级吞吐承诺；write 模式已脱离吞吐下限（QPS 中位 48.13，单轮最低 41.00 仍高于 v1.16.0 中位 33.33）。

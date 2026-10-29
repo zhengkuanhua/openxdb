@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
@@ -89,56 +88,45 @@ type Executor struct {
 	slowQueries   []SlowQueryRecord
 	slowQueryMax  int // 内存保留条数（默认 slowQueryMaxDefault，可 SetSlowQueryMax 调整）
 	slowLog       *SlowLog
-	// v1.17.0 D2.1：全局会话锁拆分回退开关。开启（默认）时读侧开关字段走
-	// atomic 无锁读（只读路径不互斥，多连接并发读不再抢全局 e.mu）；关闭
-	// 回退 v1.16.0 每读侧判定持全局 e.mu（互斥读，锁顺序语义不变）。仅供
-	// 灰度回退使用，SET session_lock_split=off 即时生效；读结果与原子读
-	// 完全一致（字段本身 atomic，回退仅是冗余加锁，行为等价）。
-	sessionLockSplit atomic.Bool
 	// v1.14.0 P0：只读 SELECT 并行开关（服务端 REPLSession 批内 autocommit
 	// 只读 SELECT 并发执行 + 按序重组 + 批尾 flush）。默认开启；关闭回退
-	// v1.13.0 逐条串行执行行为。v1.17.0 D2.1 起字段原子化：读侧（服务端每
-	// 行/每批判定）无锁 atomic.Load，写侧（SET 热切换）持 e.mu Store
-	// （含复合传播），热路径不再抢全局互斥锁。
-	roParallel atomic.Bool
+	// v1.13.0 逐条串行执行行为。经 e.mu 保护读写，热路径读开销可忽略。
+	roParallel bool
 	// v1.16.0 C6：autocommit 只读语句共享快照开关。开启时连续 autocommit
 	// 只读 SELECT 复用同一临时只读事务（RocksDB 快照），免逐语句
 	// tm.Begin/Snapshot/Release 固定开销（延迟隐藏）；关闭回退逐语句独立
 	// 快照（原语义）。仅 autocommit 只读 SELECT 生效，显式事务边界与错误
-	// 传播语义不变。v1.17.0 D2.1 起原子化（读侧无锁 Load，写侧 e.mu Store）。
-	snapshotShare atomic.Bool
+	// 传播语义不变。经 e.mu 保护读写（与 roParallel 同锁）。
+	snapshotShare bool
 	// v1.16.0 C6：连接内 pipeline 条件 flush 开关。服务端 REPLSession 串行
 	// 路径开启时，通道仍有后续命令则合并响应 flush（隐藏逐条 flush 延迟）；
 	// 通道空/读侧关闭/语句出错时立即 flush（保持逐条交互与错误传播语义）。
-	// 关闭回退 v1.14.0 每命令 flush 行为。v1.17.0 D2.1 起原子化。
-	pipelineFlush atomic.Bool
+	// 关闭回退 v1.14.0 每命令 flush 行为。经 e.mu 保护读写。
+	pipelineFlush bool
 	// v1.17.0 D1.1：显式事务 UPDATE 快照刷新锁外化开关。开启时显式事务内
 	// 对已持锁行（事务内先前语句已取行锁/表锁）跳过 refreshWriteSnapshot：
 	// 行锁持有期间前序事务不可能修改该行，刷新无新增信息，RocksDB 快照
 	// 重建与 TSO 取号从每写语句 1 次降为每新锁定行 1 次；仅新锁定行仍锁内
 	// 刷新（读到前序提交，保持 M18/M19 读改写不丢更新语义）。autocommit
 	// 路径不受影响（无持锁行，恒刷新）。关闭回退 v1.16.0 每次写语句刷新。
-	// v1.17.0 D2.1 起原子化（写语句热路径判定无锁 Load）。
-	snapshotLockExternal atomic.Bool
+	// 经 e.mu 保护读写（与 roParallel/snapshotShare 同锁）。
+	snapshotLockExternal bool
 	// v1.14.0 P1：WAL 组提交定时刷盘窗口（毫秒，0=关闭回退被动攒批）。
-	// 经 SetGroupCommitWindow 同步透传底层 WAL；SHOW CONFIG 读取同锁保护
-	// （低频展示路径，非热路径，D2.1 保持 e.mu 保护）。
+	// 经 SetGroupCommitWindow 同步透传底层 WAL；SHOW CONFIG 读取同锁保护。
 	groupCommitWindowMs float64
 	// v1.17.0 D1.3：WAL 组提交主动定时窗口开关。开启时 leader 无并发等待
 	// 者也等待 groupCommitWindow（收集稀疏到达的 Append 合并 fsync，降低
 	// 低并发写路径 fsync 频率）；关闭回退 v1.16.0 C1 单等待者免窗口（仅
 	// 存在 follower 时等待，无固定窗口延迟）。默认 false（零回归）。
-	// 经 SetGroupCommitActiveWindow 同步透传底层 WAL。v1.17.0 D2.1 起
-	// 原子化（读侧无锁 Load，写侧 e.mu Store 含复合传播）。
-	activeGroupCommitWindow atomic.Bool
+	// 经 SetGroupCommitActiveWindow 同步透传底层 WAL。
+	activeGroupCommitWindow bool
 	// v1.17.0 D1.2：autocommit 写 pipeline 开关。开启时服务端 REPLSession
 	// 收集连续 autocommit 写语句批，executor 层 Commit 走 defer sync（批内
 	// 跳过 WAL fsync，批尾 FlushWritePipeline 一次性 SyncUpTo 覆盖整批，把
 	// N 次 fsync 合并为 1 次），且窗口内 RocksDB 自身 WAL 被禁用（OpenXDB
 	// WAL 为唯一持久化通道，杜绝幽灵数据窗口）。仅 autocommit 写路径生效，
-	// 显式事务与错误传播语义不变。默认 false（零回归）。v1.17.0 D2.1 起
-	// 原子化（服务端每批判定无锁 Load）。
-	writePipeline atomic.Bool
+	// 显式事务与错误传播语义不变。默认 false（零回归）。经 e.mu 保护读写。
+	writePipeline bool
 	// v1.16.0：WAL 自动 checkpoint 控制器（nil = 未装配，SET wal_* 返回
 	// 明确错误，DB 行为零回归）。由 db.Open 注入（sql 包不依赖 db 包）。
 	chkCtl CheckpointSetter
@@ -221,9 +209,16 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 		p1Epoch:       map[storage.ID]p1RegionEpoch{},
 		splitAcc:      map[uint64]int64{},
 		qc:            NewQueryCache(),
-		// v1.17.0 D2.1：全局会话锁拆分默认开启（SET session_lock_split=off
-		// 回退 v1.16.0 每读侧判定持全局 e.mu）。布尔开关字段默认值与经
-		// Set* 热切换路径一致，构造后统一 Store（见 NewExecutor 尾部）。
+		// v1.14.0 P0：只读 SELECT 并行默认开启（SET ro_parallel=off 回退串行）。
+		roParallel:    true,
+		// v1.16.0 C6：autocommit 只读共享快照 / 连接内 pipeline 条件 flush
+		// 默认开启（SET snapshot_share=off / pipeline_flush=off 回退逐语句
+		// 独立快照 / 逐命令 flush 原语义）。
+		snapshotShare: true,
+		pipelineFlush: true,
+		// v1.17.0 D1.1：显式事务 UPDATE 快照刷新锁外化默认开启（SET
+		// snapshot_lock_external=off 回退 v1.16.0 每次写语句锁内刷新）。
+		snapshotLockExternal: true,
 		// v1.14.0 P1：WAL 组提交定时刷盘窗口默认 0.5ms（SET group_commit_window_ms=0 回退被动攒批）。
 		groupCommitWindowMs: groupCommitWindowMsDefault,
 		slowThreshold: slowThresholdDefault, // M13：默认 100ms
@@ -248,16 +243,6 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 	e.initAlertRulesEngine()
 	// v1.14.0 P1：与底层 WAL 默认窗口保持一致（wal_impl 默认 500µs）。
 	e.SetGroupCommitWindow(time.Duration(groupCommitWindowMsDefault * float64(time.Millisecond)))
-	// v1.17.0 D2.1：原子化开关默认值与 v1.16.0 保持一致——ro_parallel /
-	// snapshot_share / pipeline_flush / snapshot_lock_external 默认开启，
-	// write_pipeline / group_commit_active_window 默认关闭（atomic.Bool 零
-	// 值 false，无需显式 Store）；session_lock_split 默认开启。Store 置于
-	// SetGroupCommitWindow 之后，确保任何热路径判定前开关已就绪。
-	e.roParallel.Store(true)
-	e.snapshotShare.Store(true)
-	e.pipelineFlush.Store(true)
-	e.snapshotLockExternal.Store(true)
-	e.sessionLockSplit.Store(true)
 	return e
 }
 
@@ -273,73 +258,56 @@ func (e *Executor) initBackupScheduler() {
 
 // SetROParallel 设置只读 SELECT 并行开关（v1.14.0 P0）：批内 autocommit
 // 只读 SELECT 并发执行 + 按序重组。关闭回退 v1.13.0 逐条串行执行行为。
-// 运行时调用即时生效（SET ro_parallel=on|off 热切换）。v1.17.0 D2.1 起
-// 字段原子化：写侧持 e.mu 执行 Store（SET 低频，无竞争压力；复合传播与
-// 未来多字段一致写保留锁内原子性）。
+// 运行时调用即时生效（SET ro_parallel=on|off 热切换）。
 func (e *Executor) SetROParallel(enabled bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.roParallel.Store(enabled)
+	e.roParallel = enabled
 }
 
 // ROParallel 返回只读 SELECT 并行开关当前状态（服务端 REPLSession 热路径
-// 判定是否启用并行批收集）。v1.17.0 D2.1 起读侧无锁：session_lock_split
-// 开启时 atomic.Load（只读路径不互斥）；关闭时持全局 e.mu 读（回退
-// v1.16.0 互斥语义，锁顺序与位置不变、行为等价）。
+// 判定是否启用并行批收集）。
 func (e *Executor) ROParallel() bool {
-	if !e.sessionLockSplit.Load() {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		return e.roParallel.Load()
-	}
-	return e.roParallel.Load()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.roParallel
 }
 
 // SetSnapshotShare 设置 autocommit 只读语句共享快照开关（v1.16.0 C6）：
 // 开启时连续 autocommit 只读 SELECT 复用同一临时只读事务（RocksDB 快照），
 // 免逐语句 Begin/Snapshot/Release 固定开销；关闭回退逐语句独立快照（原
 // 语义）。运行时调用即时生效（SET snapshot_share=on|off 热切换）。显式
-// 事务边界与错误传播语义不受影响。v1.17.0 D2.1 起字段原子化，写侧持
-// e.mu Store。
+// 事务边界与错误传播语义不受影响。
 func (e *Executor) SetSnapshotShare(enabled bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.snapshotShare.Store(enabled)
+	e.snapshotShare = enabled
 }
 
 // SnapshotShare 返回 autocommit 只读语句共享快照开关当前状态（SHOW
-// CONFIG 与测试观测用；executor 内部每语句判定也经此 flag 感知读）。
-// v1.17.0 D2.1 起读侧无锁（session_lock_split 开启时 atomic.Load）。
+// CONFIG 与测试观测用）。
 func (e *Executor) SnapshotShare() bool {
-	if !e.sessionLockSplit.Load() {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		return e.snapshotShare.Load()
-	}
-	return e.snapshotShare.Load()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.snapshotShare
 }
 
 // SetPipelineFlush 设置连接内 pipeline 条件 flush 开关（v1.16.0 C6）：
 // 开启时服务端 REPLSession 串行路径在通道仍有后续命令时合并响应 flush
 // （延迟隐藏）；关闭回退 v1.14.0 每命令 flush 行为。运行时调用即时生效
-// （SET pipeline_flush=on|off 热切换）。v1.17.0 D2.1 起字段原子化，写侧
-// 持 e.mu Store。
+// （SET pipeline_flush=on|off 热切换）。
 func (e *Executor) SetPipelineFlush(enabled bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.pipelineFlush.Store(enabled)
+	e.pipelineFlush = enabled
 }
 
 // PipelineFlush 返回连接内 pipeline 条件 flush 开关当前状态（服务端
-// REPLSession 热路径判定与 SHOW CONFIG 用）。v1.17.0 D2.1 起读侧无锁
-// （session_lock_split 开启时 atomic.Load）。
+// REPLSession 热路径判定与 SHOW CONFIG 用）。
 func (e *Executor) PipelineFlush() bool {
-	if !e.sessionLockSplit.Load() {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		return e.pipelineFlush.Load()
-	}
-	return e.pipelineFlush.Load()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.pipelineFlush
 }
 
 // SetSnapshotLockExternal 设置显式事务 UPDATE 快照刷新锁外化开关
@@ -347,23 +315,18 @@ func (e *Executor) PipelineFlush() bool {
 // （行锁持有期间前序事务不可能修改该行，刷新无新增信息），仅新锁定行
 // 锁内刷新；关闭回退 v1.16.0 每次写语句锁内刷新。运行时调用即时生效
 // （SET snapshot_lock_external=on|off 热切换）。autocommit 路径不受影响。
-// v1.17.0 D2.1 起字段原子化，写侧持 e.mu Store。
 func (e *Executor) SetSnapshotLockExternal(enabled bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.snapshotLockExternal.Store(enabled)
+	e.snapshotLockExternal = enabled
 }
 
 // SnapshotLockExternal 返回显式事务 UPDATE 快照刷新锁外化开关当前状态
-// （execUpdate 热路径判定与 SHOW CONFIG 用）。v1.17.0 D2.1 起读侧无锁
-// （session_lock_split 开启时 atomic.Load）。
+// （execUpdate 热路径判定与 SHOW CONFIG 用）。
 func (e *Executor) SnapshotLockExternal() bool {
-	if !e.sessionLockSplit.Load() {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		return e.snapshotLockExternal.Load()
-	}
-	return e.snapshotLockExternal.Load()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.snapshotLockExternal
 }
 
 // SetGroupCommitWindow 设置 WAL 组提交定时刷盘窗口（v1.14.0 P1），
@@ -383,26 +346,21 @@ func (e *Executor) SetGroupCommitWindow(d time.Duration) {
 // D1.3），透传至事务管理器底层 WAL。开启时 leader 无并发等待者也等待
 // 组提交窗口（收集稀疏 Append 合并 fsync）；关闭回退 v1.16.0 C1 单等待
 // 者免窗口（零回归）。经 SET group_commit_active_window 热切换即时生效。
-// v1.17.0 D2.1 起字段原子化，写侧持 e.mu Store（含底层 WAL 复合传播）。
 func (e *Executor) SetGroupCommitActiveWindow(enabled bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.activeGroupCommitWindow.Store(enabled)
+	e.activeGroupCommitWindow = enabled
 	if e.tm != nil {
 		e.tm.SetActiveWindow(enabled)
 	}
 }
 
 // GroupCommitActiveWindow 返回 WAL 组提交主动定时窗口开关当前状态
-// （v1.17.0 D1.3；SHOW CONFIG 与测试观测用）。v1.17.0 D2.1 起读侧无锁
-// （session_lock_split 开启时 atomic.Load）。
+// （v1.17.0 D1.3；SHOW CONFIG 与测试观测用）。
 func (e *Executor) GroupCommitActiveWindow() bool {
-	if !e.sessionLockSplit.Load() {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		return e.activeGroupCommitWindow.Load()
-	}
-	return e.activeGroupCommitWindow.Load()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.activeGroupCommitWindow
 }
 
 // SetWritePipeline 设置 autocommit 写 pipeline 开关（v1.17.0 D1.2）。
@@ -415,7 +373,7 @@ func (e *Executor) GroupCommitActiveWindow() bool {
 func (e *Executor) SetWritePipeline(enabled bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.writePipeline.Store(enabled)
+	e.writePipeline = enabled
 	if e.st != nil {
 		if nw, ok := e.st.(interface{ SetNoWAL(bool) }); ok {
 			nw.SetNoWAL(enabled)
@@ -424,30 +382,11 @@ func (e *Executor) SetWritePipeline(enabled bool) {
 }
 
 // WritePipeline 返回 autocommit 写 pipeline 开关当前状态（v1.17.0 D1.2；
-// SHOW CONFIG 与测试观测用）。v1.17.0 D2.1 起读侧无锁（session_lock_split
-// 开启时 atomic.Load；服务端 REPLSession 写批判定热路径不再抢全局 e.mu）。
+// SHOW CONFIG 与测试观测用）。
 func (e *Executor) WritePipeline() bool {
-	if !e.sessionLockSplit.Load() {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		return e.writePipeline.Load()
-	}
-	return e.writePipeline.Load()
-}
-
-// SetSessionLockSplit 设置全局会话锁拆分开关（v1.17.0 D2.1）：开启时读侧
-// 开关字段走 atomic 无锁读（只读路径不互斥）；关闭回退 v1.16.0 每读侧
-// 判定持全局 e.mu（互斥读）。运行时调用即时生效（SET session_lock_split
-// =on|off 热切换）。回退仅改变加锁方式，读结果与锁顺序语义不变（字段
-// 本身 atomic，回退读与原子读完全一致）。
-func (e *Executor) SetSessionLockSplit(enabled bool) {
-	e.sessionLockSplit.Store(enabled)
-}
-
-// SessionLockSplit 返回全局会话锁拆分开关当前状态（v1.17.0 D2.1；
-// SHOW CONFIG 与测试观测用）。原子读，无锁。
-func (e *Executor) SessionLockSplit() bool {
-	return e.sessionLockSplit.Load()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.writePipeline
 }
 
 // FlushWritePipeline 统一刷盘写批内延迟持久化的事务（v1.17.0 D1.2）：
@@ -1233,7 +1172,7 @@ func (e *Executor) resetStmtSnapshot(sess *Session, stmt Stmt) {
 	if sess.inTx {
 		return
 	}
-	if e.SnapshotShare() && e.stmtROShareableLocked(sess, stmt) {
+	if e.snapshotShare && e.stmtROShareableLocked(sess, stmt) {
 		if sess.sharedROTx == nil {
 			sess.stmtBeginTS = 0 // 窗口起点：本语句独立取号
 			return
@@ -3061,7 +3000,7 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (res *Result, err er
 		// 时复用窗口事务（共享快照），成功路径不关闭窗口（供连续只读语句
 		// 复用，延迟隐藏）；出错时关闭窗口并释放（错误传播语义不变）。
 		// 其余 autocommit 语句：独立临时事务 + 语句结束 Rollback（原语义）。
-		if e.SnapshotShare() && e.stmtROShareable(sess, s) {
+		if e.snapshotShare && e.stmtROShareable(sess, s) {
 			tx, err = e.enterSharedROWindow(sess, tx)
 			if err != nil {
 				return nil, err

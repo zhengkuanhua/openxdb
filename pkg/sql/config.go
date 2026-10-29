@@ -9,7 +9,6 @@ package sql
 //   - pipeline_flush        连接内 pipeline 条件 flush 开关（v1.16.0 C6，server.go REPLSession）
 //   - snapshot_lock_external 显式事务 UPDATE 快照刷新锁外化开关（v1.17.0 D1.1，executor.go）
 //   - write_pipeline        autocommit 写 pipeline 开关（v1.17.0 D1.2，server.go REPLSession）
-//   - session_lock_split    全局会话锁拆分开关（v1.17.0 D2.1，executor.go）
 //   - group_commit_active_window WAL 组提交主动定时窗口开关（v1.17.0 D1.3，wal_impl.go）
 //   - group_commit_window_ms WAL 组提交定时刷盘窗口毫秒（v1.14.0 P1，wal_impl.go）
 //   - slow_query_threshold  慢查询阈值毫秒（M13，executor.go slowThreshold）
@@ -192,25 +191,6 @@ var configSpecs = []*configSpec{
 			return nil
 		},
 		read: func(e *Executor) string { return boolValStr(e.WritePipeline()) },
-	},
-	{
-		key:  "session_lock_split",
-		desc: "全局会话锁拆分开关（v1.17.0 D2.1）：on/off/1/0，开启时读侧开关字段走 atomic 无锁读（只读路径不互斥，多连接并发读不再抢全局 e.mu），默认 on；off 回退 v1.16.0 每读侧判定持全局 e.mu（互斥读，锁顺序语义不变）",
-		def:  "on",
-		apply: func(e *Executor, v string) error {
-			on := false
-			switch v {
-			case "on", "true", "1":
-				on = true
-			case "off", "false", "0":
-				on = false
-			default:
-				return &SQLError{Msg: "invalid value for session_lock_split: " + v + " (expected on/off/1/0)"}
-			}
-			e.SetSessionLockSplit(on)
-			return nil
-		},
-		read: func(e *Executor) string { return boolValStr(e.SessionLockSplit()) },
 	},
 	{
 		key:  "slow_query_threshold",

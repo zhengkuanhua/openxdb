@@ -651,19 +651,12 @@ func (s *Server) REPL(r io.Reader, w io.Writer) error {
 // 响应"协议语义不变。
 //
 // v1.14.0 P0：在保持"一命令一响应"语义下新增只读 SELECT 并行批路径——
-// 主循环判定连续只读 SELECT（开关 ro_parallel 默认 on）时收集为一批
-// （上限 roMaxBatch=64），批内经 worker 池（roMaxConcurrency=8）并发
-// 执行，响应按原始行序重组后一次性写回并批尾 flush（消除队头阻塞与
-// 逐条 flush）；批中遇到非只读 SELECT / BEGIN / 写语句立即中断并退回
-// 串行路径，保证事务边界与命令顺序语义不变。未鉴权连接保持串行
-// （避免并行写会话鉴权字段）。
-//
-// v1.17.0 D2.2：批执行从"worker 池并发 HandleSession"改为引擎层批接口
-// ExecuteAsSessionBatch（复用 C3 ro_parallel 语义），并放开显式事务内
-// SELECT 的 InTx 排除——写事务内连续只读 SELECT 进入并行批，批内共享
-// 同一事务快照（curTx，read-your-writes 保持），批外写语句先冲刷批再
-// 串行执行，写语句顺序与可见性不变；Serializable 隔离 / forcedTx 挂载 /
-// 含 @var / ro_parallel 关闭等保守条件由引擎层判定整批回退串行。
+// 主循环判定连续 autocommit 只读 SELECT（开关 ro_parallel 默认 on）时
+// 收集为一批（上限 roMaxBatch=64），批内经 worker 池（roMaxConcurrency=8）
+// 并发执行，响应按原始行序重组后一次性写回并批尾 flush（消除队头阻塞
+// 与逐条 flush）；批中遇到非只读 SELECT / BEGIN / 写语句立即中断并退回
+// 串行路径，保证事务边界与命令顺序语义不变。显式事务内 SELECT 不进入
+// 并行批（InTx 判定）；未鉴权连接保持串行（避免并行写会话鉴权字段）。
 func (s *Server) REPLSession(r io.Reader, w io.Writer, sess *session) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024) // 单行上限 1MB
@@ -723,36 +716,23 @@ func (s *Server) REPLSession(r io.Reader, w io.Writer, sess *session) error {
 					break collect // 连接读侧暂无更多命令：立即执行当前批
 				}
 			}
-			// v1.17.0 D2.2：批执行改走引擎层 ExecuteAsSessionBatch，复用
-			// C3 语义——autocommit 批内每条独立临时事务+独立快照；显式
-			// 事务内（含写事务）批内 SELECT 共享同一事务快照（curTx）
-			// 并行执行，read-your-writes 保持；Serializable / forcedTx /
-			// @var / ro_parallel 关闭等保守条件整批回退串行（与逐条
-			// ExecuteAsSession 完全等价）。停机检查与 active 计数在此
-			// 批量包装，语义与批内逐条 HandleSession 一致（批内全是
-			// SELECT，非事务终态，停机中整批拒绝）。
-			s.mu.Lock()
-			shuttingDown := atomic.LoadInt32(&s.state) != 0
-			atomic.AddInt64(&s.active, int64(len(batch)))
-			s.mu.Unlock()
 			results := make([]string, len(batch))
-			if shuttingDown {
-				const rej = "ERR server shutting down: rejecting new connections/transactions"
-				for i := range results {
-					results[i] = rej
-				}
-			} else {
-				bs, errs := s.SQL.ExecuteAsSessionBatch(batch, sess.user, sess.sqlSess)
-				for i := range batch {
-					switch {
-					case errs[i] != nil:
-						results[i] = "ERR sql: " + errs[i].Error()
-					case bs[i] != nil:
-						results[i] = formatResult(bs[i])
+			sem := make(chan struct{}, roMaxConcurrency)
+			var wg sync.WaitGroup
+			for i, bl := range batch {
+				wg.Add(1)
+				go func(i int, bl string) {
+					defer wg.Done()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+					resp, err := s.HandleSession(bl, sess)
+					if err != nil {
+						resp = err.Error()
 					}
-				}
+					results[i] = resp
+				}(i, bl)
 			}
-			atomic.AddInt64(&s.active, -int64(len(batch)))
+			wg.Wait() // 批内全部完成后再按序写回（响应重组，消除队头阻塞）
 			for _, resp := range results {
 				if resp == "" {
 					continue
@@ -876,18 +856,12 @@ const (
 	wpMaxBatch = 64 // 单批最大写语句数（超限自动分批，保持有界）
 )
 
-// roSelectEligible 判定 line 是否为可安全进入只读 SELECT 并行批的语句。
+// roSelectEligible 判定 line 是否为可安全并行的 autocommit 只读 SELECT。
 // 需同时满足：（1）引擎已装配且 ro_parallel 开关开启；（2）非全局会话
-// （CLI/Handle 旧路径保持串行）；（3）解析为只读 SELECT（无写副作用）；
-// （4）无鉴权降级（Auth 启用且未鉴权时保持串行路径，避免并行 worker
-// 并发写 sess.user）。首个判定在串行上下文懒创建 sqlSess，避免后续并行
-// worker 并发创建会话。
-//
-// v1.17.0 D2.2：不再排除显式事务内 SELECT（原 InTx 判定）。写事务内
-// 连续只读 SELECT 进入并行批后由引擎层 ExecuteAsSessionBatch 判定并
-// 共享同一事务快照并行执行（C3 MVCC 语义复用）；Serializable 隔离 /
-// forcedTx 挂载 / 含 @var / ro_parallel 关闭等保守条件在引擎层整批
-// 回退串行，与逐条 ExecuteAsSession 完全等价。
+// （CLI/Handle 旧路径保持串行）；（3）会话不处于显式事务内（事务内 SELECT
+// 保序串行）；（4）解析为只读 SELECT（无写副作用）；（5）无鉴权降级
+// （Auth 启用且未鉴权时保持串行路径，避免并行 worker 并发写 sess.user）。
+// 首个判定在串行上下文懒创建 sqlSess，避免后续并行 worker 并发创建会话。
 func (s *Server) roSelectEligible(sess *session, line string) bool {
 	if s.SQL == nil || !s.SQL.ROParallel() {
 		return false
@@ -900,6 +874,9 @@ func (s *Server) roSelectEligible(sess *session, line string) bool {
 	}
 	if sess.sqlSess == nil {
 		sess.sqlSess = s.SQL.NewSession()
+	}
+	if sess.sqlSess.InTx() {
+		return false
 	}
 	return s.SQL.IsROSelect(line)
 }
