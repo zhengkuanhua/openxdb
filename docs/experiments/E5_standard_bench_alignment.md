@@ -189,6 +189,32 @@ OpenXDB 自研二进制协议（非 MySQL wire protocol），标准 sysbench（`
 
 > 结论：C1-C6 结构性改造显著提升事务级吞吐（v1.16.0 验收目标达成），全部优化带独立 feature flag 可灰度回退；write 模式为吞吐下限（QPS 中位 33.33，单轮波动 29.13 仍满足目标）。详细数据与边界见 [docs/experiments/C7_e5_controlled_retest.md](docs/experiments/C7_e5_controlled_retest.md)。
 
+## v1.17.0 优化后复测结果（2026-10-29，D1 收尾）
+
+> 口径一致声明：与 v0.27.0-alpha / v1.14.0 / v1.15.0 / v1.16.0 基线同脚本（bench_oltp.py / bench_tpcc.py）、同环境（Windows 11 / Go 1.27.1 / RocksDB 11.8.1 CGO / Python 3.11.8）、同数据目录（tests/bench/e5_data，端口 7797）、同并发（8 连接）、同时长（OLTP 60s / TPC-C 120s 预热 10s）；每轮正式基准前重新 prepare 保证库表干净；3 轮取中位数。v1.17.0 相对 v1.16.0 的差异为显式事务写路径优化 D1.1-D1.3（UPDATE 快照刷新锁外化 / autocommit 写 pipeline / WAL 组提交主动定时窗口）。E5 客户端为项目内 drivers/python 本地驱动，无需 pip 安装 pyoxdb。
+
+### sysbench OLTP（8 连接，60s，10,000 行）
+
+| 模式 | v1.17.0 TPS（中位） | v1.17.0 QPS（中位） | v1.16.0 TPS | v1.16.0 QPS | 错误数 |
+| --- | --- | --- | --- | --- | --- |
+| read（只读） | **11.85** | **165.90** | 10.37 | 145.13 | 0 |
+| write（只写） | **12.03** | **48.13** | 8.33 | 33.33 | 0 |
+| read_write（读写） | **12.40** | **223.20** | 8.15 | 146.70 | 0 |
+
+> 3 轮原始数据：read TPS 11.85 / 11.70 / 14.02（QPS 165.90 / 163.80 / 196.23）；write TPS 12.03 / 10.25 / 13.10（QPS 48.13 / 41.00 / 52.40）；read_write TPS 12.40 / 8.08 / 12.92（QPS 223.20 / 145.50 / 232.50）。3 轮 errs=0 / reconnects=0。write QPS 中位 48.13 较 v1.16.0 的 33.33 提升 **+44%**，单轮最低 41.00 仍高于 v1.16.0 中位；read / read_write 无回归（分别 +14% / +52%）。
+
+### TPC-C 小仓（8 连接，120s，5 仓，预热 10s）
+
+| 指标 | v1.17.0 | v1.16.0 | v1.15.0 | v1.14.0 | v0.27.0 |
+| --- | --- | --- | --- | --- | --- |
+| tpmC（NewOrder/分钟） | **776.00** | 254.00 | 81.50 | 85.50 | 13.50 |
+| 总事务 TPM | **1720.50** | 581.00 | 170.50 | 164.50 | 32.50 |
+| 错误数 | 0 | 0 | 0 | 0 | 0 |
+
+> 3 轮原始 tpmC：810.00 / 679.50 / 776.00（tpm_total 1821.50 / 1526.00 / 1720.50），中位数 776.00；较 v1.16.0 提升约 3.1 倍（tpm_total 约 3.0 倍）。
+
+> 结论：D1 三项写路径优化达成验收目标——**write QPS 中位 ≥40（48.13）、TPS write ≥9（12.03）、TPC-C tpmC ≥300（776.00）**，其余指标无回归（read / read_write 均提升）、errs=0 / reconnects=0；write 模式脱离吞吐下限（单轮最低 41.00 仍高于 v1.16.0 中位 33.33）。全部优化带独立 feature flag 可灰度回退。详细数据与边界见 [docs/experiments/C7_e5_controlled_retest.md](docs/experiments/C7_e5_controlled_retest.md)。
+
 ## 复现方式
 
 ```powershell

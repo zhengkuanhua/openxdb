@@ -2,6 +2,17 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_aa65ed19d2c611f196c5525400248c00
+    ReservedCode1: LFOeCyUrkODjtOibxvoiDRc4gV5EBh0npfQwyk1RdTCj93bKJLKcr7NlydEtZp9SkedIk7b9FndzkSpZRiYnCNkDDWKlAOH0mun1Dyk2Zr4FUibfd69GxtLZBw/fgt5MIM8YjGfd/A2v/WherkK/iax8RZYsYAxtKj9nLFXuIcDxkKE+wFh7VWuLKvU=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_aa65ed19d2c611f196c5525400248c00
+    ReservedCode2: LFOeCyUrkODjtOibxvoiDRc4gV5EBh0npfQwyk1RdTCj93bKJLKcr7NlydEtZp9SkedIk7b9FndzkSpZRiYnCNkDDWKlAOH0mun1Dyk2Zr4FUibfd69GxtLZBw/fgt5MIM8YjGfd/A2v/WherkK/iax8RZYsYAxtKj9nLFXuIcDxkKE+wFh7VWuLKvU=
+---
+
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
     ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_bdd83564c86c11f18b7f525400393706
     ReservedCode1: WfMTyove99YV06WZh34T2L4i2JX5tj63b/O9AN9CZjk+asOZEkUIqgygBB62QdF5dTd544TxS+ntrC0pXXbwBrzwtfq+bYqYC8mjce/vKjthCv4xsNe116dQvRi9R2F7ZM+UO2m7/gBp2wgtu/2glu7tMqzb8xYdZIOKjgoRx+dpWl46pMY+hKtNLy4=
     ContentPropagator: 001191440300708461136T1XGW3
@@ -32,7 +43,7 @@ AIGC:
 [![GitHub stars](https://img.shields.io/github/stars/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 [![GitHub issues](https://img.shields.io/github/issues/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 
-OpenXDB 是从零自研的单机/分布式关系型数据库内核（Go + RocksDB），定位于学习与工程实践并重的开源数据库项目。内核自底向上实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务与带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA 故障转移、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动（JDBC/Python）、运维工具链、认证权限（审计 + RBAC）与生态导出（JSON/Parquet）等能力，当前版本 **v1.16.0**。
+OpenXDB 是从零自研的单机/分布式关系型数据库内核（Go + RocksDB），定位于学习与工程实践并重的开源数据库项目。内核自底向上实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务与带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA 故障转移、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动（JDBC/Python）、运维工具链、认证权限（审计 + RBAC）与生态导出（JSON/Parquet）等能力，当前版本 **v1.17.0**。
 
 ## 快速开始
 
@@ -171,6 +182,8 @@ Protocol / CLI (REPL · TCP server · JDBC/Python 驱动 · MySQL wire protocol 
 **v1.15.0（2026-10-26 落地）**：**SQL 执行层四项优化** —— ① W1 Scan 快路径（txn 无未提交写时快照直透，跳过全量物化 + 重建排序）；② W2 COUNT(*)/COUNT(1) 快速路径（无 WHERE/GROUP 等时走存储层 RangeCounter 逐 region 计数求和）；③ W3 SELECT 列投影下推（按需解码列，JOIN/子查询/星号保守全列回退）；④ W4 ORDER BY 索引顺序扫描免排序 + DISTINCT 相邻去重免排序（单列二级索引/主键 + 运行时 O(n) 已序验证）。E5 受控复测（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read 0.38 / write 0.40 / read-write 0.40 TPS、TPC-C tpmC 81.50，单语句专项 COUNT(*) 全表 **580ms → 5.18ms（约 103-112 倍）**、全表扫描单列 532.33ms、ORDER BY 主键 548.51ms 与 DISTINCT 619.88ms 免排序生效（详情见 docs/experiments/E5_standard_bench_alignment.md）。
 
 **v1.16.0（2026-10-28 落地）**：**SQL 执行内核并发模型优化 + WAL 持久化收敛** —— ① C1 WAL 组提交增强（单等待者免窗口 + 批量刷盘）；② C2 Begin 快照创建锁外化（ID/序号仍单调）；③ C3 ro_parallel 下沉 executor + 显式事务只读并行；④ C4 提交应用流水线化/组提交；⑤ C5 cgo 扫描拷贝优化；⑥ C6 连接内语句 pipeline / 快照复用（autocommit 顶层纯只读 SELECT 共享快照）；⑦ **WAL 自动 checkpoint/truncate**（`wal_auto_checkpoint` 默认 on、`wal_checkpoint_interval_ms` 默认 60000、`wal_checkpoint_max_mb` 默认 64；安全位点 safe=min(synced,applied)、截断前 Flush 落 SST，长期运行 wal.log 大小受控、崩溃恢复严格等价）。E5 受控复测（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read **10.37** / write **8.33** / read-write **8.15** TPS（QPS 145.13 / 33.33 / 146.70，errs=0 / reconnects=0），较 v1.15.0 TPS 提升约 **20-27 倍**、QPS 提升约 **22-27 倍**，**达成验收目标（TPS≥1.5、QPS≥30）**；TPC-C 5 仓 tpmC **254.00**（较 v1.15.0 的 81.50 提升约 3.1 倍）（详情见 docs/experiments/C7_e5_controlled_retest.md、docs/experiments/WAL_auto_checkpoint_truncate.md）。
+
+**v1.17.0（2026-10-29 落地）**：**显式事务写路径优化** —— ① D1.1 UPDATE 快照刷新锁外化（`snapshot_lock_external`，锁内刷新移到锁外，降低写语句延迟）；② D1.2 autocommit 写 pipeline 深化（`write_pipeline` 默认 off 可热切换，写语句接入连接内 pipeline，减少端侧逐条往返）；③ D1.3 WAL 组提交主动定时窗口（`group_commit_active_window` 默认 off 回退 v1.16.0 C1 单等待者免窗口，写密集下主动定时刷新合并 fsync，不影响 WAL 重放/崩溃恢复/复制 2PC 顺序）。E5 受控复测（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read **11.85** / write **12.03** / read-write **12.40** TPS（QPS 165.90 / 48.13 / 223.20，errs=0 / reconnects=0），较 v1.16.0（10.37 / 8.33 / 8.15 TPS，QPS 145.13 / 33.33 / 146.70）**write QPS +44%、read-write TPS +52%、read 无回归 +14%**；TPC-C 5 仓 tpmC **776.00** / tpm_total 1720.50（较 v1.16.0 的 254.00 / 581.00 提升约 3.0-3.1 倍）。**达成 D1 验收目标：write QPS ≥40（48.13）、TPS write ≥9（12.03）、tpmC ≥300（776.00），其余无回归**（详情见 docs/experiments/E5_standard_bench_alignment.md）。
 
 ### 完整特性
 
@@ -444,6 +457,7 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 ## License
 
 MIT — see [LICENSE](LICENSE).
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

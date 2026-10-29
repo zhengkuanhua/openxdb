@@ -2,6 +2,17 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_a98494a2d2c611f18460525400393706
+    ReservedCode1: iLDTRG50fxXG7uZsQuvQ1PywbIyR6eOm1s5ELBKuERIYwQydR0J0hY2TX8N09x5A0qi4/FFNLdkApoVAqkeETsH31w/+XMcxPGLK5BWhmeujo/+AvjI9myVd/8mzXn/MsANhUFLn+DhvEO7Bs99sxXWdOxjOp62jsCdKXHugl5z0euHijllnzOM0oWo=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_a98494a2d2c611f18460525400393706
+    ReservedCode2: iLDTRG50fxXG7uZsQuvQ1PywbIyR6eOm1s5ELBKuERIYwQydR0J0hY2TX8N09x5A0qi4/FFNLdkApoVAqkeETsH31w/+XMcxPGLK5BWhmeujo/+AvjI9myVd/8mzXn/MsANhUFLn+DhvEO7Bs99sxXWdOxjOp62jsCdKXHugl5z0euHijllnzOM0oWo=
+---
+
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
     ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_7d29f5c7c91211f196f9525400248c00
     ReservedCode1: ytEZT7sfCrFtdGbvc6CcEL+GFQjiv9F1tIX4uImXrz/tfGu9Sr6p8pebTKxbwLJ8z89fe4he4t9cg1XcI1VpxOMGR9EabN67UEupkAIAmrLKjjI7U9q5CkYs9I0b6FfgX8TXSCmLr8l8FzRI4QGsiRIvotyOOXzj8+tNKHozuVXOrJSPWqPEpI+vPCM=
     ContentPropagator: 001191440300708461136T1XGW3
@@ -14,6 +25,22 @@ AIGC:
 OpenXDB 版本变更记录。
 
 > 版本线说明：历史版本以仓库 README Status 行、docs/ 设计文档头部标注与 git 提交记录为准。早期部分中间 -alpha 版本未单独打标（git 与文档均无显式版本号），按里程碑区间归纳，版本号不做臆造。
+
+## v1.17.0 (2026-10-29)
+
+v1.17.0（显式事务写路径优化）正式发布。按 DEV_PLAN_v1.17.0 Phase A 完成 D1 三项写路径改造与 E5 受控复测，将 write 吞吐从"贴近目标线"拉到"稳定余量"（QPS +44%）；全仓回归全绿。
+
+**Added**
+
+- **D1.1 UPDATE 快照刷新锁外化**：显式事务 UPDATE 的锁内快照刷新移到锁外（对齐 C2 Begin 锁外化同型改造），降低写语句延迟；`snapshot_lock_external` 独立 flag，失败可回退锁内刷新。
+- **D1.2 autocommit 写 pipeline 深化**：写语句接入连接内 pipeline（原 pipeline 仅覆盖读路径），减少端侧逐条往返；`write_pipeline` 独立 flag 默认 off，可热切换回退逐条执行。
+- **D1.3 WAL 组提交主动定时窗口**：`group_commit_active_window`（默认 off 回退 v1.16.0 C1 单等待者免窗口）在写密集下主动定时刷新合并 fsync，降低 fsync 次数与写放大；不影响 WAL 重放 / 崩溃恢复 / 复制 2PC 顺序。
+- **E5 受控复测**（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read / write / read-write **11.85 / 12.03 / 12.40 TPS**（QPS 165.90 / 48.13 / 223.20，errs=0 / reconnects=0），较 v1.16.0（10.37 / 8.33 / 8.15 TPS，QPS 145.13 / 33.33 / 146.70）**write QPS +44%**、read-write TPS +52%、read 无回归 +14%；TPC-C 5 仓 tpmC **776.00** / tpm_total 1720.50（较 v1.16.0 的 254.00 / 581.00 提升约 **3.1-3.0 倍**）。**达成 D1 验收目标：write QPS 中位 ≥40（48.13）、TPS write ≥9（12.03）、tpmC ≥300（776.00），其余指标无回归、errs=0 / reconnects=0**。详见 [docs/experiments/E5_standard_bench_alignment.md](docs/experiments/E5_standard_bench_alignment.md)。
+
+**边界声明**
+
+- TPS/QPS 受全局会话锁与单机端侧往返制约，数值为**单机端侧功能基准**，非生产级吞吐承诺；write 模式已脱离吞吐下限（QPS 中位 48.13，单轮最低 41.00 仍高于 v1.16.0 中位 33.33）。
+- 所有优化均有独立 feature flag 可灰度回退；与 v1.16.0 兼容、可回退。
 
 ## v1.16.0 (2026-10-28)
 
@@ -203,4 +230,5 @@ v1.5.0（协议与吞吐）第 1 项「客户端 pipeline 协议」先行启动�
 
 - **M1 基础内核**：RocksDB cgo 桥存储层（+ 纯 Go 内存 B+Tree 参考实现）、追加式 WAL 与重放恢复、快照隔离本地事务、SQL 子集与二级索引、CLI/REPL 与 TCP 服务。见 [docs/T1_rocksdb_storage_impl.md](docs/T1_rocksdb_storage_impl.md)、[docs/T2_wal_impl.md](docs/T2_wal_impl.md)、[docs/T3_sql_layer.md](docs/T3_sql_layer.md)、[docs/T3_txn_impl.md](docs/T3_txn_impl.md)、[docs/T5_cli_impl.md](docs/T5_cli_impl.md)、[docs/T6_index_layer.md](docs/T6_index_layer.md)。
 - **设计决策与早期文档**：ACID 笔记（[docs/T4_acid_notes.md](docs/T4_acid_notes.md)）、M2/M3 接口预留（[docs/T7_m2m3_reservations.md](docs/T7_m2m3_reservations.md)）、引擎选型 ADR（[docs/W4_adr_engine_selection.md](docs/W4_adr_engine_selection.md)）、博客 [docs/blog_why_openxdb_rocksdb.md](docs/blog_why_openxdb_rocksdb.md)。
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
