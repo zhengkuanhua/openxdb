@@ -344,7 +344,8 @@ func (e *Engine) GroupCommitActiveWindow() bool { return e.ex.GroupCommitActiveW
 // IsROSelect 判断语句是否为可安全并行的只读 SELECT：解析后类型为
 // *SelectStmt。OpenXDB 的 SELECT 无 INTO/变量副作用，FOR UPDATE 仅语法
 // 兼容无行锁语义，因此 SELECT 并发执行安全；显式事务内的 SELECT 由
-// 服务端另行以 InTx() 排除，保持事务串行语义。解析失败返回 false。
+// v1.17.0 D2.2 起同样允许进入服务端并行批（引擎层 ExecuteAsSessionBatch
+// 保守判定并共享事务快照并行，见 ro_batch.go）。解析失败返回 false。
 func (e *Engine) IsROSelect(line string) bool {
 	ast, err := Parse(line)
 	if err != nil {
