@@ -1,0 +1,7 @@
+probe[group_by_distinct] ok
+probe[agg_as] ok
+probe[order_limit] ok
+probe all ok
+mode=read_write threads=8 time=60s txn_ok=757 errs=0 reconnects=0
+TPS=12.62 QPS=227.10
+lat_us p50=542610 p95=1368131 p99=1748465 max=2131126
