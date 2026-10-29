@@ -82,6 +82,7 @@ func (m *p1TxnMgr) SetCommitHook(func(lsn storage.LSN, seq uint64, batch *storag
 }
 func (m *p1TxnMgr) SetCommitWaitHook(func(lsn storage.LSN, seq uint64) error) {}
 func (m *p1TxnMgr) HookErr() error                                           { return nil }
+func (m *p1TxnMgr) FlushDeferredSync() error                               { return nil }
 func (m *p1TxnMgr) SetGroupCommitWindow(time.Duration)                        {}
 func (m *p1TxnMgr) Close() error                                             { return nil }
 
@@ -95,6 +96,7 @@ func (t *p1TxnT) Put(key, value []byte) error                                  {
 func (t *p1TxnT) Delete(key []byte) error                                      { return nil }
 func (t *p1TxnT) Commit() error                                                { return nil }
 func (t *p1TxnT) Rollback() error                                              { return nil }
+func (t *p1TxnT) SetDeferSync(bool)                                            {}
 
 // newP1Executor 构造启用 P1 的测试执行器（同包白盒：直接装配字段，
 // 不依赖真实存储/网络；持有校验默认注入可控钩子）。

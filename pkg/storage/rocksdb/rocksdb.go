@@ -145,6 +145,21 @@ func (r *rocks) WriteSeq() uint64 {
 	return r.writeSeq.Load()
 }
 
+// SetNoWAL 切换 RocksDB 自身 WAL（v1.17.0 D1.2 autocommit 写 pipeline）。
+// enabled=true 时后续写入 disable_wal（OpenXDB WAL 成为唯一持久化通道），
+// false 恢复默认启用。全局生效；调用方须在 pipeline 窗口开启时启用、批尾
+// FlushDeferredSync 后恢复，保证崩溃恢复一致性与零回归。
+func (r *rocks) SetNoWAL(enabled bool) {
+	if r.h == nil {
+		return
+	}
+	v := C.int(0)
+	if enabled {
+		v = C.int(1)
+	}
+	C.xdb_set_no_wal(v)
+}
+
 func (r *rocks) Snapshot() (storage.Snapshot, error) {
 	s := C.xdb_snapshot_create(r.h)
 	if s == nil {

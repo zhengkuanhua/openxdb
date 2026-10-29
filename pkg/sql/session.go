@@ -89,6 +89,14 @@ type Session struct {
 	// 命中即整批抑制（直接递归 / 同键链式互触发），防死循环；跨键链式深度由
 	// Executor.triggerMaxDepth 控制。
 	triggerStack []string
+	// v1.17.0 D1.2 autocommit 写 pipeline：deferWrite 为会话级延迟持久化
+	// 标记。服务端 REPLSession 收集到连续 autocommit 写语句批时置位（批尾
+	// 复位），executor 在 getTx 为批内每条写语句创建临时事务后据此置事务级
+	// SetDeferSync(true)——该事务 Commit 跳过 WAL SyncUpTo，批尾统一
+	// FlushWritePipeline 刷盘。仅批内写语句事务受影响；显式事务/常规路径
+	// 标记为 false 保持逐事务 SyncUpTo（零回归）。同一 Session 连接内串行
+	// 执行（读写在批收集 goroutine 与执行 goroutine 间经会话锁传递）。
+	deferWrite bool
 	procDepth    int
 	// M18：prepared statement（名称→SQL 文本，会话级）。
 	prepared map[string]string
@@ -149,4 +157,21 @@ func (s *Session) InTx() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.inTx
+}
+
+// SetDeferWrite 设置会话 autocommit 写 pipeline 延迟持久化标记（v1.17.0
+// D1.2）。服务端 REPLSession 写批收集期置位、批尾复位；executor 为批内
+// 写语句创建事务时经 DeferWrite 读取。线程安全（经会话锁）。
+func (s *Session) SetDeferWrite(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deferWrite = enabled
+}
+
+// DeferWrite 返回会话 autocommit 写 pipeline 延迟持久化标记当前值
+// （v1.17.0 D1.2）。线程安全（经会话锁）。
+func (s *Session) DeferWrite() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deferWrite
 }

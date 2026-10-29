@@ -315,6 +315,20 @@ func (e *Engine) SetSnapshotLockExternal(enabled bool) { e.ex.SetSnapshotLockExt
 
 // SnapshotLockExternal 返回显式事务 UPDATE 快照刷新锁外化开关当前状态。
 func (e *Engine) SnapshotLockExternal() bool { return e.ex.SnapshotLockExternal() }
+
+// SetWritePipeline 设置 autocommit 写 pipeline 开关（v1.17.0 D1.2），
+// 透传至执行器。开启时写批内事务 Commit 跳过 WAL fsync（批尾统一刷盘）
+// 且存储禁用自身 WAL（OpenXDB WAL 为唯一持久化通道）；关闭全部还原。
+// 可经 SET write_pipeline 热切换。
+func (e *Engine) SetWritePipeline(enabled bool) { e.ex.SetWritePipeline(enabled) }
+
+// WritePipeline 返回 autocommit 写 pipeline 开关当前状态。
+func (e *Engine) WritePipeline() bool { return e.ex.WritePipeline() }
+
+// FlushWritePipeline 统一刷盘写批内延迟持久化的事务（v1.17.0 D1.2）：
+// 对 deferredLSN 水位执行一次 WAL SyncUpTo 覆盖整批；幂等。
+func (e *Engine) FlushWritePipeline() error { return e.ex.FlushWritePipeline() }
+
 // SetGroupCommitWindow 设置 WAL 组提交定时刷盘窗口（v1.14.0 P1），透传至执行器。
 // d<=0 关闭定时窗口（回退 v1.13.0 被动攒批行为）；经 SET group_commit_window_ms 热切换。
 func (e *Engine) SetGroupCommitWindow(d time.Duration) { e.ex.SetGroupCommitWindow(d) }
@@ -330,6 +344,24 @@ func (e *Engine) IsROSelect(line string) bool {
 	}
 	_, ok := ast.(*SelectStmt)
 	return ok
+}
+
+// IsWriteStmt 判断语句是否为可进 autocommit 写 pipeline 的纯写 DML
+// （v1.17.0 D1.2）：INSERT / UPDATE / DELETE（含 REPLACE 语义的
+// INSERT...ON DUPLICATE KEY UPDATE / REPLACE INTO）。DDL、事务控制、
+// SELECT、IMPORT/GRANT 等一律返回 false——pipeline 仅合并 autocommit
+// DML 的 Commit fsync，不含 DDL（DDL 必须逐语句持久化）与显式事务。
+// 解析失败返回 false（安全默认：不进批，退回串行路径）。
+func (e *Engine) IsWriteStmt(line string) bool {
+	ast, err := Parse(line)
+	if err != nil {
+		return false
+	}
+	switch ast.(type) {
+	case *InsertStmt, *UpdateStmt, *DeleteStmt:
+		return true
+	}
+	return false
 }
 
 // SetSlowThreshold 设置慢查询阈值（毫秒，<=0 关闭记录），透传至执行器。

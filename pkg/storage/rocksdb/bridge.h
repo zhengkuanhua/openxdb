@@ -23,6 +23,10 @@ int xdb_put(xdb* h, const unsigned char* key, size_t klen,
             const unsigned char* val, size_t vlen, char** errmsg);
 int xdb_delete(xdb* h, const unsigned char* key, size_t klen, char** errmsg);
 
+/* v1.17.0 D1.2：切换 RocksDB 自身 WAL（全局）。v!=0 禁用（disable_wal=true），
+   v==0 恢复默认启用。返回 0。 */
+int xdb_set_no_wal(int v);
+
 /* 批量原子写：pairs 为 nputs 个 (key,val) 连续拼接，put_sizes[i*2]=klen, [i*2+1]=vlen；
    delkeys 为 ndeletes 个 key 连续拼接，del_sizes[i]=klen。 */
 int xdb_write_batch(xdb* h,

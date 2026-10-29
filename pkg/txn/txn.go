@@ -38,6 +38,12 @@ type Txn interface {
 	Commit() error
 	// Rollback 回滚：丢弃缓冲、释放快照；已落 WAL 的记录不会被重放。
 	Rollback() error
+	// SetDeferSync 设置本事务延迟持久化确认标记（v1.17.0 D1.2，事务级）。
+	// 置位后 Commit 阶段 2 跳过 WAL SyncUpTo（持久化推迟到调用方批尾
+	// FlushDeferredSync 统一覆盖）。仅 autocommit 写 pipeline 批内事务由
+	// executor 置位；显式事务与常规 autocommit 路径保持默认（逐事务
+	// SyncUpTo，零回归）。Commit 前调用生效。
+	SetDeferSync(enabled bool)
 }
 
 // TxnManager 事务管理器。
@@ -60,6 +66,9 @@ type TxnManager interface {
 	// SetGroupCommitWindow 设置 WAL 组提交定时刷盘窗口（v1.14.0 P1）：
 	// 透传至底层 WAL；d<=0 关闭定时窗口（回退 v1.13.0 被动攒批行为）。
 	SetGroupCommitWindow(d time.Duration)
+	// FlushDeferredSync 统一刷盘延迟持久化的提交（v1.17.0 D1.2）：对
+	// deferredLSN 水位执行一次 WAL SyncUpTo。幂等；批尾响应写回前调用。
+	FlushDeferredSync() error
 	Close() error
 }
 

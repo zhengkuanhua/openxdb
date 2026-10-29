@@ -32,6 +32,13 @@ struct xdb {
     rocksdb::DB* db;
 };
 
+// v1.17.0 D1.2：RocksDB 自身 WAL 开关（全局）。默认启用（disable_wal=false，
+// 与 v1.16.0 行为一致零回归）。autocommit 写 pipeline 开启时由 Go 侧
+// xdb_set_no_wal(1) 关闭——OpenXDB WAL 成为唯一持久化通道，崩溃恢复完全由
+// OpenXDB WAL 重放决定，消除延迟 fsync 窗口下"RocksDB 自身 WAL 恢复出
+// OpenXDB WAL 未记录事务"的幽灵数据风险。
+static int g_disable_wal = 0;
+
 // xscan：范围扫描结果。C5 优化：数据集中放在单块 arena（连续内存），
 // items 各数组记录每行 key/value 在 arena 中的偏移与长度。
 // 相比旧实现（std::vector<std::pair<std::string,std::string>> + xscan_item 逐行
@@ -96,6 +103,7 @@ int xdb_get(xdb* h, const unsigned char* key, size_t klen,
 int xdb_put(xdb* h, const unsigned char* key, size_t klen,
             const unsigned char* val, size_t vlen, char** errmsg) {
     rocksdb::WriteOptions wo;
+    wo.disableWAL = g_disable_wal != 0;
     auto st = h->db->Put(wo, rocksdb::Slice(reinterpret_cast<const char*>(key), klen),
                          rocksdb::Slice(reinterpret_cast<const char*>(val), vlen));
     if (!st.ok()) {
@@ -107,6 +115,7 @@ int xdb_put(xdb* h, const unsigned char* key, size_t klen,
 
 int xdb_delete(xdb* h, const unsigned char* key, size_t klen, char** errmsg) {
     rocksdb::WriteOptions wo;
+    wo.disableWAL = g_disable_wal != 0;
     auto st = h->db->Delete(wo, rocksdb::Slice(reinterpret_cast<const char*>(key), klen));
     if (!st.ok()) {
         if (errmsg) *errmsg = dup_status(st);
@@ -115,11 +124,20 @@ int xdb_delete(xdb* h, const unsigned char* key, size_t klen, char** errmsg) {
     return 0;
 }
 
+// xdb_set_no_wal 切换 RocksDB 自身 WAL（v1.17.0 D1.2）：v!=0 禁用（disable_wal），
+// v==0 恢复默认启用。全局生效（所有连接/句柄的后续写入）。pipeline 窗口开启
+// 时须先禁用，批尾 FlushDeferredSync 后恢复。
+int xdb_set_no_wal(int v) {
+    g_disable_wal = v != 0;
+    return 0;
+}
+
 int xdb_write_batch(xdb* h,
                     const unsigned char* pairs, const size_t* put_sizes, int nputs,
                     const unsigned char* delkeys, const size_t* del_sizes, int ndeletes,
                     char** errmsg) {
     rocksdb::WriteOptions wo;
+    wo.disableWAL = g_disable_wal != 0;
     rocksdb::WriteBatch wb;
     size_t off = 0;
     for (int i = 0; i < nputs; i++) {

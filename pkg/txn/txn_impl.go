@@ -62,6 +62,16 @@ type txnManager struct {
 	// （锁内递增）。executor 的 autocommit 只读共享快照窗口复用前比对，
 	// 窗口期间检测到新提交即关闭窗口重新取快照，保持写后读语义。
 	commitSeq uint64
+
+	// v1.17.0 D1.2：autocommit 写 pipeline 延迟持久化水位（默认零回归）。
+	// 置位 defer 的事务在 Commit 阶段 2 跳过 WAL SyncUpTo，仅把最大 LSN
+	// 归并到本水位；调用方在写批尾统一 FlushDeferredSync 一次性 SyncUpTo
+	// 覆盖整批，把 N 次 fsync 合并为 1 次。安全前提：pipeline 窗口内
+	// RocksDB 存储必须禁用自身 WAL（disable_wal），使 OpenXDB WAL 成为
+	// 唯一持久化通道——崩溃恢复完全由 OpenXDB WAL 重放决定，未 fsync 的
+	// 未 ack 事务在存储中不存在，杜绝"RocksDB 自身 WAL 恢复出 OpenXDB
+	// WAL 未记录事务"的幽灵数据窗口。
+	deferredLSN storage.LSN  // 已 Append 但尚未 SyncUpTo 的最大 LSN（defer 事务归并）
 }
 
 // CommitSeq 返回产生可见写的成功提交次数（C6，见 CommitSeqProvider 注释）。
@@ -248,6 +258,26 @@ func (m *txnManager) SetGroupCommitWindow(d time.Duration) {
 	m.wal.SetGroupCommitWindow(d)
 }
 
+// FlushDeferredSync 统一刷盘延迟持久化的事务（v1.17.0 D1.2）：对
+// deferredLSN 水位执行一次 WAL SyncUpTo，覆盖整批未 fsync 的提交记录。
+// 幂等：无延迟事务或已覆盖到该 LSN 时立即返回。批尾必须在响应写回前调用，
+// 保证客户端 ack 前全部事务已持久化。
+func (m *txnManager) FlushDeferredSync() error {
+	m.mu.Lock()
+	lsn := m.deferredLSN
+	m.mu.Unlock()
+	if lsn == 0 {
+		return nil
+	}
+	if err := m.wal.SyncUpTo(lsn); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.deferredLSN = 0
+	m.mu.Unlock()
+	return nil
+}
+
 type txnImpl struct {
 	id    uint64
 	mgr   *txnManager
@@ -255,6 +285,13 @@ type txnImpl struct {
 	ops   []opEntry // 事务内操作序列（按时间序，read-your-writes 判定依据）
 	snap  storage.Snapshot
 	state TxnState
+	// v1.17.0 D1.2：本事务延迟持久化确认标记（事务级，非全局）。置位时
+	// Commit 阶段 2 跳过 WAL SyncUpTo（deferredLSN 归并到管理器水位），
+	// 由调用方批尾 FlushDeferredSync 统一刷盘。仅 autocommit 写 pipeline
+	// 批内事务置位；其他事务保持逐事务 SyncUpTo（其 SyncUpTo 水位推进会
+	// 顺带覆盖更早 defer 事务的 WAL 记录，持久化只提前不延后，ack 语义
+	// 不受影响）。锁内读写（Commit 阶段 2 读取）。
+	deferSync bool
 	// P2-13 Serializable 冲突检测：EnableSerializable 开启后记录
 	// 读集（Get/MGet/Scan 命中的 key）与写集（Put/Delete 的 key），
 	// 提交时由协调者做 rw-antidependency 检测。
@@ -532,6 +569,15 @@ func (t *txnImpl) ReadSet() map[string]bool { return t.readSet }
 // WriteSet 返回 Serializable 写集（协调者提交检测用；仅 EnableSerializable 后非空）。
 func (t *txnImpl) WriteSet() map[string]bool { return t.writeSet }
 
+// SetDeferSync 设置本事务延迟持久化确认标记（v1.17.0 D1.2，事务级）。
+// 见 txn.Txn.SetDeferSync 注释；Commit 阶段 2 读取（锁内）。仅由 executor
+// 在 autocommit 写 pipeline 批内置位，常规路径保持零回归。
+func (t *txnImpl) SetDeferSync(enabled bool) {
+	t.mgr.mu.Lock()
+	t.deferSync = enabled
+	t.mgr.mu.Unlock()
+}
+
 // Commit：WAL 先行 → 存储原子应用 → 释放快照。
 // B2 组提交流水线：①锁内 Append 分配 LSN（WAL 顺序 = 锁获取顺序 = 提交顺序）；
 // ②释放锁后 SyncUpTo(lsn)，并发提交在此合并 fsync；③重新加锁，按提交序号排队应用存储，
@@ -565,16 +611,29 @@ func (t *txnImpl) Commit() error {
 	m.mu.Unlock()
 
 	// 阶段 2：锁外 SyncUpTo —— 并发事务在此合并为一次 leader fsync。
-	if err := m.wal.SyncUpTo(lsn); err != nil {
-		// fsync 失败：该事务视为未提交成功。跳过自己的序号，避免后续事务永久等待。
+	// v1.17.0 D1.2 defer 模式（本事务置位）：跳过 SyncUpTo（记录
+	// deferredLSN 水位，不推进 syncDone），WAL 持久化推迟到调用方批尾统一
+	// FlushDeferredSync 覆盖——未 ack 事务在崩溃时允许丢失，存储侧由
+	// disable_wal 保证无幽灵数据。其他事务照常 SyncUpTo（水位推进会顺带
+	// 覆盖更早 defer 事务的 WAL，持久化只提前不延后）。
+	if t.deferSync {
 		m.mu.Lock()
-		m.applied++
-		m.applyCond.Broadcast()
+		if lsn > m.deferredLSN {
+			m.deferredLSN = lsn
+		}
 		m.mu.Unlock()
-		return err
+	} else {
+		if err := m.wal.SyncUpTo(lsn); err != nil {
+			// fsync 失败：该事务视为未提交成功。跳过自己的序号，避免后续事务永久等待。
+			m.mu.Lock()
+			m.applied++
+			m.applyCond.Broadcast()
+			m.mu.Unlock()
+			return err
+		}
+		// 阶段 2.5：无锁记录 SyncUpTo 完成（C4 应用聚合的候补检测依据；仅观测/聚合用）。
+		atomic.AddUint64(&m.syncDone, 1)
 	}
-	// 阶段 2.5：无锁记录 SyncUpTo 完成（C4 应用聚合的候补检测依据；仅观测/聚合用）。
-	atomic.AddUint64(&m.syncDone, 1)
 
 	// 阶段 3：提交应用（C4 组提交，返工版）。
 	// 语义不变：合并 WriteBatch 按 seq 顺序排列 = WAL 顺序，一次原子 st.Write

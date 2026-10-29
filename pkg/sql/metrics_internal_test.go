@@ -26,6 +26,7 @@ func (f *fakeTxn) Put(key, value []byte) error                                  
 func (f *fakeTxn) Delete(key []byte) error                                      { return nil }
 func (f *fakeTxn) Commit() error                                                { return f.commitErr }
 func (f *fakeTxn) Rollback() error                                              { return f.rollbackErr }
+func (f *fakeTxn) SetDeferSync(sync bool)                                       {}
 
 // TestM13MetricsSQLAndSlow 注入指标后：execTimed 每次执行计 SQL、
 // recordSlow 命中计慢查询（低开销路径不落盘也可计数）。

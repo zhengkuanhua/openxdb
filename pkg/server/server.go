@@ -753,6 +753,42 @@ func (s *Server) REPLSession(r io.Reader, w io.Writer, sess *session) error {
 			needFlush = false
 			continue
 		}
+		// v1.17.0 D1.2：收集连续 autocommit 写 DML 为一批串行执行，批尾
+		// 统一 WAL 刷盘（把批内 N 次 Commit fsync 合并为 1 次）并一次性
+		// Flush 响应。批中遇到非写 DML / BEGIN / SELECT 立即中断退回串行
+		// 路径，保持事务边界与命令顺序语义不变。单条且读侧通道已空时无
+		// 合并收益，直接走串行路径（零额外开销）。
+		if s.writePipelineEligible(sess, line) {
+			batch := []string{line}
+			chanEmpty := false
+		collectW:
+			for len(batch) < wpMaxBatch {
+				select {
+				case l, ok := <-cmds:
+					if !ok {
+						break collectW // reader 已关闭：执行完当前批后主循环退出
+					}
+					if s.writePipelineEligible(sess, l) {
+						batch = append(batch, l)
+						continue
+					}
+					pending = l // 非写 DML：退回串行路径保序
+					break collectW
+				default:
+					chanEmpty = true // 读侧暂无更多命令：批为当前可见全集
+					break collectW
+				}
+			}
+			if !(chanEmpty && len(batch) == 1) {
+				if werr := s.execWritePipeline(batch, sess, bw); werr != nil {
+					close(done)
+					return werr
+				}
+				needFlush = false
+				continue
+			}
+			line = batch[0] // 单条且无后续：退回串行路径，保持原开销
+		}
 		resp, err := s.HandleSession(line, sess)
 		if err != nil {
 			resp = err.Error()
@@ -815,6 +851,11 @@ const (
 	roMaxConcurrency = 8  // 批内最大并发 worker 数
 )
 
+// v1.17.0 D1.2 autocommit 写 pipeline 批参数。
+const (
+	wpMaxBatch = 64 // 单批最大写语句数（超限自动分批，保持有界）
+)
+
 // roSelectEligible 判定 line 是否为可安全并行的 autocommit 只读 SELECT。
 // 需同时满足：（1）引擎已装配且 ro_parallel 开关开启；（2）非全局会话
 // （CLI/Handle 旧路径保持串行）；（3）会话不处于显式事务内（事务内 SELECT
@@ -838,6 +879,83 @@ func (s *Server) roSelectEligible(sess *session, line string) bool {
 		return false
 	}
 	return s.SQL.IsROSelect(line)
+}
+
+// writePipelineEligible 判定 line 是否为可进 autocommit 写 pipeline 的
+// 纯写 DML（v1.17.0 D1.2）。需同时满足：（1）引擎已装配且 write_pipeline
+// 开关开启；（2）非全局会话（CLI/Handle 旧路径保持串行）；（3）会话不处于
+// 显式事务内（事务内写语句保序串行，pipeline 仅合并 autocommit 提交）；
+// （4）无鉴权降级（Auth 启用且未鉴权时保持串行路径，避免写会话鉴权字段）；
+// （5）解析为纯写 DML（INSERT/UPDATE/DELETE，不含 DDL/事务控制）。
+// 首个判定在串行上下文懒创建 sqlSess，与 roSelectEligible 同模式。
+func (s *Server) writePipelineEligible(sess *session, line string) bool {
+	if s.SQL == nil || !s.SQL.WritePipeline() {
+		return false
+	}
+	if sess.useGlobalSQL {
+		return false
+	}
+	if s.Auth != nil && !sess.authed {
+		return false
+	}
+	if sess.sqlSess == nil {
+		sess.sqlSess = s.SQL.NewSession()
+	}
+	if sess.sqlSess.InTx() {
+		return false
+	}
+	return s.SQL.IsWriteStmt(line)
+}
+
+// execWritePipeline 串行执行一批 autocommit 写 DML（v1.17.0 D1.2）：
+// 批首开启存储 disable_wal + 会话 defer 标记，批内逐条执行（保序，响应
+// 按序写入缓冲），批尾 FlushWritePipeline 统一刷盘（客户端 ack 前全部
+// 事务已持久化）后复位开关并一次性 Flush 响应。批内语句错误转 resp 不
+// 中断（与只读批/串行路径一致）。任何失败路径都会复位开关，防泄漏。
+func (s *Server) execWritePipeline(batch []string, sess *session, bw *bufio.Writer) error {
+	s.SQL.SetWritePipeline(true)
+	if sess.sqlSess != nil {
+		sess.sqlSess.SetDeferWrite(true)
+	}
+	for _, bl := range batch {
+		resp, err := s.HandleSession(bl, sess)
+		if err != nil {
+			resp = err.Error()
+		}
+		if resp == "" {
+			continue
+		}
+		if _, werr := bw.WriteString(resp); werr != nil {
+			s.writePipelineReset(sess)
+			return werr
+		}
+		if werr := bw.WriteByte('\n'); werr != nil {
+			s.writePipelineReset(sess)
+			return werr
+		}
+	}
+	// 批尾统一刷盘：覆盖整批延迟持久化事务，返回前全部落盘。
+	var ferr error
+	if err := s.SQL.FlushWritePipeline(); err != nil {
+		ferr = err
+	}
+	s.writePipelineReset(sess)
+	if ferr != nil {
+		return ferr
+	}
+	if werr := bw.Flush(); werr != nil {
+		return werr
+	}
+	return nil
+}
+
+// writePipelineReset 复位写 pipeline 开关与会话 defer 标记（v1.17.0
+// D1.2，含 flush 失败路径防泄漏）。
+func (s *Server) writePipelineReset(sess *session) {
+	s.SQL.SetWritePipeline(false)
+	if sess.sqlSess != nil {
+		sess.sqlSess.SetDeferWrite(false)
+	}
 }
 
 // ServeTCP 监听 addr 并启动 TCP 服务。已配置 TLS（SetTLS 非 nil）时使用

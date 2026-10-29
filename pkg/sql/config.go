@@ -8,6 +8,7 @@ package sql
 //   - snapshot_share        autocommit 只读语句共享快照开关（v1.16.0 C6，executor.go）
 //   - pipeline_flush        连接内 pipeline 条件 flush 开关（v1.16.0 C6，server.go REPLSession）
 //   - snapshot_lock_external 显式事务 UPDATE 快照刷新锁外化开关（v1.17.0 D1.1，executor.go）
+//   - write_pipeline        autocommit 写 pipeline 开关（v1.17.0 D1.2，server.go REPLSession）
 //   - group_commit_window_ms WAL 组提交定时刷盘窗口毫秒（v1.14.0 P1，wal_impl.go）
 //   - slow_query_threshold  慢查询阈值毫秒（M13，executor.go slowThreshold）
 //   - slow_query_log        慢查询落盘开关（M13，slowlog.go）
@@ -151,6 +152,25 @@ var configSpecs = []*configSpec{
 			return nil
 		},
 		read: func(e *Executor) string { return e.groupCommitWindowMsText() },
+	},
+	{
+		key:  "write_pipeline",
+		desc: "autocommit 写 pipeline 开关（v1.17.0 D1.2）：on/off/1/0，开启时服务端 REPLSession 收集连续 autocommit 写 DML 为批、批尾统一 WAL 刷盘（合并 Commit fsync，写路径吞吐提升），默认 off（零回归，与 v1.16.0 逐语句 SyncUpTo 一致）",
+		def:  "off",
+		apply: func(e *Executor, v string) error {
+			on := false
+			switch v {
+			case "on", "true", "1":
+				on = true
+			case "off", "false", "0":
+				on = false
+			default:
+				return &SQLError{Msg: "invalid value for write_pipeline: " + v + " (expected on/off/1/0)"}
+			}
+			e.SetWritePipeline(on)
+			return nil
+		},
+		read: func(e *Executor) string { return boolValStr(e.WritePipeline()) },
 	},
 	{
 		key:  "slow_query_threshold",

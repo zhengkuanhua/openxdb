@@ -114,6 +114,13 @@ type Executor struct {
 	// v1.14.0 P1：WAL 组提交定时刷盘窗口（毫秒，0=关闭回退被动攒批）。
 	// 经 SetGroupCommitWindow 同步透传底层 WAL；SHOW CONFIG 读取同锁保护。
 	groupCommitWindowMs float64
+	// v1.17.0 D1.2：autocommit 写 pipeline 开关。开启时服务端 REPLSession
+	// 收集连续 autocommit 写语句批，executor 层 Commit 走 defer sync（批内
+	// 跳过 WAL fsync，批尾 FlushWritePipeline 一次性 SyncUpTo 覆盖整批，把
+	// N 次 fsync 合并为 1 次），且窗口内 RocksDB 自身 WAL 被禁用（OpenXDB
+	// WAL 为唯一持久化通道，杜绝幽灵数据窗口）。仅 autocommit 写路径生效，
+	// 显式事务与错误传播语义不变。默认 false（零回归）。经 e.mu 保护读写。
+	writePipeline bool
 	// v1.16.0：WAL 自动 checkpoint 控制器（nil = 未装配，SET wal_* 返回
 	// 明确错误，DB 行为零回归）。由 db.Open 注入（sql 包不依赖 db 包）。
 	chkCtl CheckpointSetter
@@ -327,6 +334,42 @@ func (e *Executor) SetGroupCommitWindow(d time.Duration) {
 	if e.tm != nil {
 		e.tm.SetGroupCommitWindow(d)
 	}
+}
+
+// SetWritePipeline 设置 autocommit 写 pipeline 开关（v1.17.0 D1.2）。
+// 开启时：写批内事务（executor 逐事务置 defer 标记）Commit 跳过 WAL
+// fsync，服务端 REPLSession 批尾 FlushWritePipeline 统一刷盘；存储禁用
+// 自身 WAL（OpenXDB WAL 为唯一持久化通道，杜绝幽灵数据窗口）；关闭时
+// 全部还原（零回归）。事务级 defer 由 exec2pcWrite 依据会话标记逐事务
+// 置位，其余连接/事务不受影响（各自 SyncUpTo 水位推进会顺带覆盖更早
+// defer 事务的 WAL，持久化只提前不延后）。
+func (e *Executor) SetWritePipeline(enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.writePipeline = enabled
+	if e.st != nil {
+		if nw, ok := e.st.(interface{ SetNoWAL(bool) }); ok {
+			nw.SetNoWAL(enabled)
+		}
+	}
+}
+
+// WritePipeline 返回 autocommit 写 pipeline 开关当前状态（v1.17.0 D1.2；
+// SHOW CONFIG 与测试观测用）。
+func (e *Executor) WritePipeline() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.writePipeline
+}
+
+// FlushWritePipeline 统一刷盘写批内延迟持久化的事务（v1.17.0 D1.2）：
+// 对 deferredLSN 水位执行一次 WAL SyncUpTo 覆盖整批。幂等；批尾必须在
+// 响应写回前调用（保证客户端 ack 前全部事务已持久化）。返回底层刷盘错误。
+func (e *Executor) FlushWritePipeline() error {
+	if e.tm == nil {
+		return nil
+	}
+	return e.tm.FlushDeferredSync()
 }
 
 // groupCommitWindowMsText 返回 WAL 组提交定时刷盘窗口当前值（毫秒，0=已关闭）。
@@ -1220,7 +1263,17 @@ func (e *Executor) getTx(sess *Session) (txn.Txn, error) {
 	if sess.inTx {
 		return sess.curTx, nil
 	}
-	return e.tm.Begin()
+	tx, err := e.tm.Begin()
+	if err != nil {
+		return nil, err
+	}
+	// v1.17.0 D1.2：autocommit 写 pipeline 批内语句创建临时事务后置事务级
+	// defer 标记（会话级标记由服务端 REPLSession 写批收集期置位）。持
+	// sess.mu 锁内读取字段；事务在批尾统一 FlushWritePipeline 刷盘。
+	if sess.deferWrite {
+		tx.SetDeferSync(true)
+	}
+	return tx, nil
 }
 
 // getTxForSelect 获取 SELECT 语句的事务（仅 execSelect 调用）：显式事务/
