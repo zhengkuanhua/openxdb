@@ -647,8 +647,13 @@ type ShowIndexStmt struct {
 
 func (ShowIndexStmt) stmt() {}
 
-// ShowSlowQueriesStmt SHOW SLOWQUERIES：查看慢查询记录列表。
-type ShowSlowQueriesStmt struct{}
+// ShowSlowQueriesStmt SHOW SLOWQUERIES [SUMMARY [TOP <n>]]：
+// 无 SUMMARY 查看慢查询记录列表；SUMMARY 输出按阈值区间汇总 + TOP N 最慢明细报表
+// （D3.2 slowlog 闭环；n 为 TOP 明细条数，默认 10）。
+type ShowSlowQueriesStmt struct {
+	Summary bool // true=SHOW SLOWQUERIES SUMMARY：阈值区间汇总 + TOP N 报表
+	TopN    int  // SUMMARY 的 TOP 明细条数（<=0 按默认 10，>100 截断）
+}
 
 func (ShowSlowQueriesStmt) stmt() {}
 

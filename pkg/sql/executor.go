@@ -750,7 +750,7 @@ func (e *Executor) execStmt(sess *Session, stmt Stmt) (*Result, error) {
 	case *ShowIndexStmt:
 		return e.execShowIndex(sess, s)
 	case *ShowSlowQueriesStmt:
-		return e.execShowSlowQueries(sess)
+		return e.execShowSlowQueries(sess, s)
 	case *ExplainStmt:
 		return e.execExplain(sess, s)
 	case *AddNodeStmt:
@@ -7284,9 +7284,14 @@ func (e *Executor) execShowIndex(sess *Session, s *ShowIndexStmt) (*Result, erro
 	return res, nil
 }
 
-// execShowSlowQueries SHOW SLOWQUERIES：查看内存慢查询记录（新->旧）。
+// execShowSlowQueries SHOW SLOWQUERIES [SUMMARY [TOP <n>]]：
+// 无 SUMMARY 查看内存慢查询记录（新->旧）；
+// SUMMARY 输出按阈值区间汇总 + TOP N 最慢明细报表（D3.2 slowlog 闭环）。
 // M13 列：time | user | duration_ms | rows | error | sql。
-func (e *Executor) execShowSlowQueries(sess *Session) (*Result, error) {
+func (e *Executor) execShowSlowQueries(sess *Session, s *ShowSlowQueriesStmt) (*Result, error) {
+	if s.Summary {
+		return e.execShowSlowSummary(s.TopN)
+	}
 	recs := e.SlowQueries()
 	res := &Result{Columns: []string{"time", "user", "duration_ms", "rows", "error", "sql"}}
 	for i := len(recs) - 1; i >= 0; i-- {
@@ -7299,6 +7304,106 @@ func (e *Executor) execShowSlowQueries(sess *Session) (*Result, error) {
 			StrVal(r.Err),
 			StrVal(r.SQL),
 		})
+	}
+	return res, nil
+}
+
+// slowBucketBounds 慢查询阈值区间上界（毫秒，左闭右开；最后一桶 >= 上界）。
+// D3.2：SHOW SLOWQUERIES SUMMARY 按区间汇总记录分布。
+var slowBucketBounds = []int64{1, 10, 100, 500, 1000, 5000}
+
+// slowBucketLabel 返回区间标签："[1,10)" / "[5000,+)" 等。
+func slowBucketLabel(lo, hi int64, last bool) string {
+	if last {
+		return "[" + itoa64(lo) + ",+)"
+	}
+	return "[" + itoa64(lo) + "," + itoa64(hi) + ")"
+}
+
+func itoa64(n int64) string { return strconv.FormatInt(n, 10) }
+
+// execShowSlowSummary SHOW SLOWQUERIES SUMMARY [TOP <n>]：
+// 按阈值区间汇总慢查询记录 + TOP N 最慢明细报表（D3.2 slowlog 闭环）。
+// 输出 metric|value 键值表（与 SHOW STATS 同风格）：
+//
+//	summary.threshold_ms           当前慢查询阈值
+//	summary.records                记录总数
+//	summary.avg_ms / summary.max_ms 全部记录的平均/最大耗时
+//	bucket.[lo,hi) / bucket.[lo,+) count=N avg_ms=X max_ms=Y  各区间汇总
+//	top.<rank>                     TOP N 最慢明细（time|user|duration_ms|rows|error|sql）
+//
+// TOP N 默认 10（TopN<=0），上限 100（超出截断）。
+func (e *Executor) execShowSlowSummary(topN int) (*Result, error) {
+	if topN <= 0 {
+		topN = 10
+	}
+	if topN > 100 {
+		topN = 100
+	}
+	recs := e.SlowQueries()
+	res := &Result{Columns: []string{"metric", "value"}}
+	appendKV := func(k string, v Value) {
+		res.Rows = append(res.Rows, []Value{StrVal(k), v})
+	}
+	appendKV("summary.threshold_ms", IntVal(e.SlowQueryThreshold()))
+	appendKV("summary.records", IntVal(int64(len(recs))))
+	if len(recs) == 0 {
+		return res, nil
+	}
+	var sum int64
+	var maxMs int64
+	for _, r := range recs {
+		sum += r.Duration
+		if r.Duration > maxMs {
+			maxMs = r.Duration
+		}
+	}
+	appendKV("summary.avg_ms", IntVal(sum/int64(len(recs))))
+	appendKV("summary.max_ms", IntVal(maxMs))
+	// 阈值区间桶汇总（记录为慢查询即 >= 阈值，通常 >= 1ms；<1ms 桶恒 0 不输出）
+	buckets := make([]int64, len(slowBucketBounds)+1)
+	bucketSum := make([]int64, len(slowBucketBounds)+1)
+	bucketMax := make([]int64, len(slowBucketBounds)+1)
+	for _, r := range recs {
+		idx := len(buckets) - 1 // 默认最后一桶（>= 最后上界）
+		for i, hi := range slowBucketBounds {
+			if r.Duration < hi {
+				idx = i
+				break
+			}
+		}
+		buckets[idx]++
+		bucketSum[idx] += r.Duration
+		if r.Duration > bucketMax[idx] {
+			bucketMax[idx] = r.Duration
+		}
+	}
+	for i := range buckets {
+		if buckets[i] == 0 {
+			continue
+		}
+		var lo int64
+		if i > 0 {
+			lo = slowBucketBounds[i-1]
+		}
+		last := i == len(buckets)-1
+		label := slowBucketLabel(lo, slowBucketBounds[i], last)
+		appendKV("bucket."+label, StrVal(fmt.Sprintf("count=%d avg_ms=%d max_ms=%d",
+			buckets[i], bucketSum[i]/buckets[i], bucketMax[i])))
+	}
+	// TOP N 最慢明细（耗时降序，稳定排序）
+	order := make([]int, len(recs))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool { return recs[order[a]].Duration > recs[order[b]].Duration })
+	if topN > len(order) {
+		topN = len(order)
+	}
+	for rank, idx := range order[:topN] {
+		r := recs[idx]
+		appendKV(fmt.Sprintf("top.%d", rank+1), StrVal(fmt.Sprintf("%s|%s|%dms|rows=%d|%s|%s",
+			r.StartAt, r.User, r.Duration, r.Rows, r.Err, r.SQL)))
 	}
 	return res, nil
 }
@@ -7544,7 +7649,12 @@ func (e *Executor) execExplain(sess *Session, s *ExplainStmt) (*Result, error) {
 	if meta == nil {
 		return nil, &SQLError{Msg: "table not exists: " + s.Select.From}
 	}
-	lines := e.planOf(s.Select, meta)
+	// D3.1：行数估算（RangeCounter 真实计数 / 启发式常量），叠加到节点级耗时估算
+	tableRows, err := e.tableRowEstimate(tx, meta)
+	if err != nil {
+		return nil, err
+	}
+	lines := e.planOfWithStats(s.Select, meta, tableRows)
 	res := &Result{Columns: []string{"plan"}}
 	for _, ln := range lines {
 		res.Rows = append(res.Rows, []Value{StrVal(ln)})
@@ -7552,28 +7662,88 @@ func (e *Executor) execExplain(sess *Session, s *ExplainStmt) (*Result, error) {
 	return res, nil
 }
 
-// planOf 构建 SELECT 执行计划文本（M1 单表形态；增强形态给出对应算子提示）。
+// tableRowEstimate 估算表当前行数（D3.1 EXPLAIN 行数估算）：
+// 事务实现 storage.RangeCounter 时按 region 范围真实计数（与 COUNT 快速路径同源）；
+// 否则回退启发式常量（EXPLAIN 不实际执行查询，仅诊断参考）。
+func (e *Executor) tableRowEstimate(tx txn.Txn, meta *TableMeta) (int64, error) {
+	rc, ok := tx.(storage.RangeCounter)
+	if !ok {
+		return explainEstimateDefaultRows, nil
+	}
+	var total int64
+	for _, rng := range e.rowRanges(meta) {
+		n, err := rc.CountRange(rng, 0)
+		if err != nil {
+			return 0, err
+		}
+		total += int64(n)
+	}
+	return total, nil
+}
+
+// explainEstimateDefaultRows RangeCounter 不可用时的表行数启发式估算常量（D3.1）。
+const explainEstimateDefaultRows = 1000
+
+// planOf 构建 SELECT 执行计划文本（保持历史输出，不含节点级统计）。
 func (e *Executor) planOf(s *SelectStmt, meta *TableMeta) []string {
+	return e.planLines(s, meta, explainEstimateDefaultRows)
+}
+
+// planOfWithStats 在 planOf 基础上追加节点级行数估算与耗时估算（D3.1）：
+// 每个算子行末尾追加 "rows=N est_ms=X.XX" 字段（输出向后兼容追加字段，
+// 原有列与文本前缀不变，旧解析器不受影响）。tableRows 为表当前行数估算
+// （<0 时回退启发式常量）。行数与耗时均为启发式估算，非真实执行度量。
+func (e *Executor) planOfWithStats(s *SelectStmt, meta *TableMeta, tableRows int64) []string {
+	return e.planLines(s, meta, tableRows)
+}
+
+// planLines 构建执行计划文本；tableRows>=0 时追加节点级 rows/est_ms 统计。
+func (e *Executor) planLines(s *SelectStmt, meta *TableMeta, tableRows int64) []string {
+	if tableRows < 0 {
+		tableRows = explainEstimateDefaultRows
+	}
 	var lines []string
+	prevRows := tableRows
 	if len(s.Joins) > 0 {
-		lines = append(lines, "access: nested-loop join ("+s.From+" + "+strconv.Itoa(len(s.Joins))+" table(s))")
+		// 嵌套循环连接：驱动表 + 每张连接表行数估算
+		rows := tableRows * int64(len(s.Joins)+1)
+		lines = append(lines, fmt.Sprintf("access: nested-loop join (%s + %d table(s)) rows=%d est_ms=%.2f",
+			s.From, len(s.Joins), rows, 0.5+0.01*float64(rows)))
+		prevRows = rows
 	} else if s.Subquery != nil {
-		lines = append(lines, "access: subquery scan (FROM ("+s.SubAlias+"))")
+		lines = append(lines, fmt.Sprintf("access: subquery scan (FROM (%s)) rows=%d est_ms=%.2f",
+			s.SubAlias, prevRows, 0.3+0.001*float64(prevRows)))
 	} else {
-		lines = append(lines, "access: "+e.accessOf(s, meta))
+		access := e.accessOf(s, meta)
+		rows, est := e.estimateAccess(s, meta, tableRows)
+		lines = append(lines, fmt.Sprintf("access: %s rows=%d est_ms=%.2f", access, rows, est))
+		prevRows = rows
 	}
 	// 过滤算子
 	if s.Where != nil && len(s.Where.Conds) > 0 {
-		lines = append(lines, "filter: "+e.whereSummary(s.Where))
+		rows := prevRows / 2
+		if rows < 1 {
+			rows = 1
+		}
+		lines = append(lines, fmt.Sprintf("filter: %s rows=%d est_ms=%.2f",
+			e.whereSummary(s.Where), rows, 0.02+0.0005*float64(prevRows)))
+		prevRows = rows
 	}
 	// JOIN ON 条件
 	for i := range s.Joins {
 		if len(s.Joins[i].On) > 0 {
-			lines = append(lines, fmt.Sprintf("join%d on: %s", i+1, e.whereSummary(&Where{Conds: s.Joins[i].On})))
+			lines = append(lines, fmt.Sprintf("join%d on: %s rows=%d est_ms=%.2f",
+				i+1, e.whereSummary(&Where{Conds: s.Joins[i].On}), prevRows, 0.05+0.0005*float64(prevRows)))
 		}
 	}
 	if len(s.GroupBy) > 0 {
-		lines = append(lines, "group: "+strings.Join(s.GroupBy, ", "))
+		rows := prevRows / 4
+		if rows < 1 {
+			rows = 1
+		}
+		lines = append(lines, fmt.Sprintf("group: %s rows=%d est_ms=%.2f",
+			strings.Join(s.GroupBy, ", "), rows, 0.05+0.001*float64(prevRows)))
+		prevRows = rows
 	}
 	hasAgg := false
 	for _, c := range s.Columns {
@@ -7583,19 +7753,68 @@ func (e *Executor) planOf(s *SelectStmt, meta *TableMeta) []string {
 		}
 	}
 	if hasAgg {
-		lines = append(lines, "aggregate: yes")
+		if len(s.GroupBy) == 0 {
+			prevRows = 1
+		}
+		lines = append(lines, fmt.Sprintf("aggregate: yes rows=%d est_ms=%.2f",
+			prevRows, 0.02+0.0005*float64(prevRows)))
 	}
 	if s.OrderBy != nil {
-		lines = append(lines, "sort: "+s.OrderBy.Col+" "+orderDir(s.OrderBy.Desc))
+		lines = append(lines, fmt.Sprintf("sort: %s %s rows=%d est_ms=%.2f",
+			s.OrderBy.Col, orderDir(s.OrderBy.Desc), prevRows, 0.05+0.005*float64(prevRows)))
 	}
 	if s.Limit > 0 {
-		lines = append(lines, "limit: "+strconv.Itoa(s.Limit))
+		rows := prevRows
+		if int64(s.Limit) < rows {
+			rows = int64(s.Limit)
+		}
+		lines = append(lines, fmt.Sprintf("limit: %d rows=%d est_ms=%.2f", s.Limit, rows, 0.005))
+		prevRows = rows
 	}
 	if s.Offset > 0 {
-		lines = append(lines, "offset: "+strconv.Itoa(s.Offset))
+		rows := prevRows - int64(s.Offset)
+		if rows < 0 {
+			rows = 0
+		}
+		lines = append(lines, fmt.Sprintf("offset: %d rows=%d est_ms=%.2f", s.Offset, rows, 0.005))
+		prevRows = rows
 	}
-	lines = append(lines, "projection: "+e.projSummary(s))
+	lines = append(lines, fmt.Sprintf("projection: %s rows=%d est_ms=%.2f",
+		e.projSummary(s), prevRows, 0.01+0.0002*float64(prevRows)))
 	return lines
+}
+
+// estimateAccess 访问路径行数与耗时估算（D3.1，启发式，单位 ms）：
+// 判定与 accessOf 一致——点查/索引等值 rows=1；索引范围按表行数 1/3；
+// 全表扫描为表行数。
+func (e *Executor) estimateAccess(s *SelectStmt, meta *TableMeta, tableRows int64) (rows int64, estMs float64) {
+	if s.Where != nil && len(s.Where.Conds) == 1 {
+		c := s.Where.Conds[0]
+		if c.Col == meta.PK && c.Op == "=" && c.LeftCase == nil {
+			return 1, 0.05
+		}
+	}
+	if s.Where != nil {
+		for i := range s.Where.Conds {
+			c := &s.Where.Conds[i]
+			if c.Op == "!=" || c.Op == "LIKE" || c.LeftCase != nil {
+				continue
+			}
+			for j := range meta.Indexes {
+				if meta.Indexes[j].Col == c.Col {
+					if c.Op == "=" || c.Op == "IN" {
+						return 1, 0.10
+					}
+					r := tableRows / 3
+					if r < 1 {
+						r = 1
+					}
+					return r, 0.20 + 0.003*float64(r)
+				}
+			}
+		}
+	}
+	return tableRows, 0.30 + 0.001*float64(tableRows)
 }
 
 // accessOf 判断单表访问路径：点查 / 索引扫描 / 全表扫描。

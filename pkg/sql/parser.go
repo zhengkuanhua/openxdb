@@ -3828,7 +3828,25 @@ func (p *parser) parseShow() (Stmt, error) {
 		return &ShowStatsStmt{}, nil
 	case "SLOWQUERIES":
 		p.next()
-		return &ShowSlowQueriesStmt{}, nil
+		// D3.2：SHOW SLOWQUERIES [SUMMARY [TOP <n>]]
+		stmt := &ShowSlowQueriesStmt{TopN: 0}
+		if p.cur().kind == tokIdent && p.cur().text == "SUMMARY" {
+			p.next()
+			stmt.Summary = true
+			if p.cur().kind == tokIdent && p.cur().text == "TOP" {
+				p.next()
+				nTok, err := p.expect(tokNumber, "top n")
+				if err != nil {
+					return nil, err
+				}
+				n, err := parseInt10(nTok.text)
+				if err != nil {
+					return nil, err
+				}
+				stmt.TopN = int(n)
+			}
+		}
+		return stmt, nil
 	case "NODES":
 		p.next()
 		return &ShowNodesStmt{}, nil
