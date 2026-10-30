@@ -1,0 +1,406 @@
+# OpenXDB 单机安装部署文档（Linux 7.x）
+
+> 说明：本文档适用于 Linux 7.x（CentOS/RHEL 7 系）。
+> 适用版本：OpenXDB v1.17.0
+> 适用系统：CentOS 7.x / RHEL 7.x（x86_64）
+> 面向读者：有 Linux 基础的 DBA / 运维工程师
+> 来源：本文所有命令、配置项与能力描述均取自仓库（gitee：zhengkh/openxdb，github：zhengkuanhua/openxdb）的 README、`docs/product_manual_zh.md`、`scripts/build.sh`、`scripts/deploy.sh`、`Dockerfile`、`cmd/openxdb/main.go`、`KNOWN_LIMITATIONS.md` 等真实内容；凡仓库未明确定义之处均标注"以仓库实际为准"。
+
+---
+
+## 目录
+
+- [1. 概述](#1-概述)
+- [2. 前置检查清单](#2-前置检查清单)
+- [3. 获取源码与构建](#3-获取源码与构建)
+  - [3.1 方式 A：使用仓库构建脚本 scripts/build.sh](#31-方式-a使用仓库构建脚本-scriptsbuildsh)
+  - [3.2 方式 B：手动 CGO 构建（含 RocksDB 静态链接要点）](#32-方式-b手动-cgo-构建含-rocksdb-静态链接要点)
+  - [3.3 方式 C：Docker 多阶段构建](#33-方式-cdocker-多阶段构建)
+- [4. 初始化与启动](#4-初始化与启动)
+  - [4.1 初始化数据目录](#41-初始化数据目录)
+  - [4.2 配置文件说明](#42-配置文件说明)
+  - [4.3 启动服务](#43-启动服务)
+  - [4.4 一键部署脚本 scripts/deploy.sh](#44-一键部署脚本-scriptsdeploysh)
+  - [4.5 优雅停机](#45-优雅停机)
+  - [4.6 systemd 服务化建议](#46-systemd-服务化建议)
+- [5. 安装验证](#5-安装验证)
+- [6. 数据目录与日志说明](#6-数据目录与日志说明)
+- [7. 备份恢复与升级](#7-备份恢复与升级)
+- [8. 常见问题（FAQ）](#8-常见问题faq)
+- [9. 边界与已知限制](#9-边界与已知限制)
+- [10. 参考资料](#10-参考资料)
+
+---
+
+## 1. 概述
+
+OpenXDB 是一款基于 RocksDB 的国产自研数据库，具备 SQL 子集、自研二进制协议（可选 `--mysql-port` 兼容监听，非 MySQL wire protocol 全兼容）、主从复制（M2）、分片（M3）、多节点集群（M4）、分布式 2PC 写（M5）、HA（M6）、分布式事务 TSO（M8）等能力。v1.17.0 为当前版本，数据目录兼容 v1.0.0–v1.16.0 直接打开。
+
+本单机文档只覆盖**单机部署**：构建二进制、初始化数据目录、启动、验证、日常运维。分布式与主从复制分别见《openxdb_linux_distributed.md》《openxdb_linux_replication.md》（仓库 `docs/deployment/` 下 `linux_distributed.md`、`linux_replication.md`）。
+
+### 1.1 产物形态
+
+- 仓库源码编译产出**单一可执行文件** `openxdb`（`go build ./cmd/openxdb`），RocksDB 以静态库方式链接（Linux 下 `#cgo` LDFLAGS 为 `-lstdc++ -lpthread`，依赖系统 C++/线程运行库，非全静态）。
+- 仓库**未检出** Linux 预编译二进制发布物；官方交付路径为源码构建（`scripts/build.sh`）或 Docker 镜像构建（`Dockerfile`）。如仓库后续提供预编译产物，以仓库实际为准。
+
+### 1.2 术语约定
+
+- 数据目录：`--data-dir` 指定的目录，初始化后包含 `data/`（存储）、`openxdb.conf`（配置文件）、`slow.log`（慢查询日志）、`backups/`（默认备份目录）等。
+- 端口：服务端口 `7788`（默认），复制端口、指标端口、MySQL 兼容端口见配置节。
+
+---
+
+## 2. 前置检查清单
+
+| # | 检查项 | 要求 | 验证命令 | 说明 |
+|---|--------|------|----------|------|
+| 1 | 操作系统 | CentOS 7.x / RHEL 7.x（x86_64） | `cat /etc/redhat-release` | 本文面向 7 系；其他发行版步骤相同，依赖安装命令不同 |
+| 2 | glibc | ≥ 2.17（CentOS/RHEL 7 默认满足） | `ldd --version` | Go 1.22+ 官方 linux/amd64 二进制与仓库产物运行基线 |
+| 3 | 磁盘空间 | 数据目录所在分区建议 ≥ 20GB（视业务量） | `df -h` | RocksDB 存储 + binlog + 备份 |
+| 4 | Go 工具链 | Go 1.22+（`go.mod` 声明 `go 1.22`） | `go version` | CentOS 7 无官方仓库包，需从 go.dev 下载 tarball 安装，见 §3.0 |
+| 5 | C/C++ 编译工具链 | gcc/g++（编译 RocksDB 需支持 C++17/20，见 §3.0 说明） | `gcc --version` / `g++ --version` | CentOS 7 自带 gcc 4.8.5 过旧，建议 `devtoolset` 升级，见 FAQ |
+| 6 | CMake | ≥ 3.20（RocksDB v11.8.1 构建要求，以 RocksDB 官方为准） | `cmake --version` | CentOS 7 自带 cmake 2.8.12 过旧，需 `cmake3` 或 pip 安装 |
+| 7 | 构建辅助工具 | make / ninja / git / pkg-config | `make --version`、`git --version` | `build.sh` 需要 git（RocksDB 源码拉取） |
+| 8 | 网络 | 可访问 github.com（RocksDB 源码）或内网镜像 | `curl -I https://github.com` | 也可手动放置 RocksDB v11.8.1 源码目录 |
+| 9 | 防火墙/端口 | 开放服务端口（默认 7788）、指标端口（默认值见 §4.2 冲突说明） | `firewall-cmd --list-all` | 仅外网访问需要；本机验证可不开 |
+| 10 | 时区/时钟 | NTP 同步（分布式/TSO 场景必需） | `timedatectl` | 单机部署也建议同步 |
+
+> 前置检查原则：先满足 1–8 再开始构建；构建产物拷贝到目标机运行时，目标机只需满足 1、2、3、9、10（不需要 Go 与编译工具链）。
+
+---
+
+## 3. 获取源码与构建
+
+### 3.0 安装 Go（CentOS 7 无系统包，推荐官方 tarball）
+
+```bash
+# 以 Go 1.22+（或仓库 Dockerfile 使用的 1.27.1）为例
+wget https://go.dev/dl/go1.22.12.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.22.12.linux-amd64.tar.gz
+echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+source ~/.bashrc
+go version
+```
+
+> CentOS 7 自带的 gcc 4.8.5 只支持到 C++11，**无法**编译 RocksDB v11.8.1（仓库 Dockerfile 使用 `CMAKE_CXX_STANDARD=20`，RocksDB 11.x 需 C++17+ 编译器）。建议安装 devtoolset：
+>
+> ```bash
+> sudo yum install -y centos-release-scl
+> sudo yum install -y devtoolset-11-gcc devtoolset-11-gcc-c++ cmake3 ninja-build
+> scl enable devtoolset-11 bash   # 或 source /opt/rh/devtoolset-11/enable
+> gcc --version
+> ```
+>
+> 具体编译器/CMake 版本要求以 RocksDB v11.8.1 官方构建文档为准（本仓库 Dockerfile 的构建参数见 §3.3）。
+
+获取仓库源码：
+
+```bash
+git clone https://gitee.com/zhengkh/openxdb.git   # 或 https://github.com/zhengkuanhua/openxdb.git
+cd openxdb
+git checkout <v1.17.0 对应 tag 或 commit>          # 以仓库实际 tag 为准
+```
+
+### 3.1 方式 A：使用仓库构建脚本 `scripts/build.sh`
+
+仓库提供可复现构建脚本（Linux/macOS）：
+
+```bash
+# 自动探测 RocksDB：优先 pkg-config，其次环境变量，最后报错提示传入参数
+./scripts/build.sh
+# 或显式指定 RocksDB 源码与静态库目录，并跑测试
+./scripts/build.sh --rocks-src /path/to/rocksdb-11.8.1 --rocks-build /path/to/librocksdb-dir --test
+# 仅设置 CGO 环境并打印，供手动 go build
+./scripts/build.sh --skip-all-build
+```
+
+脚本行为（取自脚本源码）：
+
+- 参数：`--rocks-src`（RocksDB 源码目录，需存在 `include/rocksdb/*.h`）、`--rocks-build`（含 `librocksdb*.a` 的静态库目录）、`--out-dir`、`--test`（构建后跑 `go test ./...`）、`--skip-all-build`。
+- 未显式传参时：读取环境变量 `ROCKSDB_SRC` / `ROCKSDB_BUILD`；仍无则尝试 `pkg-config --exists rocksdb`。
+- 命中后设置 `CGO_ENABLED=1`、`CGO_CFLAGS=-I<src>/include`、`CGO_CXXFLAGS=-I<src>/include`、`CGO_LDFLAGS=-L<build> -lrocksdb`，执行构建。
+
+### 3.2 方式 B：手动 CGO 构建（含 RocksDB 静态链接要点）
+
+**第一步：编译 RocksDB v11.8.1 静态库**
+
+```bash
+git clone --depth 1 --branch v11.8.1 https://github.com/facebook/rocksdb.git /tmp/rocksdb-src
+cmake -S /tmp/rocksdb-src -B /tmp/rocksdb-build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_STANDARD=20 \
+    -DCMAKE_CXX_FLAGS="-Wno-error=maybe-uninitialized" \
+    -DROCKSDB_BUILD_SHARED=OFF \
+    -DWITH_TESTS=OFF -DWITH_TOOLS=OFF -DWITH_BENCHMARK_TOOLS=OFF -DWITH_JNI=OFF \
+    -DWITH_GFLAGS=OFF -DWITH_ZLIB=OFF -DWITH_LZ4=OFF -DWITH_SNAPPY=OFF -DWITH_ZSTD=OFF -DWITH_BZ2=OFF
+cmake --build /tmp/rocksdb-build -j$(nproc)
+```
+
+> 以上参数与仓库 `Dockerfile` 完全一致：关闭共享库与全部第三方压缩库，产出 `librocksdb.a` 静态库，产物无三方压缩库依赖。
+
+**第二步：构建 openxdb**
+
+```bash
+export CGO_ENABLED=1
+export CGO_CFLAGS="-I/tmp/rocksdb-src/include"
+export CGO_CXXFLAGS="-I/tmp/rocksdb-src/include"
+export CGO_LDFLAGS="-L/tmp/rocksdb-build -lrocksdb"
+go build -o /usr/local/bin/openxdb ./cmd/openxdb
+# 全仓编译核验
+go build ./...
+```
+
+**RocksDB CGO 依赖与静态链接要点（来自仓库）**：
+
+- 头文件必须指向 RocksDB 源码 `include/`；链接必须指向含 `librocksdb.a` 的目录，并 `-lrocksdb`。
+- 无需手动追加 `-lstdc++` / `-lpthread`：仓库 Linux `#cgo` LDFLAGS 已包含（`-lstdc++ -lpthread`）。RocksDB 按仓库 Dockerfile 参数关闭了三方压缩库（`-DWITH_ZLIB=OFF` 等），也勿自行追加 `-lz` 等库，避免重复/错误链接。
+- 全仓测试命令：`go test ./... -count=1 -p 1`（串行避免端口竞争，仓库测试约定）。
+
+### 3.3 方式 C：Docker 多阶段构建
+
+仓库 `Dockerfile` 提供官方镜像构建（golang:1.27.1-bookworm 构建阶段 + Debian slim 运行阶段）：
+
+```bash
+docker build -t openxdb:v1.17.0 .
+# 运行示例（挂载数据目录）
+docker run -d --name openxdb \
+  -p 7788:7788 \
+  -v /data/openxdb:/data \
+  openxdb:v1.17.0 \
+  openxdb init --data-dir /data && openxdb start --data-dir /data --port 7788
+```
+
+> Dockerfile 构建参数（Go 版本 `golang:1.27.1-bookworm`、RocksDB 静态参数）以仓库实际为准；运行阶段为 Debian slim，与 CentOS 7 场景可类比参考。
+
+---
+
+## 4. 初始化与启动
+
+### 4.1 初始化数据目录
+
+```bash
+openxdb init --data-dir /data/openxdb
+```
+
+`init` 创建数据目录骨架（`data/`、`openxdb.conf` 等）。数据目录格式与 v1.0.0–v1.16.0 兼容，可直接打开旧版本数据。
+
+### 4.2 配置文件说明
+
+数据目录下 `openxdb.conf` 为 INI 风格配置文件，示例节选（取自产品手册 §3 与 main.go 装配逻辑）：
+
+```ini
+[server]
+data_dir = /data/openxdb
+port = 7788                 ; 服务端口，默认 7788
+replica_port = 7789         ; 主从复制监听端口（>0 时启用复制；默认 0 不启用，常用 7789）
+metrics_port = 7790         ; Prometheus 指标端口，默认值仓库存在 7789/7790 两处表述，建议显式指定（以仓库实际为准）
+mysql_port = 3307           ; 可选：MySQL wire 兼容监听端口（默认 0 关闭；v1.1.0+ 部分兼容，非全兼容）
+cluster_addr = 10.0.0.1:7791 ; 可选：集群节点链路地址（M4 集群模式，见分布式文档）
+tso_node = node-a           ; 可选：中心化 TSO 发号节点（分布式事务）
+node_id = node-a            ; 可选：集群节点 ID（分布式文档详述）
+tls_cert = /etc/openxdb/tls/server.crt
+tls_key  = /etc/openxdb/tls/server.key
+log_level = info
+shutdown_timeout = 15       ; 优雅停机等待秒数（默认 30，以 main.go 实际语义为准）
+
+[sql]
+query_cache = on
+slow_query_threshold = 100  ; 慢查询阈值 ms，默认 100
+backup_dir = /data/openxdb/backups
+```
+
+- 配置加载：`openxdb start --config <openxdb.conf>` 或自动读取数据目录配置；命令行参数优先级高于配置文件。
+- 在线热更新：`SET` / `SET PERSIST <key>`（持久化落盘，重启生效），如 `SET PERSIST slow_query_threshold = 50`。
+
+### 4.3 启动服务
+
+```bash
+openxdb start --data-dir /data/openxdb --port 7788
+```
+
+常用启动参数（`openxdb start` usage）：
+
+| 参数 | 含义 | 默认 |
+|------|------|------|
+| `--data-dir` | 数据目录（必填） | - |
+| `--port` | 服务端口 | 7788 |
+| `--replica-port` | 复制监听端口，>0 启用主写复制（见复制文档） | 0（不启用） |
+| `--cluster-addr` | 集群节点链路地址，非空启用 M4 集群（见分布式文档） | 空 |
+| `--metrics-port` | Prometheus /metrics 端口（main.go usage 默认 7789，0 禁用；product_manual 写 7790，见 §4.2 冲突说明） | 以仓库实际为准 |
+| `--mysql-port` | MySQL wire 兼容监听端口（0 关闭） | 0 |
+| `--tls-cert` / `--tls-key` | 服务 TLS 证书/私钥（同时加密复制端口） | 空 |
+| `--tls-allow-legacy` | 允许兼容旧客户端 | 关 |
+| `--auth` / `--auth-allow-legacy` / `--root-password` | 认证开关与 root 密码 | 以仓库实际为准 |
+| `--backup-interval` / `--backup-keep` / `--backup-dir` / `--backup-remote-url` | 定时备份调度（见 §7） | 以仓库实际为准 |
+| `--replication-mode` / `--replication-ack` / `--replication-timeout` | 复制模式相关（见复制文档） | async / 1 / 10000 |
+| `--log-level` / `--alert-*` | 日志级别与告警配置 | info |
+| `--tso-node` | 远程 TSO 发号节点（M8） | 空 |
+
+### 4.4 一键部署脚本 `scripts/deploy.sh`
+
+仓库提供 Linux 一键部署脚本（init → start(nohup) → 端口就绪等待 → doctor 自检 → 输出摘要）：
+
+```bash
+./scripts/deploy.sh -DataDir /data/openxdb [-Port 7788] [-Bin /usr/local/bin/openxdb] \
+    [-ReplicaPort 7789] [-ClusterAddr 10.0.0.1:7791] [-NoStart]
+```
+
+| 参数 | 说明 |
+|------|------|
+| `-DataDir` | 必填，数据目录 |
+| `-Port` | 服务端口，默认 7788 |
+| `-Bin` | openxdb 二进制路径（不传则 PATH 查找） |
+| `-ReplicaPort` | 传入则启用复制监听 |
+| `-ClusterAddr` | 传入则启用集群节点链路 |
+| `-NoStart` | 仅初始化不启动 |
+
+### 4.5 优雅停机
+
+- 前台运行：`Ctrl-C`（SIGINT）；后台运行：`kill -TERM <pid>`（SIGTERM）。
+- 服务内命令：在 REPL/客户端执行 `SHUTDOWN`（触发优雅停机）。
+- 优雅停机语义：停止接收新连接 → 排空进行中事务 → 关闭存储与 binlog；`shutdown_timeout` 控制等待窗口（默认 30s，以 main.go 实际语义为准）。
+
+### 4.6 systemd 服务化建议
+
+```ini
+# /etc/systemd/system/openxdb.service
+[Unit]
+Description=OpenXDB Database
+After=network.target
+
+[Service]
+Type=simple
+User=openxdb
+ExecStart=/usr/local/bin/openxdb start --data-dir /data/openxdb --port 7788
+Restart=on-failure
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+systemctl daemon-reload && systemctl enable --now openxdb
+```
+
+---
+
+## 5. 安装验证
+
+按 `examples/quickstart/README.md` 的验证链执行（仅依赖 `openxdb` 二进制与 REPL stdin 管道）：
+
+```bash
+# 1) 版本
+openxdb version
+
+# 2) 启动后在线健康检查（退出码 0=通过 / 1=警告 / 2=错误）
+openxdb doctor --data-dir /data/openxdb --addr 127.0.0.1:7788
+
+# 3) 实时指标（--interval 两次采样计算 binlog LSN 增长；--json 输出结构化）
+openxdb stats --addr 127.0.0.1:7788 --interval 5
+
+# 4) 聚合状态快照（节点存活/角色、region 分布、存储用量、慢查询摘要、事务计数、连接数 QPS）
+openxdb status --addr 127.0.0.1:7788 [--json]
+
+# 5) Prometheus 指标（若启用 metrics 端口；main.go usage 默认 7789，0 禁用，按实际启动端口替换）
+curl http://127.0.0.1:7789/metrics
+```
+
+功能验证（REPL 交互）：
+
+```bash
+openxdb repl --data-dir /data/openxdb
+```
+
+```sql
+CREATE TABLE t1 (id INT PRIMARY KEY, name VARCHAR(64));
+INSERT INTO t1 VALUES (1, 'hello');
+SELECT * FROM t1;
+EXPLAIN SELECT * FROM t1 WHERE id = 1;      -- 节点级耗时
+SHOW SLOWQUERIES SUMMARY;                    -- 慢查询汇总
+SHOW STATS;                                  -- 服务指标
+SHOW CONFIG;                                 -- 配置项
+```
+
+升级前健康检查（升级发布前运行）：
+
+```bash
+openxdb preflight --data-dir /data/openxdb [--target-version v1.17.0] [--json]
+```
+
+---
+
+## 6. 数据目录与日志说明
+
+```
+/data/openxdb/
+├── openxdb.conf        # 配置文件（node_id 等）
+├── data/               # RocksDB 存储 + 元数据（m:tables / m:regions / m:nodes / m:2pc:*）
+├── slow.log            # 慢查询日志（阈值默认 100ms，SET slow_query_threshold 调整，SET slow_query_log 开关）
+└── backups/            # 定时备份默认目录
+```
+
+- 慢查询：默认落盘 `<数据目录>/slow.log`（由 db/cmd 装配开启），`SHOW SLOWQUERIES` 查询（新→旧）。
+- 告警规则：`SET` / `SET PERSIST alert_rules*`，`SHOW ALERT RULES` / `SHOW ALERT STATUS` / `SHOW ALERTS`。
+- 二进制协议客户端：可用 `openxdb repl`（本地）或 TCP 客户端连 `--port`；可选 `--mysql-port` 用 mysql 客户端连接（部分兼容）。
+
+---
+
+## 7. 备份恢复与升级
+
+**逻辑备份（一致性快照）**：
+
+```sql
+BACKUP TO '/data/backup/openxdb-20261030.bak';   -- 单文件，含 magic+version+meta+分段 CRC32+原子写
+RESTORE FROM '/data/backup/openxdb-20261030.bak'; -- 幂等恢复（drop-then-recreate，单事务可回滚）
+RESTORE FROM '...' TO LSN <n>;                    -- 恢复到指定 binlog LSN（PITR）
+SHOW BACKUP STATUS;                               -- 备份任务状态
+```
+
+**远程推送/拉取**（HTTP 上传下载）：
+
+```bash
+openxdb backup push --file /data/backup/openxdb-20261030.bak --url http://backup-server/upload
+openxdb backup pull --url http://backup-server/openxdb-20261030.bak --out /data/restore/openxdb.bak
+```
+
+**定时备份调度**：启动参数 `--backup-interval <sec>` / `--backup-keep <n>` / `--backup-dir <dir>`（默认 `<data>/backups`）/ `--backup-remote-url <url>`；`SET PERSIST backup_*` 持久化。
+
+**升级**：v1.17.0 数据目录兼容 v1.0.0–v1.16.0 直接打开。升级流程建议：备份 → 替换二进制 → `preflight --data-dir ... --target-version <新版本>` → 启动 → `doctor` 验证。跨大版本注意事项以仓库 CHANGELOG / RELEASE_NOTES 为准。
+
+---
+
+## 8. 常见问题（FAQ）
+
+| 问题 | 现象/原因 | 处理 |
+|------|-----------|------|
+| CentOS 7 自带 gcc 4.8.5 编译 RocksDB 失败 | RocksDB 11.x 需要 C++17/20 编译器 | 安装 devtoolset-11（或更高）并 `scl enable`，或改用 Dockerfile 构建 |
+| cmake 版本过旧（2.8.12） | RocksDB 构建失败 | 安装 `cmake3`（EPEL）或以 `cmake3` 命令执行；版本要求以 RocksDB 官方为准 |
+| 链接报错找不到 `-lrocksdb` | CGO_LDFLAGS 未指向含 `librocksdb.a` 的目录 | 确认 `-L` 目录下有 `librocksdb.a`；用 `find /tmp/rocksdb-build -name 'librocksdb*.a'` 定位 |
+| 重复符号 / 链接错误 | 额外加了 `-lstdc++` / `-lz` | 删除这些追加项，仓库 `#cgo` 已处理 C++/线程库链接（`-lstdc++ -lpthread`） |
+| `go build` 报 CGO 相关错误 | `CGO_ENABLED` 未置 1 或头文件路径错误 | 确认 `CGO_ENABLED=1`、`CGO_CFLAGS=-I<rocksdb>/include` |
+| 端口被占用 | 默认 7788 被占用 | 换 `--port` 或停旧进程 |
+| `cluster not enabled` | 执行了集群语句但未以 `--cluster-addr` 启动 | 单机部署此报错为正常（见 §9） |
+| 慢查询没记录 | 阈值未达或 `slow_query_log` 关闭 | `SET slow_query_threshold = 100`、`SET slow_query_log = on` |
+
+---
+
+## 9. 边界与已知限制
+
+- **SQL 子集**：OpenXDB 支持 SQL 子集，非完整 MySQL/标准 SQL；`--mysql-port` 为部分兼容，非 MySQL wire protocol 全兼容（以产品手册第 10 章与 KNOWN_LIMITATIONS 为准）。
+- **性能数值**：README/E5 文档中的 QPS/tpmC 等均为**单机端侧功能基准**，不代表生产环境容量规划依据。
+- **跨节点写**：分布式场景跨节点写依赖 2PC（单节点部署不触发，见分布式文档）。
+- **集群语句**：单机模式（未配 `--cluster-addr`）执行 `ADD NODE` / `SHOW NODES` / `BALANCE` 等返回 `cluster not enabled`。
+- **HA quorum 默认关闭**、epoch 默认开启（v1.17.0 KNOWN_LIMITATIONS）。
+- 其余限制以 `KNOWN_LIMITATIONS.md` 为准。
+
+---
+
+## 10. 参考资料
+
+- 产品手册：`docs/product_manual_zh.md`（第 3 章部署/配置、第 7 章运维）
+- 构建脚本：`scripts/build.sh`；一键部署：`scripts/deploy.sh`
+- 容器构建：`Dockerfile`
+- 快速验证：`examples/quickstart/README.md`
+- 已知限制：`KNOWN_LIMITATIONS.md`
+- 变更记录：`CHANGELOG.md` / `RELEASE_NOTES.md`

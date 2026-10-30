@@ -106,6 +106,7 @@ Protocol / CLI (REPL · TCP server · JDBC/Python 驱动 · MySQL wire protocol 
 - **变更记录**: [CHANGELOG.md](CHANGELOG.md)
 - **发布说明**: [RELEASE_NOTES.md](RELEASE_NOTES.md)
 - **已知限制**: [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)
+- **Linux 7.x 部署文档（单机/分布式/主从复制）**: [docs/deployment/](docs/deployment/)（[单机](docs/deployment/linux_single_node.md) · [分布式](docs/deployment/linux_distributed.md) · [主从复制](docs/deployment/linux_replication.md)）
 - **设计文档**: [docs/](docs/)（T1–T42 / M 系列 / E 系列）
 - **基准实验**: [docs/experiments/](docs/experiments/)（E1–E5）
 
