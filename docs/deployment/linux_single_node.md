@@ -57,7 +57,8 @@ OpenXDB 是一款基于 RocksDB 的国产自研数据库，具备 SQL 子集、�
 
 ### 1.2 术语约定
 
-- 数据目录：`--data-dir` 指定的目录，初始化后包含 `data/`（存储）、`openxdb.conf`（配置文件）、`slow.log`（慢查询日志）、`backups/`（默认备份目录）等。
+- 数据目录：`--data-dir` 指定的目录，`openxdb init` 初始化后包含 `data/`（RocksDB 存储）、`openxdb.conf`（**数据目录 db conf**，init 自动生成，见 §4.2）、`slow.log`（慢查询日志）、`backups/`（默认备份目录）等。
+- 服务配置：`openxdb start --config <path>` 显式加载的 INI 风格配置文件（`[server]` / `[sql]` 段），与数据目录 db conf 是**两份相互独立**的 conf 文件，路径不得重合（详见 §4.2）。
 - 端口：服务端口 `7788`（默认），复制端口、指标端口、MySQL 兼容端口见配置节。
 
 ---
@@ -235,11 +236,35 @@ docker run -d --name openxdb \
 openxdb init --data-dir /data/openxdb
 ```
 
-`init` 创建数据目录骨架（`data/`、`openxdb.conf` 等）。数据目录格式与 v1.0.0–v1.16.0 兼容，可直接打开旧版本数据。
+`init` 创建数据目录骨架（`data/` 存储子目录、`openxdb.conf` 数据目录 db conf 等）。数据目录格式与 v1.0.0–v1.16.0 兼容，可直接打开旧版本数据。
+
+**init 必须先行（实测确认）**：`openxdb start` / `repl` 等子命令直接调用 `db.Open`，**不会自动 Init**；未初始化直接启动会报 `db: data directory not initialized`。任何节点首次部署都必须先执行一次 `openxdb init --data-dir <dir>`（对已初始化目录重复执行报 `data directory already initialized`，不会覆盖既有配置）。
 
 ### 4.2 配置文件说明
 
-数据目录下 `openxdb.conf` 为 INI 风格配置文件，示例节选（取自产品手册 §3 与 main.go 装配逻辑）：
+**双 conf 架构：OpenXDB 存在两份相互独立的 conf 文件，职责不同、路径不得重合（基于仓库真实代码 `cmd/openxdb/main.go` 的 cmdStart/loadStartConfig/cmdInit、`pkg/db/db.go` 的 Init/Open、`pkg/configfile`、`docs/openxdb.conf.example` 核实）**：
+
+**A. 数据目录 db conf：`<data_dir>/openxdb.conf`**
+- 由 `openxdb init --data-dir <dir>` 自动生成（`db.Init`），内容为简单键值（**无** `[server]` / `[sql]` 段），仓库样本见 `quickstart-data/openxdb.conf`：
+
+```
+# OpenXDB data directory config
+engine = rocksdb
+node_id = node-5135e5c1
+created_at = 2026-10-30T09:43:32+08:00
+```
+
+- 作用是标识存储引擎与节点：`db.Open` 打开数据目录时读取该校验文件，内容必须包含 `engine = rocksdb` 字符串，否则报 `unsupported engine`；文件缺失则报 `data directory not initialized`（`pkg/db/db.go` Init/Open）。
+- 它不是服务监听配置，不控制端口，也不能当作 `--config` 服务配置加载。
+
+**B. 服务配置：`openxdb start --config <path>` 显式加载的 INI 文件**
+- `main.go loadStartConfig` 仅在提供 `--config` 时解析配置文件；**不会自动读取数据目录下的 openxdb.conf**。
+- INI 风格，仅接受 `[server]` / `[sql]` 两个段（未知段/未知键/非法值一律拒绝，不静默忽略；可用 `openxdb config-check --config <path>` 预检）：
+  - `[server]` 合法键为白名单 `serverKeys`：`data_dir` / `port` / `replica_port` / `metrics_port` / `mysql_port` / `shutdown_timeout` / `cluster_addr` / `log_level` / `alert_enabled` / `alert_file` / `alert_webhook` / `alert_keep`。**`engine` 不是合法键**，写入即被 configfile 校验拒绝（报 `[server] unknown key "engine"`）。
+  - `[sql]` 段与 `SET` / `SET PERSIST` 同键（`query_cache` / `slow_query_threshold` / `backup_*` / `log_level` / `alert_*` 等），启动时逐个装配为内存级 SET。
+- 参考样本：仓库 `docs/openxdb.conf.example`（其中 `metrics_port = 0` 表示关闭，文档端口布局见下）。
+
+合法最小示例（已剔除不在白名单的键；**保存到数据目录之外的独立路径**，如 `/etc/openxdb/openxdb.conf`）：
 
 ```ini
 [server]
@@ -249,10 +274,6 @@ replica_port = 7789         ; 主从复制监听端口（>0 时启用复制；�
 metrics_port = 7790         ; Prometheus 指标端口（默认 7789，0 禁用；与 replica_port=7789 冲突时让位 7790，见下方说明）
 mysql_port = 3307           ; 可选：MySQL wire 兼容监听端口（默认 0 关闭；v1.1.0+ 部分兼容，非全兼容）
 cluster_addr = 10.0.0.1:7791 ; 可选：集群节点链路地址（M4 集群模式，见分布式文档）
-tso_node = node-a           ; 可选：中心化 TSO 发号节点（分布式事务）
-node_id = node-a            ; 可选：集群节点 ID（分布式文档详述）
-tls_cert = /etc/openxdb/tls/server.crt
-tls_key  = /etc/openxdb/tls/server.key
 log_level = info
 shutdown_timeout = 15       ; 优雅停机等待秒数（默认 30，以 main.go 实际语义为准）
 
@@ -262,20 +283,33 @@ slow_query_threshold = 100  ; 慢查询阈值 ms，默认 100
 backup_dir = /data/openxdb/backups
 ```
 
-- 配置加载：`openxdb start --config <openxdb.conf>` 显式加载（main.go `loadStartConfig` 仅在提供 `--config` 时解析配置文件）；**不会自动读取数据目录下的 openxdb.conf**。实测坑：只写好 `openxdb.conf` 而不带 `--config` 启动时，文件内配置（含 `mysql_port`）全部不生效，必须显式 `--config` 或在命令行带对应参数。
+> 注意：`node_id`、`tls_cert`、`tls_key`、`tso_node` 均**不在** `[server]` 白名单，写入会被 `config-check` / `start` 拒绝（以 main.go `serverKeys` 与 cmdStart 实际装配为准）。节点 ID 由 `init` 自动写入数据目录 db conf；TLS 走命令行 `--tls-cert` / `--tls-key` 或 `SET PERSIST tls_cert/tls_key`；中心化 TSO 走命令行 `--tso-node`。
+
+**两份 conf 不得重合（实测踩坑）**：
+- 服务配置若直接写到 `<data_dir>/openxdb.conf`（覆盖 init 生成的数据目录 db conf），`db.Open` 找不到 `engine = rocksdb` 字符串 → 启动报 `unsupported engine in <data_dir>/openxdb.conf`。
+- 反之，在服务配置 `[server]` 段补 `engine = rocksdb` 行 → configfile 校验报 `[server] unknown key "engine"`。
+- 结论：服务配置必须放在数据目录之外的独立路径，由 `--config` 显式加载。
+
+- 配置加载：`openxdb start --config <服务配置路径>` 显式加载；**不会自动读取数据目录下的 openxdb.conf**。实测坑：只写好服务配置而不带 `--config` 启动时，文件内配置（含 `mysql_port`）全部不生效，必须显式 `--config` 或在命令行带对应参数。
 - 命令行参数优先级高于配置文件（CLI flag 覆盖 `[server]` / `[sql]` 段同名键）。
 - **端口冲突与修正方案（实测）**：`metrics_port` 仓库默认 7789（usage 口径，0 禁用）、`replica_port` 默认 0（不启用复制）。启用复制时 `replica_port` 常用 7789，此时若 `metrics_port` 保持默认 7789，两个监听端口会冲突（先启动者占用，另一监听 bind 失败）。**推荐显式让 metrics_port 让位**，形成如下端口布局：
   - `port = 7788`（服务端口）
   - `replica_port = 7789`（复制监听，>0 启用时）
   - `metrics_port = 7790`（指标端口，让位后）
   - `mysql_port = 3307`（MySQL wire 兼容端口，可选）
-  - 修改示例：`sed -i 's|^metrics_port = 7789|metrics_port = 7790|' openxdb.conf`
+  - 修改示例：`sed -i 's|^metrics_port = 7789|metrics_port = 7790|' <服务配置路径>`
   - 实际启动时 metrics 端口在未显式配置时为 0（不监听），以仓库 main.go 实际行为为准。
-- 在线热更新：`SET` / `SET PERSIST <key>`（持久化落盘，重启生效），如 `SET PERSIST slow_query_threshold = 50`。
+- 在线热更新：`SET` / `SET PERSIST <key>`（持久化落盘到 `<data_dir>/persisted.json`，重启生效），如 `SET PERSIST slow_query_threshold = 50`。
 
 ### 4.3 启动服务
 
+先执行 §4.1 的 `init`，再启动。两种方式任选：
+
 ```bash
+# 方式一：--config 加载服务配置（data_dir 从 [server] 段读取）
+openxdb start --config /etc/openxdb/openxdb.conf
+
+# 方式二：命令行直接传参（优先级高于配置文件同名键）
 openxdb start --data-dir /data/openxdb --port 7788
 ```
 
@@ -418,8 +452,9 @@ openxdb preflight --data-dir /data/openxdb [--target-version v1.17.0] [--json]
 
 ```
 /data/openxdb/
-├── openxdb.conf        # 配置文件（node_id 等）
+├── openxdb.conf        # 数据目录 db conf（init 生成：engine=rocksdb/node_id/created_at，非服务配置，见 §4.2）
 ├── data/               # RocksDB 存储 + 元数据（m:tables / m:regions / m:nodes / m:2pc:*）
+├── persisted.json      # SET PERSIST 在线配置持久化文件（存在时）
 ├── slow.log            # 慢查询日志（阈值默认 100ms，SET slow_query_threshold 调整，SET slow_query_log 开关）
 └── backups/            # 定时备份默认目录
 ```
@@ -470,7 +505,9 @@ openxdb backup pull --url http://backup-server/openxdb-20261030.bak --out /data/
 | mysql 客户端部分语句报 1045 not supported / unsupported statement | MySQL wire 兼容层为部分兼容（实测 v1.17.0） | `SELECT VERSION()`、`DESC`、`SHOW CREATE TABLE` 不支持；`SELECT 1`、`CREATE TABLE`、`INSERT`、`SELECT`、`SHOW TABLES/DATABASES/INDEX/SLOWQUERIES/NODES/VIEWS/USERS` 支持。完整 SQL/函数能力走 7788 自研二进制协议（Python 驱动 `openxdb.connect` 或内置 REPL） |
 | `openxdb doctor` 报 rocksdb/metadata WARN | 服务运行中引擎被占用 LOCK，跳过本地 Open 检查 | 预期行为（见 §5）；停服后再跑 doctor 可验证本地 Open |
 | REPL 启动报 LOCK / Resource temporarily unavailable | REPL 需独占 data dir，服务运行中已被占用 | 先停服再开 REPL；运行期间改用 TCP 7788 / MySQL 兼容端口连接 |
-| 写了 `openxdb.conf` 但 `--mysql-port` 等配置不生效 | 配置文件需 `--config` 显式加载，不会自动读取 | 启动时带 `--config <openxdb.conf>`，或命令行显式带 `--mysql-port` |
+| 启动报 `data directory not initialized` | 未先 `openxdb init` 直接 `start`（cmdStart 直接 db.Open，不会自动 Init） | 先执行 `openxdb init --data-dir <dir>` 再启动（见 §4.1） |
+| 启动报 `unsupported engine` | `<data_dir>/openxdb.conf` 被服务配置覆盖/改写，缺少 `engine = rocksdb` 行（两份 conf 重合） | 重新 `openxdb init` 恢复数据目录 db conf；服务配置另放独立路径（见 §4.2） |
+| 写了 `openxdb.conf` 但 `--mysql-port` 等配置不生效 | 服务配置需 `--config` 显式加载，不会自动读取 | 启动时带 `--config <服务配置路径>`，或命令行显式带 `--mysql-port` |
 | 复制端口与指标端口冲突 | `replica_port=7789` 与 `metrics_port=7789` 同时启用 | 显式错开端口，如 `--metrics-port 7790`（见 §4.2） |
 
 ---
