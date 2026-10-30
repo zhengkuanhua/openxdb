@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# OpenXDB v1.16.0 —— 多阶段构建镜像
+# OpenXDB v1.17.0 —— 多阶段构建镜像
 # 阶段一：RocksDB 11.8.1 静态库（源码编译，参数与 CI / build.sh 一致，无三方压缩库）+ Go 工具链构建二进制
 # 阶段二：Debian slim 运行时，仅含 openxdb 二进制
 
