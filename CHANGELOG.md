@@ -26,16 +26,20 @@ OpenXDB 版本变更记录。
 
 > 版本线说明：历史版本以仓库 README Status 行、docs/ 设计文档头部标注与 git 提交记录为准。早期部分中间 -alpha 版本未单独打标（git 与文档均无显式版本号），按里程碑区间归纳，版本号不做臆造。
 
-## v1.17.0 (2026-10-29)
+## v1.17.0 (2026-10-30)
 
-v1.17.0（显式事务写路径优化）正式发布。按 DEV_PLAN_v1.17.0 Phase A 完成 D1 三项写路径改造与 E5 受控复测，将 write 吞吐从"贴近目标线"拉到"稳定余量"（QPS +44%）；全仓回归全绿。
+v1.17.0（显式事务写路径优化 + 可观测性/稳定性补强）正式发布。按 DEV_PLAN_v1.17.0 完成 D1 三项写路径改造（D2 会话锁调度精细化因并发伸缩验收未达标整体回退）、D3 可观测性与诊断闭环、D4 并发规模与稳定性验证，并经 D5 发版前 E5 受控复测，将 write 吞吐从"贴近目标线"拉到"稳定余量"（QPS +50%）；全仓回归全绿。
 
 **Added**
 
 - **D1.1 UPDATE 快照刷新锁外化**：显式事务 UPDATE 的锁内快照刷新移到锁外（对齐 C2 Begin 锁外化同型改造），降低写语句延迟；`snapshot_lock_external` 独立 flag，失败可回退锁内刷新。
 - **D1.2 autocommit 写 pipeline 深化**：写语句接入连接内 pipeline（原 pipeline 仅覆盖读路径），减少端侧逐条往返；`write_pipeline` 独立 flag 默认 off，可热切换回退逐条执行。
 - **D1.3 WAL 组提交主动定时窗口**：`group_commit_active_window`（默认 off 回退 v1.16.0 C1 单等待者免窗口）在写密集下主动定时刷新合并 fsync，降低 fsync 次数与写放大；不影响 WAL 重放 / 崩溃恢复 / 复制 2PC 顺序。
-- **E5 受控复测**（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read / write / read-write **11.85 / 12.03 / 12.40 TPS**（QPS 165.90 / 48.13 / 223.20，errs=0 / reconnects=0），较 v1.16.0（10.37 / 8.33 / 8.15 TPS，QPS 145.13 / 33.33 / 146.70）**write QPS +44%**、read-write TPS +52%、read 无回归 +14%；TPC-C 5 仓 tpmC **776.00** / tpm_total 1720.50（较 v1.16.0 的 254.00 / 581.00 提升约 **3.1-3.0 倍**）。**达成 D1 验收目标：write QPS 中位 ≥40（48.13）、TPS write ≥9（12.03）、tpmC ≥300（776.00），其余指标无回归、errs=0 / reconnects=0**。详见 [docs/experiments/E5_standard_bench_alignment.md](docs/experiments/E5_standard_bench_alignment.md)。
+- **D3.1 EXPLAIN 节点级耗时/行数估算**：执行计划 planLines 追加 `rows=N est_ms=X.XX` 节点级耗时与行数估算，真实行数走存储层 CountRange 计数，输出向后兼容追加字段，旧解析器不受影响。
+- **D3.2 slowlog 阈值区间 TOP N 汇总**：`SHOW SLOWQUERIES SUMMARY` 按阈值区间汇总 TOP N（降序稳定排序 + bucket 区间聚合），配合 `SET slow_query_threshold` 热配置形成诊断闭环。
+- **D4.1 并发规模长稳验证**：8 连接写密集 30min 长稳——errs=0、goroutines 恒 2、heap 42MB、wal.log 受控（45.6MB）、崩溃恢复 check COUNT 严格等价（2355864）。
+- **D4.2 bench 工具参数化**：`bench_oltp.py --rows` CLI 化、`run_e5.ps1 -OltpRows`、`load.go` 追加 goroutine/heap 观测，便于复测与 CI。
+- **E5 受控复测（发版最终）**（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read / write / read-write **14.15 / 13.40 / 12.60 TPS**（QPS 198.10 / 53.60 / 226.80，errs=0 / reconnects=0），较 v1.16.0（10.37 / 8.33 / 8.15 TPS，QPS 145.13 / 33.33 / 146.70）**write QPS +61%**、read-write TPS +55%、read 无回归 +36%；TPC-C 5 仓 tpmC **774.50** / tpm_total 1746.50（较 v1.16.0 的 254.00 / 581.00 提升约 **3.0 倍**）。**达成 v1.17.0 验收目标：OLTP TPS read ≥11（14.15）/ write ≥9（13.40）/ rw ≥8.5（12.60），QPS read ≥145（198.10）/ write ≥40（53.60）/ rw ≥146（226.80），TPC-C tpmC ≥300（774.50），errs=0 / reconnects=0**。详见 [docs/experiments/E5_standard_bench_alignment.md](docs/experiments/E5_standard_bench_alignment.md)。
 
 **回退记录（D2）**
 
@@ -43,7 +47,7 @@ v1.17.0（显式事务写路径优化）正式发布。按 DEV_PLAN_v1.17.0 Phas
 
 **边界声明**
 
-- TPS/QPS 受全局会话锁与单机端侧往返制约，数值为**单机端侧功能基准**，非生产级吞吐承诺；write 模式已脱离吞吐下限（QPS 中位 48.13，单轮最低 41.00 仍高于 v1.16.0 中位 33.33）。
+- TPS/QPS 受全局会话锁与单机端侧往返制约，数值为**单机端侧功能基准**，非生产级吞吐承诺；write 模式已脱离吞吐下限（QPS 中位 53.60，三轮最低 52.87 仍高于 v1.16.0 中位 33.33）。
 - 所有优化均有独立 feature flag 可灰度回退；与 v1.16.0 兼容、可回退。
 
 ## v1.16.0 (2026-10-28)
