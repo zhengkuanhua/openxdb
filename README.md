@@ -1,48 +1,3 @@
----
-AIGC:
-    Label: "1"
-    ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_00bbb197d40111f1a0da525400393706
-    ReservedCode1: In4tDpOafijQ02t9jw3KHcgX8wQY2/+thby5tZtAf+AdJf9ewSe1ZarM29SYyvbGxFhrxldiHIG3hOnvDYOdH61Ld7YqAlYWW83vrjZFAdXf/0zrOECqixpnvFFqN0dR/XqjYGIabXlhXnQ44byouTQ1YTZzI1qJCd7tZNuRTTOXx9sA8CbW1uYKkIs=
-    ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_00bbb197d40111f1a0da525400393706
-    ReservedCode2: In4tDpOafijQ02t9jw3KHcgX8wQY2/+thby5tZtAf+AdJf9ewSe1ZarM29SYyvbGxFhrxldiHIG3hOnvDYOdH61Ld7YqAlYWW83vrjZFAdXf/0zrOECqixpnvFFqN0dR/XqjYGIabXlhXnQ44byouTQ1YTZzI1qJCd7tZNuRTTOXx9sA8CbW1uYKkIs=
----
-
----
-AIGC:
-    Label: "1"
-    ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_aa65ed19d2c611f196c5525400248c00
-    ReservedCode1: LFOeCyUrkODjtOibxvoiDRc4gV5EBh0npfQwyk1RdTCj93bKJLKcr7NlydEtZp9SkedIk7b9FndzkSpZRiYnCNkDDWKlAOH0mun1Dyk2Zr4FUibfd69GxtLZBw/fgt5MIM8YjGfd/A2v/WherkK/iax8RZYsYAxtKj9nLFXuIcDxkKE+wFh7VWuLKvU=
-    ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_aa65ed19d2c611f196c5525400248c00
-    ReservedCode2: LFOeCyUrkODjtOibxvoiDRc4gV5EBh0npfQwyk1RdTCj93bKJLKcr7NlydEtZp9SkedIk7b9FndzkSpZRiYnCNkDDWKlAOH0mun1Dyk2Zr4FUibfd69GxtLZBw/fgt5MIM8YjGfd/A2v/WherkK/iax8RZYsYAxtKj9nLFXuIcDxkKE+wFh7VWuLKvU=
----
-
----
-AIGC:
-    Label: "1"
-    ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_bdd83564c86c11f18b7f525400393706
-    ReservedCode1: WfMTyove99YV06WZh34T2L4i2JX5tj63b/O9AN9CZjk+asOZEkUIqgygBB62QdF5dTd544TxS+ntrC0pXXbwBrzwtfq+bYqYC8mjce/vKjthCv4xsNe116dQvRi9R2F7ZM+UO2m7/gBp2wgtu/2glu7tMqzb8xYdZIOKjgoRx+dpWl46pMY+hKtNLy4=
-    ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_bdd83564c86c11f18b7f525400393706
-    ReservedCode2: WfMTyove99YV06WZh34T2L4i2JX5tj63b/O9AN9CZjk+asOZEkUIqgygBB62QdF5dTd544TxS+ntrC0pXXbwBrzwtfq+bYqYC8mjce/vKjthCv4xsNe116dQvRi9R2F7ZM+UO2m7/gBp2wgtu/2glu7tMqzb8xYdZIOKjgoRx+dpWl46pMY+hKtNLy4=
----
-
-
-
-
-
-
-
-
-
-
-
-
-
 # OpenXDB
 
 *从零自研的单机/分布式关系型数据库内核（Go + RocksDB），含 WAL、事务、SQL、复制、分片、2PC、HA、备份恢复等完整能力。*
@@ -143,8 +98,6 @@ Protocol / CLI (REPL · TCP server · JDBC/Python 驱动 · MySQL wire protocol 
         ▼
  Storage (RocksDB cgo 桥 / 内存 B+Tree)
 ```
-
-
 
 ## Documentation
 
