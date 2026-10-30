@@ -2,6 +2,17 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_00bbb197d40111f1a0da525400393706
+    ReservedCode1: In4tDpOafijQ02t9jw3KHcgX8wQY2/+thby5tZtAf+AdJf9ewSe1ZarM29SYyvbGxFhrxldiHIG3hOnvDYOdH61Ld7YqAlYWW83vrjZFAdXf/0zrOECqixpnvFFqN0dR/XqjYGIabXlhXnQ44byouTQ1YTZzI1qJCd7tZNuRTTOXx9sA8CbW1uYKkIs=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_00bbb197d40111f1a0da525400393706
+    ReservedCode2: In4tDpOafijQ02t9jw3KHcgX8wQY2/+thby5tZtAf+AdJf9ewSe1ZarM29SYyvbGxFhrxldiHIG3hOnvDYOdH61Ld7YqAlYWW83vrjZFAdXf/0zrOECqixpnvFFqN0dR/XqjYGIabXlhXnQ44byouTQ1YTZzI1qJCd7tZNuRTTOXx9sA8CbW1uYKkIs=
+---
+
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
     ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_aa65ed19d2c611f196c5525400248c00
     ReservedCode1: LFOeCyUrkODjtOibxvoiDRc4gV5EBh0npfQwyk1RdTCj93bKJLKcr7NlydEtZp9SkedIk7b9FndzkSpZRiYnCNkDDWKlAOH0mun1Dyk2Zr4FUibfd69GxtLZBw/fgt5MIM8YjGfd/A2v/WherkK/iax8RZYsYAxtKj9nLFXuIcDxkKE+wFh7VWuLKvU=
     ContentPropagator: 001191440300708461136T1XGW3
@@ -115,6 +126,8 @@ SELECT name FROM users WHERE age >= 25 AND age < 35 ORDER BY age;
 | **集群** | 复制（异步/半同步/同步）、region 分片、多节点 2PC、HA 故障转移（epoch 脑裂防护 + 回迁自动化）、自动分裂与负载均衡 |
 | **备份恢复** | 一致性快照备份（并发分片）、幂等恢复、LSN 基 PITR、分布式一致备份、备份调度/远程 push-pull |
 | **生态导出** | JDBC/Python 驱动（pipeline 批量）、mysqldump 导入（全选项）、binlog CDC、JSON/Parquet 流式导出（大结果集分片写） |
+| **写路径优化（v1.17.0）** | 显式事务写路径三项优化：UPDATE 快照刷新锁外化（`snapshot_lock_external`）、autocommit 写 pipeline（`write_pipeline`，默认 off 可热切换）、WAL 组提交主动定时窗口（`group_commit_active_window`，默认 off 回退 v1.16.0）；E5 受控复测 write QPS +61%、read-write TPS +55%、TPC-C tpmC 774.50（较 v1.16.0 约 3 倍） |
+| **可观测性（v1.17.0）** | EXPLAIN 节点级耗时/行数估算（`rows=N est_ms=X.XX`）+ `SHOW SLOWQUERIES SUMMARY TOP N` 阈值区间桶汇总，配合 `slow_query_threshold` 热配置形成慢查询诊断闭环 |
 
 ## 架构总览
 
@@ -457,6 +470,7 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 ## License
 
 MIT — see [LICENSE](LICENSE).
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

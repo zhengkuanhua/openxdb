@@ -9,6 +9,75 @@ AIGC:
     ReservedCode2: UDm3b/NfHHOkbknWca+ttp8cSfMCckglKfbESPE7h17FKwsXlvhweB/iFshQHxuiq9o9Jk6/hIsv0Gku9XZrg2r7w9bLEXfjvZSrWIv+Lg0phzlhFgGdmu5akERzFrIeUVXhtyfq/J26k6yK9nK94KWV00B0NI8gBSiSTP5XEq+YF3qlPKs2DtT/CKM=
 ---
 
+# OpenXDB v1.17.0 Release Notes
+
+发布日期：2026-10-30
+
+## 版本亮点
+
+- **显式事务写路径优化**：三项独立优化——① UPDATE 快照刷新锁外化（`snapshot_lock_external`，锁内刷新移到锁外，降低写语句延迟）；② autocommit 写 pipeline 深化（`write_pipeline`，写语句接入连接内 pipeline，减少端侧逐条往返）；③ WAL 组提交主动定时窗口（`group_commit_active_window`，写密集下主动定时刷新合并 fsync）。后两项默认关闭可热切换，不影响 WAL 重放/崩溃恢复/复制 2PC 顺序，可随时回退 v1.16.0 基线行为。
+- **性能大幅提升（发版前 E5 受控复测）**：OLTP **write QPS +61%**、**read-write TPS +55%**、read 无回归（+36%）；TPC-C 5 仓 **tpmC 774.50**（较 v1.16.0 的 254.00 提升约 **3.0 倍**），全部达成 v1.17.0 验收目标。
+- **可观测性闭环（D3）**：EXPLAIN 节点级耗时/行数估算（`rows=N est_ms=X.XX`）+ `SHOW SLOWQUERIES SUMMARY TOP N` 阈值区间桶汇总报表，配合 `slow_query_threshold` 热配置，形成慢查询诊断闭环。
+- **稳定性验证（D4）**：8 连接写密集 30min 长稳 `errs=0` / `wal.log` 受控（自动 checkpoint/truncate，45.6MB）；bench 工具 CLI 参数化，复测流程可复现。
+- **回退记录（D2）**：会话锁调度精细化因并发伸缩验收未达标整体回退（16 连接 read TPS 10.80 较 8 连接 11.85 为 -8.9%、read-write -17.1%，未达"较 8 连接提升 ≥20%"），恢复 D1 基线行为。
+
+## 新增能力（相对 v1.16.0）
+
+- **D1.1 UPDATE 快照刷新锁外化**（`snapshot_lock_external`）：锁内刷新移到锁外，降低写语句延迟。
+- **D1.2 autocommit 写 pipeline 深化**（`write_pipeline`，默认 off 可热切换）：写语句接入连接内 pipeline，减少端侧逐条往返。
+- **D1.3 WAL 组提交主动定时窗口**（`group_commit_active_window`，默认 off 回退 v1.16.0 C1 单等待者免窗口）：写密集下主动定时刷新合并 fsync，不影响 WAL 重放/崩溃恢复/复制 2PC 顺序。
+- **D3 可观测性与诊断闭环**：EXPLAIN 节点级耗时/行数估算 + `SHOW SLOWQUERIES SUMMARY TOP N` 阈值区间桶汇总。
+- **D4 并发规模与稳定性验证**：8 连接写密集 30min 长稳 `errs=0`；bench 工具 CLI 参数化。
+- **D2 回退**：会话锁调度精细化因并发伸缩验收未达标整体回退，恢复 D1 基线行为（无遗留配置项）。
+
+## 性能（发版前 E5 受控复测）
+
+8 连接、每轮 prepare 重置 + 3 轮取中位数（OLTP 8 线程 × 60s、TPC-C 5 仓 × 120s）：
+
+| 指标 | v1.16.0 | v1.17.0 | 变化 |
+|------|---------|---------|------|
+| OLTP read TPS / QPS | 10.37 / 145.13 | **14.15 / 198.10** | +36% / +37% |
+| OLTP write TPS / QPS | 8.33 / 33.33 | **13.40 / 53.60** | +61% / +61% |
+| OLTP read-write TPS / QPS | 8.15 / 146.70 | **12.60 / 226.80** | +55% / +55% |
+| TPC-C 5 仓 tpmC / tpm_total | 254.00 / 581.00 | **774.50 / 1746.50** | 约 3.0 倍 |
+| 连接错误 errs / reconnects | 0 / 0 | 0 / 0 | 保持 |
+
+v1.17.0 验收目标全部达成：TPS read ≥11（14.15）/ write ≥9（13.40）/ rw ≥8.5（12.60）、QPS read ≥145（198.10）/ write ≥40（53.60）/ rw ≥146（226.80）、tpmC ≥300（774.50）、errs=0 / reconnects=0。详情见 [docs/experiments/E5_standard_bench_alignment.md](docs/experiments/E5_standard_bench_alignment.md)。
+
+## 兼容性说明
+
+- **数据目录兼容**：v1.17.0 保持既有数据文件格式版本（`pkg/db.DataFormatVersion`），已初始化的 v1.0.0 至 v1.16.0 数据目录可直接打开，无需迁移重建。
+- **协议兼容**：自研二进制协议（pkg/server，非 MySQL wire protocol）。历史客户端（JDBC/Python 驱动）按既有帧格式可继续工作；驱动与服务器版本匹配即可。
+- **配置兼容**：新增配置项（`snapshot_lock_external` / `write_pipeline` / `group_commit_active_window` 等）默认值与既有行为兼容、均可热切换回退；既有命令行参数与 SET PERSIST 配置项保持向后兼容。
+- **无破坏性变更**：本次发布未引入数据文件格式变更或协议破坏性变更；D2 会话锁调度精细化已整体回退，不遗留配置项。
+
+## 已知问题
+
+详见 [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)。主要关注：
+
+- SQL 为子集：暂无完整 MySQL 语法覆盖（自研二进制协议 + 可选 MySQL wire 兼容监听）。
+- 性能边界：E5 实测为单机端侧基准（8 连接），非生产级吞吐；D2 会话锁调度精细化已回退，16 连接并发伸缩收益未达预期。
+- 单机 → 分布式边界：分布式写需 2PC，远程写有前置条件限制。
+
+## 升级路径
+
+1. 备份：`openxdb backup` 或脚本备份数据目录（参考 scripts/rolling_upgrade.ps1）。
+2. 预检：`openxdb preflight --data-dir <dir>` 确认版本与数据格式匹配。
+3. 优雅停机：`openxdb shutdown --graceful` 或 SIGTERM。
+4. 替换二进制为 v1.17.0 并启动（数据目录不变）。
+5. 验证：`openxdb doctor`、`openxdb stats`、`openxdb version` 确认 v1.17.0；抽查业务读写与备份恢复。
+
+## 文档与支持
+
+- 产品手册（中文）：docs/product_manual_zh.md
+- 产品手册（英文）：docs/product_manual_en.md
+- 变更记录：CHANGELOG.md
+- 已知限制：KNOWN_LIMITATIONS.md
+- 设计文档：docs/（T1–T42、M 系列、E 系列）
+- 基准实验：docs/experiments/（E1–E5）
+
+---
+
 # OpenXDB v1.0.0 Release Notes
 
 发布日期：2026-10-16

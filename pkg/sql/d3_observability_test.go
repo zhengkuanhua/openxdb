@@ -119,6 +119,9 @@ func TestD3SlowSummary(t *testing.T) {
 	if len(recs) == 0 {
 		t.Fatalf("slow threshold: want >=1 slow query, got 0")
 	}
+	// 关闭阈值：避免后续 SHOW SLOWQUERIES 语句自身执行被统一 execTimed 埋点计入慢查询，
+	// 污染 SUMMARY/TOP N 的数量断言（慢机器上 SHOW 本身耗时可能 >= 阈值）。
+	e.SetSlowThreshold(0)
 
 	// 默认 TOP 10 报表
 	res := mustExec(t, e, "SHOW SLOWQUERIES SUMMARY")
@@ -213,8 +216,9 @@ func countTop(kv map[string]string) int {
 }
 
 // topDescending 校验 top.<rank> 明细的耗时字段（duration_ms 前缀）按降序排列。
+// 注意：TOP N 输出为最慢优先（耗时单调不增），并列耗时允许相等。
 func topDescending(kv map[string]string) bool {
-	var prev int64 = -1
+	var prev int64 = 1<<62 - 1 // 哨兵：极大值，首条恒通过
 	for rank := 1; ; rank++ {
 		v, ok := kv["top."+itoaTest(rank)]
 		if !ok {
@@ -233,7 +237,7 @@ func topDescending(kv map[string]string) bool {
 			}
 			d = d*10 + int64(c-'0')
 		}
-		if d < prev {
+		if d > prev {
 			return false
 		}
 		prev = d
