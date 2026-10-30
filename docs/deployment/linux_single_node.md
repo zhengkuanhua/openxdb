@@ -23,6 +23,7 @@ AIGC:
 
 - [1. 概述](#1-概述)
 - [2. 前置检查清单](#2-前置检查清单)
+  - [2.1 CentOS 7 EOL 后 yum 源修复（前置必做）](#21-centos-7-eol-后-yum-源修复前置必做)
 - [3. 获取源码与构建](#3-获取源码与构建)
   - [3.1 方式 A：使用仓库构建脚本 scripts/build.sh](#31-方式-a使用仓库构建脚本-scriptsbuildsh)
   - [3.2 方式 B：手动 CGO 构建（含 RocksDB 静态链接要点）](#32-方式-b手动-cgo-构建含-rocksdb-静态链接要点)
@@ -78,6 +79,41 @@ OpenXDB 是一款基于 RocksDB 的国产自研数据库，具备 SQL 子集、�
 
 > 前置检查原则：先满足 1–8 再开始构建；构建产物拷贝到目标机运行时，目标机只需满足 1、2、3、9、10（不需要 Go 与编译工具链）。
 
+### 2.1 CentOS 7 EOL 后 yum 源修复（前置必做）
+
+> 来源：2026-10-30 在 CentOS 7.x（EOL）服务器上从零编译部署 OpenXDB v1.17.0 的实测记录。以下以清华镜像为例，阿里云 `mirrors.aliyun.com/centos-vault` 同样可用。
+
+CentOS 7 已 EOL：官方 `mirrorlist.centos.org` 已不可解析，`vault.centos.org` 对 `/centos/7.9.2009` 返回 HTTPS 403。**必须先把所有源切到国内 centos-vault 归档镜像**，否则后续 yum 安装 devtoolset / cmake3 / ninja 全部失败。
+
+```bash
+# 1) base/extras/updates 三段：注释 mirrorlist，baseurl 指向国内 vault 归档
+sed -i -e 's|^mirrorlist=|#mirrorlist=|' \
+       -e 's|^#baseurl=http://mirror.centos.org/centos/$releasever/os/$basearch/|baseurl=https://mirrors.tuna.tsinghua.edu.cn/centos-vault/7.9.2009/os/$basearch/|' \
+       -e 's|^#baseurl=http://mirror.centos.org/centos/$releasever/extras/$basearch/|baseurl=https://mirrors.tuna.tsinghua.edu.cn/centos-vault/7.9.2009/extras/$basearch/|' \
+       -e 's|^#baseurl=http://mirror.centos.org/centos/$releasever/updates/$basearch/|baseurl=https://mirrors.tuna.tsinghua.edu.cn/centos-vault/7.9.2009/updates/$basearch/|' \
+       /etc/yum.repos.d/CentOS-Base.repo
+
+# 2) SCL rh 源（devtoolset 所在）：/etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
+sed -i 's|^#baseurl=http://mirror.centos.org/centos/7/sclo/$basearch/rh/|baseurl=https://mirrors.tuna.tsinghua.edu.cn/centos-vault/7.9.2009/sclo/$basearch/rh/|; s|^mirrorlist=|#mirrorlist=|' /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
+
+# 3) SCL sclo 源：/etc/yum.repos.d/CentOS-SCLo-scl.repo
+#    注意！此文件的注释 baseurl 写法是 '# baseurl='（# 后带空格），sed 要匹配 '# baseurl='
+sed -i 's|^# baseurl=http://mirror.centos.org/centos/7/sclo/$basearch/sclo/|baseurl=https://mirrors.tuna.tsinghua.edu.cn/centos-vault/7.9.2009/sclo/$basearch/sclo/|; s|^mirrorlist=|#mirrorlist=|' /etc/yum.repos.d/CentOS-SCLo-scl.repo
+
+# 4) EPEL 源（cmake3/ninja-build 所在）：/etc/yum.repos.d/epel.repo 用 metalink，EOL 后失效
+sed -i '/^#\?metalink=/a baseurl=https://archives.fedoraproject.org/pub/archive/epel/7/$basearch/' /etc/yum.repos.d/epel.repo
+sed -i 's|^metalink=|#metalink=|' /etc/yum.repos.d/epel.repo
+# 备选清华：baseurl 前缀换 https://mirrors.tuna.tsinghua.edu.cn/epel-archive/7/$basearch/
+
+# 5) 重建缓存
+yum clean all && yum makecache
+```
+
+**实测要点**：
+- EOL 后最常见表象是 yum 报 403 / Could not resolve host；官方 vault 直连也会 403，切国内归档镜像即可。
+- SCL sclo 源的注释 baseurl 写法是 `# baseurl=`（井号后带空格），与常规 `#baseurl=` 不同，sed 模式必须匹配带空格的写法，否则替换不生效（rh 源则为常规写法）。
+- 修复后验证：`yum install -y devtoolset-11-gcc devtoolset-11-gcc-c++` 与 `yum install -y cmake3 ninja-build` 可正常安装。
+
 ---
 
 ## 3. 获取源码与构建
@@ -93,7 +129,7 @@ source ~/.bashrc
 go version
 ```
 
-> CentOS 7 自带的 gcc 4.8.5 只支持到 C++11，**无法**编译 RocksDB v11.8.1（仓库 Dockerfile 使用 `CMAKE_CXX_STANDARD=20`，RocksDB 11.x 需 C++17+ 编译器）。建议安装 devtoolset：
+> CentOS 7 自带的 gcc 4.8.5 只支持到 C++11，**无法**编译 RocksDB v11.8.1（仓库 Dockerfile 使用 `CMAKE_CXX_STANDARD=20`，RocksDB 11.x 需 C++17+ 编译器）。建议安装 devtoolset（需先完成 §2.1 的 yum 源修复）：
 >
 > ```bash
 > sudo yum install -y centos-release-scl
@@ -102,7 +138,11 @@ go version
 > gcc --version
 > ```
 >
-> 具体编译器/CMake 版本要求以 RocksDB v11.8.1 官方构建文档为准（本仓库 Dockerfile 的构建参数见 §3.3）。
+> 实测要点：
+> - `scl enable devtoolset-11 bash` 只在当前会话生效；要持久化，把 `source /opt/rh/devtoolset-11/enable` 追加进 `~/.bashrc`。
+> - 系统自带 `cmake` 为 2.8.12.2（不支持 `-S/-B` 与 `--build -j` 语法），**必须使用 `cmake3` 命令**（EPEL 安装，3.17.x）；下文所有 `cmake` 命令在 CentOS 7 上均需换成 `cmake3`。
+> - 验证：`gcc --version` 显示 11.2.1；`cmake3 --version` 显示 3.17.5；`ninja --version` 显示 1.10.x。
+> - 具体编译器/CMake 版本要求以 RocksDB v11.8.1 官方构建文档为准（本仓库 Dockerfile 的构建参数见 §3.3）。
 
 获取仓库源码：
 
@@ -136,15 +176,17 @@ git checkout <v1.17.0 对应 tag 或 commit>          # 以仓库实际 tag 为�
 **第一步：编译 RocksDB v11.8.1 静态库**
 
 ```bash
-git clone --depth 1 --branch v11.8.1 https://github.com/facebook/rocksdb.git /tmp/rocksdb-src
-cmake -S /tmp/rocksdb-src -B /tmp/rocksdb-build -G Ninja \
+# 源码获取：GitHub 直连可能 TCP connection reset，可用 gitee 官方镜像（备选：ghproxy 等代理或下载 release 源码包解压）
+git clone --depth 1 --branch v11.8.1 https://gitee.com/mirrors/rocksdb.git /tmp/rocksdb-src
+# CentOS 7 系统自带 cmake 2.8.12 不支持 -S/-B，必须用 cmake3（3.17.5）
+cmake3 -S /tmp/rocksdb-src -B /tmp/rocksdb-build -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CXX_STANDARD=20 \
     -DCMAKE_CXX_FLAGS="-Wno-error=maybe-uninitialized" \
     -DROCKSDB_BUILD_SHARED=OFF \
     -DWITH_TESTS=OFF -DWITH_TOOLS=OFF -DWITH_BENCHMARK_TOOLS=OFF -DWITH_JNI=OFF \
     -DWITH_GFLAGS=OFF -DWITH_ZLIB=OFF -DWITH_LZ4=OFF -DWITH_SNAPPY=OFF -DWITH_ZSTD=OFF -DWITH_BZ2=OFF
-cmake --build /tmp/rocksdb-build -j$(nproc)
+cmake3 --build /tmp/rocksdb-build -j $(nproc)
 ```
 
 > 以上参数与仓库 `Dockerfile` 完全一致：关闭共享库与全部第三方压缩库，产出 `librocksdb.a` 静态库，产物无三方压缩库依赖。
@@ -204,7 +246,7 @@ openxdb init --data-dir /data/openxdb
 data_dir = /data/openxdb
 port = 7788                 ; 服务端口，默认 7788
 replica_port = 7789         ; 主从复制监听端口（>0 时启用复制；默认 0 不启用，常用 7789）
-metrics_port = 7789         ; Prometheus 指标端口（默认 7789，0 禁用）
+metrics_port = 7790         ; Prometheus 指标端口（默认 7789，0 禁用；与 replica_port=7789 冲突时让位 7790，见下方说明）
 mysql_port = 3307           ; 可选：MySQL wire 兼容监听端口（默认 0 关闭；v1.1.0+ 部分兼容，非全兼容）
 cluster_addr = 10.0.0.1:7791 ; 可选：集群节点链路地址（M4 集群模式，见分布式文档）
 tso_node = node-a           ; 可选：中心化 TSO 发号节点（分布式事务）
@@ -220,7 +262,15 @@ slow_query_threshold = 100  ; 慢查询阈值 ms，默认 100
 backup_dir = /data/openxdb/backups
 ```
 
-- 配置加载：`openxdb start --config <openxdb.conf>` 或自动读取数据目录配置；命令行参数优先级高于配置文件。
+- 配置加载：`openxdb start --config <openxdb.conf>` 显式加载（main.go `loadStartConfig` 仅在提供 `--config` 时解析配置文件）；**不会自动读取数据目录下的 openxdb.conf**。实测坑：只写好 `openxdb.conf` 而不带 `--config` 启动时，文件内配置（含 `mysql_port`）全部不生效，必须显式 `--config` 或在命令行带对应参数。
+- 命令行参数优先级高于配置文件（CLI flag 覆盖 `[server]` / `[sql]` 段同名键）。
+- **端口冲突与修正方案（实测）**：`metrics_port` 仓库默认 7789（usage 口径，0 禁用）、`replica_port` 默认 0（不启用复制）。启用复制时 `replica_port` 常用 7789，此时若 `metrics_port` 保持默认 7789，两个监听端口会冲突（先启动者占用，另一监听 bind 失败）。**推荐显式让 metrics_port 让位**，形成如下端口布局：
+  - `port = 7788`（服务端口）
+  - `replica_port = 7789`（复制监听，>0 启用时）
+  - `metrics_port = 7790`（指标端口，让位后）
+  - `mysql_port = 3307`（MySQL wire 兼容端口，可选）
+  - 修改示例：`sed -i 's|^metrics_port = 7789|metrics_port = 7790|' openxdb.conf`
+  - 实际启动时 metrics 端口在未显式配置时为 0（不监听），以仓库 main.go 实际行为为准。
 - 在线热更新：`SET` / `SET PERSIST <key>`（持久化落盘，重启生效），如 `SET PERSIST slow_query_threshold = 50`。
 
 ### 4.3 启动服务
@@ -246,6 +296,24 @@ openxdb start --data-dir /data/openxdb --port 7788
 | `--replication-mode` / `--replication-ack` / `--replication-timeout` | 复制模式相关（见复制文档） | async / 1 / 10000 |
 | `--log-level` / `--alert-*` | 日志级别与告警配置 | info |
 | `--tso-node` | 远程 TSO 发号节点（M8） | 空 |
+
+**实测要点（CentOS 7, v1.17.0）**：
+- `--mysql-port` 需显式带（或 `--config` 加载 conf 中的 `mysql_port`），否则 MySQL 兼容端口不会监听（默认 0 关闭）。
+- 后台启动参考：
+
+```bash
+mkdir -p /data/openxdb /data/openxdb/backups
+nohup openxdb start --data-dir /data/openxdb --port 7788 --mysql-port 3307 > /tmp/openxdb.log 2>&1 &
+```
+
+- 启动日志示例（正常启动标志）：
+
+```
+slow query log: /data/openxdb/slow.log (threshold 100ms, use SHOW SLOWQUERIES)
+backup scheduler: disabled (use --backup-interval <sec> / SET PERSIST backup_interval)
+alert rules engine: started (use SET alert_rules_enabled=on, SHOW ALERT RULES)
+OpenXDB v1.17.0 serving on :7788 (data dir: /data/openxdb), Ctrl-C to stop.
+```
 
 ### 4.4 一键部署脚本 `scripts/deploy.sh`
 
@@ -315,7 +383,12 @@ openxdb status --addr 127.0.0.1:7788 [--json]
 
 # 5) Prometheus 指标（若启用 metrics 端口；main.go usage 默认 7789，0 禁用，按实际启动端口替换）
 curl http://127.0.0.1:7789/metrics
+
+# 6) 端口验证（服务端口 / MySQL 兼容端口 / 指标端口）
+ss -lntp | grep -E '7788|3307|7789'
 ```
+
+> **doctor WARN 预期（实测 v1.17.0）**：服务运行期间 `rocksdb` / `metadata` 两项会报 WARN——引擎被服务占用 LOCK、跳过本地 Open 检查，属预期；未启用复制时 `binlog` 报 WARN 也属预期。停服后再跑 `openxdb doctor --data-dir ...` 可完成本地 Open 校验。
 
 功能验证（REPL 交互）：
 
@@ -354,6 +427,7 @@ openxdb preflight --data-dir /data/openxdb [--target-version v1.17.0] [--json]
 - 慢查询：默认落盘 `<数据目录>/slow.log`（由 db/cmd 装配开启），`SHOW SLOWQUERIES` 查询（新→旧）。
 - 告警规则：`SET` / `SET PERSIST alert_rules*`，`SHOW ALERT RULES` / `SHOW ALERT STATUS` / `SHOW ALERTS`。
 - 二进制协议客户端：可用 `openxdb repl`（本地）或 TCP 客户端连 `--port`；可选 `--mysql-port` 用 mysql 客户端连接（部分兼容）。
+- **REPL 独占 data dir（实测坑）**：`openxdb repl --data-dir <dir>` 需独占该目录，服务运行期间执行会报 LOCK 占用（`Resource temporarily unavailable`）。RocksDB 为单写者模型，服务运行中不能对同一 data dir 二次打开；REPL 只能在停服后用于本地操作，运行期间请走 TCP 7788 或 MySQL 兼容端口连接。
 
 ---
 
@@ -393,12 +467,18 @@ openxdb backup pull --url http://backup-server/openxdb-20261030.bak --out /data/
 | 端口被占用 | 默认 7788 被占用 | 换 `--port` 或停旧进程 |
 | `cluster not enabled` | 执行了集群语句但未以 `--cluster-addr` 启动 | 单机部署此报错为正常（见 §9） |
 | 慢查询没记录 | 阈值未达或 `slow_query_log` 关闭 | `SET slow_query_threshold = 100`、`SET slow_query_log = on` |
+| mysql 客户端部分语句报 1045 not supported / unsupported statement | MySQL wire 兼容层为部分兼容（实测 v1.17.0） | `SELECT VERSION()`、`DESC`、`SHOW CREATE TABLE` 不支持；`SELECT 1`、`CREATE TABLE`、`INSERT`、`SELECT`、`SHOW TABLES/DATABASES/INDEX/SLOWQUERIES/NODES/VIEWS/USERS` 支持。完整 SQL/函数能力走 7788 自研二进制协议（Python 驱动 `openxdb.connect` 或内置 REPL） |
+| `openxdb doctor` 报 rocksdb/metadata WARN | 服务运行中引擎被占用 LOCK，跳过本地 Open 检查 | 预期行为（见 §5）；停服后再跑 doctor 可验证本地 Open |
+| REPL 启动报 LOCK / Resource temporarily unavailable | REPL 需独占 data dir，服务运行中已被占用 | 先停服再开 REPL；运行期间改用 TCP 7788 / MySQL 兼容端口连接 |
+| 写了 `openxdb.conf` 但 `--mysql-port` 等配置不生效 | 配置文件需 `--config` 显式加载，不会自动读取 | 启动时带 `--config <openxdb.conf>`，或命令行显式带 `--mysql-port` |
+| 复制端口与指标端口冲突 | `replica_port=7789` 与 `metrics_port=7789` 同时启用 | 显式错开端口，如 `--metrics-port 7790`（见 §4.2） |
 
 ---
 
 ## 9. 边界与已知限制
 
-- **SQL 子集**：OpenXDB 支持 SQL 子集，非完整 MySQL/标准 SQL；`--mysql-port` 为部分兼容，非 MySQL wire protocol 全兼容（以产品手册第 10 章与 KNOWN_LIMITATIONS 为准）。
+- **SQL 子集**：OpenXDB 支持 SQL 子集，非完整 MySQL/标准 SQL；`--mysql-port` 为部分兼容，非 MySQL wire protocol 全兼容（以产品手册第 10 章与 KNOWN_LIMITATIONS 为准）。实测（v1.17.0）：MySQL 客户端支持 `SELECT 1`、`CREATE TABLE`、`INSERT`、`SELECT`、`SHOW TABLES/DATABASES/INDEX/SLOWQUERIES/NODES/VIEWS/USERS`；不支持 `SELECT VERSION()`、`DESC`、`SHOW CREATE TABLE`（报 1045 not supported / unsupported statement）。
+- **默认无密码**：未开 `--auth` 时以 root 身份运行，mysql/REPL 连接默认无密码（以仓库实际为准）。
 - **性能数值**：README/E5 文档中的 QPS/tpmC 等均为**单机端侧功能基准**，不代表生产环境容量规划依据。
 - **跨节点写**：分布式场景跨节点写依赖 2PC（单节点部署不触发，见分布式文档）。
 - **集群语句**：单机模式（未配 `--cluster-addr`）执行 `ADD NODE` / `SHOW NODES` / `BALANCE` 等返回 `cluster not enabled`。
