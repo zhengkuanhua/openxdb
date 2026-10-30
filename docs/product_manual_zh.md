@@ -200,7 +200,7 @@ OpenXDB 使用 INI 风格配置文件（参考 `docs/openxdb.conf.example`），
 data_dir = ./data
 port = 7788
 replica_port = 7789
-metrics_port = 7790
+metrics_port = 7789
 # tls_cert = cert.pem
 # tls_key = key.pem
 
@@ -666,7 +666,7 @@ openxdb stats [--addr 127.0.0.1:7788] [--interval 5] [--json]
 
 ### 7.3 Prometheus 指标（M13）
 
-- 指标端口：`metrics_port`（默认 7790），暴露 Prometheus 格式指标。
+- 指标端口：`metrics_port`（默认 7789，0 禁用），暴露 Prometheus 格式指标。
 - 指标来源：`metrics.Snapshot` 同一数据源（连接数、表/region 数、慢查询、LSN 等）。
 
 ### 7.4 慢查询（M13）

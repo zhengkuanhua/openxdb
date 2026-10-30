@@ -186,7 +186,7 @@ OpenXDB uses an INI-style configuration file (see `docs/openxdb.conf.example`). 
 data_dir = ./data
 port = 7788
 replica_port = 7789
-metrics_port = 7790
+metrics_port = 7789
 # tls_cert = cert.pem
 # tls_key = key.pem
 
@@ -648,7 +648,7 @@ Metrics: active connections (server session counter), table count, region count 
 
 ### 7.3 Prometheus Metrics (M13)
 
-- Metrics port: `metrics_port` (default 7790), exposing Prometheus-format metrics.
+- Metrics port: `metrics_port` (default 7789, 0 disables), exposing Prometheus-format metrics.
 - Metrics source: same `metrics.Snapshot` data source (connections, table/region counts, slow queries, LSN, etc.).
 
 ### 7.4 Slow Queries (M13)

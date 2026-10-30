@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_76b5f518d41911f180d5525400248c00
+    ReservedCode1: W/5YmXtlijKZHTEsUQ2nt0HH0Iyeqp0y42CJx1eHTxYiHAC8dFmQDtLHJ8O+asJ3+vTRWFBd6B1dMeCobJyRrX6zEvRjqr7vUnPvX56XYuqAL7x77WRwssSRSzRfOrbMQOVAdcxrDBpJ6Iav1PMchELmzsare4iUL0X/D0bPsPJOVSDE+37fUqC6OqY=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_76b5f518d41911f180d5525400248c00
+    ReservedCode2: W/5YmXtlijKZHTEsUQ2nt0HH0Iyeqp0y42CJx1eHTxYiHAC8dFmQDtLHJ8O+asJ3+vTRWFBd6B1dMeCobJyRrX6zEvRjqr7vUnPvX56XYuqAL7x77WRwssSRSzRfOrbMQOVAdcxrDBpJ6Iav1PMchELmzsare4iUL0X/D0bPsPJOVSDE+37fUqC6OqY=
+---
+
 # OpenXDB 单机安装部署文档（Linux 7.x）
 
 > 说明：本文档适用于 Linux 7.x（CentOS/RHEL 7 系）。
@@ -193,7 +204,7 @@ openxdb init --data-dir /data/openxdb
 data_dir = /data/openxdb
 port = 7788                 ; 服务端口，默认 7788
 replica_port = 7789         ; 主从复制监听端口（>0 时启用复制；默认 0 不启用，常用 7789）
-metrics_port = 7790         ; Prometheus 指标端口，默认值仓库存在 7789/7790 两处表述，建议显式指定（以仓库实际为准）
+metrics_port = 7789         ; Prometheus 指标端口（默认 7789，0 禁用）
 mysql_port = 3307           ; 可选：MySQL wire 兼容监听端口（默认 0 关闭；v1.1.0+ 部分兼容，非全兼容）
 cluster_addr = 10.0.0.1:7791 ; 可选：集群节点链路地址（M4 集群模式，见分布式文档）
 tso_node = node-a           ; 可选：中心化 TSO 发号节点（分布式事务）
@@ -226,7 +237,7 @@ openxdb start --data-dir /data/openxdb --port 7788
 | `--port` | 服务端口 | 7788 |
 | `--replica-port` | 复制监听端口，>0 启用主写复制（见复制文档） | 0（不启用） |
 | `--cluster-addr` | 集群节点链路地址，非空启用 M4 集群（见分布式文档） | 空 |
-| `--metrics-port` | Prometheus /metrics 端口（main.go usage 默认 7789，0 禁用；product_manual 写 7790，见 §4.2 冲突说明） | 以仓库实际为准 |
+| `--metrics-port` | Prometheus /metrics 端口（默认 7789，0 禁用） | 7789 |
 | `--mysql-port` | MySQL wire 兼容监听端口（0 关闭） | 0 |
 | `--tls-cert` / `--tls-key` | 服务 TLS 证书/私钥（同时加密复制端口） | 空 |
 | `--tls-allow-legacy` | 允许兼容旧客户端 | 关 |
@@ -404,3 +415,4 @@ openxdb backup pull --url http://backup-server/openxdb-20261030.bak --out /data/
 - 快速验证：`examples/quickstart/README.md`
 - 已知限制：`KNOWN_LIMITATIONS.md`
 - 变更记录：`CHANGELOG.md` / `RELEASE_NOTES.md`
+*（内容由AI生成，仅供参考）*
