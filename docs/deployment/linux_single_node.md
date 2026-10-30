@@ -2,12 +2,16 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_76b5f518d41911f180d5525400248c00
-    ReservedCode1: W/5YmXtlijKZHTEsUQ2nt0HH0Iyeqp0y42CJx1eHTxYiHAC8dFmQDtLHJ8O+asJ3+vTRWFBd6B1dMeCobJyRrX6zEvRjqr7vUnPvX56XYuqAL7x77WRwssSRSzRfOrbMQOVAdcxrDBpJ6Iav1PMchELmzsare4iUL0X/D0bPsPJOVSDE+37fUqC6OqY=
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_9bb4db5cd45d11f1a0da525400393706
+    ReservedCode1: f5mDOXKEjPX1lpVLaAOXevzz0c0MlO2hqEkf2b6iL76G9jcUPu420e3UnGDmb+gpPSxBaQ/b9xcV+5JS82SvbwFWEFm8dPa+sie8iR36pd7qWmw0TGwDxopi7KSKP1zXg2W/koOfhPMFL6jJ8KQkIv5oqBLx/dS8/0dLHAcisWy6Sx1WFEkWDH0vS5A=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_76b5f518d41911f180d5525400248c00
-    ReservedCode2: W/5YmXtlijKZHTEsUQ2nt0HH0Iyeqp0y42CJx1eHTxYiHAC8dFmQDtLHJ8O+asJ3+vTRWFBd6B1dMeCobJyRrX6zEvRjqr7vUnPvX56XYuqAL7x77WRwssSRSzRfOrbMQOVAdcxrDBpJ6Iav1PMchELmzsare4iUL0X/D0bPsPJOVSDE+37fUqC6OqY=
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_9bb4db5cd45d11f1a0da525400393706
+    ReservedCode2: f5mDOXKEjPX1lpVLaAOXevzz0c0MlO2hqEkf2b6iL76G9jcUPu420e3UnGDmb+gpPSxBaQ/b9xcV+5JS82SvbwFWEFm8dPa+sie8iR36pd7qWmw0TGwDxopi7KSKP1zXg2W/koOfhPMFL6jJ8KQkIv5oqBLx/dS8/0dLHAcisWy6Sx1WFEkWDH0vS5A=
 ---
+
+
+
+
 
 # OpenXDB 单机安装部署文档（Linux 7.x）
 
@@ -40,7 +44,8 @@ AIGC:
 - [7. 备份恢复与升级](#7-备份恢复与升级)
 - [8. 常见问题（FAQ）](#8-常见问题faq)
 - [9. 边界与已知限制](#9-边界与已知限制)
-- [10. 参考资料](#10-参考资料)
+- [10. RHEL/Rocky/AlmaLinux/Oracle Linux 9.x 单机部署](#10-rhelrockyalmalinuxoracle-linux-9x-单机部署)
+- [11. 参考资料](#11-参考资料)
 
 ---
 
@@ -524,7 +529,135 @@ openxdb backup pull --url http://backup-server/openxdb-20261030.bak --out /data/
 
 ---
 
-## 10. 参考资料
+## 10. RHEL/Rocky/AlmaLinux/Oracle Linux 9.x 单机部署
+
+> 说明：本章为 9.x 系补充部署指南，对应一键脚本 `docs/deployment/install_openxdb_rhel9.sh`；前文 §1–§9 的通用概念（数据目录结构、备份恢复、FAQ、边界限制等）同样适用。
+> 实测记录：已在 **Oracle Linux Server 9.7（/etc/os-release ID=ol）** 完整走通全流程（见 §10.10）。
+
+### 10.1 支持发行版清单
+
+- 支持发行版：RHEL 9.x / Rocky Linux 9.x / AlmaLinux 9.x / Oracle Linux 9.x（x86_64 / arm64）。
+- 系统识别：读取 `/etc/os-release`，`ID` 白名单为 `rhel / rocky / almalinux / ol / oraclelinux`，`VERSION_ID` 主版本须为 9，不满足则拒绝执行。
+- 前置要求：root 权限；`dnf` 可用；可访问 gitee.com / github.com / mirrors.tuna.tsinghua.edu.cn（国内网络优先）；磁盘 ≥ 10GB、内存 ≥ 4GB（RocksDB 编译较耗时）。
+
+### 10.2 与 CentOS 7 版的关键差异
+
+| 维度 | CentOS 7 版（install_openxdb_centos7.sh） | RHEL/Rocky/AlmaLinux/Oracle 9.x 版（install_openxdb_rhel9.sh） |
+|------|------|------|
+| yum/dnf 源 | 需 EOL 源修复（vault/EPEL 归档镜像多候选探测） | 无需 EOL 源修复；官方 dnf 源正常，脚本严禁修改系统 yum/dnf 源 |
+| 工具链 | devtoolset-11（SCL）+ cmake3（EPEL） | `dnf` 直接安装 gcc / gcc-c++ / cmake / ninja / git / curl |
+| ninja | EPEL 提供 ninja-build | 多候选降级链（见 §10.3） |
+| Go | go.mod 要求 go1.22，不满足时装官方二进制 | 同左：不满足时清华镜像装官方二进制（见 §10.4） |
+| RocksDB 编译参数 | 与 9.x 版一致（见 §10.5） | 与 CentOS 7 版一致 |
+| 配置架构 | 脚本默认 CONF_FILE=${DATA_DIR}/openxdb.conf（未显式 init，以脚本实际为准） | 双 conf 分离：服务配置 /etc/openxdb/openxdb.conf + `openxdb init` 生成数据目录 db conf（见 §10.6） |
+| 其余 | 端口布局、doctor 语义、验证链一致 | 同左 |
+
+### 10.3 ninja 多候选降级链
+
+Oracle Linux 9.7 默认仓库中 `ninja-build` 存在 "No match" 情况，脚本（`install_ninja()` / `enable_crb_repos()`）按以下候选链依次尝试，任一成功即结束：
+
+a) `dnf install -y ninja-build`
+b) `dnf install -y ninja`（部分发行版包名不同）
+c) 启用发行版对应 CRB/Codeready Builder 仓库后重试 `dnf install -y ninja-build`：
+
+| 发行版 | 候选仓库 ID |
+|------|------|
+| RHEL | `rhel-9-for-<arch>-codeready-builder-rpms` |
+| Rocky Linux | `rocky9-crb` / `rocky9-codeready-builder` |
+| AlmaLinux | `almalinux9-crb` |
+| Oracle Linux | `ol9_codeready_builder` / `ol9_codeready_builder_archive` |
+
+启用方式：优先 `dnf config-manager --set-enabled`（缺 `dnf-plugins-core` 时先安装），逐个候选尝试。
+d) 兜底：`dnf install -y python3-pip` 后 `pip3 install ninja`。
+
+> 实测：Oracle Linux 9.7 经候选 c（启用 `ol9_codeready_builder`）安装 ninja 成功；全部候选失败才报错退出。
+
+### 10.4 Go 版本要求
+
+- 仓库 `go.mod` 声明 `go 1.22`；脚本默认安装 `GO_VERSION=1.22.12`（以仓库实际为准）。
+- 检测逻辑：`go version` 解析 `go1.<minor>`，命令不存在或 minor < 22 时重新安装；架构按 `uname -m` 取 amd64 / arm64。
+- 安装源：优先清华镜像 `https://mirrors.tuna.tsinghua.edu.cn/golang/go1.22.12.linux-<arch>.tar.gz`，失败回退官方 `dl.google.com`；解压至 `/usr/local/go`，并写入 `/etc/profile.d/go-path.sh`（重新登录后 go 自动可用）。
+- 构建时导出 `GOPROXY=https://goproxy.cn,direct`（可覆盖）。
+
+### 10.5 RocksDB 静态编译参数（与 CentOS 7 版一致）
+
+- 版本：`v11.8.1`；源码优先 gitee 镜像 `gitee.com/mirrors/rocksdb`（失败回退 `github.com/facebook/rocksdb`）。
+- cmake 配置（-G Ninja，Release，C++20，静态库，关闭三方压缩库与 tests/tools/benchmark/jni）：
+
+```bash
+cmake -S "$ROCKSDB_SRC" -B "$ROCKSDB_BUILD" -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_STANDARD=20 \
+  -DROCKSDB_BUILD_SHARED=OFF \
+  -DWITH_TESTS=OFF -DWITH_TOOLS=OFF -DWITH_BENCHMARK_TOOLS=OFF -DWITH_JNI=OFF \
+  -DWITH_GFLAGS=OFF \
+  -DWITH_ZLIB=OFF -DWITH_BZ2=OFF -DWITH_LZ4=OFF -DWITH_SNAPPY=OFF -DWITH_ZSTD=OFF \
+  -DFAIL_ON_WARNINGS=OFF
+cmake --build "$ROCKSDB_BUILD" -j"$(nproc)"
+```
+
+- 产出静态库 `$ROCKSDB_BUILD/librocksdb.a`；编译参数与 `install_openxdb_centos7.sh` 一致。
+- OpenXDB 编译（与 `scripts/build.sh` 对齐，`-l:` 强制使用静态库文件）：
+
+```bash
+export CGO_ENABLED=1
+export CGO_CFLAGS="-I$ROCKSDB_SRC/include"
+export CGO_CXXFLAGS="-I$ROCKSDB_SRC/include"
+export CGO_LDFLAGS="-L$ROCKSDB_BUILD -l:librocksdb.a -lstdc++ -lpthread"
+go build -o /usr/local/bin/openxdb ./cmd/openxdb
+```
+
+### 10.6 双 conf 架构
+
+- 服务配置 `/etc/openxdb/openxdb.conf`：仅 `[server]` 段（data_dir / port / replica_port / metrics_port / mysql_port），**不含 engine**——`cmd/openxdb/main.go` 的 serverKeys 白名单无 engine 键，写了会报 unknown key。
+- 数据目录 db conf `<data_dir>/openxdb.conf`：由 `openxdb init --data-dir <dir>` 生成，含 `engine = rocksdb` 等；db.Open 校验必须含该字符串，否则报 `unsupported engine`。
+- 两份 conf 不得重合（脚本以 `readlink -f` 校验，重合则报错退出）；`cmdStart` 直接 db.Open 不自动 Init，必须先执行 init。
+- 启动时服务配置必须显式加载：`openxdb start --config /etc/openxdb/openxdb.conf`（不会自动读取）。
+
+### 10.7 一键脚本用法
+
+```bash
+sudo bash install_openxdb_rhel9.sh          # 必须用 bash，禁止用 sh
+```
+
+- 幂等：可重复执行，已完成步骤自动跳过（复用 RocksDB 源码/静态库、OpenXDB 源码/二进制）。
+- 流程：系统检测 → 工具链（dnf）→ Go → RocksDB v11.8.1 静态编译 → OpenXDB 源码编译 → 双 conf 部署 → 启动 → 验证 → 汇总（9/9 步）。
+- 常用可覆盖变量（环境变量传入）：`DATA_DIR`（默认 /data/openxdb）、`PORT=7788`、`REPLICA_PORT=7789`、`METRICS_PORT=7790`、`MYSQL_PORT=3307`、`CONF_FILE`（默认 /etc/openxdb/openxdb.conf）、`GO_VERSION=1.22.12`、`ROCKSDB_VERSION=v11.8.1`、`REPO_URL` 等。示例：`PORT=7799 MYSQL_PORT=3308 sudo bash install_openxdb_rhel9.sh`。
+- 日志：`/var/log/openxdb/openxdb.log`；启动方式：`nohup /usr/local/bin/openxdb start --config /etc/openxdb/openxdb.conf >> /var/log/openxdb/openxdb.log 2>&1 &`。
+
+### 10.8 端口布局
+
+| 端口 | 用途 |
+|------|------|
+| 7788 | 自研二进制协议 SQL 服务（`--port`，main.go 默认 7788） |
+| 7789 | 复制端口（`--replica-port`） |
+| 7790 | Prometheus 指标端口（`--metrics-port`，main.go usage 默认 7789、0 禁用；脚本显式 7790 避免与 replica 冲突） |
+| 3307 | MySQL wire 兼容监听（`--mysql-port`，main.go 默认 0=关闭；脚本默认 3307 开启） |
+
+### 10.9 doctor 语义与验证命令
+
+- `openxdb doctor --data-dir <dir> --addr <host:port>` 退出码：**0=通过 / 1=警告 / 2=错误**（`cmd/openxdb/doctor.go` summarizeExitCode：有错误=2，否则有警告=1，全通过=0）。
+- 脚本判定：`DOCTOR_RC >= 2` 视为失败；1 属预期警告。
+- 在线运行期间 `rocksdb` / `metadata` 项报 WARN 属预期（引擎被服务占用 LOCK，跳过本地 Open 检查）；未启用复制时 `binlog` 报 WARN 也属预期（详见 §5）。停服后再跑 doctor 可完成本地 Open 校验。
+- 完整验证命令：
+
+```bash
+openxdb version
+openxdb config-check --config /etc/openxdb/openxdb.conf     # 配置校验
+ss -lntp | grep -E ':7788 |:3307 '                           # 端口监听
+openxdb doctor --data-dir /data/openxdb --addr 127.0.0.1:7788
+# MySQL wire 冒烟（部分兼容，详见 §8；不支持 VERSION()/DESC/SHOW CREATE TABLE）
+mysql -h 127.0.0.1 -P 3307 -u root -e "CREATE TABLE smoke_test (id INT PRIMARY KEY, name TEXT); INSERT INTO smoke_test VALUES (1, 'hello'); SELECT * FROM smoke_test; SHOW TABLES;"
+```
+
+### 10.10 实测记录与说明
+
+- 已在 **Oracle Linux Server 9.7（/etc/os-release ID=ol，x86_64）** 实测通过：ninja 经启用 `ol9_codeready_builder` 安装成功；gcc/gcc-c++/cmake 由 dnf 直装；Go 1.22.12 经清华镜像安装；RocksDB v11.8.1 静态编译与 OpenXDB 编译通过；init / start / 端口监听 / doctor / MySQL wire 冒烟全部通过。
+- RHEL / Rocky / AlmaLinux 9.x 未逐一实测，安装逻辑基于官方 dnf 源与脚本多候选降级链，个别包名或仓库 ID 差异以仓库实际为准。
+
+---
+
+## 11. 参考资料
 
 - 产品手册：`docs/product_manual_zh.md`（第 3 章部署/配置、第 7 章运维）
 - 构建脚本：`scripts/build.sh`；一键部署：`scripts/deploy.sh`
@@ -532,4 +665,6 @@ openxdb backup pull --url http://backup-server/openxdb-20261030.bak --out /data/
 - 快速验证：`examples/quickstart/README.md`
 - 已知限制：`KNOWN_LIMITATIONS.md`
 - 变更记录：`CHANGELOG.md` / `RELEASE_NOTES.md`
+*（内容由AI生成，仅供参考）*
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
