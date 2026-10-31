@@ -3839,7 +3839,7 @@ func (p *parser) parseShow() (Stmt, error) {
 	if err := p.expectKeyword("SHOW"); err != nil {
 		return nil, err
 	}
-	switch p.cur().text {
+	switch strings.ToUpper(p.cur().text) {
 	case "TABLES":
 		p.next()
 		return &ShowTablesStmt{}, nil

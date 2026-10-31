@@ -30,3 +30,29 @@ func TestD7ShowIndexesPlural(t *testing.T) {
 	// 复数形式同样支持 FROM 缺省表报错
 	mustErr(t, e, "SHOW INDEXES FROM nope", "not exists")
 }
+
+// D7.3-fix：SHOW INDEX / INDEXES 关键字大小写不敏感（与 MySQL 语义一致）。
+// 实测发现小写 "show indexes from t" 未识别（INDEXES 为 tokIdent、switch 原样匹配），
+// parseShow 已改为 ToUpper 归一化；此处覆盖四种大小写组合的等价性。
+func TestD7ShowIndexesCaseInsensitive(t *testing.T) {
+	e := newEngine(t)
+	mustExec(t, e, "CREATE TABLE t_d7i_ci (id INT PRIMARY KEY, name TEXT, age INT)")
+	mustExec(t, e, "CREATE INDEX idx_ci_name ON t_d7i_ci (name)")
+
+	upper := mustRows(t, e, "SHOW INDEX FROM t_d7i_ci")
+	for _, sql := range []string{
+		"SHOW INDEXES FROM t_d7i_ci",
+		"show indexes from t_d7i_ci",
+		"show index from t_d7i_ci",
+	} {
+		got := mustRows(t, e, sql)
+		if len(got) != len(upper) {
+			t.Fatalf("%s: want %d rows (same as SHOW INDEX), got %d", sql, len(upper), len(got))
+		}
+		for i := range upper {
+			if upper[i][1].String() != got[i][1].String() || upper[i][3].String() != got[i][3].String() {
+				t.Fatalf("%s: row %d mismatch: upper=%+v got=%+v", sql, i, upper[i], got[i])
+			}
+		}
+	}
+}

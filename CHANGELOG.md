@@ -56,6 +56,12 @@ v1.17.0（显式事务写路径优化 + 可观测性/稳定性补强）正式发
 - **D6.2 replica 只读强制**：备库写语句按 `isWriteStmt` 白名单统一拒绝（错误 `read-only replica: write statement rejected`），仅 replica 模式开放，主端读写零回归。
 - **D6.3 复制应用与 SQL 读并发**：以 `AppliedLSN` 为界，读快照创建前经 `ReadBarrier` 短临界区对齐复制应用批次；存储原子批次 + 快照隔离保证无半批次可见，读不阻塞复制应用、无死锁；未采用「读/复制全互斥」回退方案（并发方案经 `-race` 与专项回归验证通过）。
 - **D6.4 专项验证与文档**：6 项验收全通过——备库常驻查询、写语句拒绝且数据不受污染、滞后窗口读断言（30 轮 lagOk/worstGap=0）、崩溃恢复二次重启追平且顺序一致、`go build ./...` 与 `go test ./...` 全绿、主端读写无回归；验证脚本与说明见 [docs/experiments/D6_replica_resident_read.md](docs/experiments/D6_replica_resident_read.md) 与 [docs/experiments/run_d6_replica_validate.ps1](docs/experiments/run_d6_replica_validate.ps1)。
+- **D7.1 MySQL 握手版本串**：`serverVersion` 由硬编码 `8.0.36-OpenXDB` 改为与 v1.17.0 版本常量同源注入，mysql CLI 登录握手显示 `8.0.36-OpenXDB v1.17.0`（前缀保持 mysql CLI 版本格式识别兼容）。
+- **D7.2 version() 函数**：SQL 函数注册表登记 `version`，`select version();` 返回 `8.0.36-OpenXDB v1.17.0`（与握手版本同源）。
+- **D7.3 SHOW INDEXES 复数兼容**：`parseShow` 同时接受 `INDEX` / `INDEXES`，复用单数实现，输出等价；验收修复大小写敏感（`show indexes` 小写未识别），`parseShow` switch 归一化为 `strings.ToUpper` 并新增大小写等价单测。
+- **D7.4 SHOW CREATE TABLE**：`parseShow` 新增 `CREATE` 分支 + `ShowCreateStmt`，executor 基于表存储元数据重建 CREATE TABLE（列定义/类型/主键/二级索引/约束），供 mysqldump 与第三方工具使用。
+- **D7.5 oxsql> 客户端提示符**：自研交互 CLI `cmd/oxsql` 提示符落地为 `oxsql>`（仓库无 `mysql>` 实现，`mysql>` 为第三方 mysql CLI 客户端侧固定）。
+- **D7.6 专项验证与文档**：5 项验收全通过（G1 握手版本串、G3 `version()`、G4 `SHOW CREATE TABLE` 可重建 schema、G5 `SHOW INDEXES` 与 `SHOW INDEX` 四种大小写组合等价、G2 `oxsql>` 提示符生效），全仓 `go test ./...` 全绿；验证脚本与说明见 [docs/experiments/D7_mysql_compat_validate.md](docs/experiments/D7_mysql_compat_validate.md) 与 [docs/experiments/run_d7_mysql_compat_validate.ps1](docs/experiments/run_d7_mysql_compat_validate.ps1)。
 
 **回退记录（D2）**
 
