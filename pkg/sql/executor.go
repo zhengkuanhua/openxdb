@@ -31,6 +31,11 @@ type Executor struct {
 	// P0 HA：写入 fencing 检查（nil = 未装配，写路径零开销放行）。
 	// 由 db.Open 注入（db.DB.AllowWrite）；实现见 WriteFence。
 	writeFence WriteFence
+	// D6：备库常驻读只读强制（replica 模式装配；默认 false 主端零回归）。
+	// SetReplicaReadOnly 开启后，写语句（isWriteStmt 白名单）在
+	// ExecuteTextAsSession 入口被拒绝；提升为主节点时可热切换置 false。
+	roMu      sync.RWMutex
+	replicaRO bool
 	// P0 HA：ha_epoch_enabled / ha_quorum_enabled 开关节流控制器
 	// （nil = 未装配，SET ha_* 返回明确错误）；实现见 HAConfigSetter。
 	haCfg HAConfigSetter
@@ -608,6 +613,13 @@ func (e *Executor) ExecuteTextAs(stmt Stmt, sqlText, user string) (*Result, erro
 // 状态（BEGIN/COMMIT/ROLLBACK）与语句快照属于指定会话，多连接可并行
 // 执行互不干扰。会话对象由 Executor.NewSession 创建。
 func (e *Executor) ExecuteTextAsSession(stmt Stmt, sqlText, user string, sess *Session) (*Result, error) {
+	// D6.2：replica 只读强制——写语句（isWriteStmt 白名单）在 replica
+	// 模式下一律拒绝，只读查询/事务控制/配置语句放行（仅 replica 模式
+	// 装配，主端 start 默认关闭零回归）。批量并行读路径与所有直调入口
+	// 最终均经本方法，单点拦截全覆盖。
+	if e.isReplicaRO() && isWriteStmt(stmt) {
+		return nil, fmt.Errorf("read-only replica: write statement rejected")
+	}
 	if err := e.checkPrivilege(stmt, user); err != nil {
 		return nil, err
 	}
@@ -631,6 +643,30 @@ func (e *Executor) ExecuteTextAsSession(stmt Stmt, sqlText, user string, sess *S
 		}
 		return res, err
 	})
+}
+
+// SetReplicaReadOnly 设置/关闭 D6 备库只读强制：开启后所有经
+// ExecuteTextAsSession 的写语句（isWriteStmt 白名单）被拒绝。仅 replica
+// 模式（cmdReplica）装配，主端 start 默认 false 零回归；提升为主节点
+// 时置 false 可热切换（执行路径每次语句经 RWMutex 读锁检查）。
+func (e *Executor) SetReplicaReadOnly(ro bool) {
+	e.roMu.Lock()
+	e.replicaRO = ro
+	e.roMu.Unlock()
+}
+
+// IsReplicaReadOnly 返回 D6 备库只读强制是否开启（状态观测/汇报用）。
+func (e *Executor) IsReplicaReadOnly() bool {
+	e.roMu.RLock()
+	defer e.roMu.RUnlock()
+	return e.replicaRO
+}
+
+// isReplicaRO 执行路径只读强制检查（RWMutex 读锁，成本可忽略）。
+func (e *Executor) isReplicaRO() bool {
+	e.roMu.RLock()
+	defer e.roMu.RUnlock()
+	return e.replicaRO
 }
 
 // isWriteStmt 判断语句是否修改存储可见状态：DML 与 DDL（含备份恢复、

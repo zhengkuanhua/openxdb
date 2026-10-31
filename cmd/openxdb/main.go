@@ -863,6 +863,9 @@ func cmdReplica(args []string) error {
 	if err := d.StartFollowerTLS(master, tlsCfg); err != nil {
 		return err
 	}
+	// D6.2：replica 模式只读强制——SQL 监听仅开放只读查询，写语句按
+	// isWriteStmt 白名单拒绝（仅 replica 模式装配，主端 start 零回归）。
+	d.SQL.SetReplicaReadOnly(true)
 	if tlsCfg != nil {
 		fmt.Printf("OpenXDB %s replica of %s (TLS, data dir: %s), Ctrl-C to stop.\n", version, master, dir)
 	} else {

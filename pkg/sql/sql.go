@@ -94,6 +94,13 @@ func (e *Engine) BinlogWireInfo() (binlogPath string, tables []TableMeta, err er
 // nil = 不启用，零回归）。
 func (e *Engine) SetWriteFence(wf WriteFence) { e.ex.SetWriteFence(wf) }
 
+// SetReplicaReadOnly 装配 D6 备库只读强制（cmdReplica 调用，转发至 Executor；
+// 开启后写语句经 isWriteStmt 白名单拒绝；默认 false 主端零回归）。
+func (e *Engine) SetReplicaReadOnly(ro bool) { e.ex.SetReplicaReadOnly(ro) }
+
+// IsReplicaReadOnly 返回 D6 备库只读强制是否开启（状态观测/汇报用）。
+func (e *Engine) IsReplicaReadOnly() bool { return e.ex.IsReplicaReadOnly() }
+
 // SetHAConfigSetter 装配 P0 HA 开关节流控制器（db.Open 调用，转发至 Executor）。
 func (e *Engine) SetHAConfigSetter(hc HAConfigSetter) { e.ex.SetHAConfigSetter(hc) }
 
