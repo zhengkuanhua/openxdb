@@ -3876,7 +3876,8 @@ func (p *parser) parseShow() (Stmt, error) {
 			return nil, err
 		}
 		return &ShowRegionRoutesStmt{}, nil
-	case "INDEX":
+	case "INDEX", "INDEXES":
+		// D7.3：SHOW INDEXES 为 SHOW INDEX 的 MySQL 复数同义词（SHOW INDEXES FROM t）。
 		p.next()
 		if err := p.expectKeyword("FROM"); err != nil {
 			return nil, err
