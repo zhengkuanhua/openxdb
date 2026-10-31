@@ -2717,6 +2717,9 @@ func (p *parser) parseSelectColumn() (SelectColumn, error) {
 			switch upper {
 			case "COUNT", "SUM", "AVG", "MAX", "MIN", "ROW_NUMBER", "RANK", "DENSE_RANK":
 				return p.parseAggSelectColumn(upper)
+			case "VERSION":
+				// D7.2：无参标量内置函数 version()，executor 直接求值。
+				return p.parseScalarFuncColumn("VERSION")
 			}
 			p.next()
 			return SelectColumn{}, errf("function %q not supported", first)
@@ -2834,6 +2837,23 @@ func (p *parser) parseAggSelectColumn(upper string) (SelectColumn, error) {
 }
 
 // ---- T40：算术表达式解析（递归下降，优先级 * / % 高于 + -，一元负 NEG） ----
+
+// parseScalarFuncColumn 解析无参标量内置函数列（D7.2：VERSION()）。
+// 返回带 Func 标记的 SelectColumn，executor 直接求值（不依赖行上下文）。
+func (p *parser) parseScalarFuncColumn(upper string) (SelectColumn, error) {
+	p.next() // ident（函数名）
+	if _, err := p.expect(tokLParen, "("); err != nil {
+		return SelectColumn{}, err
+	}
+	if _, err := p.expect(tokRParen, ")"); err != nil {
+		return SelectColumn{}, err
+	}
+	sc := SelectColumn{Raw: upper + "()", Func: upper, Name: upper + "()"}
+	if err := p.parseSelectAlias(&sc); err != nil {
+		return SelectColumn{}, err
+	}
+	return sc, nil
+}
 
 // parseExpr 解析算术表达式。表达式结束时不消费后续 token（由调用方决定边界）。
 func (p *parser) parseExpr() (*Expr, error) {

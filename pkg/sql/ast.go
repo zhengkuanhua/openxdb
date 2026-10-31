@@ -271,6 +271,7 @@ type SelectColumn struct {
 	Expr     *Expr           // 非空 = 投影/聚合参数为算术表达式（T40）
 	Window   *WindowSpec     // 非空 = 窗口函数列（OVER 子句）
 	Var      string          // M18-C：用户变量引用（SELECT @var，含 @）
+	Func     string          // D7.2：无参标量内置函数（"VERSION"），executor 直接求值
 }
 
 // Expr 算术表达式节点（T40）：二元算术（+ - * / %）与一元负号（NEG）。

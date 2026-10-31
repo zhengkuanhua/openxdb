@@ -2933,6 +2933,19 @@ func (e *Executor) resolveWhereVars(sess *Session, w *Where) error {
 	return nil
 }
 
+// serverVersionString 与 pkg/mysqlproto/handshake.go 的 serverVersion 保持一致
+// （D7.2 同源约束：sql 包与 mysqlproto 存在依赖环，无法直接引用，改动需两处同步）。
+const serverVersionString = "8.0.36-OpenXDB v1.17.0"
+
+// evalScalarFunc 求值无参标量内置函数（D7.2：VERSION()）。
+func evalScalarFunc(name string) (Value, error) {
+	switch name {
+	case "VERSION":
+		return Value{Kind: "TEXT", S: serverVersionString}, nil
+	}
+	return Value{}, errf("unsupported scalar function %q", name)
+}
+
 func (e *Executor) execSelect(sess *Session, s *SelectStmt) (res *Result, err error) {
 	// 无 FROM 常量投影：SELECT 1 / SELECT 'x' / SELECT 1+2 / SELECT @var（M18-C / T45）。
 	// 兼容 mysql CLI 的 SELECT 1、Connector/J 连接探测等无表查询。
@@ -2969,6 +2982,12 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (res *Result, err er
 					return nil, &SQLError{Msg: "column reference in CASE without FROM"}
 				}
 				v, err = e.evalCaseRel(sess, nil, nil, nil, sc.Case)
+				if err != nil {
+					return nil, err
+				}
+			case sc.Func != "":
+				// D7.2：无 FROM 标量函数（VERSION()）直接求值。
+				v, err = evalScalarFunc(sc.Func)
 				if err != nil {
 					return nil, err
 				}
@@ -3405,6 +3424,13 @@ func (e *Executor) finishSelect(meta *TableMeta, s *SelectStmt, rows [][]Value, 
 				out = append(out, visibleRow(meta, row)...)
 			} else if c.Case != nil {
 				v, err := evalCaseM1(meta, row, c.Case)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, v)
+			} else if c.Func != "" {
+				// D7.2：标量函数列（VERSION()）不依赖行上下文。
+				v, err := evalScalarFunc(c.Func)
 				if err != nil {
 					return nil, err
 				}
@@ -5569,6 +5595,13 @@ func (e *Executor) finishRel(sess *Session, tx txn.Txn, s *SelectStmt, rel *Rel,
 				out = append(out, v)
 			} else if c.Expr != nil {
 				v, err := evalExprForRow(rel, row, c.Expr)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, v)
+			} else if c.Func != "" {
+				// D7.2：标量函数列（VERSION()）不依赖行上下文。
+				v, err := evalScalarFunc(c.Func)
 				if err != nil {
 					return nil, err
 				}
