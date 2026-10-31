@@ -53,8 +53,12 @@ const (
 // authPlugin 当前认证插件（MySQL 8 默认 caching_sha2_password）。
 const authPlugin = "caching_sha2_password"
 
-// serverVersion 服务器版本串：以 MySQL 兼容格式开头，客户端可识别。
-const serverVersion = "8.0.36-OpenXDB"
+// OpenxdbVersion OpenXDB 自身发布版本号（与发版版本常量同源注入）。
+const OpenxdbVersion = "v1.17.0"
+
+// serverVersion 服务器版本串：前缀 8.0.36-OpenXDB 保持 MySQL 兼容
+// （mysql CLI 可识别），OpenXDB 自身版本部分与 OpenxdbVersion 同源拼接。
+const serverVersion = "8.0.36-OpenXDB " + OpenxdbVersion
 
 // handshakeV10 构造服务端初始握手包（Server Greeting，协议 10）。
 // scramble 为 20 字节随机串（auth-plugin-data，含结尾 0）。

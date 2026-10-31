@@ -45,6 +45,12 @@ func TestHandshakeV10Structure(t *testing.T) {
 	if verEnd < 0 || string(p[off:off+verEnd]) != serverVersion {
 		t.Fatalf("server version = %q, want %q", p[off:off+verEnd], serverVersion)
 	}
+	if serverVersion != "8.0.36-OpenXDB v1.17.0" {
+		t.Fatalf("server version = %q, want %q", serverVersion, "8.0.36-OpenXDB v1.17.0")
+	}
+	if !bytes.HasPrefix(p[off:off+verEnd], []byte("8.0.36-OpenXDB")) {
+		t.Fatalf("server version prefix lost: %q", p[off:off+verEnd])
+	}
 	off += verEnd + 1
 	if binary.LittleEndian.Uint32(p[off:off+4]) != 7 {
 		t.Fatalf("conn id = %d, want 7", binary.LittleEndian.Uint32(p[off:off+4]))
