@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_01872216d40111f180d5525400248c00
+    ReservedCode1: YBXB3QTDd/2Vengt7Ab8J7Xb7zGGxVchDXMCvs/UuP9x/Vzeidok8KHsOy9puktDrcCsnxPPX6Cir20dEc/v3yxK+Jr3/zNsdC3iAVLSQ71rVKfHHG9bYpFlzDGSSjyhS06TQxqNoHTWPKLAyscLtbwVQGijGLQtEP9P9/3zF0RYi24eNsXDxQbODLA=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_01872216d40111f180d5525400248c00
+    ReservedCode2: YBXB3QTDd/2Vengt7Ab8J7Xb7zGGxVchDXMCvs/UuP9x/Vzeidok8KHsOy9puktDrcCsnxPPX6Cir20dEc/v3yxK+Jr3/zNsdC3iAVLSQ71rVKfHHG9bYpFlzDGSSjyhS06TQxqNoHTWPKLAyscLtbwVQGijGLQtEP9P9/3zF0RYi24eNsXDxQbODLA=
+---
+
 # v1.17.0 D4：并发规模与稳定性验证
 
 > 对应 DEV_PLAN_v1.17.0.md Phase D（D4，P1，2d）。依赖 Phase A/B 新基线（D1/D2 已交付）。
@@ -67,3 +78,4 @@
 - commit：`v1.17.0 D4: stability run + bench tool parameterization`
 - 显式 git add 指定文件（禁 -A/-u）；双远端（gitee + GitHub443）ls-remote SHA 核验一致。
 - DEV_PLAN_v1.17.0.md 保持 untracked 不入库。
+*（内容由AI生成，仅供参考）*

@@ -2,6 +2,17 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_fff9e8edd40011f180d5525400248c00
+    ReservedCode1: nRLYRIDP/1GeKXFMzy+MkIeUkaOQy4C2TM8wea/j3bgFbddNNJt5q2nbcNbUtzqSASvzNtcPcWXJ4ZzrkqkvWQDHtJFRP7Kh+QVrKtP1qN6vu/M0NVhvssZ6dBppNPAFMQT6A/vK0Nmvm8iIe6AUMGdwV4tTxq2+yaZJif9rSk17Rxbo+6FYYH4hzxU=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_fff9e8edd40011f180d5525400248c00
+    ReservedCode2: nRLYRIDP/1GeKXFMzy+MkIeUkaOQy4C2TM8wea/j3bgFbddNNJt5q2nbcNbUtzqSASvzNtcPcWXJ4ZzrkqkvWQDHtJFRP7Kh+QVrKtP1qN6vu/M0NVhvssZ6dBppNPAFMQT6A/vK0Nmvm8iIe6AUMGdwV4tTxq2+yaZJif9rSk17Rxbo+6FYYH4hzxU=
+---
+
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
     ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_4a29eb5dcdd111f1b307525400393706
     ReservedCode1: YtWrJY5X9ga7JOaUVWHvfrtfOs6/DmVKYPZqRM7TZBswg+vqfvgKAQs+bWEhiopH81vKtcBqQ57DUYMz1eThDRPUTeI2yo/d6EvqsEpz6ClNMNoRWRohmub6O4nTXhn/Nd+75LfhDIA1kKzyCPyGEKIj/3BEp51ofE10DcjBXlKsfk7uOxETjyzcNYU=
     ContentPropagator: 001191440300708461136T1XGW3
@@ -116,6 +127,7 @@ AIGC:
 
 ---
 
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

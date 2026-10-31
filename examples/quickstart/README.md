@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_bbff5b1ed40c11f1a0da525400393706
+    ReservedCode1: 6kb4UxX7ta4vyS1p/jQKt8cfOB0xPBuwvRbCEqg2see+DM3vjrd48MhLin7c4e7tOxqHEa0Zv/3ZgdAfaHfvJoz5JW/kI92y6mPgaNfjBTCPJok+5g0z9LMKxe0itdmxdf9DHJ3+7ux/Ym+0Jdb4YofOGadBndNP3N21kNg82yOFh6MeNm1z2OzkysY=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_bbff5b1ed40c11f1a0da525400393706
+    ReservedCode2: 6kb4UxX7ta4vyS1p/jQKt8cfOB0xPBuwvRbCEqg2see+DM3vjrd48MhLin7c4e7tOxqHEa0Zv/3ZgdAfaHfvJoz5JW/kI92y6mPgaNfjBTCPJok+5g0z9LMKxe0itdmxdf9DHJ3+7ux/Ym+0Jdb4YofOGadBndNP3N21kNg82yOFh6MeNm1z2OzkysY=
+---
+
 # OpenXDB Quickstart 端到端演示（examples/quickstart）
 
 > 适用版本：v1.17.0。演示一条完整链路：**init → start → 建表/插入/二级索引/查询 → EXPLAIN → SHOW SLOWQUERIES SUMMARY → doctor/stats**。
@@ -127,3 +138,4 @@ openxdb stats --addr 127.0.0.1:7788 [--interval 5] [--json]
 - 发布说明：[RELEASE_NOTES.md](../../RELEASE_NOTES.md)
 - 变更记录：[CHANGELOG.md](../../CHANGELOG.md)
 - 基准实验：[docs/experiments/E5_standard_bench_alignment.md](../../docs/experiments/E5_standard_bench_alignment.md)
+*（内容由AI生成，仅供参考）*

@@ -2,6 +2,17 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_fe5310b2d40011f180d5525400248c00
+    ReservedCode1: ajv7TYrZfNMyKgWEOQJWRk7t/+iYBcpEcdFBiGyTN/AcrBy8Kab4KOOF0WAz3Jeb1x8VknzPb7rvgHCoa0yaWkUb7EHJC5Iz6HIldOM2iaLImDhLDMEjG1SzabdcFm8L0X3SQv4phKShHZs5NEEWEDKI1pMx5/Um9GveAAYEufzQ02qkj91Qwp52JS4=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_fe5310b2d40011f180d5525400248c00
+    ReservedCode2: ajv7TYrZfNMyKgWEOQJWRk7t/+iYBcpEcdFBiGyTN/AcrBy8Kab4KOOF0WAz3Jeb1x8VknzPb7rvgHCoa0yaWkUb7EHJC5Iz6HIldOM2iaLImDhLDMEjG1SzabdcFm8L0X3SQv4phKShHZs5NEEWEDKI1pMx5/Um9GveAAYEufzQ02qkj91Qwp52JS4=
+---
+
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
     ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_741f5a66c88e11f196f9525400248c00
     ReservedCode1: Q1pynsm4lpq4wtZ4Ho8loeEsUUjxkLLSHnP3ECsHhDPEYm+Gy67JYZYq1ImUYAGedk38xJ5UB2H4qJf8KVZxL1UDMgoEVd9oiyLQ0V+Q8AOmGBGNPWLJxGV2QJjVPuA1CTQhVqq8DduJXAy5FuujZ8CpR12cdT7EXdes1mn9dn0PBGolVDE9pUsHpuU=
     ContentPropagator: 001191440300708461136T1XGW3
@@ -250,4 +261,5 @@ go build ./...
 # 2. 一键编排：init + start + prepare + 跑基准 + 停止
 powershell -ExecutionPolicy Bypass -File tests/bench/e5/run_e5.ps1
 ```
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

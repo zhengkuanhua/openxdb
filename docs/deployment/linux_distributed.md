@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_77cdf291d41911f180d5525400248c00
+    ReservedCode1: yeDKPTlXQDhcNQqZ8ZbK1w8vYa9uQy+/34PTlCLhyqdITyLjIT9JBDV0i2NdXrFbKXZI2o6hr754VaqdsIYRy0xR1j92OhwnFiviP0BCe6MNNhY5MfbojBYnm8WBBSI6nuUz0yhPZABATVbr9GFjBSCl7ZtM10U2Gwm9FOVx3TIw4PILomZO5O7vd50=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_77cdf291d41911f180d5525400248c00
+    ReservedCode2: yeDKPTlXQDhcNQqZ8ZbK1w8vYa9uQy+/34PTlCLhyqdITyLjIT9JBDV0i2NdXrFbKXZI2o6hr754VaqdsIYRy0xR1j92OhwnFiviP0BCe6MNNhY5MfbojBYnm8WBBSI6nuUz0yhPZABATVbr9GFjBSCl7ZtM10U2Gwm9FOVx3TIw4PILomZO5O7vd50=
+---
+
 # OpenXDB 分布式安装部署文档（Linux 7.x）
 
 > 说明：本文档适用于 Linux 7.x（CentOS/RHEL 7 系）。
@@ -286,3 +297,4 @@ openxdb start --data-dir /data/openxdb --port 7788 --cluster-addr 10.0.0.1:7791 
 - `docs/T15_m6_ha.md`（M6 HA）、`docs/T43_ha_rpo_rejoin.md`（RPO 补追/回连）
 - `docs/product_manual_zh.md` 第 8 章（分布式能力）
 - `KNOWN_LIMITATIONS.md`、`CHANGELOG.md`
+*（内容由AI生成，仅供参考）*

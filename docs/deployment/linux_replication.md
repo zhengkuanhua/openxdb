@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_7893f45dd41911f180d5525400248c00
+    ReservedCode1: ZzLqY7mb/qAwggmbMu2dZsIQyokNrgo4jrvvWC9zgAOMj1L/CwTVSOYeB89Asr+Fleech5Z7k5K1fww9JEKt5r0ol0Zy69G8YIezPM5hRweBtN9Z7d24/j3ChO56LkL7Gg+kGL+JgUvOMqDjy3aRct5YQ8BAJW0TxcMEecr3U2C0bbtEa3WSlch1vso=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_7893f45dd41911f180d5525400248c00
+    ReservedCode2: ZzLqY7mb/qAwggmbMu2dZsIQyokNrgo4jrvvWC9zgAOMj1L/CwTVSOYeB89Asr+Fleech5Z7k5K1fww9JEKt5r0ol0Zy69G8YIezPM5hRweBtN9Z7d24/j3ChO56LkL7Gg+kGL+JgUvOMqDjy3aRct5YQ8BAJW0TxcMEecr3U2C0bbtEa3WSlch1vso=
+---
+
 # OpenXDB 主从复制搭建文档（Linux 7.x）
 
 > 说明：本文档适用于 Linux 7.x（CentOS/RHEL 7 系）。
@@ -307,3 +318,4 @@ SHOW BINLOG EVENTS FROM <lsn> LIMIT 10; -- 从指定 LSN 续读
 - `docs/T43_ha_rpo_rejoin.md`（RPO 补追/回连）、`docs/T15_m6_ha.md`（M6 HA 复制主从切换）
 - `cmd/openxdb/main.go`（`start` / `replica` 子命令与参数）
 - `KNOWN_LIMITATIONS.md`、`CHANGELOG.md`
+*（内容由AI生成，仅供参考）*

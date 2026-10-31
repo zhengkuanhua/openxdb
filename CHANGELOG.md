@@ -2,6 +2,17 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_ff45e042d40011f1a0da525400393706
+    ReservedCode1: TcPDRY0dBYZwCCXFhchhBsqryA6vBzCIQcP+TFimUfVMUKK0eHlw62uqEYsw+hU+DOP2Bo2uBOk3db8N81FnY4EhNWH4veixF9Rbx7orKu9Y3zi2SV8OGOwkYDHSrBUVJn8q2/CLONg4wXDqq6ZbsIm35jpTH9xSKjtnnfX6lLaxh5YateaIWkvz60g=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_ff45e042d40011f1a0da525400393706
+    ReservedCode2: TcPDRY0dBYZwCCXFhchhBsqryA6vBzCIQcP+TFimUfVMUKK0eHlw62uqEYsw+hU+DOP2Bo2uBOk3db8N81FnY4EhNWH4veixF9Rbx7orKu9Y3zi2SV8OGOwkYDHSrBUVJn8q2/CLONg4wXDqq6ZbsIm35jpTH9xSKjtnnfX6lLaxh5YateaIWkvz60g=
+---
+
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
     ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_a98494a2d2c611f18460525400393706
     ReservedCode1: iLDTRG50fxXG7uZsQuvQ1PywbIyR6eOm1s5ELBKuERIYwQydR0J0hY2TX8N09x5A0qi4/FFNLdkApoVAqkeETsH31w/+XMcxPGLK5BWhmeujo/+AvjI9myVd/8mzXn/MsANhUFLn+DhvEO7Bs99sxXWdOxjOp62jsCdKXHugl5z0euHijllnzOM0oWo=
     ContentPropagator: 001191440300708461136T1XGW3
@@ -238,5 +249,6 @@ v1.5.0（协议与吞吐）第 1 项「客户端 pipeline 协议」先行启动�
 
 - **M1 基础内核**：RocksDB cgo 桥存储层（+ 纯 Go 内存 B+Tree 参考实现）、追加式 WAL 与重放恢复、快照隔离本地事务、SQL 子集与二级索引、CLI/REPL 与 TCP 服务。见 [docs/T1_rocksdb_storage_impl.md](docs/T1_rocksdb_storage_impl.md)、[docs/T2_wal_impl.md](docs/T2_wal_impl.md)、[docs/T3_sql_layer.md](docs/T3_sql_layer.md)、[docs/T3_txn_impl.md](docs/T3_txn_impl.md)、[docs/T5_cli_impl.md](docs/T5_cli_impl.md)、[docs/T6_index_layer.md](docs/T6_index_layer.md)。
 - **设计决策与早期文档**：ACID 笔记（[docs/T4_acid_notes.md](docs/T4_acid_notes.md)）、M2/M3 接口预留（[docs/T7_m2m3_reservations.md](docs/T7_m2m3_reservations.md)）、引擎选型 ADR（[docs/W4_adr_engine_selection.md](docs/W4_adr_engine_selection.md)）、博客 [docs/blog_why_openxdb_rocksdb.md](docs/blog_why_openxdb_rocksdb.md)。
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
