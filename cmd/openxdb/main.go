@@ -821,6 +821,27 @@ func cmdReplica(args []string) error {
 		return err
 	}
 	defer d.Close()
+	// D6.1：replica 常驻 SQL 监听（--mysql-port，默认 0=关闭）。与主端 start 的
+	// mysql wire 装配同源：--auth 验证映射 Engine.AuthenticateUser，监听层 TLS
+	// 沿用 --tls-cert/--tls-key（loadTLSConfig 与主端同函数）。
+	mysqlPort := 0
+	if p, ok := flagValue(args, "--mysql-port"); ok {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return errors.New("invalid --mysql-port value: " + p)
+		}
+		mysqlPort = n
+	}
+	authOn := false
+	for _, a := range args {
+		if a == "--auth" {
+			authOn = true
+		}
+	}
+	mysqlTLS, err := loadTLSConfig(args)
+	if err != nil {
+		return err
+	}
 	var tlsCfg *tls.Config
 	if caPath, hasCA := flagValue(args, "--replica-tls-ca"); hasCA {
 		// verify-full：主机名取 --master 的 host 部分（--master 可为 host:port）。
@@ -846,6 +867,33 @@ func cmdReplica(args []string) error {
 		fmt.Printf("OpenXDB %s replica of %s (TLS, data dir: %s), Ctrl-C to stop.\n", version, master, dir)
 	} else {
 		fmt.Printf("OpenXDB %s replica of %s (data dir: %s), Ctrl-C to stop.\n", version, master, dir)
+	}
+	// D6.1：replica 常驻 SQL 监听装配（复用主端 start 的 mysqlproto 监听路径）。
+	if mysqlPort > 0 {
+		ms := mysqlproto.New(d.SQL)
+		if authOn {
+			ms.SetVerify(func(user, pass string) bool {
+				ok, err := d.SQL.AuthenticateUser(user, pass)
+				return err == nil && ok
+			})
+		}
+		if mysqlTLS != nil {
+			ms.SetTLS(mysqlTLS)
+		}
+		ms.Logf = func(format string, a ...any) {
+			logx.Default.Info("mysqlproto", "mysql_log", fmt.Sprintf(format, a...))
+		}
+		mysqlAddr := fmt.Sprintf(":%d", mysqlPort)
+		go func() {
+			if err := ms.Serve(mysqlAddr); err != nil {
+				fmt.Fprintf(os.Stderr, "openxdb: mysql protocol listener: %v\n", err)
+			}
+		}()
+		proto := "plaintext"
+		if mysqlTLS != nil {
+			proto = "TLS"
+		}
+		fmt.Printf("mysql wire protocol listening on %s (%s, auth=%v)\n", mysqlAddr, proto, authOn)
 	}
 	select {} // 阻塞等待；StartFollower 在后台 goroutine 持续复制
 }
@@ -892,6 +940,10 @@ Commands:
                              以从节点身份连接主节点并异步复制
           [--replica-tls]     以 TLS 加密连接主节点复制端口（自签名/内网测试不校验服务器名）
           [--replica-tls-ca <path>] 以 TLS 连接并校验 CA 链与主机名（T36 verify-full）
+          [--mysql-port <n>]  备库常驻 SQL 监听端口（D6，默认 0=关闭）；开启后
+                             mysql CLI / oxsql 等可常驻查询备库数据
+          [--auth]            启用连接握手鉴权（与主端用户表一致）
+          [--tls-cert <path> --tls-key <path>] 监听层 TLS 加密（可选，两者须同时提供）
   doctor  --data-dir <dir>   数据目录/本地服务健康巡检
           [--addr <host:port>] 在线服务检查（端口连通、慢查询等）
           [--json]            输出 JSON 报告（退出码：0=通过 1=警告 2=错误）
