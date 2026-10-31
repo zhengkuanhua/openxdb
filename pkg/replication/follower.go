@@ -103,6 +103,17 @@ func (f *Follower) AppliedLSN() storage.LSN {
 	return f.applied
 }
 
+// ReadBarrier 等待复制应用到达稳定边界：阻塞直至当前进行中的 ApplyBinlog
+// 批次完整写入存储后返回（D6 备库常驻读，replica SQL 读路径在创建快照前
+// 调用）。配合 Storage.Write 原子批次与快照隔离，保证读可见性以
+// AppliedLSN 为界：不会读到进行中的半个批次，也不会越过已应用位点；
+// 屏障只等待当前批次（Mutex 短临界区），不阻塞后续复制应用，读与复制
+// 应用保持并发，锁序单向（f.mu → storage）无死锁。
+func (f *Follower) ReadBarrier() {
+	f.mu.Lock()
+	f.mu.Unlock()
+}
+
 // LastMasterLSN 返回主端 binlog 最新位点（RPO 审计基准，v1.6.0 阶段一）：
 // 握手 helloOK 通告与每个 msgBinlog 时取 max 更新；从未连接或旧主无位点
 // 通告时为 0。

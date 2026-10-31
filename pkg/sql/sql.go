@@ -101,6 +101,11 @@ func (e *Engine) SetReplicaReadOnly(ro bool) { e.ex.SetReplicaReadOnly(ro) }
 // IsReplicaReadOnly 返回 D6 备库只读强制是否开启（状态观测/汇报用）。
 func (e *Engine) IsReplicaReadOnly() bool { return e.ex.IsReplicaReadOnly() }
 
+// SetReplicaBarrier 装配 D6 复制应用边界屏障（cmdReplica 调用，转发至
+// Executor；读路径快照前等待复制批次边界，保证以 AppliedLSN 为界；
+// nil = 不启用，主端 start 零回归）。
+func (e *Engine) SetReplicaBarrier(fn func()) { e.ex.SetReplicaBarrier(fn) }
+
 // SetHAConfigSetter 装配 P0 HA 开关节流控制器（db.Open 调用，转发至 Executor）。
 func (e *Engine) SetHAConfigSetter(hc HAConfigSetter) { e.ex.SetHAConfigSetter(hc) }
 

@@ -36,6 +36,11 @@ type Executor struct {
 	// ExecuteTextAsSession 入口被拒绝；提升为主节点时可热切换置 false。
 	roMu      sync.RWMutex
 	replicaRO bool
+	// D6：复制应用边界屏障（replica 模式装配；nil = 未装配零开销）。
+	// 读路径（非写语句）在快照创建前调用，等待进行中的复制批次完成，
+	// 保证读可见性以 AppliedLSN 为界；由 cmdReplica 注入
+	// Follower.ReadBarrier。装配期一次性设置，运行期只读。
+	replicaBarrier func()
 	// P0 HA：ha_epoch_enabled / ha_quorum_enabled 开关节流控制器
 	// （nil = 未装配，SET ha_* 返回明确错误）；实现见 HAConfigSetter。
 	haCfg HAConfigSetter
@@ -620,6 +625,12 @@ func (e *Executor) ExecuteTextAsSession(stmt Stmt, sqlText, user string, sess *S
 	if e.isReplicaRO() && isWriteStmt(stmt) {
 		return nil, fmt.Errorf("read-only replica: write statement rejected")
 	}
+	// D6.3：replica 读路径复制应用边界屏障——快照创建前等待进行中的
+	// 复制批次完成（Follower.ReadBarrier），读可见性以 AppliedLSN 为界；
+	// 屏障仅等待当前批次，不阻塞后续复制，读与复制应用保持并发。
+	if e.isReplicaRO() && e.replicaBarrier != nil {
+		e.replicaBarrier()
+	}
 	if err := e.checkPrivilege(stmt, user); err != nil {
 		return nil, err
 	}
@@ -668,6 +679,10 @@ func (e *Executor) isReplicaRO() bool {
 	defer e.roMu.RUnlock()
 	return e.replicaRO
 }
+
+// SetReplicaBarrier 装配 D6 复制应用边界屏障（cmdReplica 调用；nil = 关闭）。
+// 装配期一次性设置，运行期只读；仅 replica 模式注入，主端 start 零回归。
+func (e *Executor) SetReplicaBarrier(fn func()) { e.replicaBarrier = fn }
 
 // isWriteStmt 判断语句是否修改存储可见状态：DML 与 DDL（含备份恢复、
 // region 运维写操作）成功后需失效查询缓存；只读查询/事务控制语句不失效。

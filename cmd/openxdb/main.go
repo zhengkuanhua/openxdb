@@ -866,6 +866,11 @@ func cmdReplica(args []string) error {
 	// D6.2：replica 模式只读强制——SQL 监听仅开放只读查询，写语句按
 	// isWriteStmt 白名单拒绝（仅 replica 模式装配，主端 start 零回归）。
 	d.SQL.SetReplicaReadOnly(true)
+	// D6.3：复制应用与 SQL 读并发——读路径快照前等待复制批次边界
+	// （Follower.ReadBarrier），原子批次 + 快照隔离保证无半批次可见、
+	// 读可见性以 AppliedLSN 为界；屏障仅等当前批次，不阻塞后续复制，
+	// 锁序单向无死锁（仅 replica 模式装配，主端 start 零回归）。
+	d.SQL.SetReplicaBarrier(func() { d.Follower.ReadBarrier() })
 	if tlsCfg != nil {
 		fmt.Printf("OpenXDB %s replica of %s (TLS, data dir: %s), Ctrl-C to stop.\n", version, master, dir)
 	} else {
