@@ -648,6 +648,14 @@ type ShowIndexStmt struct {
 
 func (ShowIndexStmt) stmt() {}
 
+// ShowCreateStmt SHOW CREATE TABLE t：基于存储元数据重建 CREATE TABLE 语句
+// （D7.4：供 mysqldump 与第三方工具读取 schema）。
+type ShowCreateStmt struct {
+	Table string
+}
+
+func (ShowCreateStmt) stmt() {}
+
 // ShowSlowQueriesStmt SHOW SLOWQUERIES [SUMMARY [TOP <n>]]：
 // 无 SUMMARY 查看慢查询记录列表；SUMMARY 输出按阈值区间汇总 + TOP N 最慢明细报表
 // （D3.2 slowlog 闭环；n 为 TOP 明细条数，默认 10）。

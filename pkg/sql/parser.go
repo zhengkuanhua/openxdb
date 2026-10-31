@@ -3887,6 +3887,17 @@ func (p *parser) parseShow() (Stmt, error) {
 			return nil, err
 		}
 		return &ShowIndexStmt{Table: nameTok.text}, nil
+	case "CREATE":
+		// D7.4：SHOW CREATE TABLE <t>：重建建表语句（供 mysqldump/第三方工具）。
+		p.next()
+		if err := p.expectKeyword("TABLE"); err != nil {
+			return nil, err
+		}
+		nameTok, err := p.expect(tokIdent, "table name")
+		if err != nil {
+			return nil, err
+		}
+		return &ShowCreateStmt{Table: nameTok.text}, nil
 	case "VIEWS":
 		p.next()
 		return &ShowViewsStmt{}, nil

@@ -749,6 +749,8 @@ func (e *Executor) execStmt(sess *Session, stmt Stmt) (*Result, error) {
 		return e.execDropDatabase(sess, s)
 	case *ShowIndexStmt:
 		return e.execShowIndex(sess, s)
+	case *ShowCreateStmt:
+		return e.execShowCreate(sess, s)
 	case *ShowSlowQueriesStmt:
 		return e.execShowSlowQueries(sess, s)
 	case *ExplainStmt:
@@ -7315,6 +7317,87 @@ func (e *Executor) execShowIndex(sess *Session, s *ShowIndexStmt) (*Result, erro
 		})
 	}
 	return res, nil
+}
+
+// execShowCreate SHOW CREATE TABLE t（D7.4）：基于表存储元数据重建 CREATE TABLE
+// 语句（列定义/类型精度/自增/主键/二级索引/外键），供 mysqldump 与第三方工具读取。
+// 输出列与 MySQL 一致：Table | Create Table。
+func (e *Executor) execShowCreate(sess *Session, s *ShowCreateStmt) (*Result, error) {
+	tx, err := e.getTx(sess)
+	if err != nil {
+		return nil, err
+	}
+	if e.autocommit(sess) {
+		defer tx.Rollback()
+	}
+	tabs, err := loadTables(tx.Get)
+	if err != nil {
+		return nil, err
+	}
+	meta := findTable(tabs, s.Table)
+	if meta == nil {
+		return nil, &SQLError{Msg: "table not exists: " + s.Table}
+	}
+	res := &Result{Columns: []string{"Table", "Create Table"}}
+	res.Rows = append(res.Rows, []Value{StrVal(meta.Name), StrVal(buildCreateTableSQL(meta))})
+	return res, nil
+}
+
+// buildCreateTableSQL 基于 TableMeta 重建 CREATE TABLE 文本（D7.4）。
+// 存储元数据为唯一事实源：类型经 parser 归一化（INTEGER→INT、VARCHAR/CHAR→TEXT、
+// TIMESTAMP→DATE、STRING→TEXT），精度参数保留在 Params 中原样回放。
+func buildCreateTableSQL(meta *TableMeta) string {
+	var b strings.Builder
+	b.WriteString("CREATE TABLE `" + meta.Name + "` (\n")
+	lines := make([]string, 0, len(meta.Columns)+len(meta.Indexes)+len(meta.ForeignKeys)+1)
+	for _, c := range meta.Columns {
+		line := "  `" + c.Name + "` " + c.Type
+		if len(c.Params) > 0 {
+			ps := make([]string, len(c.Params))
+			for i, p := range c.Params {
+				ps[i] = strconv.Itoa(p)
+			}
+			line += "(" + strings.Join(ps, ",") + ")"
+		}
+		if c.AutoIncrement {
+			line += " AUTO_INCREMENT"
+		}
+		lines = append(lines, line)
+	}
+	// 主键：复合主键 PKCols 优先，单列回退 PK。
+	if len(meta.PKCols) > 0 {
+		lines = append(lines, "  PRIMARY KEY (`"+strings.Join(meta.PKCols, "`,`")+"`)")
+	} else if meta.PK != "" {
+		lines = append(lines, "  PRIMARY KEY (`"+meta.PK+"`)")
+	}
+	// 二级索引（含 UNIQUE）。
+	for _, in := range meta.Indexes {
+		cols := in.Cols
+		if len(cols) == 0 {
+			cols = []string{in.Col}
+		}
+		kind := "KEY"
+		if in.Unique {
+			kind = "UNIQUE KEY"
+		}
+		lines = append(lines, "  "+kind+" `"+in.Name+"` (`"+strings.Join(cols, "`,`")+"`)")
+	}
+	// 外键（约束名以列名派生，元数据未持久化命名）。
+	for _, fk := range meta.ForeignKeys {
+		line := "  CONSTRAINT `fk_" + strings.Join(fk.Columns, "_") + "` FOREIGN KEY (`" +
+			strings.Join(fk.Columns, "`,`") + "`) REFERENCES `" + fk.RefTable + "` (`" +
+			strings.Join(fk.RefColumns, "`,`") + "`)"
+		if fk.OnDelete != "" {
+			line += " ON DELETE " + fk.OnDelete
+		}
+		if fk.OnUpdate != "" {
+			line += " ON UPDATE " + fk.OnUpdate
+		}
+		lines = append(lines, line)
+	}
+	b.WriteString(strings.Join(lines, ",\n"))
+	b.WriteString("\n)")
+	return b.String()
 }
 
 // execShowSlowQueries SHOW SLOWQUERIES [SUMMARY [TOP <n>]]：
