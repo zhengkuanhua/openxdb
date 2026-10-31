@@ -52,6 +52,11 @@ v1.17.0（显式事务写路径优化 + 可观测性/稳定性补强）正式发
 - **D4.2 bench 工具参数化**：`bench_oltp.py --rows` CLI 化、`run_e5.ps1 -OltpRows`、`load.go` 追加 goroutine/heap 观测，便于复测与 CI。
 - **E5 受控复测（发版最终）**（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read / write / read-write **14.15 / 13.40 / 12.60 TPS**（QPS 198.10 / 53.60 / 226.80，errs=0 / reconnects=0），较 v1.16.0（10.37 / 8.33 / 8.15 TPS，QPS 145.13 / 33.33 / 146.70）**write QPS +61%**、read-write TPS +55%、read 无回归 +36%；TPC-C 5 仓 tpmC **774.50** / tpm_total 1746.50（较 v1.16.0 的 254.00 / 581.00 提升约 **3.0 倍**）。**达成 v1.17.0 验收目标：OLTP TPS read ≥11（14.15）/ write ≥9（13.40）/ rw ≥8.5（12.60），QPS read ≥145（198.10）/ write ≥40（53.60）/ rw ≥146（226.80），TPC-C tpmC ≥300（774.50），errs=0 / reconnects=0**。详见 [docs/experiments/E5_standard_bench_alignment.md](docs/experiments/E5_standard_bench_alignment.md)。
 
+- **D6.1 replica SQL 常驻监听**：`openxdb replica --mysql-port <port>` 支持 MySQL wire 常驻读监听（复用主端装配路径，支持 `--auth` / `--tls-cert` / `--tls-key`），mysql CLI / oxsql 可直连备库常驻查询。
+- **D6.2 replica 只读强制**：备库写语句按 `isWriteStmt` 白名单统一拒绝（错误 `read-only replica: write statement rejected`），仅 replica 模式开放，主端读写零回归。
+- **D6.3 复制应用与 SQL 读并发**：以 `AppliedLSN` 为界，读快照创建前经 `ReadBarrier` 短临界区对齐复制应用批次；存储原子批次 + 快照隔离保证无半批次可见，读不阻塞复制应用、无死锁；未采用「读/复制全互斥」回退方案（并发方案经 `-race` 与专项回归验证通过）。
+- **D6.4 专项验证与文档**：6 项验收全通过——备库常驻查询、写语句拒绝且数据不受污染、滞后窗口读断言（30 轮 lagOk/worstGap=0）、崩溃恢复二次重启追平且顺序一致、`go build ./...` 与 `go test ./...` 全绿、主端读写无回归；验证脚本与说明见 [docs/experiments/D6_replica_resident_read.md](docs/experiments/D6_replica_resident_read.md) 与 [docs/experiments/run_d6_replica_validate.ps1](docs/experiments/run_d6_replica_validate.ps1)。
+
 **回退记录（D2）**
 
 - **D2 会话锁与调度精细化已回退**：D2.1 session lock granularity split（d7660f5）与 D2.2 read-parallel in write txn（442c4cb）因并发伸缩验收未达标（D2.3 复测 16 连接 read TPS 10.80 较 8 连接 11.85 为 -8.9%、read-write 10.28 较基线 12.40 为 -17.1%，未达"16 连接较 8 连接提升 ≥20%"验收目标）而整体回退，恢复 D1 基线行为（等价 cdd62e7）；D2.3 并发伸缩 bench 数据与实验文档（e1ba367）保留作为记录。回退后全仓回归全绿（`go test ./... -count=1 -p 1`），E5 受控复测（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read / write / read-write **12.75 / 12.63 / 10.97 TPS**（QPS 178.50 / 50.53 / 197.40，errs=0 / reconnects=0），TPC-C 5 仓 tpmC **709.00** / tpm_total 1568.00。**D1 指标复测仍达标：write QPS 中位 ≥40（50.53）、TPS write ≥9（12.63）、tpmC ≥300（709.00），read / read-write 无回归，errs=0 / reconnects=0**。
