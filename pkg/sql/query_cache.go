@@ -3,6 +3,7 @@ package sql
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // M9 子功能 2：查询缓存（pkg/sql 新文件）。
@@ -20,9 +21,11 @@ type queryCacheEntry struct {
 }
 
 // QueryCache 查询结果缓存（线程安全）。
+// v1.18.0 D2：enabled 原子化——Enabled() 热路径读侧无锁，不再抢 qc.mu
+// （每语句判定缓存是否启用）；其余方法仍在 qc.mu 内 Load 读取保持一致性。
 type QueryCache struct {
 	mu      sync.Mutex
-	enabled bool
+	enabled atomic.Bool
 	entries map[string]*queryCacheEntry
 	hits    int64
 	misses  int64
@@ -38,24 +41,23 @@ func NewQueryCache() *QueryCache {
 func (q *QueryCache) SetEnabled(on bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.enabled = on
+	q.enabled.Store(on)
 	if !on {
 		q.entries = make(map[string]*queryCacheEntry)
 	}
 }
 
-// Enabled 查询缓存是否开启。
+// Enabled 查询缓存是否开启。v1.18.0 D2 起无锁原子读（写侧 SetEnabled 持
+// qc.mu Store；读侧宽松一致即可）。
 func (q *QueryCache) Enabled() bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.enabled
+	return q.enabled.Load()
 }
 
 // Get 命中返回结果的深拷贝（防调用方修改污染缓存）；未命中计 miss。
 func (q *QueryCache) Get(key string) (*Result, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if !q.enabled {
+	if !q.enabled.Load() {
 		return nil, false
 	}
 	ent, ok := q.entries[key]
@@ -75,7 +77,7 @@ func (q *QueryCache) Get(key string) (*Result, bool) {
 func (q *QueryCache) Put(key string, res *Result) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if !q.enabled || len(res.Columns) == 0 {
+	if !q.enabled.Load() || len(res.Columns) == 0 {
 		return
 	}
 	rows := make([][]Value, len(res.Rows))
@@ -92,7 +94,7 @@ func (q *QueryCache) Put(key string, res *Result) {
 func (q *QueryCache) Invalidate() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if !q.enabled {
+	if !q.enabled.Load() {
 		return
 	}
 	q.invals++
@@ -103,7 +105,7 @@ func (q *QueryCache) Invalidate() {
 func (q *QueryCache) Stats() (enabled bool, hits, misses, invals int64) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.enabled, q.hits, q.misses, q.invals
+	return q.enabled.Load(), q.hits, q.misses, q.invals
 }
 
 // NormalizeSQL 规范化 SQL 文本作为缓存 key：去首尾空白与尾分号、

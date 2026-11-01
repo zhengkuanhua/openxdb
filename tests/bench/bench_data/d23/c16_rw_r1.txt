@@ -2,6 +2,6 @@ probe[group_by_distinct] ok
 probe[agg_as] ok
 probe[order_limit] ok
 probe all ok
-mode=read_write threads=16 time=60s txn_ok=633 errs=0 reconnects=0
-TPS=10.55 QPS=189.90
-lat_us p50=1431668 p95=2538108 p99=3935662 max=5136889
+mode=read_write threads=16 time=60s txn_ok=752 errs=0 reconnects=0
+TPS=12.53 QPS=225.6
+lat_us p50=474860 p95=4720886 p99=5467070 max=6338719

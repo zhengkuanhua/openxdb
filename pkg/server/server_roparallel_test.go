@@ -123,9 +123,10 @@ func TestREPLSessionROParallelOff(t *testing.T) {
 	}
 }
 
-// TestREPLSessionROParallelTxIsolation v1.14.0 P0：显式事务内的 SELECT 不
-// 进入并行批（InTx 排除），事务语义（读己之写、命令顺序）保持；COMMIT 后
-// 只读 SELECT 恢复并行路径。
+// TestREPLSessionROParallelTxIsolation v1.14.0 P0 + v1.17.0 D2.2：
+// 显式事务内的 SELECT 行为——v1.14.0 起由 InTx 排除不进并行批；v1.17.0
+// D2.2 起允许进入并行批（引擎层 ExecuteAsSessionBatch 共享事务快照并行），
+// 事务语义（读己之写、命令顺序）保持；COMMIT 后只读 SELECT 恢复并行路径。
 func TestREPLSessionROParallelTxIsolation(t *testing.T) {
 	s, closeFn := newSQLTestServerV113(t)
 	defer closeFn()

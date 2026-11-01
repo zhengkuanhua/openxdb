@@ -61,7 +61,9 @@ type txnManager struct {
 	// C6 全局提交序列：产生存储可见写的成功提交（st.Write 应用成功）时递增
 	// （锁内递增）。executor 的 autocommit 只读共享快照窗口复用前比对，
 	// 窗口期间检测到新提交即关闭窗口重新取快照，保持写后读语义。
-	commitSeq uint64
+	// v1.18.0 D2 起原子化：写侧仍锁内（notifyCommittedLocked），读侧
+	// CommitSeq() 无锁 Load——只读 SELECT 热路径不再抢全局 m.mu。
+	commitSeq atomic.Uint64
 
 	// v1.17.0 D1.2：autocommit 写 pipeline 延迟持久化水位（默认零回归）。
 	// 置位 defer 的事务在 Commit 阶段 2 跳过 WAL SyncUpTo，仅把最大 LSN
@@ -75,10 +77,10 @@ type txnManager struct {
 }
 
 // CommitSeq 返回产生可见写的成功提交次数（C6，见 CommitSeqProvider 注释）。
+// v1.18.0 D2 起无锁原子读：commitSeq 仅在持 m.mu 的 notifyCommittedLocked
+// 内递增，读侧无需互斥（宽松一致即可：窗口复用判定只关心是否前进）。
 func (m *txnManager) CommitSeq() uint64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.commitSeq
+	return m.commitSeq.Load()
 }
 
 // AppliedLSN 返回已成功应用到存储的最大提交记录 LSN（txn.AppliedLSNProvider）。
@@ -92,7 +94,7 @@ func (m *txnManager) AppliedLSN() storage.LSN {
 // （调用方须持有 m.mu）。纯读事务（空批次提交）与应用失败不递增——只读
 // 不改变对外可见状态，失败提交未落存储。
 func (m *txnManager) notifyCommittedLocked() {
-	m.commitSeq++
+	m.commitSeq.Add(1)
 }
 
 // New 创建事务管理器并执行启动恢复（重放 WAL 已 Commit 记录）。
