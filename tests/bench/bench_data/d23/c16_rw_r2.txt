@@ -5,3 +5,4 @@ probe all ok
 mode=read_write threads=16 time=60s txn_ok=734 errs=0 reconnects=0
 TPS=12.23 QPS=220.2
 lat_us p50=429212 p95=4755947 p99=5380960 max=5798391
+（内容由AI生成，仅供参考）

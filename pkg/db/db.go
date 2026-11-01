@@ -290,8 +290,12 @@ func (d *DB) SetTSONode(nodeID string, batch uint64) error {
 	src := cluster.NewTSOClient(d.Cluster, nodeID, batch)
 	d.TSO = src
 	d.SQL.SetTSO(src)
+	// server 侧 TSO 保持本地发号器：ClusterSrv 只负责响应 TSO_REQ，
+	// 若随 engine 远程源漂移（尤其 nodeID==selfID 时）会造成
+	// fetchBatch 持锁等响应、handleTso 等同一把锁的自指死锁。
+	// 本地发号器保证 server 响应权威且无转发放大（M8 设计）。
 	if d.ClusterSrv != nil {
-		d.ClusterSrv.SetTSO(src)
+		d.ClusterSrv.SetTSO(tso.New())
 	}
 	return nil
 }

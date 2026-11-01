@@ -509,7 +509,10 @@ func cmdStart(args []string) error {
 	}
 	// M8：中心化 TSO（可选）。--tso-node 指向全局发号节点，其余节点挂载远程
 	// TSO 客户端（懒解析地址，未注册前首次取号返回错误，ADD NODE 后自动可用）。
-	if tsoNode != "" {
+	// 本节点即 TSO 主（--tso-node == selfID）时跳过远程装配，保持本地发号器：
+	// 避免 engine 自指 tsoClient 与 ClusterSrv 同源造成的 fetchBatch/handleTso
+	// 互等死锁（server 侧始终本地发号，见 db.SetTSONode）。
+	if tsoNode != "" && tsoNode != d.Cluster.SelfID {
 		if err := d.SetTSONode(tsoNode, 0); err != nil {
 			return err
 		}

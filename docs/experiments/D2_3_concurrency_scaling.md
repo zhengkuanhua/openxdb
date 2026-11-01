@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_88687900d5ba11f1a0da525400393706
+    ReservedCode1: 4R9uyQINBSHwvH4zZuyDoBYb8FxTJrOepybCJKyPpSgfIyi4sRBvDoXE1/v3MCpE4MJxMJF6q1GovL5LxBKXZba2HCBriTjoEb4esh3KSJHx2MB00GziEoUB0v7aom0D1IJ3N3cy/YTXbJUCX9WUFaxtUoP3wDF8iKYWeMnJkyjthN8uvmOpeopsoHo=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_88687900d5ba11f1a0da525400393706
+    ReservedCode2: 4R9uyQINBSHwvH4zZuyDoBYb8FxTJrOepybCJKyPpSgfIyi4sRBvDoXE1/v3MCpE4MJxMJF6q1GovL5LxBKXZba2HCBriTjoEb4esh3KSJHx2MB00GziEoUB0v7aom0D1IJ3N3cy/YTXbJUCX9WUFaxtUoP3wDF8iKYWeMnJkyjthN8uvmOpeopsoHo=
+---
+
 # D2.3 并发伸缩验证（v1.18.0 D2 会话锁细化重试）
 
 - 实验编号：D2.3（并发伸缩验证，v1.18.0 D2 重试）
@@ -67,3 +78,4 @@ D2.3 子项要求：8/16/32 连接 read/read-write TPS 曲线与 errs 统计；�
   | 数据汇总 | `tests/bench/bench_data/d23/summary.md` | TPS/QPS/延迟/errs 与验收判定 |
   | 实验文档 | `docs/experiments/D2_3_concurrency_scaling.md` | 本文档 |
 - commit：`v1.18.0 D2: session lock scaling retest + bench data + doc`；双远端（gitee + origin）SHA 一致（SHA 以 git log 为准）。
+*（内容由AI生成，仅供参考）*

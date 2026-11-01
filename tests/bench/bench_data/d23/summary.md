@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_89daa1f3d5ba11f180d5525400248c00
+    ReservedCode1: 6pebFEtwA5RZ2Xq7J3+ChwQWGczrzKuXdGE6ZZYu4tT1db6f7uFFuxPxQqT8S7uuwPmNMoD83JTbhZ22uIsAnHM2Sp1SBIJPpytuWRbhhb4mdwl2vvtJ/g+bavuodvYvSSUNDLxrMJ+di4vWqX0orC/FPHxvUm9LR3LLIRz8wF9UgWmH6xUL8WulP5c=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_89daa1f3d5ba11f180d5525400248c00
+    ReservedCode2: 6pebFEtwA5RZ2Xq7J3+ChwQWGczrzKuXdGE6ZZYu4tT1db6f7uFFuxPxQqT8S7uuwPmNMoD83JTbhZ22uIsAnHM2Sp1SBIJPpytuWRbhhb4mdwl2vvtJ/g+bavuodvYvSSUNDLxrMJ+di4vWqX0orC/FPHxvUm9LR3LLIRz8wF9UgWmH6xUL8WulP5c=
+---
+
 # D2.3 并发伸缩验证数据汇总（OLTP 等价模型，3 轮取中位数）
 
 - 日期：2026-11-01（v1.18.0 D2 会话锁细化重试）
@@ -50,3 +61,4 @@
 | read-write 无回归（基线 12.40） | ≥12.40 | 13.58（+9.5%） | 达成 |
 
 结论：v1.18.0 D2 重试在全新数据基线下达成验收——read 8/16 连接饱和于 ~17 TPS（QPS ~239），16 连接较 v1.17.0 D1 基线（11.85）提升 +44.6%（≥20% 达成）；当前 8 连接亦达 17.05（较基线 +43.9%），8→16 连接已逼近 RocksDB 读吞吐上限（~240 QPS），相对增量仅 +0.4%，验收按文档基线口径判定。rw 无回归（13.58 ≥ 12.40）。主要收益来自：① 消除 10-29 旧库 87.9 万 MVCC 版本堆积（扫描 330us/行 → ~55us/行）；② D2.2 显式事务内 SELECT 批并行（off 对照 c8 ~10.08 / c16 ~12.17，+20.7%）。32 连接 read 回落至 ~11，符合全局提交队列/调度争用模型；批内并行在 16 连接为负收益（已保持 roBatchMaxConcurrency=8 并回退 4/全局信号量等实验）。
+*（内容由AI生成，仅供参考）*
