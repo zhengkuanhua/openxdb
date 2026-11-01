@@ -2,12 +2,14 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_a3d33c00ffee00112233445566778899
-    ReservedCode1: ZRgTb7zW0fUlcjh61ilsI5y3dORzkqSP7YCUEAH05g5mXNFHtg3wmn5x95r5HNAZ56cW+6D7Yd5MigaJw3DbYLTpfuLTpeyp+T6i/0qIwxUWE+uu7uGhn/62Lyqv71mgaaC5hrnOefGyjMgaiRl5urCUY11mGU6K3VGDlRYZhLqBu3yy23sy7g3nA7U=
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_407e34acd64711f1a0da525400393706
+    ReservedCode1: 8HGK8gQoOf0Ttgb+qurWK11M4l46W1+epFatAEJHCs2kys+LNRRgaF41dnmSNqLZ6uOXp5fHCcbCT6LI3KbCUMi8MSMfQi2T57UCFMw2e17kWtPJS43adO0I7Mogozg4JvCGNO+cx1IlMB5VBfS5CZ0/3AsVwOrrugmX/LIDDDLTD6sbxvQ0apNgzKw=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_a3d33c00ffee00112233445566778899
-    ReservedCode2: ZRgTb7zW0fUlcjh61ilsI5y3dORzkqSP7YCUEAH05g5mXNFHtg3wmn5x95r5HNAZ56cW+6D7Yd5MigaJw3DbYLTpfuLTpeyp+T6i/0qIwxUWE+uu7uGhn/62Lyqv71mgaaC5hrnOefGyjMgaiRl5urCUY11mGU6K3VGDlRYZhLqBu3yy23sy7g3nA7U=
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_407e34acd64711f1a0da525400393706
+    ReservedCode2: 8HGK8gQoOf0Ttgb+qurWK11M4l46W1+epFatAEJHCs2kys+LNRRgaF41dnmSNqLZ6uOXp5fHCcbCT6LI3KbCUMi8MSMfQi2T57UCFMw2e17kWtPJS43adO0I7Mogozg4JvCGNO+cx1IlMB5VBfS5CZ0/3AsVwOrrugmX/LIDDDLTD6sbxvQ0apNgzKw=
 ---
+
+
 
 
 
@@ -115,4 +117,5 @@ G4 matrix: A forward id=8=v8x / B forward id=8=v8x / C local id=8=v8x / C local 
   - 集群模式禁用 C6 快照共享窗口：跨节点连续只读语句不再共享 RocksDB 快照，每条语句独立取号 + 独立临时事务，牺牲该优化换取跨节点强一致读语义。
 - **回退路径**（DEV_PLAN §4）：修复全部可逆——G1/G2/D3.3 修复均在 executor/cluster 路径内，单机行为（clusterEnabled=false）零变化；如后续发现跨节点一致性问题，仍可保留源节点副本，ASSIGN 路由逐 region 撤销重指派回源。
 
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

@@ -2,12 +2,14 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_a4d33c00ffee00112233445566778899
-    ReservedCode1: ZRgTb7zW0fUlcjh61ilsI5y3dORzkqSP7YCUEAH05g5mXNFHtg3wmn5x95r5HNAZ56cW+6D7Yd5MigaJw3DbYLTpfuLTpeyp+T6i/0qIwxUWE+uu7uGhn/62Lyqv71mgaaC5hrnOefGyjMgaiRl5urCUY11mGU6K3VGDlRYZhLqBu3yy23sy7g3nA7U=
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_41982205d64711f1a0da525400393706
+    ReservedCode1: f3BM0M55pIeCMlfm3GdjqDZOWF2Y6HAzQehHfmNh8d6fYVMojyEd7mSKArX6XQK8ywhn5AszxyDXjq8/l33fxl8xR1+ZkiiPaeXUvW/z4Q5HvQ1Wczc9IpilhjpRwKg5QNKsUkyFoKxpoujZa8jUbc6f5rVuUxVmT/dywZeu2IpjRGdNzhzQTnn6oMY=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_a4d33c00ffee00112233445566778899
-    ReservedCode2: ZRgTb7zW0fUlcjh61ilsI5y3dORzkqSP7YCUEAH05g5mXNFHtg3wmn5x95r5HNAZ56cW+6D7Yd5MigaJw3DbYLTpfuLTpeyp+T6i/0qIwxUWE+uu7uGhn/62Lyqv71mgaaC5hrnOefGyjMgaiRl5urCUY11mGU6K3VGDlRYZhLqBu3yy23sy7g3nA7U=
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_41982205d64711f1a0da525400393706
+    ReservedCode2: f3BM0M55pIeCMlfm3GdjqDZOWF2Y6HAzQehHfmNh8d6fYVMojyEd7mSKArX6XQK8ywhn5AszxyDXjq8/l33fxl8xR1+ZkiiPaeXUvW/z4Q5HvQ1Wczc9IpilhjpRwKg5QNKsUkyFoKxpoujZa8jUbc6f5rVuUxVmT/dywZeu2IpjRGdNzhzQTnn6oMY=
 ---
+
+
 
 
 
@@ -211,4 +213,5 @@ DELETE FROM t3 WHERE id=9;          -- A/B/C COUNT 均 = 26
 - `DEV_PLAN_v1.18.0.md` —— 版本排期、风险与回退（§3 D3、§4）
 - 测试脚本归档：`tests/bench/bench_data/d32/`、`tests/bench/bench_data/d33/`（可重跑验证）
 
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
