@@ -1,0 +1,10 @@
+2026/11/02 07:18:21 sql: failover skip candidate node-b5d542b7 for region 3: sql: region 3 not held by candidate node-b5d542b7
+2026/11/02 07:18:23 [openxdb-mysql] query failed: SQL error: TXN_PREPARE_FAILED: tso unavailable: dial tcp 127.0.0.1:17881: connectex: No connection could be made because the target machine actively refused it.; sql="INSERT INTO t3 VALUES (29,'v29')"
+{"event":"mysql_log","level":"info","module":"mysqlproto","msg":"mysql conn 18 closed: read tcp 127.0.0.1:13318-\u003e127.0.0.1:58716: wsarecv: An existing connection was forcibly closed by the remote host.","time":"2026-11-02T07:18:23.998+08:00"}
+2026/11/02 07:18:31 sql: failover down node node-b5d542b7 skipped: quorum not met: db: quorum not met, refuse to promote: reachable 1/3, need 2
+2026/11/02 07:18:33 sql: failover down node node-2cdc130d skipped: quorum not met: db: quorum not met, refuse to promote: reachable 1/3, need 2
+2026/11/02 07:18:33 sql: failover down node node-b5d542b7 skipped: quorum not met: db: quorum not met, refuse to promote: reachable 1/3, need 2
+2026/11/02 07:18:33 [openxdb-mysql] query failed: SQL error: TXN_PREPARE_FAILED: tso unavailable: dial tcp 127.0.0.1:17881: connectex: No connection could be made because the target machine actively refused it.; sql="INSERT INTO t3 VALUES (30,'v30')"
+{"event":"mysql_log","level":"info","module":"mysqlproto","msg":"mysql conn 21 closed: read tcp 127.0.0.1:13318-\u003e127.0.0.1:54659: wsarecv: An existing connection was forcibly closed by the remote host.","time":"2026-11-02T07:18:33.244+08:00"}
+2026/11/02 07:18:33 sql: failover down node node-2cdc130d skipped: quorum not met: db: quorum not met, refuse to promote: reachable 1/3, need 2
+2026/11/02 07:18:33 sql: failover down node node-b5d542b7 skipped: quorum not met: db: quorum not met, refuse to promote: reachable 1/3, need 2
