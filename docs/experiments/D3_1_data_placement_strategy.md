@@ -2,12 +2,14 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_9d7f2a1c4e5b6c7d8e9f0a1b2c3d4e5f
-    ReservedCode1: D3J1dataPlacementStrategySelection
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_dd70d8ead60611f180d5525400248c00
+    ReservedCode1: F4YZLhRQdTtBI0/X2GuqIJblfttSj+sUnlVIZ/MoGYc9e8fbkRDR31Np3MNzkg7vMgfE7bbu6bL+UyAkP47KBGvKAnHhw+LcNQJqTrdS3klyiE3HQK2pPevFk8fJ3Jn7ycebLuiosnp4jaFx17giREWHEQzcM26YsuchrtyKC18VJLLZd+wqS+kxf1M=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_9d7f2a1c4e5b6c7d8e9f0a1b2c3d4e5f
-    ReservedCode2: D3J1dataPlacementStrategySelection
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_dd70d8ead60611f180d5525400248c00
+    ReservedCode2: F4YZLhRQdTtBI0/X2GuqIJblfttSj+sUnlVIZ/MoGYc9e8fbkRDR31Np3MNzkg7vMgfE7bbu6bL+UyAkP47KBGvKAnHhw+LcNQJqTrdS3klyiE3HQK2pPevFk8fJ3Jn7ycebLuiosnp4jaFx17giREWHEQzcM26YsuchrtyKC18VJLLZd+wqS+kxf1M=
 ---
+
+
 
 # D3.1 数据分布策略选型（v1.18.0 D3 跨节点数据分布）
 
@@ -140,4 +142,5 @@ OpenXDB 现状中的近似机制是 M2 binlog 复制（T11）：主从异步复�
 - **广播表列为后续版本增强**：本质是"全 region 全节点副本"的显式指派退化形态，需要新增同步广播写协议，本版本不实施；
 - **回退路径明确**：D3.1 文档先行不阻塞；D3.2 失败回退隐式单 region（数据不丢）；广播表作为后续备选路线。
 
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

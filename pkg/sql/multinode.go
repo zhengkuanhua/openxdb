@@ -291,7 +291,8 @@ func (e *Executor) scanMergedCluster(sess *Session, tx txn.Txn, ranges []storage
 // ---- 集群管理语句 ----
 
 // execAddNode ADD NODE '<addr>'：注册远端节点。
-// 先 TCP 握手（NODE_HELLO/NODE_HELLO_OK 双向身份确认），成功后再写入注册表。
+// 先 TCP 握手（NODE_HELLO/NODE_HELLO_OK 双向身份确认），成功后再写入注册表；
+// 随后向全拓扑广播注册表快照（G2 修复：使 B/C 互相可达，跨节点转发不报 not registered）。
 func (e *Executor) execAddNode(sess *Session, s *AddNodeStmt) (*Result, error) {
 	if e.mgr == nil {
 		return nil, &SQLError{Msg: "cluster not enabled"}
@@ -303,6 +304,10 @@ func (e *Executor) execAddNode(sess *Session, s *AddNodeStmt) (*Result, error) {
 	// 注册表落盘 m:nodes（与 m:regions 同层，重启后恢复）
 	if err := e.persistNodes(); err != nil {
 		return nil, err
+	}
+	// G2 修复：注册表广播为尽力而为，单节点失败不阻断 ADD 回执（日志记录）
+	if err := e.mgr.BroadcastRegistry(); err != nil {
+		dbgLog("add node: registry broadcast partial: %v", err)
 	}
 	return &Result{
 		Columns: []string{"node_id"},

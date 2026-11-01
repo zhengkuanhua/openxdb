@@ -208,6 +208,8 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.handleQuery(conn, payload)
 		case msgRegionPush:
 			s.handlePut(conn, payload)
+		case msgRegistrySync:
+			s.handleRegistrySync(conn, payload)
 		case msgPing:
 			// 复用 M2 心跳：原样回 ts
 			writeFrame(conn, msgPong, payload)
@@ -318,6 +320,22 @@ func (s *Server) handlePut(conn net.Conn, payload []byte) {
 		return
 	}
 	writeFrame(conn, msgRegionPushOK, mustJSON(resp))
+}
+
+// handleRegistrySync 处理 REGISTRY_SYNC（G2 修复）：合并源节点注册表快照并落盘 m:nodes。
+// 幂等：RegisterPeer 对已存在节点刷新地址与状态；本节点自身条目忽略。
+func (s *Server) handleRegistrySync(conn net.Conn, payload []byte) {
+	var req RegistrySyncReq
+	if err := unmarshalJSON(payload, &req); err != nil {
+		writeFrame(conn, msgRegistrySyncOK, mustJSON(RegistrySyncResp{Err: "bad registry sync request"}))
+		return
+	}
+	if s.mgr != nil {
+		s.mgr.RegisterPeers(req.Nodes)
+		// 注册表落盘：重启后仍可路由到全部节点（失败不阻断回执，内存已生效）
+		s.persistNodes()
+	}
+	writeFrame(conn, msgRegistrySyncOK, mustJSON(RegistrySyncResp{}))
 }
 
 // applyPush 执行数据装载：目标节点将 region 数据与路由原子写入本机。

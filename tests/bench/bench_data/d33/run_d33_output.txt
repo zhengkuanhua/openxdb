@@ -1,0 +1,91 @@
+[PASS] A listening
+[PASS] resolve A node id for TSO
+[PASS] B/C listening with TSO->A
+--- add node results ---
+Connected to 127.0.0.1:13316, server version: 8.0.36-OpenXDB v1.17.0
+node_id
+node-7bdd100a
+1 row(s) in set
+Connected to 127.0.0.1:13316, server version: 8.0.36-OpenXDB v1.17.0
+node_id
+node-0cda209c
+1 row(s) in set
+--- SHOW NODES @A ---
+Connected to 127.0.0.1:13316, server version: 8.0.36-OpenXDB v1.17.0
+node_id	addr	role	state
+node-0cda209c	127.0.0.1:17883	DATA	UP
+node-7bdd100a	127.0.0.1:17882	DATA	UP
+node-e2d441b0	127.0.0.1:17881	DATA	UP
+3 row(s) in set
+--- SHOW NODES @B ---
+Connected to 127.0.0.1:13317, server version: 8.0.36-OpenXDB v1.17.0
+node_id	addr	role	state
+node-0cda209c	127.0.0.1:17883	DATA	UP
+node-7bdd100a	127.0.0.1:17882	DATA	UP
+node-e2d441b0	127.0.0.1:17881	DATA	UP
+3 row(s) in set
+--- SHOW NODES @C ---
+Connected to 127.0.0.1:13318, server version: 8.0.36-OpenXDB v1.17.0
+node_id	addr	role	state
+node-0cda209c	127.0.0.1:17883	DATA	UP
+node-7bdd100a	127.0.0.1:17882	DATA	UP
+node-e2d441b0	127.0.0.1:17881	DATA	UP
+3 row(s) in set
+[PASS] A registry count=3
+[PASS] B registry count=3 (G2 fix: broadcast)
+[PASS] C registry count=3 (G2 fix: broadcast)
+[PASS] resolve node ids by addr
+node ids: A=node-e2d441b0 B=node-7bdd100a C=node-0cda209c
+[PASS] A create t3
+[PASS] B/C t3 DDL synced via broadcast (already exists)
+[PASS] t3 split to 3 regions
+region ids rA=3 rB=4 rC=2
+[PASS] assign rB->B / rC->C
+[PASS] B routes learned (3)
+[PASS] C routes learned (3)
+[PASS] B point id=1 (remote rA) visible
+[PASS] C point id=4 (remote rB) visible (G3 fix)
+[PASS] B point id=9 (remote rC) visible (G5 fix)
+[PASS] C point id=5 (local rC) visible
+[PASS] A COUNT(*) t3 = 9
+[PASS] A COUNT-where t3 = 9
+[PASS] B COUNT(*) t3 = 9
+[PASS] B COUNT-where t3 = 9
+[PASS] C COUNT(*) t3 = 9
+[PASS] C COUNT-where t3 = 9
+[PASS] B scan merged 1..9 in order
+[PASS] C scan merged 1..9 in order
+[PASS] A agg no-loss-no-dup
+[PASS] B agg no-loss-no-dup
+[PASS] C agg no-loss-no-dup
+[PASS] B COUNT rC-range (19..27) = 9
+[PASS] C COUNT rC-range (19..27) = 9
+[PASS] A UPDATE id=5 (rC) via 2PC ok
+[PASS] A point id=5 = v5x (coordinator forward read)
+[PASS] B point id=5 = v5x (remote forward read)
+[PASS] C point id=5 = v5x (local read, no version gap)
+[PASS] C local rC range count=21 (2PC write landed on owner)
+[PASS] B UPDATE id=8 (rC) via 2PC ok
+[PASS] A point id=8 = v8x (B-coordinated 2PC visible)
+[PASS] C point id=8 = v8x (local read)
+[PASS] A DELETE id=9 (rC) via 2PC ok
+[PASS] A/B COUNT=26 after remote delete (no-loss-no-dup)
+[PASS] C COUNT=26 after 2PC delete
+--- G4 visibility matrix (A coordinator / B remote / C owner) ---
+A forward read id=8: Connected to 127.0.0.1:13316, server version: 8.0.36-OpenXDB v1.17.0
+v
+v8x
+1 row(s) in set
+B forward read id=8: Connected to 127.0.0.1:13317, server version: 8.0.36-OpenXDB v1.17.0
+v
+v8x
+1 row(s) in set
+C local read id=8:  Connected to 127.0.0.1:13318, server version: 8.0.36-OpenXDB v1.17.0
+v
+v8x
+1 row(s) in set
+C local read id=5:  Connected to 127.0.0.1:13318, server version: 8.0.36-OpenXDB v1.17.0
+v
+v5x
+1 row(s) in set
+SUMMARY pass=41 fail=0 gap=0

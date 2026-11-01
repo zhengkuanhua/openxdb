@@ -169,6 +169,38 @@ func (m *Manager) AddNode(addr string) (string, error) {
 	return hello.NodeID, nil
 }
 
+// BroadcastRegistry 将本节点注册表快照广播给所有已注册远端节点（G2 修复）。
+// ADD NODE 仅发起节点单向注册，导致 B/C 互相不可达（跨节点转发报
+// node not registered）；每次 AddNode 成功后调用，使全拓扑注册表收敛一致。
+// 尽力而为：单节点失败不阻断其余节点同步，返回首个错误（由调用方记录）。
+func (m *Manager) BroadcastRegistry() error {
+	nodes := m.ListNodes()
+	var firstErr error
+	for _, n := range nodes {
+		if n.ID == m.SelfID {
+			continue
+		}
+		if err := m.clientFor(n.ID).syncRegistry(nodes, m.SelfID); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+// RegisterPeers 批量注册节点（接收 REGISTRY_SYNC 时调用）：
+// 逐个 RegisterPeer 合并注册表快照（幂等、跳过自身与空 ID）。
+func (m *Manager) RegisterPeers(nodes []NodeInfo) {
+	for i := range nodes {
+		n := nodes[i]
+		if n.ID == "" || n.ID == m.SelfID {
+			continue
+		}
+		m.RegisterPeer(n.ID, n.Addr)
+	}
+}
+
 // SetNodes 整体替换注册表（db.Open 从 m:nodes 恢复时调用；保持本节点条目存在）。
 func (m *Manager) SetNodes(nodes []NodeInfo) {
 	m.mu.Lock()

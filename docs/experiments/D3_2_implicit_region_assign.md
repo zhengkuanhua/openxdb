@@ -2,12 +2,14 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_9d7f2a1c4e5b6c7d8e9f0a1b2c3d4e5f
-    ReservedCode1: D3J2ImplicitRegionAssign
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_deb60d13d60611f1a0da525400393706
+    ReservedCode1: ZRgTb7zW0fUlcjh61ilsI5y3dORzkqSP7YCUEAH05g5mXNFHtg3wmn5x95r5HNAZ56cW+6D7Yd5MigaJw3DbYLTpfuLTpeyp+T6i/0qIwxUWE+uu7uGhn/62Lyqv71mgaaC5hrnOefGyjMgaiRl5urCUY11mGU6K3VGDlRYZhLqBu3yy23sy7g3nA7U=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_9d7f2a1c4e5b6c7d8e9f0a1b2c3d4e5f
-    ReservedCode2: D3J2ImplicitRegionAssign
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_deb60d13d60611f1a0da525400393706
+    ReservedCode2: ZRgTb7zW0fUlcjh61ilsI5y3dORzkqSP7YCUEAH05g5mXNFHtg3wmn5x95r5HNAZ56cW+6D7Yd5MigaJw3DbYLTpfuLTpeyp+T6i/0qIwxUWE+uu7uGhn/62Lyqv71mgaaC5hrnOefGyjMgaiRl5urCUY11mGU6K3VGDlRYZhLqBu3yy23sy7g3nA7U=
 ---
+
+
 
 # D3.2 隐式显式化 + ASSIGN REGION 三节点分布验证（v1.18.0 D3 Phase A）
 
@@ -97,3 +99,4 @@ region_id  table_id  start_key  end_key  state   node             local
 - **已知边界**：注册表广播、COUNT 跨节点聚合、跨节点版本可见性三项缺口按 §4 记录，不阻塞本阶段；进入 D3.3 一致性验证时优先修复 G2（注册表广播，连带 G3/G5）与 G1。
 - **回退路径**（DEV_PLAN §4）：如 D3.3 发现不可修复的一致性问题，按 D3.1 回退约定保留源节点副本，数据仍在源节点，ASSIGN 路由可逐 region 撤销（重指派回源），隐式单 region 语义不受影响。
 - **commit**：A2（D3.2 验证 + 文档 + 脚本归档），双远端（gitee + GitHub 443）SHA 一致。
+*（内容由AI生成，仅供参考）*

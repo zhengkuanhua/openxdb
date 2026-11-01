@@ -19,8 +19,10 @@ import (
 )
 
 const (
-	msgRegionPush   byte = 20
-	msgRegionPushOK byte = 21
+	msgRegionPush     byte = 20
+	msgRegionPushOK   byte = 21
+	msgRegistrySync   byte = 32 // 避开 2PC(22-27)/TSO(28-29)/DDL(30-31)
+	msgRegistrySyncOK byte = 33
 )
 
 // RegionPushReq REGION_PUSH 载荷：region 元信息 + 全量物理键数据 + 源节点路由视图。
@@ -168,6 +170,54 @@ func (c *Client) syncRegionRoutes(routes []sharding.RegionInfo, deleteIDs []stor
 	}
 	if resp.Err != "" {
 		return errors.New("cluster: route sync failed: " + resp.Err)
+	}
+	return nil
+}
+
+// RegistrySyncReq REGISTRY_SYNC 载荷：源节点注册表全量快照（G2 修复）。
+// 接收端合并 Nodes 到本机注册表并落盘 m:nodes，使拓扑各节点注册表收敛一致。
+type RegistrySyncReq struct {
+	SrcID string     `json:"src_id,omitempty"`
+	Nodes []NodeInfo `json:"nodes,omitempty"`
+}
+
+// RegistrySyncResp REGISTRY_SYNC_OK 载荷。
+type RegistrySyncResp struct {
+	Err string `json:"err,omitempty"`
+}
+
+// syncRegistry 短连接发送 REGISTRY_SYNC 并读取 REGISTRY_SYNC_OK。
+// 注册表广播为尽力而为：单节点失败不阻断其余节点同步（由 BroadcastRegistry 汇总）。
+func (c *Client) syncRegistry(nodes []NodeInfo, srcID string) error {
+	addr, err := c.mgr.NodeAddr(c.nodeID)
+	if err != nil {
+		return err
+	}
+	conn, err := dial(addr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	payload, err := marshalJSON(RegistrySyncReq{SrcID: srcID, Nodes: nodes})
+	if err != nil {
+		return err
+	}
+	if err := writeFrame(conn, msgRegistrySync, payload); err != nil {
+		return err
+	}
+	typ, raw, err := readFrame(conn)
+	if err != nil {
+		return err
+	}
+	if typ != msgRegistrySyncOK {
+		return errors.New("cluster: unexpected registry sync reply")
+	}
+	var resp RegistrySyncResp
+	if err := unmarshalJSON(raw, &resp); err != nil {
+		return err
+	}
+	if resp.Err != "" {
+		return errors.New("cluster: registry sync failed: " + resp.Err)
 	}
 	return nil
 }

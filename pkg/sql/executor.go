@@ -1262,6 +1262,11 @@ func (e *Executor) snapshotTS(sess *Session) uint64 {
 		return sess.curBeginTS
 	}
 	if sess.stmtBeginTS == 0 {
+		// D3.3：autocommit 读语句取号前 Reset 丢弃残余预取批次，与显式事务
+		// M18 一致。跨节点场景下残留批号滞后于 2PC commitTS，会导致远端
+		// 提交对本地不可见（快照号过旧）；Reset 后向权威 TSO 重新拉批，
+		// 拿到权威序列当前新鲜号，保证 node 间点查/COUNT/scan 互读一致。
+		e.ts.Reset()
 		ts, err := e.ts.Get()
 		if err != nil {
 			return 0
@@ -1286,7 +1291,7 @@ func (e *Executor) resetStmtSnapshot(sess *Session, stmt Stmt) {
 	if sess.inTx {
 		return
 	}
-	if e.SnapshotShare() && e.stmtROShareableLocked(sess, stmt) {
+	if e.SnapshotShare() && !e.clusterEnabled() && e.stmtROShareableLocked(sess, stmt) {
 		if sess.sharedROTx == nil {
 			sess.stmtBeginTS = 0 // 窗口起点：本语句独立取号
 			return
@@ -1323,11 +1328,18 @@ func (e *Executor) commitSeqLocked() uint64 {
 // 窗口（调用方须持 sess.mu）。判定保守对齐 C3 批判定（roBatchEligible）：
 // 仅纯只读 SELECT，排除读取用户变量（@var）、forcedTx 挂载窗口、
 // Serializable 隔离、非顶层 SELECT（内部子查询/物化视图重算等）；
+// D3.3：集群模式（clusterEnabled）一律不可共享——共享窗口过期检测依赖
+// 本地 WriteSeq，无法感知远端节点 2PC 提交，跨节点复用窗口快照会导致
+// 远端写入对本地不可见；集群下恢复逐语句独立快照（正确性优先，C6 快照
+// 共享优化仅限单机）；
 // C3 批接口并行段（batchExec）禁止共享，保持批内
 // "每条独立临时事务 + 独立快照"语义。
 func (e *Executor) stmtROShareableLocked(sess *Session, stmt Stmt) bool {
 	sel, ok := stmt.(*SelectStmt)
 	if !ok {
+		return false
+	}
+	if e.clusterEnabled() {
 		return false
 	}
 	if !sess.stmtTopLevel {
@@ -4403,6 +4415,16 @@ func (e *Executor) tryCountFastPath(sess *Session, tx txn.Txn, s *SelectStmt) (*
 	meta := findTable(tabs, s.From)
 	if meta == nil {
 		return nil, false, nil
+	}
+	// G1 修复（D3.3）：集群感知——表存在远端归属 region 时禁用本地快速路径，
+	// 回退 scanMergedCluster 物化聚合（本地 CountRange 只数本地 region，
+	// 跨节点 COUNT 会少计；回退后经 QUERY_REQ 转发远端 region 合并，不丢不重）。
+	if e.clusterEnabled() {
+		for _, rg := range e.regionsOf(meta) {
+			if !e.regionLocal(rg.RegionID) {
+				return nil, false, nil
+			}
+		}
 	}
 	rc, ok := tx.(storage.RangeCounter)
 	if !ok {
