@@ -1,0 +1,3 @@
+{"event":"storage_open_failed","level":"error","module":"storage","msg":"open storage in D:\\AI项目\\OpenXDB开源数据库开发\\openxdb\\tests\\bench\\bench_data\\d32\\data\\node-a: rocksdb: open D:\\AI项目\\OpenXDB开源数据库开发\\openxdb\\tests\\bench\\bench_data\\d32\\data\\node-a\\data: IO error: No such file or directory: Failed to create a directory: D:\\AI项目\\OpenXDB开源数据库开发\\openxdb\\tests\\bench\\bench_data\\d32\\data\\node-a\\data: ϵͳ�Ҳ���ָ����·����\r\n","time":"2026-11-01T19:06:13.596+08:00"}
+openxdb: db: open storage: rocksdb: open D:\AI项目\OpenXDB开源数据库开发\openxdb\tests\bench\bench_data\d32\data\node-a\data: IO error: No such file or directory: Failed to create a directory: D:\AI项目\OpenXDB开源数据库开发\openxdb\tests\bench\bench_data\d32\data\node-a\data: ϵͳ�Ҳ���ָ����·����
+
