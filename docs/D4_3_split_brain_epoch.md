@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_a5ce2d5bd69a11f1b2d8525400393706
+    ReservedCode1: gG/3PUwco3g8tMxi1BR28ghx2yul3JzLoQetfFZxNe64tqlolhgDnDrHVF5PW1abdv6xxS0XkcvobkFyUpgKA+KvYbQRkvWkSwIhMu098CcKF9ZGkju9Vgn2zNEVjHAm5mtFIfFc0QVtRkV9WZxKv1iMyMfT+VGK0MN3cU4KvA5lAT9jbcNXJrfj8k8=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_a5ce2d5bd69a11f1b2d8525400393706
+    ReservedCode2: gG/3PUwco3g8tMxi1BR28ghx2yul3JzLoQetfFZxNe64tqlolhgDnDrHVF5PW1abdv6xxS0XkcvobkFyUpgKA+KvYbQRkvWkSwIhMu098CcKF9ZGkju9Vgn2zNEVjHAm5mtFIfFc0QVtRkV9WZxKv1iMyMfT+VGK0MN3cU4KvA5lAT9jbcNXJrfj8k8=
+---
+
 # D4.3 脑裂 / epoch 拒绝验证
 
 - 日期：2026-11-02
@@ -86,3 +97,4 @@ iptables -I OUTPUT -m owner --uid-owner 2001 -p tcp --dport 7793 -j DROP # 断 A
 
 - `tests/bench/bench_data/d43/run_d43_split_brain_epoch.py`：可复现演练脚本（paramiko 驱动 VM）
 - `tests/bench/bench_data/d43/run_d43_output.txt`：本次观测输出记录
+*（内容由AI生成，仅供参考）*

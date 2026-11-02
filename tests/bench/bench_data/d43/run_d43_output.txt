@@ -43,3 +43,4 @@ TestP0EpochDefaultOnZeroRegression 全部 PASS
 
 [汇总] T1 集群轨无升主路径(不适用) | T3 GAP(旧主写放行, 恢复不收敛) |
 T6 复制轨 PASS(go test) | T8 on/off 默认与热切换 OK | T9 沿用 D4.2(PASS/FAIL 边界)
+（内容由AI生成，仅供参考）

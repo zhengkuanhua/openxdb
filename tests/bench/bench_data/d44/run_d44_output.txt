@@ -1,0 +1,40 @@
+D4.4 节点恢复回迁演练观测输出（2026-11-03，VM 192.168.100.200，v1.17.0 集群轨）
+
+== 基线（d44_t1，SPLIT x2 -> r1/r3/r4，ASSIGN r3->B r4->C） ==
+A read: COUNT(*) SUM(id) | 5 15
+B read: COUNT(*) SUM(id) | 3 33
+C read: COUNT(*) SUM(id) | 3 63
+
+== S1 杀 B（kill -9 pid=10944）==
+A nodes: node-24b6a076 UP | node-bdbff1cc DOWN | node-cab8c15a UP
+C nodes: node-24b6a076 UP | node-bdbff1cc DOWN | node-cab8c15a UP
+A routes: r1 -> node-24b6a076(local=true) | r3 -> node-24b6a076(local=true) | r4 -> node-cab8c15a(local=false)
+  # 注：r3 被 failover 自动重指派到 A
+A down-period INSERT id=30 -> (empty)=OK
+A read: 6 45（1-5 + 30）
+C read: 3 63（20-22，未见 A 的 30）
+
+== S3 重启 B（--port 7789；误用 7790 与 C 冲突 bind: address already in use，B 正确内部端口 7789）==
+B proc: 15923 UP；A nodes: 三端全 UP
+A routes: r1->A | r3->A（failover 残留）| r4->C
+B routes: r1->A | r3->B（本地 meta）| r4->C   # 路由分裂
+A read: 6 45 | B read: 3 33 | C read: 3 63    # 三端本地化，聚合读未恢复
+B SELECT id=30 -> (empty)                     # down 期写入不回迁
+B INSERT id=31 -> OK（本地提交）
+A read: 6 45 | B read: 4 64 | C read: 3 63    # 31 不进 A/C 视图
+
+== S3+ 人工回迁（ASSIGN REGION 3 TO B）==
+A routes: r1->A | r3->B | r4->C（三端一致）
+A read: 6 45 | B read: 4 64 | C read: 3 63    # 路由一致后聚合读仍不恢复
+
+== S4 对照（SIGTERM 优雅退出 B -> 重启）==
+B proc: 17345 UP；A nodes: 三端 UP
+A routes: r1->A | r3->B | r4->C（三端一致）
+A read: 6 45 | B read: 4 64 | C read: 3 63    # 优雅重启同样本地化，排除 kill -9 残留
+
+== 结论 ==
+- 宕机检测 / 心跳恢复：PASS
+- failover region 重指派：PASS（r3 自动接管到 A）
+- 路由自动回迁 / 收敛：GAP（failover 接管不回迁；B 本地 meta 与集群视图分裂；人工 ASSIGN 可收敛）
+- 数据回迁 / 追平：GAP（down 期写入与恢复后写入均不进聚合视图，三端发散）
+- 读聚合恢复：GAP（重启节点跨节点拉取失效，路由一致亦不恢复）
