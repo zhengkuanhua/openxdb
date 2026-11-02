@@ -1,0 +1,45 @@
+D4.3 脑裂 / epoch 拒绝验证 — 观测输出记录
+日期: 2026-11-02
+VM: 192.168.100.200 Oracle Linux 9.7 | OpenXDB v1.17.0 三节点集群轨
+节点: A=node-24b6a076(7791/13306, 中心TSO) B=node-bdbff1cc(7792/13307) C=node-cab8c15a(7793/13308)
+配置: ha_epoch_enabled=on(default) ha_quorum_enabled=off(default)
+
+[S0 配置修正]
+- B/C 启动参数 --tso-node 原为 node-a(别名, 不在注册表) -> 写路径恒报 tso unavailable: node not registered
+- 修正为 A 真实 ID node-24b6a076 后 B/C 直写成功(本地提交)
+- A 进程改为独立用户 oxd43(uid=2001) 运行, 数据目录 /data/d43-node1 chown -R oxd43:oxd43
+- iptables nf_tables 后端不支持 --pid-owner(unknown option), 改 --uid-owner 隔离 A 出站
+
+[S1 基线]
+- SPLIT REGION 9223372036854775809 -> regions 1/2; SPLIT REGION 2 -> regions 1/3/4
+- ASSIGN REGION 3 TO B / ASSIGN REGION 4 TO C
+- A 写 1-5, B 写 10-12, C 写 20-22
+- 三端聚合读: count=11 sum=111 (一致)
+
+[S2 双向隔离 A]
+iptables: INPUT --dport 7791 DROP; OUTPUT -m owner --uid-owner 2001 --dport 7792 DROP; OUTPUT ... --dport 7793 DROP
+等待 25s 后:
+- A 侧 SHOW NODES: node-24b6a076 UP / node-bdbff1cc DOWN / node-cab8c15a DOWN
+- B 侧 SHOW NODES: node-24b6a076 DOWN / node-bdbff1cc UP / node-cab8c15a UP
+- C 侧 SHOW NODES: node-24b6a076 DOWN / node-bdbff1cc UP / node-cab8c15a UP
+- A 旧主写 INSERT 100: 成功, A count=6 (未被 fencing 拒绝) [GAP]
+- B 写 INSERT 200: ERROR 1045 SQL error: TXN_PREPARE_FAILED: tso unavailable: dial tcp 192.168.100.200:7791: i/o timeout
+- C 写 INSERT 300: 同上
+- B 聚合读: count=9 (r3本地3 + r4经C 3 + 本地残留3; r1经A 5行丢失)
+- A 聚合读: count=6 (本地r1 5 + 分区期写入100)
+
+[S3 恢复]
+清 iptables, 等待 20s:
+- 三端 SHOW NODES 全 UP (心跳自动恢复)
+- A count=6 (1-5,100) / B count=11 / C count=11 (三端不一致, 100 不在聚合视图) [GAP]
+- A 再写 INSERT 400: A=7, B/C 仍 11 (400 亦不在聚合视图) [GAP]
+- 分析: 100/400 落在 r4 区间(id>=20), r4 归属 C, 读路由指向 C; A 写为本地提交, 本地的 100/400 被排除出聚合视图
+- 集群轨无复制轨, 恢复后无自动合并/数据回灌补偿
+
+[本机 go test 断言(复制轨 epoch fencing 闭环)]
+ok pkg/db 3.2s: TestP1BrainSplitDrill / TestP0EpochMonotonicPersist /
+TestP0QuorumGuardRejectsInsufficient / TestP0AllowWriteFencing /
+TestP0EpochDefaultOnZeroRegression 全部 PASS
+
+[汇总] T1 集群轨无升主路径(不适用) | T3 GAP(旧主写放行, 恢复不收敛) |
+T6 复制轨 PASS(go test) | T8 on/off 默认与热切换 OK | T9 沿用 D4.2(PASS/FAIL 边界)
