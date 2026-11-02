@@ -45,6 +45,10 @@ type NodeInfo struct {
 	Role     NodeRole  `json:"role"`
 	State    NodeState `json:"state"`
 	LastSeen int64     `json:"last_seen"` // UnixMilli；0 = 未知
+	// DataReady 数据面就绪标记（P3 读聚合 READY 前置）：节点重启/新加入后
+	// 数据与路由未对齐时为 false，读路径拒绝跨节点转发；全量对齐推送成功后
+	// 置回 true。旧数据目录恢复（无该字段）默认 true（零回归）。
+	DataReady bool `json:"data_ready,omitempty"`
 }
 
 // MetaNodesKey 节点注册表落盘全局键（不带 region 前缀，与 m:regions 同层）。
@@ -91,6 +95,9 @@ type Manager struct {
 
 	// M6 节点离线回调（心跳 UP->DOWN 首次转换时异步触发一次）。
 	onDown func(nodeID string)
+	// P3 节点上线回调（心跳 DOWN->UP 首次转换时异步触发一次）：
+	// 由 SQL 层装配为 join 同步路由 + failover 接管回迁入口（见 sql/ha_p3.go）。
+	onUp func(nodeID string)
 
 	// P2 HA：分区检测与视图 version（见 partition.go）。
 	prober      func(id string) bool // 注入探活函数（nil = 真实 PING/PONG）
@@ -163,7 +170,7 @@ func (m *Manager) AddNode(addr string) (string, error) {
 	}
 	m.nodes[hello.NodeID] = &NodeInfo{
 		ID: hello.NodeID, Addr: addr, Role: RoleData, State: StateUp,
-		LastSeen: time.Now().UnixMilli(),
+		LastSeen: time.Now().UnixMilli(), DataReady: true,
 	}
 	m.mu.Unlock()
 	return hello.NodeID, nil
@@ -262,8 +269,15 @@ func (m *Manager) HasRemoteNodes() bool {
 }
 
 // RegisterPeer 注册对端节点（双向握手：收到 NODE_HELLO 时调用）。
-// 已存在则刷新地址与状态；本节点自身忽略。
+// 已存在则刷新地址与状态；本节点自身忽略。握手场景视为数据面就绪。
 func (m *Manager) RegisterPeer(id, addr string) {
+	m.RegisterPeerData(id, addr, true)
+}
+
+// RegisterPeerData 注册/刷新对端节点并携带数据面就绪标记（REGISTRY_SYNC 接收端用）。
+// 已存在条目以广播快照的 DataReady 为准（P3：SetDataReady 的未就绪状态随注册表
+// 广播传播到全网）；新条目使用传入值。本节点自身忽略。
+func (m *Manager) RegisterPeerData(id, addr string, dataReady bool) {
 	if id == "" || id == m.SelfID {
 		return
 	}
@@ -272,12 +286,13 @@ func (m *Manager) RegisterPeer(id, addr string) {
 	if n, ok := m.nodes[id]; ok {
 		n.Addr = addr
 		n.State = StateUp
+		n.DataReady = dataReady
 		if t := time.Now().UnixMilli(); t > n.LastSeen {
 			n.LastSeen = t
 		}
 		return
 	}
-	m.nodes[id] = &NodeInfo{ID: id, Addr: addr, Role: RoleData, State: StateUp, LastSeen: time.Now().UnixMilli()}
+	m.nodes[id] = &NodeInfo{ID: id, Addr: addr, Role: RoleData, State: StateUp, LastSeen: time.Now().UnixMilli(), DataReady: dataReady}
 }
 
 // MarkHeartbeat 记录对端心跳响应时间（更新 LastSeen 并置 UP）。
@@ -336,6 +351,48 @@ func (m *Manager) notifyDown(id string) {
 	if fn != nil {
 		go fn(id)
 	}
+}
+
+// SetOnUp 注册节点上线回调：心跳检测到节点 DOWN->UP 时异步触发一次。
+// 回调在独立 goroutine 中执行（不阻塞心跳循环；调用方须自行处理并发与锁）。
+func (m *Manager) SetOnUp(fn func(nodeID string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onUp = fn
+}
+
+// notifyUp 异步触发上线回调（仅 DOWN->UP 首次转换，由心跳 tick 判定后调用）。
+func (m *Manager) notifyUp(id string) {
+	m.mu.RLock()
+	fn := m.onUp
+	m.mu.RUnlock()
+	if fn != nil {
+		go fn(id)
+	}
+}
+
+// SetDataReady 更新节点数据面就绪标记并广播注册表（P3 读聚合 READY 前置）。
+// 调用方（SQL 层）在本节点数据/路由对齐完成或未就绪时调用；广播为尽力而为，
+// 单节点失败不阻断本地状态更新。
+func (m *Manager) SetDataReady(id string, v bool) error {
+	m.mu.Lock()
+	if n, ok := m.nodes[id]; ok {
+		n.DataReady = v
+	}
+	m.mu.Unlock()
+	return m.BroadcastRegistry()
+}
+
+// NodeDataReady 查询节点数据面就绪状态：未注册视为就绪（兼容"未注册即本地"
+// 与单机语义，零回归）。
+func (m *Manager) NodeDataReady(id string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n, ok := m.nodes[id]
+	if !ok {
+		return true
+	}
+	return n.DataReady
 }
 
 // ensureRemote 校验转发目标存在且在线。

@@ -118,6 +118,8 @@ func (e *Executor) failoverRegion(rg sharding.RegionInfo, downID string) error {
 				return err
 			}
 		}
+		// P3：记录接管来源（原主），原主恢复 UP 后据此自动回迁。
+		_ = e.recordRegionEpochOwnerFor(rg.RegionID, e.selfID, downID)
 		if err := e.router.SetRegionNode(rg.RegionID, e.selfID); err != nil {
 			return err
 		}
@@ -128,6 +130,7 @@ func (e *Executor) failoverRegion(rg sharding.RegionInfo, downID string) error {
 		changed := rg
 		changed.Node = e.selfID
 		changed.Local = false
+		changed.SourceOwner = downID
 		return e.broadcastRegionView([]sharding.RegionInfo{changed}, nil)
 	}
 	// 构建权威路由视图（显式化本地归属；本次 region 归属目标节点）。
@@ -153,6 +156,8 @@ func (e *Executor) failoverRegion(rg sharding.RegionInfo, downID string) error {
 	if err := e.mgr.PushRegion(target, rg, srcRows, regions, srcID); err != nil {
 		return err
 	}
+	// P3：记录接管来源（原主），原主恢复 UP 后据此自动回迁。
+	_ = e.recordRegionEpochOwnerFor(rg.RegionID, target, downID)
 	if err := e.router.SetRegionNode(rg.RegionID, target); err != nil {
 		return err
 	}
@@ -163,6 +168,7 @@ func (e *Executor) failoverRegion(rg sharding.RegionInfo, downID string) error {
 	changed := rg
 	changed.Node = target
 	changed.Local = false
+	changed.SourceOwner = downID
 	return e.broadcastRegionView([]sharding.RegionInfo{changed}, nil)
 }
 
@@ -258,4 +264,150 @@ func (e *Executor) resolveRegionOwner(rid storage.ID) string {
 		return e.selfID
 	}
 	return node
+}
+
+// HandleNodeUp 节点恢复 UP 后的集群轨装配入口（P3 HA，由 Manager.SetOnUp 回调）：
+//  1. join 同步路由：把本机权威 region 路由表同步给恢复节点（region 级对齐兜底，
+//     避免恢复节点凭旧路由表服务导致路由分裂；PushAllRegionsToNode 内部已做
+//     数据面 READY 前置，见 db.StartCluster 装配）。
+//  2. failover 接管回迁：若本机持有该节点原主 region 的接管条目（SourceOwner ==
+//     nodeID，即此前 failover 重指派记录），自动回迁数据与路由（TryRejoinAsFollower
+//     幂等：路由 epoch 陈旧即跳过，原主数据完整性以新 epoch 为准）。
+//
+// 单机模式与节点未注册时无操作（零回归）；回迁失败不阻断路由同步。
+func (e *Executor) HandleNodeUp(nodeID string) (int, error) {
+	if e.mgr == nil || nodeID == "" || nodeID == e.selfID {
+		return 0, nil
+	}
+	migrated := 0
+	// 先同步权威路由（本机视图为最新，恢复节点以对齐为准）。
+	if err := e.syncRegionsToNode(nodeID); err != nil {
+		log.Printf("sql: node up %s route sync failed: %v", nodeID, err)
+	} else {
+		log.Printf("sql: node up %s route synced", nodeID)
+	}
+	// 再执行 failover 接管回迁（依赖路由表已学习到接管来源）。
+	for _, rg := range e.router.AllRegions() {
+		if rg.SourceOwner != nodeID {
+			continue
+		}
+		if err := e.tryRejoinAsFollower(rg, nodeID); err != nil {
+			log.Printf("sql: node up %s rejoin region %d failed: %v", nodeID, rg.RegionID, err)
+			continue
+		}
+		migrated++
+	}
+	return migrated, nil
+}
+
+// syncRegionsToNode 将本机权威 region 路由表同步到目标节点（join 同步路由）。
+// 复用复制轨 pushAllRegionsToNode（SQL 层暴露的 PushAllRegionsToNode 同一实现，
+// 含数据/路由装载与 epoch 校验）；推送全部成功即声明目标节点数据面就绪并广播
+// （全网读路径 READY 前置放行跨节点聚合读）；目标不可达/推送失败返回错误，
+// 由 HandleNodeUp 记录，下一次 UP 回调重试（尽力而为）。
+func (e *Executor) syncRegionsToNode(nodeID string) error {
+	if e.mgr == nil || e.selfID == nodeID {
+		return nil
+	}
+	if err := e.pushAllRegionsToNode(nodeID); err != nil {
+		return err
+	}
+	return e.mgr.SetDataReady(nodeID, true)
+}
+
+// tryRejoinAsFollower 复制轨装配版（P3 region 级对齐兜底）：
+// 将 SourceOwner == 原主的 region 从接管节点回迁数据/路由到原主（follower 语义），
+// 成功返回 nil；已回迁/epoch 陈旧/键空间无数据时返回 nil（幂等）。
+func (e *Executor) tryRejoinAsFollower(rg sharding.RegionInfo, rejoinID string) error {
+	start := sharding.EncodeRegionKey(rg.RegionID, rg.StartKey)
+	end := sharding.EncodeRegionKey(rg.RegionID, rg.EndKey)
+	if rg.EndKey == nil {
+		end = sharding.EncodeRegionKey(rg.RegionID+1, nil)
+	}
+	rows, err := e.scanRegionRows(e.selfID, start, end)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		// 接管节点已无该 region 真实数据（回迁无意义），仅归还路由归属。
+		log.Printf("sql: rejoin region %d to %s: no local data, route only", rg.RegionID, rejoinID)
+		return e.routeOnlyRejoin(rg, rejoinID)
+	}
+	// 复制轨 P1 对齐：目标持有校验 + 数据/路由推送（携带新 epoch），
+	// 失败（目标未就绪/陈旧 epoch 拒绝）返回错误由调用方跳过。
+	if err := e.PushRegionEpochTo(rejoinID, rg, rows, e.selfID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// routeOnlyRejoin 无数据场景的纯路由归还：仅将 region 归属改回原主并广播，
+// 不推送数据（避免把空数据覆盖原主可能存在的本地副本）。
+func (e *Executor) routeOnlyRejoin(rg sharding.RegionInfo, rejoinID string) error {
+	if e.mgr == nil {
+		return nil
+	}
+	updated := rg
+	updated.Node = rejoinID
+	updated.Local = false
+	updated.SourceOwner = ""
+	// 不 bump epoch：无数据变更，仅归属归还；接收端按 epoch 幂等接受。
+	if err := e.router.SetRegionNodeEpochSource(rg.RegionID, rejoinID, rg.RegionEpoch, ""); err != nil {
+		return err
+	}
+	if err := e.persistRegions(); err != nil {
+		return err
+	}
+	return e.broadcastRegionView([]sharding.RegionInfo{updated}, nil)
+}
+
+// PushRegionEpochTo 将 region 数据与路由按新 epoch 推送到目标节点（回迁专用）。
+// 复用 cluster.Manager.PushRegionEpoch（复制轨 TryRejoinAsFollower 同款通道）：
+// 携带 clusterEpoch + regionEpoch，接收端 checkRegionPushEpoch 校验通过才装载。
+// 目标节点未就绪/不可达时返回错误，由调用方决定跳过。
+func (e *Executor) PushRegionEpochTo(target string, rg sharding.RegionInfo, rows []storage.KVPair, srcID string) error {
+	if e.mgr == nil {
+		return nil
+	}
+	regionEpoch := e.nextRegionEpoch(rg.RegionID, e.epochSrc.AcquireEpoch())
+	regions := e.router.AllRegions()
+	for i := range regions {
+		if regions[i].RegionID == rg.RegionID {
+			regions[i].Node = target
+			regions[i].Local = false
+			regions[i].RegionEpoch = regionEpoch
+			regions[i].SourceOwner = ""
+		}
+	}
+	clusterEpoch := e.epochSrc.AcquireEpoch()
+	srcRows := make([]cluster.QueryRow, 0, len(rows))
+	for _, kv := range rows {
+		srcRows = append(srcRows, cluster.QueryRow{Key: kv.Key, Value: kv.Value})
+	}
+	if err := e.mgr.PushRegionEpoch(target, rg, srcRows, regions, srcID, clusterEpoch); err != nil {
+		return err
+	}
+	if err := e.router.SetRegionNodeEpochSource(rg.RegionID, target, regionEpoch, ""); err != nil {
+		return err
+	}
+	if err := e.persistRegions(); err != nil {
+		return err
+	}
+	updated := rg
+	updated.Node = target
+	updated.Local = false
+	updated.RegionEpoch = regionEpoch
+	updated.SourceOwner = ""
+	return e.broadcastRegionViewEpoch([]sharding.RegionInfo{updated}, nil, clusterEpoch)
+}
+
+// recordRegionEpochOwnerFor 旧路径（无 epoch）fallback：将 failover 接管来源
+// （原主）记录到本机路由，供原主恢复 UP 后回迁决策；epoch 未启用时落盘
+// SourceOwner 字段本身即可（路由视图随 m:regions 持久化）。
+func (e *Executor) recordRegionEpochOwnerFor(rid storage.ID, owner, source string) error {
+	if rg, ok := e.router.FindRegion(rid); ok {
+		rg.SourceOwner = source
+		_ = e.router.SetRegionNodeEpochSource(rid, owner, rg.RegionEpoch, source)
+	}
+	return e.persistRegions()
 }

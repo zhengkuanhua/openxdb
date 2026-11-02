@@ -59,6 +59,10 @@ func (e *Engine) PushAllRegionsToNode(targetNodeID string) error {
 	return e.ex.pushAllRegionsToNode(targetNodeID)
 }
 
+// HandleNodeUp 节点恢复 UP 回调（P3 join 同步路由 + failover 接管回迁）：
+// 由 db.StartCluster 装配为心跳 UP 回调，触发节点上线后的路由同步与数据回迁。
+func (e *Engine) HandleNodeUp(nodeID string) (int, error) { return e.ex.HandleNodeUp(nodeID) }
+
 // ApplyRemoteDDL 节点侧应用远端 DDL 目录变更（T34 跨节点 DDL 广播接收端）。
 func (e *Engine) ApplyRemoteDDL(req cluster.DDLPushReq) error { return e.ex.ApplyRemoteDDL(req) }
 

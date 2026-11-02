@@ -179,6 +179,10 @@ func (e *Executor) scanMergedClusterTop(sess *Session, tx txn.Txn, ranges []stor
 				e.incLocal()
 				pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 			} else {
+				// P3 读聚合 READY 前置：目标节点数据面未就绪时拒绝远端转发。
+				if err = e.checkRemoteReady(node); err != nil {
+					return nil, err
+				}
 				e.incRemote()
 				rows, rerr := e.mgr.ScanRemote(node, r.Start, r.End, n, bs, e.txContextID(sess))
 				if rerr != nil {

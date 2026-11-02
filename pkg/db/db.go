@@ -106,16 +106,16 @@ type DB struct {
 
 	// compMu 补偿批次串行化（阶段二回迁自动化）：ReceiveCompensation 逐条
 	// apply+追加 binlog，与并发写/commit hook 隔离，保证补偿批次原子性。
-	compMu sync.Mutex
+	compMu        sync.Mutex
 	epochFilePath string // EpochMetaFile 持久化路径（Open 时装配）
 
 	// P2 HA：分区恢复合并（复制轨收敛 + 数据冲突标记）。
 	// NoteEpoch 检测到本节点为陈旧主（masterEpoch < 广播 epoch）时自动
 	// 降级只读并停止复制；写路径被 fencing 拒绝计入冲突标记。开关关闭
 	// 时以上字段保持零值/空，零回归。
-	readOnly     bool   // 陈旧主降级后的只读标记（分区恢复收敛）
+	readOnly      bool   // 陈旧主降级后的只读标记（分区恢复收敛）
 	conflictCount uint64 // 数据冲突标记：陈旧主写尝试被拒 / 恢复合并降级计数
-	demoteHook   func() // 降级观察回调（测试/上层通知用，nil 忽略）
+	demoteHook    func() // 降级观察回调（测试/上层通知用，nil 忽略）
 
 	// v1.16.0 WAL 自动 checkpoint：周期检查 WAL 大小，在安全位点截断已
 	// 持久化记录，防止 wal.log 随提交单调增长。Open 启动、Close 停止。
@@ -346,7 +346,14 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// 心跳：周期 PING 远端节点，超时标记 DOWN（复用 M2 帧协议）。
 	// M6：节点离线后自动触发 region 重指派（SQL 层读 failover 依赖新路由）。
 	d.Cluster.SetOnDown(func(nodeID string) { _, _ = d.SQL.FailoverDownNode(nodeID) })
+	// P3：节点恢复 UP 后自动触发 join 同步路由 + failover 接管回迁
+	// （见 sql/ha.go HandleNodeUp；回调独立 goroutine，不阻塞心跳）。
+	d.Cluster.SetOnUp(func(nodeID string) { _, _ = d.SQL.HandleNodeUp(nodeID) })
 	d.Cluster.StartHeartbeat(2*time.Second, 6*time.Second)
+	// P3 读聚合 READY 前置：本节点重启后路由可能落后于全网（down 期间其他节点
+	// 可能完成 failover/迁移），先声明数据面未就绪并广播，读路径 READY 前置拒绝
+	// 其他节点转发；待其他节点 HandleNodeUp 全量对齐推送成功后置回就绪。
+	_ = d.Cluster.SetDataReady(d.Cluster.SelfID, false)
 	return realAddr, nil
 }
 

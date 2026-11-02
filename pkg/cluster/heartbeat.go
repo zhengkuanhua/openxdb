@@ -11,7 +11,7 @@ import (
 
 // heartbeatLoop 周期探测远端节点存活的循环。
 type heartbeatLoop struct {
-	mgr     *Manager
+	mgr      *Manager
 	interval time.Duration
 	timeout  time.Duration
 	stopCh   chan struct{}
@@ -90,6 +90,11 @@ func (h *heartbeatLoop) pingNode(n NodeInfo, now int64) {
 		return
 	}
 	h.mgr.MarkHeartbeat(n.ID, ts)
+	// P3：DOWN->UP 首次转换时通知 SQL 层触发 join 同步路由 + failover 接管回迁。
+	// n 为 tick 前快照（含旧 State），仅旧状态为 DOWN 才触发，避免首次心跳误触发。
+	if n.State == StateDown {
+		h.mgr.notifyUp(n.ID)
+	}
 }
 
 // Probe 对单个注册节点做一次 PING/PONG 探活（P0 HA 升主多数派仲裁用）。

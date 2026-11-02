@@ -68,6 +68,19 @@ func (e *Executor) checkWritable(rid storage.ID) error {
 	return nil
 }
 
+// checkRemoteReady 跨节点读前校验目标节点数据面就绪（P3 读聚合 READY 前置）。
+// 未注册/未知节点视为就绪（与"未注册即本地"语义一致，零回归）；
+// 显式未就绪（重启对齐中）返回明确错误，调用方拒绝远端转发/降级。
+func (e *Executor) checkRemoteReady(nodeID string) error {
+	if e.mgr == nil {
+		return nil
+	}
+	if !e.mgr.NodeDataReady(nodeID) {
+		return &SQLError{Msg: fmt.Sprintf("node %s data not ready (restart alignment in progress)", nodeID)}
+	}
+	return nil
+}
+
 // getKVCluster 集群感知点查：定位 region 后，本地直读、远端转发。
 // 与 tx.Get 相同的错误语义（未命中返回 storage.ErrNotFound）。
 // M8 快照隔离：读路径携带 begin_ts，本地/远端均按版本过滤。
@@ -251,6 +264,10 @@ func (e *Executor) scanMergedCluster(sess *Session, tx txn.Txn, ranges []storage
 				e.incLocal()
 				pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 			} else {
+				// P3 读聚合 READY 前置：目标节点数据面未就绪时拒绝远端转发。
+				if err = e.checkRemoteReady(node); err != nil {
+					return nil, err
+				}
 				e.incRemote()
 				rows, rerr := e.mgr.ScanRemote(node, r.Start, r.End, 0, bs, e.txContextID(sess))
 				if rerr != nil {
@@ -305,9 +322,16 @@ func (e *Executor) execAddNode(sess *Session, s *AddNodeStmt) (*Result, error) {
 	if err := e.persistNodes(); err != nil {
 		return nil, err
 	}
-	// G2 修复：注册表广播为尽力而为，单节点失败不阻断 ADD 回执（日志记录）
-	if err := e.mgr.BroadcastRegistry(); err != nil {
+	// G2 修复：注册表广播为尽力而为，单节点失败不阻断 ADD 回执（日志记录）。
+	// P3 join 同步路由：新节点加入即标记数据面未就绪并广播（SetDataReady 内部
+	// 即广播注册表，读路径 READY 前置拒绝转发，直到其完成数据对齐后
+	// SetDataReady(true)）；随后下发本机权威 region 路由表，避免新节点凭空路由
+	// /旧路由表服务导致路由分裂。
+	if err := e.mgr.SetDataReady(nodeID, false); err != nil {
 		dbgLog("add node: registry broadcast partial: %v", err)
+	}
+	if err := e.syncRegionsToNode(nodeID); err != nil {
+		dbgLog("add node: route sync partial: %v", err)
 	}
 	return &Result{
 		Columns: []string{"node_id"},

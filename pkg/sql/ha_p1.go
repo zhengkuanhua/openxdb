@@ -138,6 +138,7 @@ func (e *Executor) staleFailover(rg sharding.RegionInfo) bool {
 //   - 消息不带 clusterEpoch（=0，旧节点 / ASSIGN 旧路径）→ 放行（版本协商防呆）；
 //   - clusterEpoch < 本机已知最大 → 陈旧消息拒绝（分区双端至多一端获胜）；
 //   - regionEpoch < 本机快照 → 该 region 曾被更新纪元取代，拒绝更新路由。
+//
 // 校验失败返回错误，接收端拒绝更新路由并记日志。
 func (e *Executor) checkRegionPushEpoch(clusterEpoch, regionEpoch uint64, rid storage.ID) error {
 	if !e.p1Enabled() {
@@ -171,12 +172,12 @@ func (e *Executor) nextRegionEpoch(rid storage.ID, clusterEpoch uint64) uint64 {
 
 // failoverRegionP1 failoverRegion 的 P1 增强版（由 FailoverDownNode 调用）：
 // 在原有"选副本 → 推送路由"之间插入两步校验：
-//   1) quorum 前置：FailoverDownNode 已做（本函数不再重复）；
-//   2) epoch 授权：启用 P1 时通过 epochSrc.AcquireEpoch() 取新 clusterEpoch；
-//   3) 持有校验：逐个候选目标调用 regionHoldsLocal(rg) 验证真实持有，
-//      不通过则跳过该候选尝试下一候选；
-//   4) epoch 校验：重指派消息携带 clusterEpoch + regionEpoch，接收端
-//      （checkRegionPushEpoch）校验通过才更新路由，陈旧消息被拒。
+//  1. quorum 前置：FailoverDownNode 已做（本函数不再重复）；
+//  2. epoch 授权：启用 P1 时通过 epochSrc.AcquireEpoch() 取新 clusterEpoch；
+//  3. 持有校验：逐个候选目标调用 regionHoldsLocal(rg) 验证真实持有，
+//     不通过则跳过该候选尝试下一候选；
+//  4. epoch 校验：重指派消息携带 clusterEpoch + regionEpoch，接收端
+//     （checkRegionPushEpoch）校验通过才更新路由，陈旧消息被拒。
 //
 // 保持与 failoverRegion 相同的返回语义：成功 nil；跳过全部候选返回明确错误。
 func (e *Executor) failoverRegionP1(rg sharding.RegionInfo, downID string) error {
@@ -297,7 +298,7 @@ func (e *Executor) tryFailoverTargetP1(rg sharding.RegionInfo, downID, target st
 	if err := e.mgr.PushRegionEpoch(target, rg, srcRows, regions, srcID, clusterEpoch); err != nil {
 		return err
 	}
-	if err := e.router.SetRegionNodeEpoch(rg.RegionID, target, regionEpoch); err != nil {
+	if err := e.router.SetRegionNodeEpochSource(rg.RegionID, target, regionEpoch, downID); err != nil {
 		return err
 	}
 	if err := e.persistRegions(); err != nil {
@@ -308,6 +309,7 @@ func (e *Executor) tryFailoverTargetP1(rg sharding.RegionInfo, downID, target st
 	updated.Node = target
 	updated.Local = false
 	updated.RegionEpoch = regionEpoch
+	updated.SourceOwner = downID
 	return e.broadcastRegionViewEpoch([]sharding.RegionInfo{updated}, nil, clusterEpoch)
 }
 

@@ -37,13 +37,13 @@ const (
 // Key 区间 [StartKey, EndKey)：StartKey 包含、EndKey 排他。
 // 边界为内层行键字节（如 s{tableID}{pk}），nil 表示表键空间开放端（表起始/表结束）。
 type RegionInfo struct {
-	RegionID storage.ID   `json:"region_id"`
-	TableID  storage.ID   `json:"table_id"`
-	StartKey []byte       `json:"start_key,omitempty"`
-	EndKey   []byte       `json:"end_key,omitempty"`
-	State    RegionState  `json:"state,omitempty"`
-	Local    bool         `json:"local"` // 数据是否物理位于本节点（M3 单机恒 true）
-	Explicit bool         `json:"explicit"` // 显式分片标记（隐式单 region 为 false）
+	RegionID storage.ID  `json:"region_id"`
+	TableID  storage.ID  `json:"table_id"`
+	StartKey []byte      `json:"start_key,omitempty"`
+	EndKey   []byte      `json:"end_key,omitempty"`
+	State    RegionState `json:"state,omitempty"`
+	Local    bool        `json:"local"`    // 数据是否物理位于本节点（M3 单机恒 true）
+	Explicit bool        `json:"explicit"` // 显式分片标记（隐式单 region 为 false）
 	// Node region 归属节点 ID（M4 集群路由）：空字符串 = 本节点（未指派）。
 	// 该字段为 M4 新增，M3 既有落盘元数据不含此字段（JSON 反序列化后为空），
 	// 语义默认"本节点"，保证未多节点化部署时路由行为零回归。
@@ -52,6 +52,11 @@ type RegionInfo struct {
 	// owner（Node）每变更一次 +1，随路由/重指派消息携带，接收方据此拒绝陈旧消息。
 	// 0 = 未启用/历史数据（兼容旧节点与关闭开关的路径，零回归）。
 	RegionEpoch uint64 `json:"region_epoch,omitempty"`
+	// SourceOwner failover 接管来源（原主节点 ID，P3 HA 回迁）：
+	// region 因归属节点 down 被自动重指派时记录原主，原主恢复 UP 后据此
+	// 自动回迁数据与路由；手动 ASSIGN/SPLIT/迁移产生的条目为空串（非故障接管）。
+	// 随路由持久化/广播传播，旧数据缺失该字段（空串）= 非接管，零回归。
+	SourceOwner string `json:"source_owner,omitempty"`
 }
 
 // 标准错误。
@@ -285,6 +290,28 @@ func (r *Router) SetRegionNodeEpoch(regionID storage.ID, node string, epoch uint
 			}
 			r.regions[i].Node = node
 			r.regions[i].RegionEpoch = epoch
+			return nil
+		}
+	}
+	return ErrRegionNotFound
+}
+
+// SetRegionNodeEpochSource 更新 region 归属节点并记录 owner 变更纪元与接管来源
+// （P1/P3 HA failover 专用）：epoch 陈旧（< 当前值）拒绝更新并返回
+// ErrStaleRegionEpoch；source 为该 region 的接管来源（原主节点 ID），非 failover
+// 的路由变更（手动 ASSIGN 等）传空串清除历史接管标记，防止原主恢复后误回迁。
+// 找不到 region 返回 ErrRegionNotFound。
+func (r *Router) SetRegionNodeEpochSource(regionID storage.ID, node string, epoch uint64, source string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.regions {
+		if r.regions[i].RegionID == regionID {
+			if epoch < r.regions[i].RegionEpoch {
+				return ErrStaleRegionEpoch
+			}
+			r.regions[i].Node = node
+			r.regions[i].RegionEpoch = epoch
+			r.regions[i].SourceOwner = source
 			return nil
 		}
 	}
