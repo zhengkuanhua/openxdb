@@ -87,6 +87,28 @@ func (d *DB) QuorumOK() error {
 	return d.quorumGuard()
 }
 
+// WriteQuorumOK 集群轨写入的多数派授权判定（P3 / D4.5 §6-3）。
+// 与 quorumGuard（升主/重指派前置仲裁，要求集群规模 >= 2，单节点直接拒绝）
+// 语义不同：写路径在单机或尚未注册任何 peer（n<2）时不存在多数派概念，放行；
+// 一旦组网（n>=2）则要求多数派可达——分区少数派侧拒绝写，与分区检测循环
+// （PartitionStatus）共用同一判定源，保证"检测到少数派"与"拒绝写"同步。
+func (d *DB) WriteQuorumOK() error {
+	if !d.quorumEnabled {
+		return nil
+	}
+	if d.Cluster == nil {
+		return nil
+	}
+	if n := len(d.Cluster.ListNodes()); n < 2 {
+		return nil
+	}
+	ps := d.Cluster.PartitionStatus()
+	if !ps.MajorityOK {
+		return fmt.Errorf("%w: reachable %d/%d, need %d", ErrQuorumNotMet, ps.Reachable, ps.Total, ps.Quorum)
+	}
+	return nil
+}
+
 // MasterEpoch 返回本节点当前 master 授权 epoch（0 = 未授权主）。
 func (d *DB) MasterEpoch() uint64 {
 	d.epochMu.Lock()
@@ -244,9 +266,9 @@ func (d *DB) broadcastEpoch(e uint64) {
 	_ = d.Cluster.BroadcastEpoch(e)
 }
 
-// quorumGuard 升主多数派仲裁（ha_quorum_enabled 开启时）：统计本节点与
-// 全部已注册远端中可达节点数（PING/PONG 探活），要求 >= N/2+1（N=注册表
-// 节点总数）；不足时返回 ErrQuorumNotMet，调用方不得升主（保持只读并重试）。
+// quorumGuard 升主/集群轨写多数派仲裁（ha_quorum_enabled 开启时）：统计本节点与
+// 全部已注册远端中可达节点数，要求 >= N/2+1（N=注册表节点总数）；不足时返回
+// ErrQuorumNotMet，调用方不得升主、不得接受集群轨写入（保持只读并重试）。
 // 复制链路已确认旧主不可达（follower offline 才触发升主），此处再以
 // 多数派确认本节点未孤立：分区内少于多数派时禁止升主，防多 follower 双主。
 // 开关关闭时直接放行（M6 旧行为，零回归）。
@@ -257,23 +279,16 @@ func (d *DB) quorumGuard() error {
 	if d.Cluster == nil {
 		return ErrQuorumNotMet
 	}
-	nodes := d.Cluster.ListNodes()
-	n := len(nodes)
+	n := len(d.Cluster.ListNodes())
 	if n < 2 {
 		return fmt.Errorf("%w: cluster size %d, need >= 2", ErrQuorumNotMet, n)
 	}
-	quorum := n/2 + 1
-	up := 1 // 本节点自身
-	for _, nd := range nodes {
-		if nd.ID == d.Cluster.SelfID {
-			continue
-		}
-		if d.Cluster.Probe(nd.ID) {
-			up++
-		}
-	}
-	if up < quorum {
-		return fmt.Errorf("%w: reachable %d/%d, need %d", ErrQuorumNotMet, up, n, quorum)
+	// 多数派判定统一走 cluster.Manager.PartitionStatus（与分区检测/恢复回调
+	// 同一判定源）：生产环境等价于真实 PING/PONG 探活；演练与测试可通过
+	// SetProber 注入分区视图，使"写路径授权"与"分区恢复检测"始终一致。
+	ps := d.Cluster.PartitionStatus()
+	if !ps.MajorityOK {
+		return fmt.Errorf("%w: reachable %d/%d, need %d", ErrQuorumNotMet, ps.Reachable, ps.Total, ps.Quorum)
 	}
 	return nil
 }

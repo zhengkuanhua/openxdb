@@ -146,6 +146,12 @@ func (e *Executor) groupOps(ops []kvOp) ([]kvOp, map[string][]kvOp, error) {
 	for _, op := range ops {
 		rid, _ := sharding.DecodeRegionKey(op.Key)
 		if e.regionLocal(rid) {
+			// P3（D4.5 §6-3 / T3）：本地写入前按 epoch 快照校验 region 归属——
+			// 该 region 已被更高 regionEpoch 指派给其它 owner 而本地路由条目
+			// 仍陈旧时拒绝提交，避免恢复窗口内旧主继续写已被接管的 region。
+			if err := e.regionOwnerFence(rid); err != nil {
+				return nil, nil, err
+			}
 			local = append(local, op)
 			continue
 		}

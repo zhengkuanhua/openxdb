@@ -120,6 +120,13 @@ type DB struct {
 	// v1.16.0 WAL 自动 checkpoint：周期检查 WAL 大小，在安全位点截断已
 	// 持久化记录，防止 wal.log 随提交单调增长。Open 启动、Close 停止。
 	checkpoint *checkpointController
+
+	// T3（D4.5 §6-3）：分区检测循环——quorum 仲裁开启时周期调用
+	// Cluster.CheckPartitionRecovery，检测"少数派 → 多数派"转换并触发集群轨
+	// 写 fencing 解除 + 路由视图自动收敛（SQL.OnPartitionRecovered）。
+	// StartCluster 启动、Close 停止；quorum 关闭时空转（零开销、零回归）。
+	partitionMu   sync.Mutex
+	partitionStop chan struct{}
 }
 
 // Init 初始化数据目录：创建 data/ 子目录与 openxdb.conf。
@@ -352,6 +359,14 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// P3：节点恢复 UP 后自动触发 join 同步路由 + failover 接管回迁
 	// （见 sql/ha.go HandleNodeUp；回调独立 goroutine，不阻塞心跳）。
 	d.Cluster.SetOnUp(func(nodeID string) { _, _ = d.SQL.HandleNodeUp(nodeID) })
+	// T3（D4.5 §6-3）集群轨 epoch fencing：
+	//  1) 装配"分区恢复"回调——少数派 → 多数派后清写 fencing 缓存、按 epoch
+	//     大者胜收敛路由视图，并异步向多数派拉取权威路由视图（旧主收敛为新
+	//     owner 的远端路由，其本地写随之被归属强制路由拒绝）；
+	//  2) 恢复后主动重拉权威视图，避免本地遗留陈旧 owner 继续接受本地写入。
+	d.Cluster.SetOnPartitionRecovered(func(version uint64) { d.SQL.OnPartitionRecovered(version) })
+	d.SQL.SetPartitionRouteResync(d.refreshRouteViewFromPeers)
+	d.startPartitionWatch()
 	d.Cluster.StartHeartbeat(2*time.Second, 6*time.Second)
 	// P3 读聚合 READY 前置：本节点重启后路由可能落后于全网（down 期间其他节点
 	// 可能完成 failover/迁移），先声明数据面未就绪并广播，读路径 READY 前置拒绝
@@ -363,6 +378,54 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// 导致 r3 不回迁、跨节点写落本地不报错（GAP A/C 根因）。异步执行不阻塞启动。
 	go d.refreshRouteViewFromPeers()
 	return realAddr, nil
+}
+
+// partitionWatchInterval 分区检测周期（T3）：quorum 仲裁关闭时循环空转
+// （不产生任何探活开销）；开启后按该周期做一次多数派判定，与心跳 2s 探活
+// 同量级，用于捕获"少数派 → 多数派"状态转换并触发写 fencing 解除与收敛。
+const partitionWatchInterval = time.Second
+
+// startPartitionWatch 启动分区检测循环（T3）：仅在 quorum 开启时实际探测，
+// 检测到分区恢复后由 cluster 回调触发 SQL.OnPartitionRecovered。
+// 重复 StartCluster 不重复启动；Close 时经 stopPartitionWatch 停止。
+func (d *DB) startPartitionWatch() {
+	if d.Cluster == nil {
+		return
+	}
+	d.partitionMu.Lock()
+	if d.partitionStop != nil {
+		d.partitionMu.Unlock()
+		return
+	}
+	stop := make(chan struct{})
+	d.partitionStop = stop
+	d.partitionMu.Unlock()
+	go func() {
+		t := time.NewTicker(partitionWatchInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				if d.Cluster == nil || !d.QuorumEnabled() {
+					continue // quorum 关闭：集群轨写 fencing 未启用，零开销空转
+				}
+				d.Cluster.CheckPartitionRecovery()
+			}
+		}
+	}()
+}
+
+// stopPartitionWatch 停止分区检测循环（Close 调用；幂等）。
+func (d *DB) stopPartitionWatch() {
+	d.partitionMu.Lock()
+	defer d.partitionMu.Unlock()
+	if d.partitionStop == nil {
+		return
+	}
+	close(d.partitionStop)
+	d.partitionStop = nil
 }
 
 // refreshRouteViewFromPeers 重启后主动向各远端节点拉取权威 region 归属视图
@@ -613,6 +676,8 @@ func (d *DB) Close() error {
 		d.checkpoint.Stop()
 		d.checkpoint = nil
 	}
+	// T3：先停止分区检测循环（避免停止后仍调用 CheckPartitionRecovery），幂等。
+	d.stopPartitionWatch()
 	if d.Cluster != nil {
 		d.Cluster.Stop() // 停止心跳并关闭复用连接
 	}

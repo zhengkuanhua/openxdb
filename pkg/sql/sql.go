@@ -161,6 +161,20 @@ func (e *Engine) SetTSO(src tso.Source) { e.ex.SetTSO(src) }
 // FailoverDownNode 触发节点离线后的 region 自动重指派（M6 心跳回调装配）。
 func (e *Engine) FailoverDownNode(downID string) (int, error) { return e.ex.FailoverDownNode(downID) }
 
+// OnPartitionRecovered 分区恢复（少数派 → 多数派）后的集群轨收敛入口
+// （T3，db.StartCluster 装配到 cluster 的分区恢复回调）：清写 fencing 缓存、
+// 按 epoch 大者胜收敛路由视图、异步拉取权威路由视图。
+func (e *Engine) OnPartitionRecovered(version uint64) { e.ex.OnPartitionRecovered(version) }
+
+// SetPartitionRouteResync 装配分区恢复后的权威路由拉取钩子（nil = 不拉取）。
+func (e *Engine) SetPartitionRouteResync(fn func()) { e.ex.SetPartitionRouteResync(fn) }
+
+// FencedWriteCount 返回集群轨写 fencing 拒绝次数（T3 观测项）。
+func (e *Engine) FencedWriteCount() uint64 { return e.ex.FencedWriteCount() }
+
+// PartitionRecoveredCount 返回分区恢复收敛次数（T3 观测项）。
+func (e *Engine) PartitionRecoveredCount() uint64 { return e.ex.PartitionRecoveredCount() }
+
 // SetAutoSplit 配置 M7 自动分裂：enabled 开启后，写路径累计水位并检查本地 region
 // 行数，超过 rowThreshold 自动沿数据中点一分为二（rowThreshold<=0 表示未开启）。
 func (e *Engine) SetAutoSplit(enabled bool, rowThreshold int64) {

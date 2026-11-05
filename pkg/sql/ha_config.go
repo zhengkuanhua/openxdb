@@ -77,7 +77,14 @@ func (e *Executor) SetHAConfigSetter(hc HAConfigSetter) {
 }
 
 // writeFenceCheck 写路径入口 fencing 检查：未装配或放行返回 nil。
+// P3（D4.5 §6-3 / T3）：先做复制轨 epoch fencing（db.AllowWrite），再做集群轨
+// 多数派授权校验——集群轨 masterEpoch 恒 0，db.AllowWrite 恒放行，故分区期
+// 旧主的写入必须由 clusterFenceCheck 拦截（ha_epoch_enabled + ha_quorum_enabled
+// 双开才生效，默认关闭零回归）。
 func (e *Executor) writeFenceCheck() error {
+	if err := e.clusterFenceCheck(); err != nil {
+		return err
+	}
 	if e.writeFence == nil {
 		return nil
 	}

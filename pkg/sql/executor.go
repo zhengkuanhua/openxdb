@@ -60,6 +60,16 @@ type Executor struct {
 	// P2 HA：陈旧路由消息冲突计数（分区恢复合并冲突标记，见 ha_p2.go）。
 	p2Mu           sync.Mutex
 	regionConflict uint64
+	// P3 HA（D4.5 §6 第 3 项 / T3）：集群轨写入 epoch/归属授权（分区 fencing）。
+	// 集群轨无复制轨、masterEpoch 恒 0，db.AllowWrite 恒放行；故写路径在此
+	// 追加多数派授权校验（见 ha_p3.go）：epoch + quorum 双开时本节点处于
+	// 分区少数派即拒绝写入，分区恢复后自动收敛并放行。默认关闭零回归。
+	p3Mu          sync.Mutex
+	p3At          time.Time // 上次多数派探测时间（TTL 缓存，避免逐语句 PING 放大）
+	p3Majority    bool      // 上次探测结果（多数派可达 = 写入获授权）
+	p3Fenced      uint64    // 分区期被拒绝的写入次数（观测）
+	p3Recovered   uint64    // 分区恢复收敛次数（观测）
+	p3RouteResync func()    // 分区恢复后拉取权威路由视图钩子（db.StartCluster 装配）
 	// 全局会话（旧单会话 API 使用：Engine.Execute/ExecuteAs、CLI、既有测试）。
 	// 服务端多连接场景使用 NewSession 创建独立会话，显式事务状态互不干扰。
 	globalSess *Session
