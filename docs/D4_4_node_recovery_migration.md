@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_4ac1819cd6a011f1a216525400248c00
+    ReservedCode1: MXZVjQ5L8dBAN6BKi4sAtTTe+8N81xTsrZRegBG1dEjjhl2iTPrD+3W8ZCk4dp2OmhNIpDtPFX2k+1I5McbLw2m9In9bqH8Tw6s5WxxS0pdmZYDhmge/9Gp7ixGmlKPk4qPGOQFy0wof0eD0NayFszpArATi5FReO8V+Im5qvclxJ8M/z+nLgGWyXSI=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_4ac1819cd6a011f1a216525400248c00
+    ReservedCode2: MXZVjQ5L8dBAN6BKi4sAtTTe+8N81xTsrZRegBG1dEjjhl2iTPrD+3W8ZCk4dp2OmhNIpDtPFX2k+1I5McbLw2m9In9bqH8Tw6s5WxxS0pdmZYDhmge/9Gp7ixGmlKPk4qPGOQFy0wof0eD0NayFszpArATi5FReO8V+Im5qvclxJ8M/z+nLgGWyXSI=
+---
+
 # D4.4 节点恢复回迁演练（B4）
 
 - 日期：2026-11-03
@@ -82,3 +93,4 @@ SIGTERM 优雅退出 B → 重启：三端 UP、路由三端一致（r1→A/r3�
 - `tests/bench/bench_data/d44/run_d44_node_recovery.py`：可复现演练脚本（paramiko 驱动 VM，含 S1-S4）
 - `tests/bench/bench_data/d44/run_d44_output.txt`：本次观测输出记录
 - 本文档：docs/D4_4_node_recovery_migration.md
+*（内容由AI生成，仅供参考）*
