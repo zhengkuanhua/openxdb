@@ -69,6 +69,22 @@ func nowTS() uint64 {
 	return uint64(time.Now().UnixMilli()) << logicalBits
 }
 
+// NowTS 返回当前物理毫秒编码的时间戳基数（低 24 位归零）。
+// 导出给 HA 发号层（pkg/cluster TSO 主备）复用同一时间戳编码规则，
+// 避免两处各写一份位移常量导致布局漂移。
+func NowTS() uint64 { return nowTS() }
+
+// NextBase 返回严格大于 after 的合法发号起点：优先取当前物理毫秒基数，
+// 时钟回拨或同毫秒（基数不前进）时退化为 after+1 兜底，保证不回退。
+// HA 发号层用它在"接管/恢复"时把新序列钉在旧序列之上。
+func NextBase(after uint64) uint64 {
+	b := nowTS()
+	if b <= after {
+		b = after + 1
+	}
+	return b
+}
+
 // allocLocked 在锁内分配 n 个连续号 [start, start+n)，推进 last 保证严格单调。
 func (t *TSO) allocLocked(n uint64) (uint64, uint64) {
 	if n == 0 {

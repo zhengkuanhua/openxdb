@@ -28,9 +28,11 @@ type TsoReq struct {
 }
 
 // TsoResp TSO_RESP 载荷：成功返回 [Start, Start+Count) 连续区间。
+// B2 TSO HA 下附带 Epoch（发号主纪元），客户端据此识别更高纪元的新主。
 type TsoResp struct {
 	Start uint64 `json:"start,omitempty"`
 	Count uint64 `json:"count,omitempty"`
+	Epoch uint64 `json:"epoch,omitempty"`
 	Err   string `json:"err,omitempty"`
 }
 
@@ -138,6 +140,10 @@ func (c *tsoClient) fetchBatch() (uint64, uint64, error) {
 }
 
 // handleTso 服务端处理 TSO_REQ：用本节点本地发号器批量发放并回执。
+//
+// B2 TSO HA：启用 HA 时只有"已授权主"可发号——follower 一律回执
+// errNotTsoLeader，客户端据此转发选主（epoch 更大者接管），从而避免
+// 一个已经失去授权的旧主在分区期间继续发号造成回退/重复。
 func (s *Server) handleTso(conn net.Conn, payload []byte) {
 	var req TsoReq
 	if err := unmarshalJSON(payload, &req); err != nil {
@@ -146,6 +152,15 @@ func (s *Server) handleTso(conn net.Conn, payload []byte) {
 	}
 	if s.tso == nil {
 		writeFrame(conn, msgTsoResp, mustJSON(TsoResp{Err: "tso not configured"}))
+		return
+	}
+	if st := s.tsoHAState(); st != nil {
+		start, n, ok, epoch := st.serve(req.Batch)
+		if !ok {
+			writeFrame(conn, msgTsoResp, mustJSON(TsoResp{Err: errTSONotLeader(epoch), Epoch: epoch}))
+			return
+		}
+		writeFrame(conn, msgTsoResp, mustJSON(TsoResp{Start: start, Count: n, Epoch: epoch}))
 		return
 	}
 	start, n := s.tso.GetBatch(req.Batch)

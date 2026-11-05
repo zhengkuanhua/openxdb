@@ -52,6 +52,9 @@ type Server struct {
 	// tso 本地/全局时间戳源（M8）：nil = 未装配（旧路径，不做版本过滤）。
 	// 中心化部署下本节点即为发号权威，TSO_REQ 由其批量发放。
 	tso tso.Source
+	// tsoHA TSO 主备状态机（B2）：非 nil 时 TSO_REQ 走"仅已授权主发号"分支，
+	// follower 回执 not tso leader 触发客户端选主；nil = 未启用 HA（单点语义）。
+	tsoHA *tsoHAState
 	// ddlApply 节点侧 DDL 元数据 apply 回调（T34）：由 db.StartCluster 装配
 	// sql.Executor.ApplyRemoteDDL；nil = 未装配（不接收目录变更）。
 	ddlApply func(req DDLPushReq) error
@@ -231,6 +234,12 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.handle2pcAbort(conn, payload)
 		case msgTsoReq:
 			s.handleTso(conn, payload)
+		case msgTsoElect:
+			// B2 TSO HA：选主请求（竞逐者拉票，主以 epoch 授予）
+			s.handleTsoElect(conn, payload)
+		case msgTsoFence:
+			// B2 TSO HA：降级广播（新主通告 epoch，陈旧主自降）
+			s.handleTsoFence(conn, payload)
 		case msgDDLPush:
 			s.handleDDLPush(conn, payload)
 		case msgBackupPrepare:
