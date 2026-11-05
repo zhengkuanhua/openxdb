@@ -135,6 +135,11 @@ func (e *Executor) hasRemoteOps(ops []kvOp) bool {
 }
 
 // groupOps 按 region 归属分组：本地组 + 远端组（按归属节点 ID）。
+//
+// B 簇加固（D4.4 未闭合根因）：远端归属的 op 只允许经 2PC 协调者转发到权威
+// owner，绝不允许静默改写本地副本造成跨节点读分裂（GAP C）。协调者能力
+// 缺失（未装配管理面或 TSO）时无法保证转发原子性，直接以明确错误拒绝，
+// 与 checkWritable 语义一致，不做本地降级写。
 func (e *Executor) groupOps(ops []kvOp) ([]kvOp, map[string][]kvOp, error) {
 	var local []kvOp
 	remote := map[string][]kvOp{}
@@ -142,9 +147,20 @@ func (e *Executor) groupOps(ops []kvOp) ([]kvOp, map[string][]kvOp, error) {
 		rid, _ := sharding.DecodeRegionKey(op.Key)
 		if e.regionLocal(rid) {
 			local = append(local, op)
-		} else {
-			node := e.regionNode(rid)
-			remote[node] = append(remote[node], op)
+			continue
+		}
+		node := e.regionNode(rid)
+		remote[node] = append(remote[node], op)
+	}
+	if len(remote) > 0 && (e.mgr == nil || e.ts == nil) {
+		for node, nops := range remote {
+			rid := storage.ID(0)
+			if len(nops) > 0 {
+				rid, _ = sharding.DecodeRegionKey(nops[0].Key)
+			}
+			return nil, nil, &SQLError{Msg: fmt.Sprintf(
+				"write to remote region %d not supported: region owned by node %s and no coordinator path (2pc unavailable)",
+				rid, node)}
 		}
 	}
 	return local, remote, nil

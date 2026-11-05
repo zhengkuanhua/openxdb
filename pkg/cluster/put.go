@@ -35,6 +35,11 @@ type RegionPushReq struct {
 	Rows      []QueryRow            `json:"rows"`
 	Routes    []sharding.RegionInfo `json:"routes,omitempty"`
 	SyncOnly  bool                  `json:"sync_only,omitempty"` // true=纯路由同步：不写数据、不把 Region 落本地
+	// ClaimOwner 本次接收 region 的归属声明（D4.4 修复）：
+	// true = 目标节点成为该 region owner（ASSIGN/迁移/回迁装载，Region.Node 通常即目标）；
+	// false（默认）= 副本对齐语义，接收端按 Region.Node 权威归属落视图，
+	// 不得把 Region 无条件判为本地，避免全量对齐把第三方 region 误标 local=true。
+	ClaimOwner bool `json:"claim_owner,omitempty"`
 	DeleteIDs []storage.ID          `json:"delete_ids,omitempty"` // SPLIT 广播：接收端先删除这些 region 路由
 	// ClusterEpoch 消息级全局纪元（P1 HA 防路由分裂）：由发起方在 quorum 授权后
 	// 递增取号，接收端校验本消息不落后于已见值；0 = 未启用/旧节点消息（跳过校验）。
@@ -56,23 +61,37 @@ func (m *Manager) PushRegion(nodeID string, rg sharding.RegionInfo, rows []Query
 	return m.pushRegionEpoch(nodeID, rg, rows, routes, srcID, 0)
 }
 
+// PushRegionReplica 以副本语义把 region 数据装载到目标节点（D4.4 修复）：
+// 声明 Region.Node 的权威归属，接收端保持该归属（本机仅持副本，local=false），
+// 仅当 Region.Node 为空或等于目标节点时目标才成为 owner。用于重启节点/新节点
+// 的全量对齐与路由同步，避免把第三方 region 误判为本地形成孤立读视图。
+func (m *Manager) PushRegionReplica(nodeID string, rg sharding.RegionInfo, rows []QueryRow, routes []sharding.RegionInfo, srcID string) error {
+	return m.pushRegionOwner(nodeID, rg, rows, routes, srcID, 0, false)
+}
+
 // PushRegionEpoch P1 数据装载：在 PushRegion 基础上携带 clusterEpoch（发起方
 // quorum 授权后取号），接收端校验 epoch 新鲜度后才更新路由，防分区双端重指派。
 func (m *Manager) PushRegionEpoch(nodeID string, rg sharding.RegionInfo, rows []QueryRow, routes []sharding.RegionInfo, srcID string, clusterEpoch uint64) error {
 	return m.pushRegionEpoch(nodeID, rg, rows, routes, srcID, clusterEpoch)
 }
 
-// pushRegionEpoch 短连接发送 REGION_PUSH 并读取 REGION_PUSH_OK。
+// pushRegionEpoch 短连接发送 REGION_PUSH 并读取 REGION_PUSH_OK（claim 语义：目标成为 owner）。
 func (m *Manager) pushRegionEpoch(nodeID string, rg sharding.RegionInfo, rows []QueryRow, routes []sharding.RegionInfo, srcID string, clusterEpoch uint64) error {
+	return m.pushRegionOwner(nodeID, rg, rows, routes, srcID, clusterEpoch, true)
+}
+
+// pushRegionOwner 带归属声明地发送 REGION_PUSH：claim=true 目标成为 owner，
+// claim=false 接收端按 Region.Node 权威归属落视图（副本对齐）。
+func (m *Manager) pushRegionOwner(nodeID string, rg sharding.RegionInfo, rows []QueryRow, routes []sharding.RegionInfo, srcID string, clusterEpoch uint64, claim bool) error {
 	n, err := m.ensureRemote(nodeID)
 	if err != nil {
 		return err
 	}
-	return m.clientFor(n.ID).pushRegion(rg, rows, routes, srcID, clusterEpoch)
+	return m.clientFor(n.ID).pushRegion(rg, rows, routes, srcID, clusterEpoch, claim)
 }
 
 // pushRegion 短连接发送 REGION_PUSH 并读取 REGION_PUSH_OK。
-func (c *Client) pushRegion(rg sharding.RegionInfo, rows []QueryRow, routes []sharding.RegionInfo, srcID string, clusterEpoch uint64) error {
+func (c *Client) pushRegion(rg sharding.RegionInfo, rows []QueryRow, routes []sharding.RegionInfo, srcID string, clusterEpoch uint64, claim bool) error {
 	addr, err := c.mgr.NodeAddr(c.nodeID)
 	if err != nil {
 		return err
@@ -82,7 +101,7 @@ func (c *Client) pushRegion(rg sharding.RegionInfo, rows []QueryRow, routes []sh
 		return err
 	}
 	defer conn.Close()
-	payload, err := marshalJSON(RegionPushReq{SrcID: srcID, Region: rg, Rows: rows, Routes: routes, ClusterEpoch: clusterEpoch})
+	payload, err := marshalJSON(RegionPushReq{SrcID: srcID, Region: rg, Rows: rows, Routes: routes, ClusterEpoch: clusterEpoch, ClaimOwner: claim})
 	if err != nil {
 		return err
 	}
@@ -135,6 +154,17 @@ func (m *Manager) broadcastRegionsEpoch(routes []sharding.RegionInfo, deleteIDs 
 		}
 	}
 	return firstErr
+}
+
+// SyncRouteViewTo 把源节点权威路由视图（纯路由，不带数据行）同步给 target 节点
+//（D4.4 修复：重启节点主动刷新 region 归属视图的服务端下发实现）。
+// 与 BroadcastRegionsEpoch 的差别是单播到指定节点，不向全网扩散。
+func (m *Manager) SyncRouteViewTo(target string, routes []sharding.RegionInfo, srcID string) error {
+	n, err := m.ensureRemote(target)
+	if err != nil {
+		return err
+	}
+	return m.clientFor(n.ID).syncRegionRoutes(routes, nil, srcID, 0)
 }
 
 // syncRegionRoutes 短连接发送 REGION_PUSH(SyncOnly=true) 并读取 REGION_PUSH_OK。

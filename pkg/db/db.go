@@ -326,6 +326,9 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// v1.7.0：装配全量对齐推送回调（FULLALIGN_REQ 接收端，回迁降级兜底）：
 	// 旧主请求本节点（新主）把全部 region 当前行 REGION_PUSH 推送给它。
 	srv.SetFullAlignHandler(d.SQL.PushAllRegionsToNode)
+	// D4.4 修复：装配权威路由视图同步回调（FULLALIGN_REQ{RoutesOnly} 接收端）：
+	// 重启节点主动请求本节点下发权威 region 归属视图，用于修正陈旧 owner。
+	srv.SetRouteSyncHandler(d.SQL.PushRouteViewToNode)
 	// M5：2PC 崩溃恢复——清理未决 prepare（未决事务回滚，数据从未写入）
 	// 与历史幂等标记（仅运行期有效），保证重启后参与者状态干净可重入。
 	if err := srv.Recover2PC(); err != nil {
@@ -354,8 +357,66 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// 可能完成 failover/迁移），先声明数据面未就绪并广播，读路径 READY 前置拒绝
 	// 其他节点转发；待其他节点 HandleNodeUp 全量对齐推送成功后置回就绪。
 	_ = d.Cluster.SetDataReady(d.Cluster.SelfID, false)
+	// D4.4 修复（A 簇）：不等对端 UP 事件检测（快速重启未超时标 DOWN 时对端不会触发
+	// HandleNodeUp），由本节点主动向各已注册远端节点拉取权威 region 归属视图，
+	// 覆盖本地 m:regions 旧视图，消除"重启节点误判 local=true 形成孤立读视图"
+	// 导致 r3 不回迁、跨节点写落本地不报错（GAP A/C 根因）。异步执行不阻塞启动。
+	go d.refreshRouteViewFromPeers()
 	return realAddr, nil
 }
+
+// refreshRouteViewFromPeers 重启后主动向各远端节点拉取权威 region 归属视图
+//（D4.4 修复 A 簇）。重启瞬间本节点注册表通常为空（对端尚未握手/广播），
+// 因此按短周期轮询等待对端出现后再拉取：任一对端同步成功即认为视图已收敛
+// 并置数据面就绪；等待窗口内始终无对端（单机部署）则直接置就绪；
+// 有对端但全部不可达时保持未就绪，由对端 HandleNodeUp 全量对齐兜底。
+func (d *DB) refreshRouteViewFromPeers() {
+	if d.Cluster == nil {
+		return
+	}
+	selfID := d.Cluster.SelfID
+	deadline := time.Now().Add(routeViewRefreshWindow)
+	for {
+		peers := make([]string, 0, 4)
+		for _, n := range d.Cluster.ListNodes() {
+			if n.ID != selfID {
+				peers = append(peers, n.ID)
+			}
+		}
+		if len(peers) == 0 {
+			if time.Now().After(deadline) {
+				// 单节点集群：无权威源可拉取，直接声明就绪（避免读路径永久 READY 阻塞）。
+				_ = d.Cluster.SetDataReady(selfID, true)
+				return
+			}
+			time.Sleep(routeViewRefreshInterval)
+			continue
+		}
+		synced := 0
+		for _, peer := range peers {
+			if err := d.Cluster.RequestRouteSync(peer, selfID); err != nil {
+				continue
+			}
+			synced++
+		}
+		if synced > 0 {
+			_ = d.Cluster.SetDataReady(selfID, true)
+			return
+		}
+		if time.Now().After(deadline) {
+			// 对端暂不可达：保持未就绪，等待对端 UP 事件的 HandleNodeUp 推送兜底。
+			return
+		}
+		time.Sleep(routeViewRefreshInterval)
+	}
+}
+
+const (
+	// routeViewRefreshWindow 重启后等待对端出现并刷新权威路由视图的总窗口。
+	routeViewRefreshWindow = 30 * time.Second
+	// routeViewRefreshInterval 轮询对端注册与重试间隔。
+	routeViewRefreshInterval = 500 * time.Millisecond
+)
 
 // clusterNodeID 读取或生成节点 ID：优先 openxdb.conf 的 node_id，
 // 未初始化该字段的旧数据目录以数据目录短哈希兜底（保证多节点部署可区分）。

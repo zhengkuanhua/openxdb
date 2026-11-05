@@ -15,6 +15,7 @@ package sql
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
@@ -275,41 +276,80 @@ func (e *Executor) resolveRegionOwner(rid storage.ID) string {
 //     幂等：路由 epoch 陈旧即跳过，原主数据完整性以新 epoch 为准）。
 //
 // 单机模式与节点未注册时无操作（零回归）；回迁失败不阻断路由同步。
+// D4.4 修复（A 簇）：对端重启回 UP 的首次通知可能早于其监听就绪（注册表广播
+// 先于 ListenAndServe 完成），此时推送与回迁会因连接被拒而失败；由于 DOWN->UP
+// 只会触发一次，失败即永久丢失，重启节点将长期保留孤立读视图。因此按短间隔
+// 有限重试，直到路由推送成功且回迁无失败（推送与回迁均幂等）。
 func (e *Executor) HandleNodeUp(nodeID string) (int, error) {
 	if e.mgr == nil || nodeID == "" || nodeID == e.selfID {
 		return 0, nil
 	}
-	migrated := 0
-	// 先同步权威路由（本机视图为最新，恢复节点以对齐为准）。
-	if err := e.syncRegionsToNode(nodeID); err != nil {
-		log.Printf("sql: node up %s route sync failed: %v", nodeID, err)
-	} else {
+	var lastErr error
+	for attempt := 0; attempt < nodeUpSyncAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(nodeUpSyncInterval)
+		}
+		// 先同步权威路由（本机视图为最新，恢复节点以对齐为准）。
+		if err := e.syncRegionsToNode(nodeID); err != nil {
+			lastErr = err
+			log.Printf("sql: node up %s route sync failed (attempt %d/%d): %v",
+				nodeID, attempt+1, nodeUpSyncAttempts, err)
+			continue
+		}
 		log.Printf("sql: node up %s route synced", nodeID)
+		// 再执行 failover 接管回迁（依赖路由表已学习到接管来源）。
+		migrated, rejoinErr := e.rejoinOwnedRegions(nodeID)
+		if rejoinErr != nil {
+			lastErr = rejoinErr
+			continue
+		}
+		return migrated, nil
 	}
-	// 再执行 failover 接管回迁（依赖路由表已学习到接管来源）。
+	return 0, lastErr
+}
+
+// rejoinOwnedRegions 回迁本机此前从 nodeID 接管（SourceOwner == nodeID）的 region。
+// 返回成功回迁数；任一 region 回迁失败即返回错误，交由 HandleNodeUp 重试。
+func (e *Executor) rejoinOwnedRegions(nodeID string) (int, error) {
+	migrated := 0
+	var firstErr error
 	for _, rg := range e.router.AllRegions() {
 		if rg.SourceOwner != nodeID {
 			continue
 		}
 		if err := e.tryRejoinAsFollower(rg, nodeID); err != nil {
 			log.Printf("sql: node up %s rejoin region %d failed: %v", nodeID, rg.RegionID, err)
+			if firstErr == nil {
+				firstErr = err
+			}
 			continue
 		}
 		migrated++
 	}
-	return migrated, nil
+	return migrated, firstErr
 }
 
+const (
+	// nodeUpSyncAttempts 节点回 UP 后路由推送 + 回迁的最大尝试次数（覆盖对端
+	// 监听就绪窗口；全失败视为对端仍不可用，交由后续心跳/重启对齐兜底）。
+	nodeUpSyncAttempts = 6
+	// nodeUpSyncInterval 相邻两次尝试的间隔。
+	nodeUpSyncInterval = 500 * time.Millisecond
+)
+
 // syncRegionsToNode 将本机权威 region 路由表同步到目标节点（join 同步路由）。
-// 复用复制轨 pushAllRegionsToNode（SQL 层暴露的 PushAllRegionsToNode 同一实现，
-// 含数据/路由装载与 epoch 校验）；推送全部成功即声明目标节点数据面就绪并广播
+// 复用复制轨 pushRegionsToNode 的副本语义分支（claim=false，D4.4 修复）：
+// 只推送本节点持有/归属本节点的 region，并按本节点声明权威归属，接收端保持
+// 该归属（local=false），不再把第三方 region 误判为目标本地（旧 claim 语义
+// 会把全部 region 判给目标节点，重启节点据此形成孤立读视图并静默本地写）。
+// 含数据/路由装载与 epoch 校验；推送全部成功即声明目标节点数据面就绪并广播
 // （全网读路径 READY 前置放行跨节点聚合读）；目标不可达/推送失败返回错误，
 // 由 HandleNodeUp 记录，下一次 UP 回调重试（尽力而为）。
 func (e *Executor) syncRegionsToNode(nodeID string) error {
 	if e.mgr == nil || e.selfID == nodeID {
 		return nil
 	}
-	if err := e.pushAllRegionsToNode(nodeID); err != nil {
+	if err := e.pushRegionsToNode(nodeID, false); err != nil {
 		return err
 	}
 	return e.mgr.SetDataReady(nodeID, true)

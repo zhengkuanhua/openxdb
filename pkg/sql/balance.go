@@ -549,6 +549,17 @@ func (e *Executor) migrateRegion(rg sharding.RegionInfo, target string) error {
 // 源节点保持权威视图，目标节点经 applyPush 学习后本地持全部 region。
 // 任一 region 推送失败（如目标不可达）立即返回错误，调用方据此判定对齐失败。
 func (e *Executor) pushAllRegionsToNode(target string) error {
+	return e.pushRegionsToNode(target, true)
+}
+
+// pushRegionsToNode 全量推送实现（D4.4 修复：区分归属声明语义）。
+// claim=true：ASSIGN/回迁兜底语义——目标节点经 applyPush 成为全部 region 的 owner；
+// claim=false：副本对齐语义——只推送本节点持有（Node=="" 且物理持有，或 Node==selfID）
+// 的 region，并按 e.selfID 声明权威归属，接收端据 ClaimOwner=false 保持该归属
+// （local=false），不把他人 region 误判为本地。
+// 后者用于节点回 UP / 新节点加入的 join 路由同步，避免把第三方 region 判成本地
+// 形成孤立读视图（D4.4 GAP A/C 根因）。
+func (e *Executor) pushRegionsToNode(target string, claim bool) error {
 	if e.mgr == nil || !e.mgr.HasRemoteNodes() {
 		return &SQLError{Msg: "cluster not enabled"}
 	}
@@ -597,6 +608,11 @@ func (e *Executor) pushAllRegionsToNode(target string) error {
 		}
 	}
 	for _, rg := range regions {
+		// 副本对齐语义（claim=false）：只推送本节点持有或归属本节点的 region，
+		// 归属第三方的 region 不进数据推送队列（其归属随 routes 一并下发）。
+		if !claim && rg.Node != "" && rg.Node != e.selfID {
+			continue
+		}
 		start := sharding.EncodeRegionKey(rg.RegionID, rg.StartKey)
 		end := sharding.EncodeRegionKey(rg.RegionID, rg.EndKey)
 		if rg.EndKey == nil {
@@ -610,9 +626,13 @@ func (e *Executor) pushAllRegionsToNode(target string) error {
 		for _, kv := range pairs {
 			rows = append(rows, cluster.QueryRow{Key: kv.Key, Value: kv.Value})
 		}
-		// 本次推送 region 在视图中归属目标节点（供目标节点学习；applyPush 单独落本地）。
+		// 本次推送 region 的归属声明：claim 语义归目标节点；副本语义归本节点（源）。
 		rgView := rg
-		rgView.Node = target
+		if claim {
+			rgView.Node = target
+		} else {
+			rgView.Node = e.selfID
+		}
 		rgView.Local = false
 		pushRoutes := make([]sharding.RegionInfo, 0, len(routes)+1)
 		appended := false
@@ -627,9 +647,47 @@ func (e *Executor) pushAllRegionsToNode(target string) error {
 		if !appended {
 			pushRoutes = append(pushRoutes, rgView)
 		}
-		if err := e.mgr.PushRegion(target, rg, rows, pushRoutes, e.selfID); err != nil {
+		if claim {
+			if err := e.mgr.PushRegion(target, rg, rows, pushRoutes, e.selfID); err != nil {
+				return err
+			}
+			continue
+		}
+		// 副本语义：接收端按 rgView.Node（本节点）保持权威归属，local=false。
+		if err := e.mgr.PushRegionReplica(target, rgView, rows, pushRoutes, e.selfID); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// PushRouteViewToNode 把本节点权威 region 归属视图（纯路由，不带数据行）同步给
+// target 节点（D4.4 修复：重启节点主动刷新视图的服务端实现）。
+// 视图构造与 pushRegionsToNode 一致：本地持有（Node==""）补记 selfID，
+// 其余保持权威归属；接收端经 applyRouteSync 覆盖学习陈旧归属，
+// 从而消除"重启节点凭旧 m:regions 误判 local=true"的孤立读视图。
+func (e *Executor) PushRouteViewToNode(target string) error {
+	if e.mgr == nil || !e.mgr.HasRemoteNodes() {
+		return &SQLError{Msg: "cluster not enabled"}
+	}
+	if target == "" || target == e.selfID {
+		return &SQLError{Msg: "invalid route sync target: " + target}
+	}
+	if _, ok := e.mgr.GetNode(target); !ok {
+		return &SQLError{Msg: "node not registered: " + target}
+	}
+	routes := e.router.AllRegions()
+	for i := range routes {
+		if routes[i].Node == "" {
+			holds, err := e.regionHoldsLocal(routes[i])
+			if err != nil {
+				return err
+			}
+			if holds {
+				routes[i].Node = e.selfID
+				routes[i].Local = false
+			}
+		}
+	}
+	return e.mgr.SyncRouteViewTo(target, routes, e.selfID)
 }

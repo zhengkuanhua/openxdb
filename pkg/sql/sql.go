@@ -63,6 +63,13 @@ func (e *Engine) PushAllRegionsToNode(targetNodeID string) error {
 // 由 db.StartCluster 装配为心跳 UP 回调，触发节点上线后的路由同步与数据回迁。
 func (e *Engine) HandleNodeUp(nodeID string) (int, error) { return e.ex.HandleNodeUp(nodeID) }
 
+// PushRouteViewToNode 权威 region 归属视图同步（D4.4 修复）：把本节点权威路由视图
+// （纯路由，不带数据行）单播给目标节点，供重启节点主动刷新陈旧 owner 视图。
+// 由 db.StartCluster 装配为集群 Server 的 FULLALIGN_REQ{RoutesOnly} 回调。
+func (e *Engine) PushRouteViewToNode(targetNodeID string) error {
+	return e.ex.PushRouteViewToNode(targetNodeID)
+}
+
 // ApplyRemoteDDL 节点侧应用远端 DDL 目录变更（T34 跨节点 DDL 广播接收端）。
 func (e *Engine) ApplyRemoteDDL(req cluster.DDLPushReq) error { return e.ex.ApplyRemoteDDL(req) }
 

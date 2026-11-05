@@ -76,6 +76,11 @@ type Server struct {
 	// sql.Executor.PushAllRegionsToNode）；nil = 未装配（FULLALIGN_REQ 回执 Err）。
 	// 签名：dest=推送目的地 NodeID（请求方自身，旧主）。
 	fullAlignFn func(dest string) error
+	// routeSyncFn 节点侧权威路由视图同步回调（db.StartCluster 装配
+	// sql.Executor.PushRouteViewToNode）；nil = 未装配（FULLALIGN_REQ{RoutesOnly} 回执 Err）。
+	// 签名：dest=路由视图接收方 NodeID（重启节点自身）。
+	// D4.4 修复：重启节点主动拉取权威 region 归属视图，不依赖对端 UP 事件检测。
+	routeSyncFn func(dest string) error
 }
 
 // SetTSO 注入时间戳源（M8：db.StartCluster 装配本地发号器）。
@@ -136,6 +141,11 @@ func (s *Server) SetManager(m *Manager) { s.mgr = m }
 // SetFullAlignHandler 注入 v1.7.0 全量对齐回调（db.StartCluster 装配
 // sql.Executor.PushAllRegionsToNode）；传 nil 恢复未装配（FULLALIGN_REQ 回执 Err）。
 func (s *Server) SetFullAlignHandler(fn func(dest string) error) { s.fullAlignFn = fn }
+
+// SetRouteSyncHandler 注入权威路由视图同步回调（db.StartCluster 装配
+// sql.Executor.PushRouteViewToNode）；传 nil 恢复未装配（FULLALIGN_REQ{RoutesOnly} 回执 Err）。
+// D4.4 修复：重启节点经此路径主动从集群权威源刷新 region 归属视图。
+func (s *Server) SetRouteSyncHandler(fn func(dest string) error) { s.routeSyncFn = fn }
 
 // Serve 在已有 listener 上提供服务，返回实际监听地址（127.0.0.1:0 场景获取端口）。
 func (s *Server) Serve(ln net.Listener) (string, error) {
@@ -391,14 +401,22 @@ func (s *Server) applyPush(req *RegionPushReq) (RegionPushResp, error) {
 				route.Local = false
 			}
 		}
+		route = s.normalizeRouteOwner(route)
 		if err := s.router.UpsertRegion(route); err != nil {
 			return RegionPushResp{}, err
 		}
 	}
-	// 学习路由（本地视图）
+	// 学习本次接收 region 的归属（D4.4 修复：不再无条件落本地）：
+	//   - ClaimOwner=true（ASSIGN/迁移/回迁装载）：目标成为 owner，落本地视图；
+	//   - Region.Node 为空（旧节点/单机 region 未显式化）：沿用"未指派即本节点"语义；
+	//   - Region.Node == 本节点：源视图已确认本节点为 owner，落本地视图；
+	//   - 其余（Region.Node 为第三方或源节点）：本机仅持副本，保持远端归属与 local=false，
+	//     避免全量对齐/重启刷新把他人 region 误判为本地，形成孤立读写视图（GAP A/C 根因）。
 	rg := req.Region
-	rg.Node = ""
-	rg.Local = true
+	if req.ClaimOwner {
+		rg.Node = s.SelfID // 归属声明：目标节点成为该 region owner
+	}
+	rg = s.normalizeRouteOwner(rg)
 	rg.State = sharding.StateActive
 	if err := s.router.UpsertRegion(rg); err != nil {
 		return RegionPushResp{}, err
@@ -455,6 +473,7 @@ func (s *Server) applyRouteSync(req *RegionPushReq) (RegionPushResp, error) {
 				route.Local = false
 			}
 		}
+		route = s.normalizeRouteOwner(route)
 		if err := s.router.UpsertRegion(route); err != nil {
 			return RegionPushResp{}, err
 		}
@@ -470,6 +489,24 @@ func (s *Server) applyRouteSync(req *RegionPushReq) (RegionPushResp, error) {
 		return RegionPushResp{}, err
 	}
 	return RegionPushResp{}, nil
+}
+
+// normalizeRouteOwner 依据权威归属归一 Local 标记（D4.4 修复）。
+//
+// 集群内 region 归属只有一个事实源：RegionInfo.Node。Local 必须由 Node 推导，
+// 否则会出现"owner 是本节点但 local=false"（写路径按 owner 判定会静默写本地，
+// 形成分叉写）或"owner 是远端但 local=true"（孤立读视图，重启节点看不到
+// 他人 region）两类矛盾视图，正是 D4.4 GAP A/C 的未闭合根因。
+//   - Node 为空或等于本节点 → Node 归一为空（"未指派即本节点"既有语义）+ Local=true；
+//   - Node 为远端 → Local=false，保留远端归属。
+func (s *Server) normalizeRouteOwner(rg sharding.RegionInfo) sharding.RegionInfo {
+	if rg.Node == "" || rg.Node == s.SelfID {
+		rg.Node = ""
+		rg.Local = true
+		return rg
+	}
+	rg.Local = false
+	return rg
 }
 
 // regionHoldsLocal 判断本机物理键空间 [EncodeRegionKey(rid,StartKey), EncodeRegionKey(rid,EndKey))

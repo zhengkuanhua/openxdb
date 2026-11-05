@@ -26,6 +26,10 @@ const (
 type FullAlignReq struct {
 	// DestNodeID 推送目的地（被覆盖对齐的节点 NodeID）。
 	DestNodeID string `json:"dest_node_id,omitempty"`
+	// RoutesOnly true = 只请求权威路由视图同步（不推数据行）。用于节点重启后
+	// 主动从集群权威源刷新 region 归属视图（D4.4 修复：不依赖对端 UP 事件检测，
+	// 快速重启未触发 DOWN 时也能收敛视图，杜绝孤立读视图）。
+	RoutesOnly bool `json:"routes_only,omitempty"`
 }
 
 // FullAlignResp FULLALIGN_OK 载荷。
@@ -42,11 +46,22 @@ func (m *Manager) RequestFullAlign(target, destNodeID string) error {
 	if err != nil {
 		return err
 	}
-	return m.clientFor(n.ID).requestFullAlign(destNodeID)
+	return m.clientFor(n.ID).requestFullAlign(destNodeID, false)
+}
+
+// RequestRouteSync 请求 target 节点把其权威 region 路由视图同步给 destNodeID
+//（D4.4 修复：节点重启后主动拉取权威视图，不依赖对端 UP 事件检测）。
+// 只同步路由，不传数据行；返回错误表示对端不可达或路由同步失败。
+func (m *Manager) RequestRouteSync(target, destNodeID string) error {
+	n, err := m.ensureRemote(target)
+	if err != nil {
+		return err
+	}
+	return m.clientFor(n.ID).requestFullAlign(destNodeID, true)
 }
 
 // requestFullAlign 短连接发送 FULLALIGN_REQ 并读取 FULLALIGN_OK。
-func (c *Client) requestFullAlign(destNodeID string) error {
+func (c *Client) requestFullAlign(destNodeID string, routesOnly bool) error {
 	addr, err := c.mgr.NodeAddr(c.nodeID)
 	if err != nil {
 		return err
@@ -56,7 +71,7 @@ func (c *Client) requestFullAlign(destNodeID string) error {
 		return err
 	}
 	defer conn.Close()
-	payload, err := marshalJSON(FullAlignReq{DestNodeID: destNodeID})
+	payload, err := marshalJSON(FullAlignReq{DestNodeID: destNodeID, RoutesOnly: routesOnly})
 	if err != nil {
 		return err
 	}
@@ -91,6 +106,19 @@ func (s *Server) handleFullAlign(conn net.Conn, payload []byte) {
 	}
 	if req.DestNodeID == "" {
 		writeFrame(conn, msgFullAlignOK, mustJSON(FullAlignResp{Err: "empty dest node id"}))
+		return
+	}
+	// RoutesOnly：只把权威路由视图同步给目标节点（重启节点主动刷新视图路径）。
+	if req.RoutesOnly {
+		if s.routeSyncFn == nil {
+			writeFrame(conn, msgFullAlignOK, mustJSON(FullAlignResp{Err: "route sync handler not installed"}))
+			return
+		}
+		if err := s.routeSyncFn(req.DestNodeID); err != nil {
+			writeFrame(conn, msgFullAlignOK, mustJSON(FullAlignResp{Err: err.Error()}))
+			return
+		}
+		writeFrame(conn, msgFullAlignOK, mustJSON(FullAlignResp{}))
 		return
 	}
 	if s.fullAlignFn == nil {
