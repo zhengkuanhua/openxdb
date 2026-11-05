@@ -23,7 +23,7 @@ def run(c, cmd, t=60):
     err = e.read().decode("utf-8", "replace").strip()
     return out if out else ("[stderr] " + err if err else "(empty)")
 
-def qry(c, sp, sql, t=20):
+def qry(c, sp, sql, t=45):
     return run(c, "timeout %d /usr/bin/mysql -h 127.0.0.1 -P %d -u root -e \"%s\" 2>&1" % (t, sp, sql), t + 5)
 
 def section(c, name):
@@ -44,12 +44,18 @@ def main():
     if not args.skip_baseline and not args.only_check:
         section(c, "rebuild baseline")
         for sp in (13306, 13307, 13308):
-            qry(c, sp, "DROP TABLE IF EXISTS %s" % T, 15)
+            qry(c, sp, "DROP TABLE IF EXISTS %s" % T)
         qry(c, 13306, "CREATE TABLE %s (id INT PRIMARY KEY, v VARCHAR(64))" % T)
         for i in range(1, 6):
             qry(c, 13306, "INSERT INTO %s VALUES (%d,'v%d')" % (T, i, i))
         qry(c, 13306, "SPLIT REGION 9223372036854775809")
-        qry(c, 13306, "SPLIT REGION 2")
+        # 再切首个 region：region id 随每次 DROP/CREATE 递增，不可硬编码（旧版固定 2，
+        # 在非首次初始化时 SPLIT 失败导致基线只剩 2 个 region）
+        _r = qry(c, 13306, "SHOW REGION ROUTES")
+        _ids = [ln.split("\t")[0] for ln in _r.splitlines()
+                if ln and not ln.startswith("region_id")]
+        if _ids:
+            qry(c, 13306, "SPLIT REGION %s" % _ids[0])
         routes = qry(c, 13306, "SHOW REGION ROUTES")
         rows = [ln.split("\t") for ln in routes.splitlines() if ln and not ln.startswith("region_id")]
         nodes = qry(c, 13306, "SHOW NODES")
@@ -59,12 +65,12 @@ def main():
         qry(c, 13306, "ASSIGN REGION %s TO NODE '%s'" % (rows[2][0], idC))
         time.sleep(2)
         for i in (10, 11, 12):
-            qry(c, 13307, "INSERT INTO %s VALUES (%d,'b%d')" % (T, i, i), 15)
+            qry(c, 13307, "INSERT INTO %s VALUES (%d,'b%d')" % (T, i, i))
         for i in (20, 21, 22):
-            qry(c, 13308, "INSERT INTO %s VALUES (%d,'c%d')" % (T, i, i), 15)
+            qry(c, 13308, "INSERT INTO %s VALUES (%d,'c%d')" % (T, i, i))
         time.sleep(2)
         for sp, nm in ((13306, "A"), (13307, "B"), (13308, "C")):
-            print("%s baseline: %s" % (nm, qry(c, sp, "SELECT COUNT(*), SUM(id) FROM %s" % T, 15).replace("\n", " ")))
+            print("%s baseline: %s" % (nm, qry(c, sp, "SELECT COUNT(*), SUM(id) FROM %s" % T).replace("\n", " ")))
 
     # S1 杀 B
     if not args.only_check:
@@ -73,8 +79,8 @@ def main():
         print("B pid:", bp)
         print(run(c, "kill -9 %s 2>&1; echo RC=$?" % bp))
         time.sleep(15)
-        print("A nodes:", qry(c, 13306, "SHOW NODES").replace("\n", " | "))
-        print("A routes:", qry(c, 13306, "SHOW REGION ROUTES").replace("\n", " | "))
+        print("A nodes:", qry(c, 13306, "SHOW NODES").replace("\n"," | ").replace("\t"," / "))
+        print("A routes:", qry(c, 13306, "SHOW REGION ROUTES").replace("\n"," | ").replace("\t"," / "))
         print("A down-period write id=30:", repr(qry(c, 13306, "INSERT INTO %s VALUES (30,'pA30')" % T)))
         print("A read:", qry(c, 13306, "SELECT COUNT(*), SUM(id) FROM %s" % T).replace("\n", " "))
 
@@ -83,25 +89,25 @@ def main():
         run(c, B_START)
         time.sleep(18)
         print("B proc:", run(c, "ps -ef | grep d43-node2 | grep -v grep | awk '{print $2}'"))
-        print("A nodes:", qry(c, 13306, "SHOW NODES").replace("\n", " | "))
-        print("A routes:", qry(c, 13306, "SHOW REGION ROUTES").replace("\n", " | "))
-        print("B routes:", qry(c, 13307, "SHOW REGION ROUTES").replace("\n", " | "))
+        print("A nodes:", qry(c, 13306, "SHOW NODES").replace("\n"," | ").replace("\t"," / "))
+        print("A routes:", qry(c, 13306, "SHOW REGION ROUTES").replace("\n"," | ").replace("\t"," / "))
+        print("B routes:", qry(c, 13307, "SHOW REGION ROUTES").replace("\n"," | ").replace("\t"," / "))
         for sp, nm in ((13306, "A"), (13307, "B"), (13308, "C")):
-            print("%s read: %s" % (nm, qry(c, sp, "SELECT COUNT(*), SUM(id) FROM %s" % T, 25).replace("\n", " ")))
+            print("%s read: %s" % (nm, qry(c, sp, "SELECT COUNT(*), SUM(id) FROM %s" % T).replace("\n", " ")))
         print("B SELECT id=30 (down-period write):", repr(qry(c, 13307, "SELECT * FROM %s WHERE id=30" % T)))
         print("B write id=31:", repr(qry(c, 13307, "INSERT INTO %s VALUES (31,'pB31')" % T)))
         time.sleep(3)
         for sp, nm in ((13306, "A"), (13307, "B"), (13308, "C")):
-            print("%s read after B write: %s" % (nm, qry(c, sp, "SELECT COUNT(*), SUM(id) FROM %s" % T, 25).replace("\n", " ")))
+            print("%s read after B write: %s" % (nm, qry(c, sp, "SELECT COUNT(*), SUM(id) FROM %s" % T).replace("\n", " ")))
 
         # 人工回迁对照
         section(c, "S3+ manual reassign r3 -> B (route convergence check)")
         print("ASSIGN rc:", repr(qry(c, 13306, "ASSIGN REGION 3 TO NODE 'node-bdbff1cc'")))
         time.sleep(5)
-        print("A routes:", qry(c, 13306, "SHOW REGION ROUTES").replace("\n", " | "))
-        print("C routes:", qry(c, 13308, "SHOW REGION ROUTES").replace("\n", " | "))
+        print("A routes:", qry(c, 13306, "SHOW REGION ROUTES").replace("\n"," | ").replace("\t"," / "))
+        print("C routes:", qry(c, 13308, "SHOW REGION ROUTES").replace("\n"," | ").replace("\t"," / "))
         for sp, nm in ((13306, "A"), (13307, "B"), (13308, "C")):
-            print("%s read: %s" % (nm, qry(c, sp, "SELECT COUNT(*), SUM(id) FROM %s" % T, 25).replace("\n", " ")))
+            print("%s read: %s" % (nm, qry(c, sp, "SELECT COUNT(*), SUM(id) FROM %s" % T).replace("\n", " ")))
 
     # S4 对照：优雅退出重启
     if not args.only_s1_s2:
@@ -115,11 +121,11 @@ def main():
         run(c, B_START)
         time.sleep(16)
         print("B proc:", run(c, "ps -ef | grep d43-node2 | grep -v grep | awk '{print $2}'"))
-        print("A nodes:", qry(c, 13306, "SHOW NODES").replace("\n", " | "))
-        print("A routes:", qry(c, 13306, "SHOW REGION ROUTES").replace("\n", " | "))
-        print("B routes:", qry(c, 13307, "SHOW REGION ROUTES").replace("\n", " | "))
+        print("A nodes:", qry(c, 13306, "SHOW NODES").replace("\n"," | ").replace("\t"," / "))
+        print("A routes:", qry(c, 13306, "SHOW REGION ROUTES").replace("\n"," | ").replace("\t"," / "))
+        print("B routes:", qry(c, 13307, "SHOW REGION ROUTES").replace("\n"," | ").replace("\t"," / "))
         for sp, nm in ((13306, "A"), (13307, "B"), (13308, "C")):
-            print("%s read: %s" % (nm, qry(c, sp, "SELECT COUNT(*), SUM(id) FROM %s" % T, 25).replace("\n", " ")))
+            print("%s read: %s" % (nm, qry(c, sp, "SELECT COUNT(*), SUM(id) FROM %s" % T).replace("\n", " ")))
     c.close()
 
 if __name__ == "__main__":
