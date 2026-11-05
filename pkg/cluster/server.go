@@ -421,6 +421,16 @@ func (s *Server) applyPush(req *RegionPushReq) (RegionPushResp, error) {
 	if err := s.router.UpsertRegion(rg); err != nil {
 		return RegionPushResp{}, err
 	}
+	// 权威视图收敛（D4.4 次要缺陷修复）：全量装载携带源节点完整路由视图时，
+	// 清理"权威视图中不存在、且区间已被现役 region 完全接管"的本地历史 region。
+	pruned, retained := 0, 0
+	if req.Authoritative {
+		var cerr error
+		pruned, retained, cerr = s.convergeRouteView(req.Routes, req.Region.RegionID)
+		if cerr != nil {
+			return RegionPushResp{}, cerr
+		}
+	}
 	// 落盘 m:regions（路由表变更随数据同批次原子提交）
 	seq, regions := s.router.Dump()
 	metaRaw, err := sharding.MarshalMeta(seq, regions)
@@ -431,14 +441,16 @@ func (s *Server) applyPush(req *RegionPushReq) (RegionPushResp, error) {
 	if err := s.st.Write(batch); err != nil {
 		return RegionPushResp{}, err
 	}
-	return RegionPushResp{Rows: len(req.Rows)}, nil
+	return RegionPushResp{Rows: len(req.Rows), Pruned: pruned, RetainedStale: retained}, nil
 }
 
 // applyRouteSync 纯路由同步（SyncOnly=true）：路由变更全网广播的接收端。
 // 1) 先删除 DeleteIDs 路由（SPLIT 广播移除旧 region，幂等）；
 // 2) 按源权威视图学习 Routes：Node 非空直接学习；Node=="" 沿用持有校验语义
 //    （本机持有→保持本地视图；不持有且已有远端归属→保留原归属；否则未指派）；
-// 3) 落盘 m:regions。
+// 3) 权威全量同步（Authoritative=true，重启刷新路径）时收敛本地 region 集合：
+//    清理权威视图不存在、区间已被现役 region 完全取代的历史残留（D4.4 修复）；
+// 4) 落盘 m:regions。
 // 不写数据、不把 req.Region 落本地（本机未持有该 region，不得标记为本地）。
 func (s *Server) applyRouteSync(req *RegionPushReq) (RegionPushResp, error) {
 	if s.router == nil {
@@ -478,6 +490,18 @@ func (s *Server) applyRouteSync(req *RegionPushReq) (RegionPushResp, error) {
 			return RegionPushResp{}, err
 		}
 	}
+	// 权威视图收敛（D4.4 次要缺陷修复）：重启节点拉取权威视图后，本地集合必须与
+	// 权威视图收敛一致——否则历史 region（如与现役 region 区间完全重叠的 rid=3）
+	// 会继续以 local=true 出现在 SHOW REGION ROUTES。增量广播（Authoritative=false）
+	// 只含本次变更条目，严禁做收敛删除。
+	pruned, retained := 0, 0
+	if req.Authoritative {
+		var cerr error
+		pruned, retained, cerr = s.convergeRouteView(req.Routes, 0)
+		if cerr != nil {
+			return RegionPushResp{}, cerr
+		}
+	}
 	seq, regions := s.router.Dump()
 	metaRaw, err := sharding.MarshalMeta(seq, regions)
 	if err != nil {
@@ -488,7 +512,56 @@ func (s *Server) applyRouteSync(req *RegionPushReq) (RegionPushResp, error) {
 	if err := s.st.Write(batch); err != nil {
 		return RegionPushResp{}, err
 	}
-	return RegionPushResp{}, nil
+	return RegionPushResp{Pruned: pruned, RetainedStale: retained}, nil
+}
+
+// convergeRouteView 以权威写入视图收敛本地 region 集合（D4.4 次要缺陷修复）。
+//
+// 缺陷：路由视图同步此前只做 upsert 学习 + DeleteIDs 显式删除，从不清理"权威
+// 视图中并不存在"的本地记录。节点重启后 m:regions 里 SPLIT/迁移前的历史 region
+// （实测 rid=3 与现役 rid=7 区间完全重叠）被重新装载并标 local=true，
+// SHOW REGION ROUTES 因此出现权威视图没有的 region，视图与权威不收敛。
+//
+// 清理判定唯一依据 sharding.Router.PruneSupersededRegions：仅当某本地 region
+// 的 RegionID 不在权威视图、且其键区间被权威视图中同表 region 完全覆盖时才移除。
+// keepID 非 0 时表示本次数据装载的 region，必须保留：若它不在权威视图内（权威
+// 视图残缺/装载与视图不同步）则整批放弃收敛，宁可不清理也不误删现役 region。
+//
+// 物理数据一律不动：本方法只改路由视图。被移除的 region 若本机仍持有物理键空间，
+// 计入 retained 并打告警日志，物理数据保留待人工对账清理，绝不自动删除数据。
+func (s *Server) convergeRouteView(authoritative []sharding.RegionInfo, keepID storage.ID) (pruned, retained int, err error) {
+	if len(authoritative) == 0 {
+		return 0, 0, nil
+	}
+	if keepID != 0 {
+		found := false
+		for i := range authoritative {
+			if authoritative[i].RegionID == keepID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Printf("cluster: %s: skip route view convergence: authoritative view misses incoming region rid=%d", s.SelfID, keepID)
+			return 0, 0, nil
+		}
+	}
+	removed := s.router.PruneSupersededRegions(authoritative)
+	for _, rg := range removed {
+		holds, herr := s.regionHoldsLocal(rg)
+		if herr != nil {
+			return len(removed), retained, herr
+		}
+		if holds {
+			retained++
+			log.Printf("cluster: %s: route view converged: superseded region rid=%d table=%d [%x,%x) removed from view (local flag cleared); physical keys retained on this node, manual GC required",
+				s.SelfID, rg.RegionID, rg.TableID, rg.StartKey, rg.EndKey)
+			continue
+		}
+		log.Printf("cluster: %s: route view converged: superseded region rid=%d table=%d [%x,%x) removed from view (no local data)",
+			s.SelfID, rg.RegionID, rg.TableID, rg.StartKey, rg.EndKey)
+	}
+	return len(removed), retained, nil
 }
 
 // normalizeRouteOwner 依据权威归属归一 Local 标记（D4.4 修复）。

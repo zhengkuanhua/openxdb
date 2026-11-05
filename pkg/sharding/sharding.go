@@ -391,6 +391,85 @@ func (r *Router) DeleteRegion(regionID storage.ID) error {
 	return nil
 }
 
+// PruneSupersededRegions 以权威路由视图为准，移除本地"已被现役 region 取代"的
+// 历史 region 记录（D4.4 次要缺陷修复）。
+//
+// 缺陷背景：路由视图同步（RequestRouteSync / REGION_PUSH 路由学习）此前只做
+// upsert（UpsertRegion 按 ID 覆盖或追加）+ DeleteIDs 显式删除，从不清理"权威
+// 视图中并不存在"的本地陈旧 region。节点重启后 m:regions 里 SPLIT/迁移前的旧
+// region（如 rid=3，与现役 rid=7 区间完全重叠）被重新装载并标为 local=true，
+// SHOW REGION ROUTES 因此出现权威视图不存在的 region。
+//
+// 判定条件（三者同时满足才移除，任一不满足一律保留——保守优先）：
+//  1. 本地 region X 的 RegionID 不在权威视图集合内；
+//  2. 权威视图中存在同表 region Y，其键区间完全覆盖 X 的区间
+//     （[Y.Start,Y.End) ⊇ [X.Start,X.End)，nil 起点=表起始、nil 终点=表结束），
+//     即 X 的键空间已被现役 region 接管，X 只能是旧划分的残留；
+//  3. 仅移除路由记录，绝不触碰物理数据（调用方负责按持有情况记录告警）。
+//
+// 条件 2 刻意收得很紧：若权威视图既没有 X、也没有任何 region 接管 X 的区间，
+// 说明权威视图本身可能残缺或 X 是合法的新 region，此时保留 X，避免误删。
+// 本方法幂等，可对同一权威视图重复调用。
+func (r *Router) PruneSupersededRegions(authoritative []RegionInfo) []RegionInfo {
+	if len(authoritative) == 0 {
+		return nil
+	}
+	keep := make(map[storage.ID]struct{}, len(authoritative))
+	for i := range authoritative {
+		keep[authoritative[i].RegionID] = struct{}{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var pruned []RegionInfo
+	kept := make([]RegionInfo, 0, len(r.regions))
+	for i := range r.regions {
+		rg := r.regions[i]
+		if _, ok := keep[rg.RegionID]; ok {
+			kept = append(kept, rg)
+			continue
+		}
+		if supersededBy(rg, authoritative) {
+			pruned = append(pruned, rg)
+			continue
+		}
+		kept = append(kept, rg)
+	}
+	if len(pruned) == 0 {
+		return nil
+	}
+	r.regions = kept
+	r.sortLocked()
+	return pruned
+}
+
+// supersededBy 判断 rg 的键区间是否被权威视图中同表的某条 region 完全覆盖。
+func supersededBy(rg RegionInfo, authoritative []RegionInfo) bool {
+	for i := range authoritative {
+		au := authoritative[i]
+		if au.TableID != rg.TableID || au.RegionID == rg.RegionID {
+			continue
+		}
+		if regionCovers(au, rg) {
+			return true
+		}
+	}
+	return false
+}
+
+// regionCovers 判断 outer 的键区间是否完全覆盖 inner：
+// nil StartKey 视为表起始（-inf），nil EndKey 视为表结束（+inf）。
+func regionCovers(outer, inner RegionInfo) bool {
+	// outer.StartKey <= inner.StartKey（nil 起点最小）
+	if len(outer.StartKey) > 0 && (len(inner.StartKey) == 0 || bytes.Compare(outer.StartKey, inner.StartKey) > 0) {
+		return false
+	}
+	// outer.EndKey >= inner.EndKey（nil 终点最大）
+	if len(outer.EndKey) > 0 && (len(inner.EndKey) == 0 || bytes.Compare(outer.EndKey, inner.EndKey) < 0) {
+		return false
+	}
+	return true
+}
+
 // sortLocked 按 (TableID, StartKey) 升序排序；nil StartKey 视为表起始（-inf）排最前。
 func (r *Router) sortLocked() {
 	sort.SliceStable(r.regions, func(i, j int) bool {

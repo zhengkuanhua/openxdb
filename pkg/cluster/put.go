@@ -45,12 +45,23 @@ type RegionPushReq struct {
 	// 递增取号，接收端校验本消息不落后于已见值；0 = 未启用/旧节点消息（跳过校验）。
 	// region 级 owner 变更纪元随 Region.RegionEpoch / Routes[i].RegionEpoch 携带。
 	ClusterEpoch uint64 `json:"cluster_epoch,omitempty"`
+	// Authoritative 标记 Routes 是否为源节点的"全量权威路由视图"（D4.4 收敛修复）：
+	// true = Routes 即源节点完整视图，接收端在学习后清理"已被现役 region 取代"的
+	// 本地历史 region 记录（见 sharding.Router.PruneSupersededRegions）；
+	// false（默认）= 增量广播（只含本次变更条目），接收端仅 upsert，不得做收敛删除。
+	Authoritative bool `json:"authoritative,omitempty"`
 }
 
 // RegionPushResp REGION_PUSH_OK 载荷。
 type RegionPushResp struct {
 	Err  string `json:"err,omitempty"`
 	Rows int    `json:"rows"`
+	// Pruned 本次权威视图同步中被判定为历史残留、已从本地路由视图移除的 region 数
+	// （仅路由记录移除，物理键不动）。
+	Pruned int `json:"pruned,omitempty"`
+	// RetainedStale 上述被移除记录中，本机物理仍持有其键空间数据的条数：
+	// 视图已收敛，但物理数据保留待人工清理/对账（不自动删除数据）。
+	RetainedStale int `json:"retained_stale,omitempty"`
 }
 
 // PushRegion 将 region 数据装载到目标节点（ASSIGN REGION 远端指派路径）。
@@ -101,7 +112,9 @@ func (c *Client) pushRegion(rg sharding.RegionInfo, rows []QueryRow, routes []sh
 		return err
 	}
 	defer conn.Close()
-	payload, err := marshalJSON(RegionPushReq{SrcID: srcID, Region: rg, Rows: rows, Routes: routes, ClusterEpoch: clusterEpoch, ClaimOwner: claim})
+	// Routes 为非空时即源节点完整路由表快照（调用方均传 AllRegions 全量视图），
+	// 因此标记为权威视图：接收端学习后收敛清理被取代的历史 region 记录（D4.4）。
+	payload, err := marshalJSON(RegionPushReq{SrcID: srcID, Region: rg, Rows: rows, Routes: routes, ClusterEpoch: clusterEpoch, ClaimOwner: claim, Authoritative: len(routes) > 0})
 	if err != nil {
 		return err
 	}
@@ -147,7 +160,7 @@ func (m *Manager) broadcastRegionsEpoch(routes []sharding.RegionInfo, deleteIDs 
 		if n.ID == m.SelfID {
 			continue
 		}
-		if err := m.clientFor(n.ID).syncRegionRoutes(routes, deleteIDs, srcID, clusterEpoch); err != nil {
+		if err := m.clientFor(n.ID).syncRegionRoutes(routes, deleteIDs, srcID, clusterEpoch, false); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -164,13 +177,15 @@ func (m *Manager) SyncRouteViewTo(target string, routes []sharding.RegionInfo, s
 	if err != nil {
 		return err
 	}
-	return m.clientFor(n.ID).syncRegionRoutes(routes, nil, srcID, 0)
+	return m.clientFor(n.ID).syncRegionRoutes(routes, nil, srcID, 0, true)
 }
 
 // syncRegionRoutes 短连接发送 REGION_PUSH(SyncOnly=true) 并读取 REGION_PUSH_OK。
 // 只同步路由视图（Routes 为源节点权威视图；DeleteIDs 先删后学），
 // 不携带数据、不把 req.Region 落本地，接收端仅更新路由表并落盘 m:regions。
-func (c *Client) syncRegionRoutes(routes []sharding.RegionInfo, deleteIDs []storage.ID, srcID string, clusterEpoch uint64) error {
+// authoritative=true 表示 routes 是源节点全量权威视图（重启刷新路径），接收端
+// 学完后需清理被现役 region 取代的本地历史 region；增量广播必须传 false。
+func (c *Client) syncRegionRoutes(routes []sharding.RegionInfo, deleteIDs []storage.ID, srcID string, clusterEpoch uint64, authoritative bool) error {
 	addr, err := c.mgr.NodeAddr(c.nodeID)
 	if err != nil {
 		return err
@@ -180,7 +195,7 @@ func (c *Client) syncRegionRoutes(routes []sharding.RegionInfo, deleteIDs []stor
 		return err
 	}
 	defer conn.Close()
-	payload, err := marshalJSON(RegionPushReq{SrcID: srcID, SyncOnly: true, DeleteIDs: deleteIDs, Routes: routes, ClusterEpoch: clusterEpoch})
+	payload, err := marshalJSON(RegionPushReq{SrcID: srcID, SyncOnly: true, DeleteIDs: deleteIDs, Routes: routes, ClusterEpoch: clusterEpoch, Authoritative: authoritative})
 	if err != nil {
 		return err
 	}
