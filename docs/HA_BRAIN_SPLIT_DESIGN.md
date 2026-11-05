@@ -234,6 +234,14 @@ OpenXDB 现有 HA 由两条相对独立的链路构成，均**不包含 quorum /
 
 **回归记录（v1.10.0）**：`go build ./...` 通过；`pkg/db`、`pkg/replication`、`pkg/sql` 全量 `go test` 全绿（含 backup_schedule 新增 4 用例，sql 包 46.3s）。
 
+**v1.18.0 D4 灰度结论（2026-11-05，报告：docs/D4_5_ha_quorum_gray_report.md）**：
+
+- **演练覆盖**：D4.1 quorum 开启评估（PASS 16 / FAIL 2 预期 / GAP 2）、D4.2 宕机 failover（PASS 33 / FAIL 2 预期 / GAP 1）、D4.3 脑裂 epoch 拒绝（T3 GAP）、D4.4 节点恢复回迁（路由回迁 / 数据回灌 / 聚合读恢复三项 GAP）。
+- **通过项**：quorum 多数派仲裁门（2/3 放行、1/3 拒绝）、三节点自动升主语义未破坏、心跳 DOWN 检测、存活副本前提下的读 failover（`resolveRegionOwner` → `FailoverDownNode` → 持有校验）均 PASS。
+- **未闭环项**：① 单副本 region 宕机不可恢复（B1，设计边界，需 region 多副本 / raft）；② 中心 TSO 单点导致跨节点写失败（B2，需 TSO HA）；③ 集群轨 `masterEpoch=0` 使 `AllowWrite` 恒放行，分区期旧主写未被 fencing（T3 GAP）；④ 恢复节点路由自动回迁 / 数据回灌 / 聚合读恢复（D4.4 三 GAP，P3 源码修复已入库：`6a9f06c` join 路由同步 + SourceOwner 接管回迁 + region 级对齐、`34235f1` 注册表广播 DOWN→UP 的 `notifyUp` 补触发与自接管 `SourceOwner` 记录；VM 三节点复测尚未执行，故本版不判定闭环）。
+- **写入路径现状**：集群轨写仍为本地提交，不按 region 归属强制路由，恢复节点写入不会进入全局聚合视图（D4.4 建议 4 未落地）。
+- **评估结论**：`ha.quorumEnabled` **维持默认关闭**；仅在三节点及以上、每 region ≥2 存活副本、TSO 不与唯一副本同机的验证环境按**受限灰度**开启，单机 / 两节点 / 单副本 region 禁止开启。全量开启前须先闭环 T3 与写路径 region 归属强制路由（并入 v1.19.0 M8 2PC）。
+
 ---
 
 ## 6. 测试矩阵
