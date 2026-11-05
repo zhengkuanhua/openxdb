@@ -277,22 +277,31 @@ func (m *Manager) RegisterPeer(id, addr string) {
 // RegisterPeerData 注册/刷新对端节点并携带数据面就绪标记（REGISTRY_SYNC 接收端用）。
 // 已存在条目以广播快照的 DataReady 为准（P3：SetDataReady 的未就绪状态随注册表
 // 广播传播到全网）；新条目使用传入值。本节点自身忽略。
+// P3 修复（D4.5 复测）：节点重启时 SetDataReady(false) 触发 BroadcastRegistry，
+// 会把该节点抢先置 UP，导致心跳 tick 的 DOWN->UP 检测永不触发、onUp 回调丢失。
+// 因此本机旧状态为 DOWN 而广播快照为 UP（节点恢复广播）时，在锁外触发
+// notifyUp，直接驱动 SQL 层 HandleNodeUp（join 同步路由 + failover 接管回迁）。
 func (m *Manager) RegisterPeerData(id, addr string, dataReady bool) {
 	if id == "" || id == m.SelfID {
 		return
 	}
+	var oldDown bool
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if n, ok := m.nodes[id]; ok {
+		oldDown = n.State == StateDown
 		n.Addr = addr
 		n.State = StateUp
 		n.DataReady = dataReady
 		if t := time.Now().UnixMilli(); t > n.LastSeen {
 			n.LastSeen = t
 		}
-		return
+	} else {
+		m.nodes[id] = &NodeInfo{ID: id, Addr: addr, Role: RoleData, State: StateUp, LastSeen: time.Now().UnixMilli(), DataReady: dataReady}
 	}
-	m.nodes[id] = &NodeInfo{ID: id, Addr: addr, Role: RoleData, State: StateUp, LastSeen: time.Now().UnixMilli(), DataReady: dataReady}
+	m.mu.Unlock()
+	if oldDown {
+		m.notifyUp(id)
+	}
 }
 
 // MarkHeartbeat 记录对端心跳响应时间（更新 LastSeen 并置 UP）。

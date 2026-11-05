@@ -267,7 +267,11 @@ func (e *Executor) tryFailoverTargetP1(rg sharding.RegionInfo, downID, target st
 		updated.Node = e.selfID
 		updated.Local = false
 		updated.RegionEpoch = regionEpoch
-		if err := e.router.SetRegionNodeEpoch(rg.RegionID, e.selfID, regionEpoch); err != nil {
+		// 回本节点接管同样要记录接管来源（原主 downID）：P3 原主恢复 UP 后
+		// HandleNodeUp 依据 SourceOwner 触发 tryRejoinAsFollower 自动回迁；
+		// 漏记会导致原主恢复后 owner 永不归还（数据仅靠 join 同步追平）。
+		updated.SourceOwner = downID
+		if err := e.router.SetRegionNodeEpochSource(rg.RegionID, e.selfID, regionEpoch, downID); err != nil {
 			return err
 		}
 		if err := e.persistRegions(); err != nil {
