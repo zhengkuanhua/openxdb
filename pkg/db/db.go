@@ -127,6 +127,15 @@ type DB struct {
 	// StartCluster 启动、Close 停止；quorum 关闭时空转（零开销、零回归）。
 	partitionMu   sync.Mutex
 	partitionStop chan struct{}
+
+	// B1（D4.5 §6-1）：单副本不可恢复修复——副本冗余与无损恢复。
+	// ha_replica_enabled 默认关闭；开启后 StartCluster 启动维护循环周期补齐
+	// 单副本 region（SQL.EnsureRegionReplicas），使任一单节点损毁后仍有存活
+	// 副本可被 failover 接管。关闭时字段保持零值，零回归。
+	replicaEnabled  bool
+	replicaMu       sync.Mutex
+	replicaStop     chan struct{}
+	replicaInterval time.Duration
 }
 
 // Init 初始化数据目录：创建 data/ 子目录与 openxdb.conf。
@@ -367,6 +376,12 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	d.Cluster.SetOnPartitionRecovered(func(version uint64) { d.SQL.OnPartitionRecovered(version) })
 	d.SQL.SetPartitionRouteResync(d.refreshRouteViewFromPeers)
 	d.startPartitionWatch()
+	// B1（D4.5 §6-1）单副本不可恢复修复：开启 ha_replica_enabled（或
+	// ha_quorum_enabled）后启动副本维护循环，周期为准单副本 region 补齐影子
+	// 副本，使单节点损毁后仍有存活副本可接管。默认关闭时不启动协程，零回归。
+	if d.ReplicaEnabled() || d.QuorumEnabled() {
+		d.startReplicaMaintainer()
+	}
 	d.Cluster.StartHeartbeat(2*time.Second, 6*time.Second)
 	// P3 读聚合 READY 前置：本节点重启后路由可能落后于全网（down 期间其他节点
 	// 可能完成 failover/迁移），先声明数据面未就绪并广播，读路径 READY 前置拒绝
@@ -678,6 +693,8 @@ func (d *DB) Close() error {
 	}
 	// T3：先停止分区检测循环（避免停止后仍调用 CheckPartitionRecovery），幂等。
 	d.stopPartitionWatch()
+	// B1：停止副本维护循环（避免关闭后仍推送副本），幂等。
+	d.stopReplicaMaintainer()
 	if d.Cluster != nil {
 		d.Cluster.Stop() // 停止心跳并关闭复用连接
 	}

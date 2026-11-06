@@ -57,6 +57,19 @@ type Executor struct {
 	p1Epoch map[storage.ID]p1RegionEpoch
 	// P1 HA：可注入持有校验钩子（nil = 真实键空间扫描，见 ha_p1.go）。
 	holdsChecker holdsChecker
+	// B1（D4.5 §6 第 1 项）：单副本冗余修复状态（见 ha_b1.go）。
+	// b1Pending 记录"无存活副本"而未完成重指派的 region（不永久放弃，允许重试）；
+	// b1Replicas/b1Lost/b1Ensured 为观测口径；b1RetryAt 为 failover 重试冷却；
+	// b1Push/b1Scan 为可注入钩子（nil = 真实网络/键空间实现）。
+	b1Mu       sync.Mutex
+	b1Pending  map[storage.ID]string
+	b1Replicas map[storage.ID][]string
+	b1Lost     map[storage.ID]bool
+	b1RetryAt  map[string]time.Time
+	b1NodeCool map[string]time.Time // 副本补齐节点级冷却（推送失败后短期跳过）
+	b1Ensured  uint64
+	b1Push     func(target string, rg sharding.RegionInfo, rows []cluster.QueryRow, srcID string) error
+	b1Scan     func(nodeID string, rg sharding.RegionInfo) ([]cluster.QueryRow, error)
 	// P2 HA：陈旧路由消息冲突计数（分区恢复合并冲突标记，见 ha_p2.go）。
 	p2Mu           sync.Mutex
 	regionConflict uint64

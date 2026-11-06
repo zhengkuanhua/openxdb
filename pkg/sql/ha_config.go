@@ -114,6 +114,33 @@ func applyHaQuorumEnabled(e *Executor, v string) error {
 		return &SQLError{Msg: "invalid value for ha_quorum_enabled: " + v + " (expected on/off)"}
 	}
 	e.haCfg.SetQuorumEnabled(on)
+	// B1（D4.5 §6 第 1 项）：quorum 开启即要求生产冗余，立即异步补齐单副本
+	// region（关闭时无动作，零回归）。
+	if on {
+		e.b1EnsureAsync()
+	}
+	return nil
+}
+
+// applyHaReplicaEnabled 解析并转发 ha_replica_enabled（B1 副本冗余开关）。
+func applyHaReplicaEnabled(e *Executor, v string) error {
+	if e.haCfg == nil {
+		return &SQLError{Msg: "ha_replica_enabled requires cluster HA configuration (start cluster first)"}
+	}
+	rs, ok := e.haCfg.(ReplicaSwitch)
+	if !ok {
+		return &SQLError{Msg: "ha_replica_enabled unsupported by this build (no replica switch)"}
+	}
+	on, err := haParseBool(v)
+	if err != nil {
+		return &SQLError{Msg: "invalid value for ha_replica_enabled: " + v + " (expected on/off)"}
+	}
+	rs.SetReplicaEnabled(on)
+	// 开即补齐：把当前所有单副本 region 立刻冗余一份，避免"开关已开但仍
+	// 单副本"的裸奔窗口（异步执行，不阻塞 SET 语句）。
+	if on {
+		e.b1EnsureAsync()
+	}
 	return nil
 }
 
@@ -157,6 +184,24 @@ func initHAConfigSpecs() {
 					return "off"
 				}
 				return boolValStr(e.haCfg.QuorumEnabled())
+			},
+		},
+		&configSpec{
+			key: "ha_replica_enabled",
+			desc: "B1 副本冗余：单副本 region 自动补齐影子副本（默认 off；" +
+				"ha_quorum_enabled=on 时自动生效）；需先启动集群",
+			def: "off",
+			apply: func(e *Executor, v string) error {
+				return applyHaReplicaEnabled(e, v)
+			},
+			read: func(e *Executor) string {
+				if e.haCfg == nil {
+					return "off"
+				}
+				if rs, ok := e.haCfg.(ReplicaSwitch); ok {
+					return boolValStr(rs.ReplicaEnabled())
+				}
+				return "off"
 			},
 		},
 	)

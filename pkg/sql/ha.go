@@ -49,22 +49,48 @@ func (e *Executor) FailoverDownNode(downID string) (int, error) {
 	if e.failoverDone[downID] {
 		return 0, nil
 	}
-	e.failoverDone[downID] = true
+	// B1（D4.5 §6 第 1 项）：上次因"无存活副本"未能完整重指派时，冷却窗口内
+	// 直接返回（幂等，避免读路径高频重试打爆扫描/推送）；窗口外重新尝试，
+	// 使"副本补齐 / 原节点恢复"后同一 down 节点可被自动重新接管。
+	if !e.b1RetryAllowed(downID) {
+		return 0, nil
+	}
 
 	var moved int
 	var firstErr error
+	// pendingB1 本次是否存在"无存活副本"的 region（存在则不置 failoverDone，
+	// 保留后续重试机会）。
+	pendingB1 := false
 	for _, rg := range e.router.AllRegions() {
 		if rg.Node != downID {
 			continue
 		}
-		if err := e.failoverRegionP1(rg, downID); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
+		err := e.failoverRegionP1(rg, downID)
+		if err == nil {
+			e.clearB1Pending(rg.RegionID)
+			moved++
 			continue
 		}
-		moved++
+		if isNoLiveCopy(err) {
+			// B1：该 region 在存活节点上无任何副本 —— 记录 pending 而不永久放弃，
+			// 待副本补齐（EnsureRegionReplicas）或原节点恢复后再次尝试。
+			e.recordB1Pending(rg.RegionID, downID)
+			pendingB1 = true
+			log.Printf("sql: failover region %d deferred (no live copy, will retry): %v", rg.RegionID, err)
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
 	}
+	if pendingB1 {
+		// 不置 failoverDone：冷却窗口后允许重试；同时尝试补齐副本以避免
+		// 该 region 长期裸奔（B1 主动冗余触发点）。
+		e.setB1RetryAt(downID)
+		e.b1EnsureAsync()
+		return moved, firstErr
+	}
+	e.failoverDone[downID] = true
+	e.clearB1RetryAt(downID)
 	return moved, firstErr
 }
 
@@ -303,6 +329,9 @@ func (e *Executor) HandleNodeUp(nodeID string) (int, error) {
 			lastErr = rejoinErr
 			continue
 		}
+		// B1（D4.5 §6 第 1 项）：节点回 UP 且回迁完成后补齐副本——该节点磁盘
+		// 可能被清空/重建，此时按现存副本重新冗余，避免 region 长期单副本裸奔。
+		e.b1EnsureAsync()
 		return migrated, nil
 	}
 	return 0, lastErr

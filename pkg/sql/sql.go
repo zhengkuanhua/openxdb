@@ -172,6 +172,27 @@ func (e *Engine) SetPartitionRouteResync(fn func()) { e.ex.SetPartitionRouteResy
 // FencedWriteCount 返回集群轨写 fencing 拒绝次数（T3 观测项）。
 func (e *Engine) FencedWriteCount() uint64 { return e.ex.FencedWriteCount() }
 
+// EnsureRegionReplicas 为单副本 region 补齐影子副本（B1 数据可恢复，D4.5 §6
+// 第 1 项）：返回本次补齐的 region 数。未启用 ha_replica_enabled / 未启动集群
+// 时返回 0（零回归）。db 层 ha_replica_maintainer 周期调用，SET 开关开启与
+// 节点回 UP 时也会触发。
+func (e *Engine) EnsureRegionReplicas() (int, error) { return e.ex.EnsureRegionReplicas() }
+
+// SetReplicaHooks 注入 B1 副本补齐的推送/扫描钩子（nil = 真实网络/键空间实现）。
+func (e *Engine) SetReplicaHooks(push func(target string, rg sharding.RegionInfo, rows []cluster.QueryRow, srcID string) error,
+	scan func(nodeID string, rg sharding.RegionInfo) ([]cluster.QueryRow, error)) {
+	e.ex.SetReplicaHooks(push, scan)
+}
+
+// B1PendingRegions 返回因"无存活副本"待重试的 region（区->down 节点，B1 观测项）。
+func (e *Engine) B1PendingRegions() map[storage.ID]string { return e.ex.B1PendingRegions() }
+
+// B1LostRegions 返回集群内已无任何副本的 region（B1 观测项）。
+func (e *Engine) B1LostRegions() []storage.ID { return e.ex.B1LostRegions() }
+
+// B1EnsureCount 返回累计补齐的副本数（B1 观测项）。
+func (e *Engine) B1EnsureCount() uint64 { return e.ex.B1EnsureCount() }
+
 // PartitionRecoveredCount 返回分区恢复收敛次数（T3 观测项）。
 func (e *Engine) PartitionRecoveredCount() uint64 { return e.ex.PartitionRecoveredCount() }
 
