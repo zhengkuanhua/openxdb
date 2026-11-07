@@ -55,6 +55,13 @@ type Executor struct {
 	// 读取 failover 路由时对照，陈旧 failover 条目视为无效。
 	p1Mu    sync.Mutex
 	p1Epoch map[storage.ID]p1RegionEpoch
+	// P6 HA（D4.5 §6 / NEW-1 重启双主分叉）：region 归属视图确认状态。
+	// 启动时若装载了磁盘持久化的 region 归属视图（p1ViewUnconfirmed=true，
+	// 由 db.Open 标记），在收到/拉取到权威源带 epoch 的路由视图
+	// （p1ViewConfirmed=true）之前，禁止本地 region 落盘写——避免重启节点
+	// 凭旧视图与多数派新 owner 双写分叉（见 regionOwnerFence / ha_p1.go）。
+	p1ViewConfirmed   bool
+	p1ViewUnconfirmed bool
 	// P1 HA：可注入持有校验钩子（nil = 真实键空间扫描，见 ha_p1.go）。
 	holdsChecker holdsChecker
 	// B1（D4.5 §6 第 1 项）：单副本冗余修复状态（见 ha_b1.go）。

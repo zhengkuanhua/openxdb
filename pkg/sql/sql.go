@@ -138,6 +138,15 @@ func (e *Engine) CheckRegionPushEpoch(clusterEpoch, regionEpoch uint64, rid stor
 	return e.ex.checkRegionPushEpoch(clusterEpoch, regionEpoch, rid)
 }
 
+// MarkRegionOwnershipUnconfirmed 标记本机启动时装载了磁盘持久化的 region 归属
+// 视图（db.Open 加载 m:regions 后调用）：与权威源确认之前，集群 + quorum +
+// epoch 全开场景禁止本地 region 落盘写（NEW-1 重启双主分叉的写路径熔断）。
+func (e *Engine) MarkRegionOwnershipUnconfirmed() { e.ex.MarkRegionOwnershipUnconfirmed() }
+
+// MarkRegionViewConfirmed 标记本机归属视图已由权威源确认（权威路由视图拉取成功
+// 后调用），解除上述写栅栏。
+func (e *Engine) MarkRegionViewConfirmed() { e.ex.MarkRegionViewConfirmed() }
+
 // EnableAutoFailover 返回自动故障转移开关（P1 quorum 开启后自动重指派需多数派确认）。
 func (e *Engine) EnableAutoFailover() bool { return e.ex.autoFailoverEnabled() }
 

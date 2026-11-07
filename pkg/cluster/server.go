@@ -10,6 +10,7 @@ package cluster
 // 本簇不做跨节点一致性快照（文档说明留待下簇）。
 
 import (
+	"bytes"
 	"errors"
 	"log"
 	"net"
@@ -440,6 +441,14 @@ func (s *Server) applyPush(req *RegionPushReq) (RegionPushResp, error) {
 			return RegionPushResp{}, cerr
 		}
 	}
+	// NEW-1 可观测性（重启双主分叉）：装载前统计本机该 region 已有行中"被本次
+	// 推送同键覆盖"与"推送未覆盖的本机残留行"。物理数据一律不删除（残留行保留，
+	// 由后续回迁/权威视图归并对齐），仅计数并告警，避免已写入数据被静默丢弃。
+	overwritten, localExtra := s.regionDivergence(req.Region, req.Rows)
+	if overwritten > 0 || localExtra > 0 {
+		log.Printf("cluster: %s: push region %d overwrites %d local rows, %d local rows not covered by push (retained, not deleted)",
+			s.SelfID, req.Region.RegionID, overwritten, localExtra)
+	}
 	// 落盘 m:regions（路由表变更随数据同批次原子提交）
 	seq, regions := s.router.Dump()
 	metaRaw, err := sharding.MarshalMeta(seq, regions)
@@ -450,8 +459,43 @@ func (s *Server) applyPush(req *RegionPushReq) (RegionPushResp, error) {
 	if err := s.st.Write(batch); err != nil {
 		return RegionPushResp{}, err
 	}
-	return RegionPushResp{Rows: len(req.Rows), Pruned: pruned, RetainedStale: retained}, nil
+	return RegionPushResp{Rows: len(req.Rows), Pruned: pruned, RetainedStale: retained,
+		Overwritten: overwritten, LocalExtra: localExtra}, nil
 }
+
+// regionDivergence 统计本次装载将产生的数据分歧（只读，不修改任何数据）：
+//   - overwritten：本机已有行中，推送同键但值不同的行数（装载后被覆盖）；
+//   - localExtra：本机已有但推送未覆盖的行数（物理保留）。
+//
+// 供 NEW-1 场景"重启节点本地写入与权威推送冲突"的可观测性使用。
+func (s *Server) regionDivergence(rg sharding.RegionInfo, rows []QueryRow) (overwritten, localExtra int) {
+	start := sharding.EncodeRegionKey(rg.RegionID, rg.StartKey)
+	end := sharding.EncodeRegionKey(rg.RegionID, rg.EndKey)
+	if rg.EndKey == nil {
+		end = sharding.EncodeRegionKey(rg.RegionID+1, nil)
+	}
+	local, err := s.st.Scan(storage.KeyRange{Start: start, End: end}, regionDivergenceScanLimit)
+	if err != nil || len(local) == 0 {
+		return 0, 0
+	}
+	incoming := make(map[string][]byte, len(rows))
+	for _, row := range rows {
+		incoming[string(row.Key)] = row.Value
+	}
+	for _, kv := range local {
+		if v, ok := incoming[string(kv.Key)]; ok {
+			if !bytes.Equal(v, kv.Value) {
+				overwritten++
+			}
+			continue
+		}
+		localExtra++
+	}
+	return overwritten, localExtra
+}
+
+// regionDivergenceScanLimit 分歧统计的单 region 扫描上限（仅告警用，超限截断）。
+const regionDivergenceScanLimit = 8192
 
 // applyRouteSync 纯路由同步（SyncOnly=true）：路由变更全网广播的接收端。
 // 1) 先删除 DeleteIDs 路由（SPLIT 广播移除旧 region，幂等）；

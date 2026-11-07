@@ -133,11 +133,101 @@ func (e *Executor) staleFailover(rg sharding.RegionInfo) bool {
 	return rg.RegionEpoch < ep.regionEpoch
 }
 
+// regionEpochView 读取本机 region 归属快照（term + epoch + owner）。
+func (e *Executor) regionEpochView(rid storage.ID) (p1RegionEpoch, bool) {
+	e.p1Mu.Lock()
+	defer e.p1Mu.Unlock()
+	ep, ok := e.p1Epoch[rid]
+	return ep, ok
+}
+
+// epochOlder 判定 (termA, epochA) 是否严格早于 (termB, epochB)：
+// 以 clusterEpoch（全局单调的归属授权纪元）为第一比较键、regionEpoch 为第二
+// 比较键的字典序。
+//
+// NEW-1 修复（重启双主分叉）：此前只用 regionEpoch 单键比较，而该值是各节点
+// 本地自增序号，跨节点不可比——重启节点本地 known=2 会把多数派权威指派的
+// epoch=1 判为陈旧而拒收（日志 `stale region epoch 1 < known 2`），保留旧
+// 归属视图并与多数派形成双主。改为 term 优先的字典序后，权威指派不再更旧。
+func epochOlder(termA, epochA, termB, epochB uint64) bool {
+	if termA != termB {
+		return termA < termB
+	}
+	return epochA < epochB
+}
+
+// markRegionViewConfirmed 标记本机 region 归属视图已与权威源对齐（收到并接受
+// 带 epoch 的权威路由消息、或完成权威视图拉取后调用），解除重启后的归属视图
+// 未确认写栅栏（见 ha_p3.go regionOwnerFence）。
+func (e *Executor) markRegionViewConfirmed() {
+	e.p1Mu.Lock()
+	e.p1ViewConfirmed = true
+	e.p1ViewUnconfirmed = false
+	e.p1Mu.Unlock()
+}
+
+// MarkRegionViewConfirmed 对外入口（db 装配：权威路由视图拉取成功后调用）。
+func (e *Executor) MarkRegionViewConfirmed() { e.markRegionViewConfirmed() }
+
+// MarkRegionOwnershipUnconfirmed 标记"本机启动时装载了磁盘持久化的 region 归属
+// 视图"（db.Open 装载 m:regions 后调用）。与权威源确认之前，集群 + quorum +
+// epoch 全开场景禁止本地 region 落盘写（NEW-1 双主分叉的写路径熔断）。
+func (e *Executor) MarkRegionOwnershipUnconfirmed() {
+	e.p1Mu.Lock()
+	e.p1ViewUnconfirmed = true
+	e.p1ViewConfirmed = false
+	e.p1Mu.Unlock()
+}
+
+// regionViewConfirmed 本机归属视图是否已由权威源确认（未进入未确认状态即视为
+// 确认，保证非重启路径与既有行为零回归）。
+func (e *Executor) regionViewConfirmed() bool {
+	e.p1Mu.Lock()
+	defer e.p1Mu.Unlock()
+	return e.p1ViewConfirmed || !e.p1ViewUnconfirmed
+}
+
+// authorizeRegionEpoch 把 region 归属 epoch 纳入 quorum 裁决：本节点重指派取得
+// 的 clusterEpoch 必须不落后于本机已观测到的任一 region 归属授权纪元，否则说明
+// 本机视图落后于多数派（已知更新的授权却按旧授权重指派）→ 拒绝重指派、降级
+// 只读等待收敛（NEW-1：避免重启节点凭旧视图自升主形成双主）。
+func (e *Executor) authorizeRegionEpoch(clusterEpoch uint64) error {
+	e.p1Mu.Lock()
+	defer e.p1Mu.Unlock()
+	for rid, ep := range e.p1Epoch {
+		if ep.clusterEpoch > clusterEpoch {
+			return fmt.Errorf("sql: region %d ownership epoch %d newer than quorum epoch %d (region view behind quorum)",
+				rid, ep.clusterEpoch, clusterEpoch)
+		}
+	}
+	return nil
+}
+
+// adoptRegionEpoch 采纳权威源的 region 归属纪元（term/epoch 大者胜），同时把
+// 本机视图标记为已由权威源确认。
+func (e *Executor) adoptRegionEpoch(rid storage.ID, clusterEpoch, regionEpoch uint64) {
+	e.p1Mu.Lock()
+	defer e.p1Mu.Unlock()
+	old, ok := e.p1Epoch[rid]
+	if !ok || !epochOlder(clusterEpoch, regionEpoch, old.clusterEpoch, old.regionEpoch) {
+		adopted := p1RegionEpoch{clusterEpoch: clusterEpoch, regionEpoch: regionEpoch}
+		if ok {
+			adopted.owner = old.owner
+		}
+		e.p1Epoch[rid] = adopted
+	}
+	e.p1ViewConfirmed = true
+	e.p1ViewUnconfirmed = false
+}
+
 // checkRegionPushEpoch 节点侧 P1 路由消息 epoch 校验（cluster.Server 装配调用）：
 //   - 未启用 P1（epochSrc 未装配 / 开关关闭）→ 放行（零回归）；
 //   - 消息不带 clusterEpoch（=0，旧节点 / ASSIGN 旧路径）→ 放行（版本协商防呆）；
 //   - clusterEpoch < 本机已知最大 → 陈旧消息拒绝（分区双端至多一端获胜）；
-//   - regionEpoch < 本机快照 → 该 region 曾被更新纪元取代，拒绝更新路由。
+//   - 消息归属纪元 (clusterEpoch, regionEpoch) 键序落后于本机快照 → 拒绝；
+//   - 本机无该 region 归属快照（重启后尚未与权威源交换归属信息）→ 以权威源
+//     为准采纳（NEW-1 修复：旧实现用本地路由条目的本地自增 epoch 对照，重启
+//     节点因此拒收多数派新归属并保留旧视图）。
 //
 // 校验失败返回错误，接收端拒绝更新路由并记日志。
 func (e *Executor) checkRegionPushEpoch(clusterEpoch, regionEpoch uint64, rid storage.ID) error {
@@ -155,17 +245,33 @@ func (e *Executor) checkRegionPushEpoch(clusterEpoch, regionEpoch uint64, rid st
 		e.bumpRegionConflict() // 数据冲突标记：陈旧路由消息被拒
 		return fmt.Errorf("sql: stale cluster epoch %d < known %d (rid=%d)", clusterEpoch, e.epochSrc.Epoch(), rid)
 	}
-	if regionEpoch > 0 && e.regionEpochOf(rid) > regionEpoch {
-		e.bumpRegionConflict() // 数据冲突标记：陈旧路由消息被拒
-		return fmt.Errorf("sql: stale region epoch %d < known %d (rid=%d)", regionEpoch, e.regionEpochOf(rid), rid)
+	ep, ok := e.regionEpochView(rid)
+	if !ok {
+		// 无归属快照：本机对该 region 从未采纳过任何归属纪元，以权威源为准。
+		e.adoptRegionEpoch(rid, clusterEpoch, regionEpoch)
+		return nil
 	}
+	if epochOlder(clusterEpoch, regionEpoch, ep.clusterEpoch, ep.regionEpoch) {
+		e.bumpRegionConflict() // 数据冲突标记：陈旧路由消息被拒
+		return fmt.Errorf("sql: stale region epoch %d (term %d) < known %d (term %d) (rid=%d)",
+			regionEpoch, clusterEpoch, ep.regionEpoch, ep.clusterEpoch, rid)
+	}
+	// 接受：刷新快照（owner 由后续路由学习/收敛补齐）并标记视图已确认。
+	e.adoptRegionEpoch(rid, clusterEpoch, regionEpoch)
 	return nil
 }
 
 // nextRegionEpoch 在 clusterEpoch 授权后为本 region 取新 owner 纪元：
-// 当前值 + 1（owner 变更语义），并记录到本机快照。
+// 取 max(本机已知 + 1, clusterEpoch)，并记录到本机快照。
+//
+// NEW-1 修复：旧实现恒为本地序号 +1，epoch 跨节点不可比；新值与授权用
+// clusterEpoch 同域（全局单调），全网可直接按字典序比较，权威指派不会再被
+// 重启节点误判为陈旧。
 func (e *Executor) nextRegionEpoch(rid storage.ID, clusterEpoch uint64) uint64 {
 	next := e.regionEpochOf(rid) + 1
+	if clusterEpoch > next {
+		next = clusterEpoch
+	}
 	e.recordRegionEpoch(rid, clusterEpoch, next)
 	return next
 }
@@ -187,6 +293,11 @@ func (e *Executor) failoverRegionP1(rg sharding.RegionInfo, downID string) error
 	}
 	// epoch 授权：多数派确认（FailoverDownNode 前置）已通过，此处取新号。
 	clusterEpoch := e.epochSrc.AcquireEpoch()
+	// region 归属 epoch 纳入 quorum 裁决（NEW-1）：本机若已知更新的归属授权
+	// 纪元，说明视图落后于多数派，拒绝按旧授权重指派（降级只读等待收敛）。
+	if err := e.authorizeRegionEpoch(clusterEpoch); err != nil {
+		return err
+	}
 	// 候选目标：存活远端（UP 且非 down 且非自身），逐个持有校验，首个通过即用；
 	// 全部不通过则回本节点（本机持有校验通过才允许落本地路由）。
 	for _, n := range e.mgr.ListNodes() {

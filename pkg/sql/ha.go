@@ -348,6 +348,11 @@ func (e *Executor) rejoinOwnedRegions(nodeID string) (int, error) {
 		}
 		if err := e.tryRejoinAsFollower(rg, nodeID); err != nil {
 			log.Printf("sql: node up %s rejoin region %d failed: %v", nodeID, rg.RegionID, err)
+			// NEW-1 修复（重启双主分叉）：回迁被目标以归属纪元陈旧拒绝时，本机
+			// 不得继续按旧视图自持该 region 归属——立即向权威源拉取路由视图收敛
+			// （同类 stale-epoch rejoin 不保留归属旧视图）；本机残留数据随后续
+			// 权威推送/回迁归并对齐，此处不删除任何数据（不静默丢弃）。
+			e.scheduleRouteResync()
 			if firstErr == nil {
 				firstErr = err
 			}

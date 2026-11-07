@@ -120,10 +120,24 @@ func (e *Executor) regionOwnerFence(rid storage.ID) error {
 	if !e.p1Enabled() {
 		return nil
 	}
+	// NEW-1 修复（重启双主分叉）：本机启动时装载了磁盘持久化的归属视图，且
+	// 尚未与权威源确认（join 路由同步/权威视图拉取未到达），此时本机对该
+	// region 的归属判断仅来自重启前的旧快照，可能与多数派新 owner 相反。
+	// 集群 + quorum + epoch 全开且存在远端节点时，禁止本地 region 落盘写，
+	// 必须等权威视图收敛（收到并接受权威路由消息即自动解除），避免"重启
+	// 节点写 70、多数派写 71/72"的双写分叉与二次重启后的静默丢数据。
+	if !e.regionViewConfirmed() && e.clusterFenceEnabled() && e.hasRemotePeer() {
+		e.p3Mu.Lock()
+		e.p3Fenced++
+		e.p3Mu.Unlock()
+		return &SQLError{Msg: fmt.Sprintf(
+			"%s: region %d write rejected, region ownership view not yet confirmed by authoritative source "+
+				"(node restarted with persisted route view; retry after route sync)", p3FencedPrefix, rid)}
+	}
 	e.p1Mu.Lock()
 	ep, ok := e.p1Epoch[rid]
 	e.p1Mu.Unlock()
-	if !ok || ep.owner == "" || ep.owner == e.selfID {
+	if !ok {
 		return nil
 	}
 	rg, exists := e.router.FindRegion(rid)
@@ -136,9 +150,42 @@ func (e *Executor) regionOwnerFence(rid storage.ID) error {
 	e.p3Mu.Lock()
 	e.p3Fenced++
 	e.p3Mu.Unlock()
+	// NEW-1 修复：快照纪元已前进但本地路由条目仍停留在旧纪元时，无论快照是否
+	// 记录了新 owner（重启节点采纳权威纪元时 owner 尚未知），一律视为归属视图
+	// 陈旧并拒绝本地提交——不允许重启节点在视图收敛前按旧归属继续落盘。
+	owner := ep.owner
+	if owner == "" {
+		owner = "unknown"
+	}
 	return &SQLError{Msg: fmt.Sprintf(
-		"%s: region %d reassigned to node %s at regionEpoch %d, local route view epoch %d is stale",
-		p3FencedPrefix, rid, ep.owner, ep.regionEpoch, rg.RegionEpoch)}
+		"%s: region %d reassigned to %s at ownership epoch %d (term %d), local route view epoch %d is stale",
+		p3FencedPrefix, rid, owner, ep.regionEpoch, ep.clusterEpoch, rg.RegionEpoch)}
+}
+
+// hasRemotePeer 本节点是否已注册除自身以外的节点（多节点集群）。
+// 单机/未装配集群返回 false：归属视图确认栅栏仅在存在权威源时生效（零回归）。
+func (e *Executor) hasRemotePeer() bool {
+	if e.mgr == nil {
+		return false
+	}
+	for _, n := range e.mgr.ListNodes() {
+		if n.ID != e.selfID {
+			return true
+		}
+	}
+	return false
+}
+
+// scheduleRouteResync 异步触发权威路由视图拉取（p3RouteResync 未装配时空操作）。
+// 供回迁陈旧失败等"本机视图落后"场景主动收敛，不阻塞调用方。
+func (e *Executor) scheduleRouteResync() {
+	e.p3Mu.Lock()
+	fn := e.p3RouteResync
+	e.p3Mu.Unlock()
+	if fn == nil {
+		return
+	}
+	go fn()
 }
 
 // SetPartitionRouteResync 装配分区恢复后的权威路由拉取钩子（db.StartCluster

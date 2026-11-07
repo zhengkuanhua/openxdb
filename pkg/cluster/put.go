@@ -62,6 +62,10 @@ type RegionPushResp struct {
 	// RetainedStale 上述被移除记录中，本机物理仍持有其键空间数据的条数：
 	// 视图已收敛，但物理数据保留待人工清理/对账（不自动删除数据）。
 	RetainedStale int `json:"retained_stale,omitempty"`
+	// Overwritten / LocalExtra（NEW-1 可观测性）：本次装载覆盖的本机已有行数
+	// （同键不同值）与推送未覆盖、物理保留的本机残留行数（不删除）。
+	Overwritten int `json:"overwritten,omitempty"`
+	LocalExtra  int `json:"local_extra,omitempty"`
 }
 
 // PushRegion 将 region 数据装载到目标节点（ASSIGN REGION 远端指派路径）。

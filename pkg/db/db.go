@@ -235,6 +235,14 @@ func Open(dir string) (*DB, error) {
 	}
 	eng := sql.New(tm)
 	eng.LoadSharding(seq, regions)
+	// P6 HA（NEW-1 修复）：本次启动装载了磁盘持久化的 region 归属视图——该视图
+	// 可能落后于多数派（重启前该 region 曾被重指派）。标记归属视图待权威源确认：
+	// 集群 + quorum + epoch 全开场景下，确认前禁止本地 region 落盘写，避免重启
+	// 节点凭旧视图与多数派新 owner 双写分叉。确认来源为 StartCluster 之后的
+	// 权威路由拉取 / 对端 HandleNodeUp 推送（见 refreshRouteViewFromPeers）。
+	if len(regions) > 0 {
+		eng.MarkRegionOwnershipUnconfirmed()
+	}
 	// M4：恢复节点注册表（m:nodes）并创建集群管理器；selfAddr 由 StartCluster 填充。
 	mgr := cluster.NewManager(clusterNodeID(dir))
 	if raw, err := st.Get(cluster.MetaNodesKey()); err != nil {
@@ -474,6 +482,7 @@ func (d *DB) refreshRouteViewFromPeers() {
 			if time.Now().After(deadline) {
 				// 单节点集群：无权威源可拉取，直接声明就绪（避免读路径永久 READY 阻塞）。
 				_ = d.Cluster.SetDataReady(selfID, true)
+				d.SQL.MarkRegionViewConfirmed()
 				return
 			}
 			time.Sleep(routeViewRefreshInterval)
@@ -487,6 +496,9 @@ func (d *DB) refreshRouteViewFromPeers() {
 			synced++
 		}
 		if synced > 0 {
+			// NEW-1：权威视图已拉取，本机归属视图不再是"重启前的旧快照"，解除
+			// 归属视图未确认写栅栏（路由装载过程中 epoch 校验通过亦会解除）。
+			d.SQL.MarkRegionViewConfirmed()
 			_ = d.Cluster.SetDataReady(selfID, true)
 			return
 		}
