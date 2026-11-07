@@ -170,6 +170,12 @@ func (e *Executor) EnsureRegionReplicas() (int, error) {
 	if e.mgr == nil || !e.b1Enabled() {
 		return 0, nil
 	}
+	// 启动期栅栏（D4.5 Phase8 / NEW-2 v2）：存储句柄就绪前 / 关闭后禁止任何
+	// 快照与副本扫描。此处为所有入口（异步补齐、维护循环、测试直调）的统一
+	// 闸门；未就绪时挂起请求，等 MarkStorageReady 事件补发。
+	if !e.b1EnsureAllowed() {
+		return 0, nil
+	}
 	alive := make([]string, 0, 4)
 	for _, n := range e.mgr.ListNodes() {
 		if n.State == cluster.StateDown {
@@ -191,6 +197,12 @@ func (e *Executor) EnsureRegionReplicas() (int, error) {
 	var ensured int
 	var firstErr error
 	for _, rg := range e.router.AllRegions() {
+		// 关闭期中断：db.Close 释放 C 层句柄后，逐轮立刻退出，避免继续
+		// 扫描/快照（与 b1EnsureAllowed 共同构成栅栏；rocksdb 层另有空句柄
+		// 兜底校验，三道防线确保不再出现原生访问违例）。
+		if e.b1StorageClosed() {
+			return ensured, firstErr
+		}
 		holders := make([]string, 0, len(alive))
 		for _, id := range alive {
 			holds, err := e.holdsRegion(rg, id)
@@ -306,10 +318,24 @@ func (e *Executor) B1EnsureCount() uint64 {
 }
 
 // b1EnsureAsync 异步触发一次副本补齐（触发点用，不阻塞调用方）。
+//
+// 启动期栅栏（D4.5 Phase8 / NEW-2 v2）：db.Open 装配期（存储句柄尚未就绪）
+// 与 db.Close 之后均不得起协程——持久化 ha_quorum_enabled=on 在
+// LoadPersistedConfig 应用时即触发本函数，若此时直起 goroutine，会在进程
+// 试开-关闭路径上于句柄释放后调用 C 层快照接口导致原生崩溃。未就绪时请求
+// 被挂起，由 MarkStorageReady 事件补发一次（见 ha_b1_gate.go）。
 func (e *Executor) b1EnsureAsync() {
 	if e.mgr == nil || !e.b1Enabled() {
 		return
 	}
+	if !e.b1EnsureAllowed() {
+		return
+	}
+	e.b1EnsureGo()
+}
+
+// b1EnsureGo 起协程执行一次副本补齐（须已通过启动期栅栏判定）。
+func (e *Executor) b1EnsureGo() {
 	go func() {
 		if _, err := e.EnsureRegionReplicas(); err != nil {
 			log.Printf("sql: B1 replica ensure: %v", err)

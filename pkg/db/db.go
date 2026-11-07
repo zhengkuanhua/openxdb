@@ -234,6 +234,13 @@ func Open(dir string) (*DB, error) {
 		}
 	}
 	eng := sql.New(tm)
+	// D4.5 Phase8（NEW-2 v2）：进入启动期——存储/事务句柄虽已建，但持久化
+	// 配置尚未加载完成，且本函数可能在进程启动的"试开-即关"路径上被调用
+	//（cmd/openxdb 读 TLS 持久化意图）。此刻起关闭 B1 副本补齐栅栏：期间
+	// 由持久化 ha_quorum_enabled=on 触发的补齐请求只登记不执行，待本函数
+	// 返回前 MarkStorageReady 事件补发，避免异步 goroutine 在句柄就绪前或
+	// 释放后做快照导致 0xc0000005。
+	eng.MarkStorageStarting()
 	eng.LoadSharding(seq, regions)
 	// P6 HA（NEW-1 修复）：本次启动装载了磁盘持久化的 region 归属视图——该视图
 	// 可能落后于多数派（重启前该 region 曾被重指派）。标记归属视图待权威源确认：
@@ -313,6 +320,11 @@ func Open(dir string) (*DB, error) {
 		_ = st.Close()
 		return nil, fmt.Errorf("db: load persisted config: %w", err)
 	}
+	// D4.5 Phase8（NEW-2 v2）：启动期结束——存储句柄、事务管理器、路由与
+	// 持久化 HA 配置均已就绪，打开 B1 栅栏；启动期被挂起的副本补齐请求在此
+	// 以事件驱动方式补发一次（保证持久化 ha_quorum_enabled=on 真实生效，
+	// 同时确保此前不会发生任何快照/副本扫描）。
+	eng.MarkStorageReady()
 	return db, nil
 }
 
@@ -706,6 +718,12 @@ func (d *DB) BinlogLSN() (uint64, error) {
 // Close 关闭事务管理器、存储与 WAL（顺序与 Open 相反）。
 func (d *DB) Close() error {
 	var errs []error
+	// D4.5 Phase8（NEW-2 v2）：第一时间关闭 B1 副本补齐栅栏——此后任何异步
+	// 补齐/维护动作一律拒绝，避免在本函数释放 C 层存储句柄后仍做快照与扫描
+	//（Phase7 复测的启动期 0xc0000005 即由此产生）。
+	if d.SQL != nil {
+		d.SQL.MarkStorageClosed()
+	}
 	// v1.16.0 WAL 自动 checkpoint：最先停止后台检查协程，避免 Close 过程中
 	// 并发访问 WAL/Txn/Storage。
 	if d.checkpoint != nil {

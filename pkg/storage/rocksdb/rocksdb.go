@@ -18,6 +18,7 @@ import "C"
 import (
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -26,6 +27,10 @@ import (
 
 type rocks struct {
 	h *C.xdb
+	// hmu 句柄生命周期读写锁（D4.5 Phase8 / NEW-2 v2）：Snapshot 持读锁并
+	// 校验句柄，Close 持写锁释放句柄并置 nil，消除"读到非 nil 句柄后句柄被
+	// 并发关闭释放"的窗口，杜绝 C 层访问已释放指针（0xc0000005）。
+	hmu sync.RWMutex
 	// C6 存储级写提交序列：每次成功 Write 后递增，供 executor 共享快照
 	// 窗口过期检测（storage.WriteSeqProvider）。存储重建（Close 后重新
 	// Open）后新实例序列复位，executor 随 storage 重建时窗口一并关闭。
@@ -161,6 +166,15 @@ func (r *rocks) SetNoWAL(enabled bool) {
 }
 
 func (r *rocks) Snapshot() (storage.Snapshot, error) {
+	// D4.5 Phase8（NEW-2 v2）兜底防线：持读锁校验句柄——Close 已释放 C 层
+	// 句柄（r.h = nil）后若仍有异步路径创建快照，返回错误而非把空指针交给
+	// C 层（否则 xdb_snapshot_create(0x0) 触发原生访问违例 0xc0000005，
+	// Go 侧无栈可查）；读锁同时保证句柄不会在创建快照期间被并发释放。
+	r.hmu.RLock()
+	defer r.hmu.RUnlock()
+	if r.h == nil {
+		return nil, fmt.Errorf("rocksdb: snapshot: closed")
+	}
 	s := C.xdb_snapshot_create(r.h)
 	if s == nil {
 		return nil, fmt.Errorf("rocksdb: snapshot create failed")
@@ -169,6 +183,8 @@ func (r *rocks) Snapshot() (storage.Snapshot, error) {
 }
 
 func (r *rocks) Close() error {
+	r.hmu.Lock()
+	defer r.hmu.Unlock()
 	if r.h == nil {
 		return nil
 	}
@@ -237,6 +253,10 @@ type snapshot struct {
 }
 
 func (sn *snapshot) Get(key []byte) ([]byte, error) {
+	// D4.5 Phase8（NEW-2 v2）兜底防线：快照已释放时禁止把空句柄交给 C 层。
+	if sn == nil || sn.s == nil {
+		return nil, fmt.Errorf("rocksdb: snapshot get: released")
+	}
 	var val *C.uchar
 	var vlen C.size_t
 	var errmsg *C.char
@@ -254,6 +274,12 @@ func (sn *snapshot) Get(key []byte) ([]byte, error) {
 }
 
 func (sn *snapshot) Scan(rng storage.KeyRange, limit int) ([]storage.KVPair, error) {
+	// D4.5 Phase8（NEW-2 v2）兜底防线：快照已释放（含所属存储已关闭后
+	// Release）时，禁止把空句柄交给 C 层（xdb_snapshot_scan(0x0) 导致原生
+	// 访问违例，Phase7 复测崩溃栈的第二落点）。
+	if sn == nil || sn.s == nil {
+		return nil, fmt.Errorf("rocksdb: snapshot scan: released")
+	}
 	var errmsg *C.char
 	return doScan(C.xdb_snapshot_scan(
 		sn.s,

@@ -77,6 +77,11 @@ type Executor struct {
 	b1Ensured  uint64
 	b1Push     func(target string, rg sharding.RegionInfo, rows []cluster.QueryRow, srcID string) error
 	b1Scan     func(nodeID string, rg sharding.RegionInfo) ([]cluster.QueryRow, error)
+	// b1Gate（D4.5 Phase8 / NEW-2 v2）：B1 副本补齐的存储就绪栅栏。db.Open
+	// 装配期关闭、装配完成后打开、db.Close 永久关闭；未就绪期间补齐请求被
+	// 挂起并由就绪事件补发，杜绝"句柄未就绪/已释放仍做快照"导致的原生崩溃
+	//（见 ha_b1_gate.go）。
+	b1Gate *b1StorageGate
 	// P2 HA：陈旧路由消息冲突计数（分区恢复合并冲突标记，见 ha_p2.go）。
 	p2Mu           sync.Mutex
 	regionConflict uint64
@@ -261,6 +266,9 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 		p1Epoch:       map[storage.ID]p1RegionEpoch{},
 		splitAcc:      map[uint64]int64{},
 		qc:            NewQueryCache(),
+		// D4.5 Phase8：B1 存储就绪栅栏默认放行（直接 sql.New 构造零回归），
+		// 经 db.Open 装配的实例由 MarkStorageStarting/Ready/Closed 显式驱动。
+		b1Gate: newB1StorageGate(),
 		// v1.18.0 D2：全局会话锁拆分默认开启（SET session_lock_split=off
 		// 回退 v1.16.0 每读侧判定持全局 e.mu）。布尔开关字段默认值与经
 		// Set* 热切换路径一致，构造后统一 Store（见 NewExecutor 尾部）。
