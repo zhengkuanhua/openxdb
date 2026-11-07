@@ -273,11 +273,12 @@ func Open(dir string) (*DB, error) {
 	db.checkpoint = cc
 	cc.Start()
 	eng.SetCheckpointController(cc)
-	if err := eng.LoadPersistedConfig(); err != nil {
-		_ = tm.Close()
-		_ = st.Close()
-		return nil, fmt.Errorf("db: load persisted config: %w", err)
-	}
+	// NEW-2 修复（D4.5 Phase4 复测暴露）：ha_* 持久化配置的应用必须先于
+	// LoadPersistedConfig。否则 SET PERSIST ha_epoch_enabled / ha_quorum_enabled
+	// 落盘的 persisted.json 在重启时于 HA 装配（SetHAConfigSetter）之前 apply，
+	// 被 applyHaEpochEnabled 判为 "requires cluster HA configuration" 直接
+	// 拒绝启动，节点无法拉起（配置加载顺序缺陷，与集群是否就绪无关）。
+	//
 	// P0 HA v1.10.0：epoch 授权与写入 fencing 默认开启（评估结论：对未授权
 	// 主/单机零回归——masterEpoch=0 时 AllowWrite 放行、无广播不触发降级；
 	// 仅已授权主被更高 epoch 取代时才 fencing）。quorum 升主仲裁保留默认
@@ -291,11 +292,19 @@ func Open(dir string) (*DB, error) {
 	// P0 HA：装配写入 fencing 检查（epoch 校验拒陈旧主写路径；开关关闭零开销）。
 	eng.SetWriteFence(db)
 	// P0 HA：装配 epoch/quorum 开关节流控制器（SET ha_* 热切换入口）。
+	// 让 SET ha_* 与 persisted.json 中的 ha_* 键共用同一装配后路径：
+	// 集群 HA 配置入口（clusterAddr/EnableTSOHA 等）由 StartCluster 后续补齐，
+	// 这里的 setter 只保证"开关可被解析并应用"，不依赖集群已启动。
 	eng.SetHAConfigSetter(db)
 	// P1 HA：装配 clusterEpoch 取号源与 quorum 仲裁器（FailoverDownNode 前置
 	// 多数派确认 + failoverRegion epoch 授权；开关关闭零回归）。
 	eng.SetEpochSource(db)
 	eng.SetQuorumArbiter(db)
+	if err := eng.LoadPersistedConfig(); err != nil {
+		_ = tm.Close()
+		_ = st.Close()
+		return nil, fmt.Errorf("db: load persisted config: %w", err)
+	}
 	return db, nil
 }
 

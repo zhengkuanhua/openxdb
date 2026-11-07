@@ -144,6 +144,7 @@ func needDataDir(args []string) (string, error) {
 var serverKeys = []string{
 	"data_dir", "port", "replica_port", "metrics_port", "mysql_port", "shutdown_timeout",
 	"cluster_addr", "log_level", "alert_enabled", "alert_file", "alert_webhook", "alert_keep",
+	"tso_node", "tso_ha_group", "tso_ha_batch",
 }
 
 // loadStartConfig 加载并校验统一配置文件（--config <path>，INI 风格）。
@@ -247,6 +248,51 @@ func cmdREPL(args []string) error {
 	s := server.New(d.Txn)
 	s.SQL = d.SQL
 	return s.REPL(os.Stdin, os.Stdout)
+}
+
+// parseTSOHAGroup 解析逗号分隔的 TSO 副本节点 ID 列表（B2 生产接线）：
+// 去空白、丢空项、按出现顺序去重（客户端按该顺序优先选主，配置稳定即可
+// 保持首选主稳定）。空串返回 nil，代表未配置 TSO HA。
+func parseTSOHAGroup(spec string) []string {
+	if strings.TrimSpace(spec) == "" {
+		return nil
+	}
+	seen := make(map[string]bool, 4)
+	out := make([]string, 0, 4)
+	for _, part := range strings.Split(spec, ",") {
+		id := strings.TrimSpace(part)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// setupTSOHA 生产装配 TSO HA（B2）：把本节点 TSO 从单点/本地发号切换为
+// 组内主备客户端（HATSOClient），并绑定服务端 HA 状态机。
+// 必须在 StartCluster 之后调用（需要集群帧处理与节点链路地址）。
+// 选主不在装配期发生（首次取号触发），因此本函数只校验装配结果。
+func setupTSOHA(d *db.DB, group []string, batch uint64) error {
+	if len(group) == 0 {
+		return errors.New("TSO HA: empty group")
+	}
+	if err := d.EnableTSOHA(group, batch); err != nil {
+		return fmt.Errorf("TSO HA: %w", err)
+	}
+	if d.TSOHAClient() == nil {
+		return errors.New("TSO HA: client not installed after EnableTSOHA")
+	}
+	return nil
+}
+
+// tsoHALeaderLabel 选主未完成时给出可读占位，便于启动日志观察是否已选主。
+func tsoHALeaderLabel(leader string) string {
+	if leader == "" {
+		return "(pending election on first write)"
+	}
+	return leader
 }
 
 func cmdStart(args []string) error {
@@ -378,6 +424,41 @@ func cmdStart(args []string) error {
 	}
 	if tn, ok := flagValue(args, "--tso-node"); ok {
 		tsoNode = tn
+	}
+	// B2（D4.5 §6-2）TSO HA 生产接线（A 项）：--tso-ha-group <id1,id2,id3> 或
+	// [server] tso_ha_group 给出 TSO 副本组（逗号分隔，靠前者优先当选主）；
+	// --tso-ha-batch / [server] tso_ha_batch 给出客户端单次拉批大小（默认 64）。
+	// 与旧式单点 --tso-node 互斥：同时配置时以 HA 组为准（HA 覆盖单点发号）。
+	tsoHAGroup := []string(nil)
+	if cfgFile != nil {
+		if v, ok := cfgFile.Get("server", "tso_ha_group"); ok {
+			tsoHAGroup = parseTSOHAGroup(v)
+		}
+	}
+	if p, ok := flagValue(args, "--tso-ha-group"); ok {
+		tsoHAGroup = parseTSOHAGroup(p)
+	}
+	tsoHABatch := uint64(64)
+	if cfgFile != nil {
+		if v, ok := cfgFile.Get("server", "tso_ha_batch"); ok {
+			n, berr := strconv.ParseUint(v, 10, 64)
+			if berr != nil || n == 0 {
+				return errors.New("invalid [server] tso_ha_batch value: " + v + " (expected positive integer)")
+			}
+			tsoHABatch = n
+		}
+	}
+	if p, ok := flagValue(args, "--tso-ha-batch"); ok {
+		n, berr := strconv.ParseUint(p, 10, 64)
+		if berr != nil || n == 0 {
+			return errors.New("invalid --tso-ha-batch value: " + p + " (expected positive integer)")
+		}
+		tsoHABatch = n
+	}
+	// TSO HA 依赖集群链路（选主走集群帧协议 + 节点注册表），无集群地址直接拒绝，
+	// 避免"配了 HA 但发号仍单点"的静默降级。
+	if len(tsoHAGroup) > 0 && clusterAddr == "" {
+		return errors.New("--tso-ha-group requires --cluster-addr (TSO HA needs cluster link)")
 	}
 	// 结构化日志级别与告警配置（[server] 段默认值）：db.Open 前的失败路径亦使用；
 	// [sql] 段与 CLI 覆盖在 db.Open 后装配（见下）。
@@ -512,7 +593,20 @@ func cmdStart(args []string) error {
 	// 本节点即 TSO 主（--tso-node == selfID）时跳过远程装配，保持本地发号器：
 	// 避免 engine 自指 tsoClient 与 ClusterSrv 同源造成的 fetchBatch/handleTso
 	// 互等死锁（server 侧始终本地发号，见 db.SetTSONode）。
-	if tsoNode != "" && tsoNode != d.Cluster.SelfID {
+	//
+	// B2（A 项）生产接线：配置了 TSO HA 组时优先走组内主备发号（主宕机后由
+	// 客户端自动切主），单点 --tso-node 配置被忽略并显式告警，避免两套发号
+	// 装配互相覆盖导致"看起来接了 HA 实际仍是单点"。
+	if len(tsoHAGroup) > 0 {
+		if tsoNode != "" {
+			fmt.Fprintf(os.Stderr, "openxdb: WARN --tso-node %s ignored: --tso-ha-group takes precedence\n", tsoNode)
+		}
+		if err := setupTSOHA(d, tsoHAGroup, tsoHABatch); err != nil {
+			return err
+		}
+		fmt.Printf("OpenXDB %s TSO HA enabled (group %s, batch %d, leader %s)\n",
+			version, strings.Join(tsoHAGroup, ","), tsoHABatch, tsoHALeaderLabel(d.TSOHALeader()))
+	} else if tsoNode != "" && tsoNode != d.Cluster.SelfID {
 		if err := d.SetTSONode(tsoNode, 0); err != nil {
 			return err
 		}
@@ -930,6 +1024,11 @@ Commands:
                                （默认纯 TLS，明文连接拒绝）
           [--replica-port <n>] 主节点复制端口（启用 M2 复制并生成 binlog）
           [--cluster-addr <addr>] 集群节点链路地址（启用 M4 节点握手/转发）
+          [--tso-node <nodeID>] 中心化 TSO 发号节点（M8；单点发号，主宕机写失败）
+          [--tso-ha-group <ids>] TSO 高可用副本组（B2；逗号分隔节点 ID，靠前者
+                              优先当选主，需同时配置 --cluster-addr；配置后自动
+                              接管发号，主节点宕机后跨节点写自动恢复）
+          [--tso-ha-batch <n>] TSO HA 客户端单次拉批大小（默认 64）
           [--metrics-port <n>] Prometheus /metrics 端口（默认 7789，0 禁用）
           [--mysql-port <n>]  MySQL wire protocol 兼容监听端口（默认 0=关闭；
                               开启后 mysql CLI / go-sql-driver 等可直接连接）
