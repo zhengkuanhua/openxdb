@@ -389,6 +389,10 @@ func (e *Executor) tryFailoverTargetP1(rg sharding.RegionInfo, downID, target st
 			return err
 		}
 		e.recordRegionEpochOwner(rg.RegionID, clusterEpoch, regionEpoch, e.selfID)
+		// P9：本机接管成功 → 推进集群轨归属纪元（term=本次接管使用的
+		// clusterEpoch）。此后本机写路径按该 term 获得授权；若后续收到更高
+		// 纪元的归属消息，本机归属被收回、写入随即被 fencing 拒绝。
+		e.notifyLocalTakeover(clusterEpoch)
 		return e.broadcastRegionViewEpoch([]sharding.RegionInfo{updated}, nil, clusterEpoch)
 	}
 	// 远端目标：构建权威路由视图（同 failoverRegion，补充显式化本地归属）。

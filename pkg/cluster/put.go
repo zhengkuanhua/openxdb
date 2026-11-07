@@ -177,11 +177,19 @@ func (m *Manager) broadcastRegionsEpoch(routes []sharding.RegionInfo, deleteIDs 
 //（D4.4 修复：重启节点主动刷新 region 归属视图的服务端下发实现）。
 // 与 BroadcastRegionsEpoch 的差别是单播到指定节点，不向全网扩散。
 func (m *Manager) SyncRouteViewTo(target string, routes []sharding.RegionInfo, srcID string) error {
+	return m.SyncRouteViewToEpoch(target, routes, srcID, 0)
+}
+
+// SyncRouteViewToEpoch 带 clusterEpoch 的权威路由视图同步（P9）：
+// 与 SyncRouteViewTo 相同，但把源节点已知的集群纪元随消息下发，接收端据此
+// 推进本机集群轨归属纪元（cluster term）——term=0 表示源节点无纪元信息
+// （旧节点/单机），接收端按"仅学习归属、不推进纪元"处理。
+func (m *Manager) SyncRouteViewToEpoch(target string, routes []sharding.RegionInfo, srcID string, clusterEpoch uint64) error {
 	n, err := m.ensureRemote(target)
 	if err != nil {
 		return err
 	}
-	return m.clientFor(n.ID).syncRegionRoutes(routes, nil, srcID, 0, true)
+	return m.clientFor(n.ID).syncRegionRoutes(routes, nil, srcID, clusterEpoch, true)
 }
 
 // syncRegionRoutes 短连接发送 REGION_PUSH(SyncOnly=true) 并读取 REGION_PUSH_OK。

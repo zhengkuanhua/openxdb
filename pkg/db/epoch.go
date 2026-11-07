@@ -247,6 +247,14 @@ func (d *DB) AllowWrite() error {
 	if !d.epochEnabled {
 		return nil
 	}
+	// P9 集群轨归属 fencing（先于复制轨判定）：两条轨道的授权来源不同，但都
+	// 要求本节点在权威视图中的归属与其已知纪元一致。三种情形生效：
+	// 重启后归属待权威视图确认、本机归属已被权威视图收回、以及两者皆无但
+	// 曾获授权（clusterOwnTerm>0）。从未接管且无重启待确认记录的节点恒放行
+	// （单机/普通集群节点零回归）。
+	if err := d.clusterOwnershipFenceLocked(); err != nil {
+		return err
+	}
 	if d.masterEpoch == 0 {
 		return nil
 	}

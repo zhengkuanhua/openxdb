@@ -178,6 +178,12 @@ func (e *Engine) OnPartitionRecovered(version uint64) { e.ex.OnPartitionRecovere
 // SetPartitionRouteResync 装配分区恢复后的权威路由拉取钩子（nil = 不拉取）。
 func (e *Engine) SetPartitionRouteResync(fn func()) { e.ex.SetPartitionRouteResync(fn) }
 
+// SetClusterOwnershipNotify 透传 Executor.SetClusterOwnershipNotify（P9：
+// 集群轨归属纪元通知，db.StartCluster 装配 db.DB.NoteOwnershipView）。
+func (e *Engine) SetClusterOwnershipNotify(fn func(term uint64, selfOwns, authoritative bool)) {
+	e.ex.SetClusterOwnershipNotify(fn)
+}
+
 // FencedWriteCount 返回集群轨写 fencing 拒绝次数（T3 观测项）。
 func (e *Engine) FencedWriteCount() uint64 { return e.ex.FencedWriteCount() }
 

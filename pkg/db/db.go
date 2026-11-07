@@ -48,6 +48,10 @@ const (
 	// EpochMetaFile P0 HA epoch 持久化文件（记录已知最大 clusterEpoch，
 	// 重启加载作为单调下限，防回退）。
 	EpochMetaFile = "epoch.meta"
+	// ClusterTermFile P9 集群轨归属纪元持久化文件（记录已知最新集群纪元、
+	// 本节点获授权持有的纪元与当前是否仍持有；重启装载后先按"待确认"处理，
+	// 待权威路由视图确认归属再放行写入）。
+	ClusterTermFile = "cluster_term.meta"
 	// DefaultEngine 当前存储引擎。
 	DefaultEngine = "rocksdb"
 )
@@ -108,6 +112,20 @@ type DB struct {
 	// apply+追加 binlog，与并发写/commit hook 隔离，保证补偿批次原子性。
 	compMu        sync.Mutex
 	epochFilePath string // EpochMetaFile 持久化路径（Open 时装配）
+
+	// P9 集群轨归属纪元（cluster term）：NEW-1 / T3 同源收口。
+	// 复制轨靠 masterEpoch 判定陈旧主，纯集群轨（无复制链路）没有升主动作，
+	// masterEpoch 恒 0 → AllowWrite 门槛永不成立。此处为集群轨建立同构的
+	// 归属纪元：授予（本节点成为 owner）时记 clusterOwnTerm 并把已知纪元推到
+	// 该 term；收回（权威全量视图显示本机不再持有任何 region）时置
+	// clusterOwned=false；重启装载后 clusterPend=true，归属待权威视图确认前
+	// 拒绝写入。以上字段仅在收到归属消息时被写入，无集群/无 failover 场景恒
+	// 零值，且 fencing 判定还要求 clusterOwnTerm>0，保证零回归。
+	clusterTermFilePath string // ClusterTermFile 持久化路径（Open 时装配）
+	clusterTerm         uint64 // 本节点已知最新集群轨归属纪元（0 = 无纪元信息）
+	clusterOwnTerm      uint64 // 本节点最近一次获授权持有归属的纪元（0 = 从未授权）
+	clusterOwned        bool   // 本节点在 clusterOwnTerm 上是否仍持有归属
+	clusterPend         bool   // 重启后归属待权威视图确认（确认前拒绝写入）
 
 	// P2 HA：分区恢复合并（复制轨收敛 + 数据冲突标记）。
 	// NoteEpoch 检测到本节点为陈旧主（masterEpoch < 广播 epoch）时自动
@@ -302,6 +320,11 @@ func Open(dir string) (*DB, error) {
 	// P0 HA：加载 epoch.meta（已知最大 clusterEpoch 单调下限，防回退）。
 	db.epochFilePath = filepath.Join(dir, EpochMetaFile)
 	db.loadEpochMeta()
+	// P9：加载集群轨归属纪元。重启前本节点仍持有归属的，装载后先置"待确认"
+	// ——拒绝写入直至权威路由视图确认归属（NEW-1：重启装载旧 m:regions 后若
+	// 直接放行写入，陈旧 owner 写入会覆盖多数派已确认数据）。
+	db.clusterTermFilePath = filepath.Join(dir, ClusterTermFile)
+	db.loadClusterTermMeta()
 	// T33：装配复制模式控制器（SET replication_* 热切换入口）。
 	eng.SetReplicationModeSetter(db)
 	// P0 HA：装配写入 fencing 检查（epoch 校验拒陈旧主写路径；开关关闭零开销）。
@@ -374,6 +397,19 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// D4.4 修复：装配权威路由视图同步回调（FULLALIGN_REQ{RoutesOnly} 接收端）：
 	// 重启节点主动请求本节点下发权威 region 归属视图，用于修正陈旧 owner。
 	srv.SetRouteSyncHandler(d.SQL.PushRouteViewToNode)
+	// P9 修复（NEW-1 与 T3 同源收口）：装配集群轨归属纪元通知——路由/装载
+	// 消息应用后由 d.NoteOwnershipView 推进已知 term 并记录本机归属，
+	// 使 AllowWrite 的归属 fencing 在集群轨（无复制链路的部署）真正生效。
+	srv.SetOwnershipNotify(d.NoteOwnershipView)
+	d.SQL.SetClusterOwnershipNotify(d.NoteOwnershipView)
+	// P9 修复（NEW-1 重启双主）：重启节点若在本地路由视图里仍持有 region 且
+	// 集群存在其它节点，其归属进入"待权威视图确认"——确认前拒绝写入，封住
+	// "按旧视图抢先写、覆盖多数派新 owner 已确认数据"的窗口。单节点集群
+	// （无对端）本地视图即最终视图，不置 pending（零回归）。
+	{
+		selfOwns, peerCount := srv.OwnershipSnapshot()
+		d.noteRestartOwnershipView(selfOwns, peerCount)
+	}
 	// M5：2PC 崩溃恢复——清理未决 prepare（未决事务回滚，数据从未写入）
 	// 与历史幂等标记（仅运行期有效），保证重启后参与者状态干净可重入。
 	if err := srv.Recover2PC(); err != nil {
@@ -495,6 +531,9 @@ func (d *DB) refreshRouteViewFromPeers() {
 				// 单节点集群：无权威源可拉取，直接声明就绪（避免读路径永久 READY 阻塞）。
 				_ = d.Cluster.SetDataReady(selfID, true)
 				d.SQL.MarkRegionViewConfirmed()
+				// P9：单节点集群无权威源可拉取，本地视图即最终视图——确认
+				// 重启后的归属（否则"待确认"状态会让节点永久只读）。
+				d.ConfirmOwnershipLocal()
 				return
 			}
 			time.Sleep(routeViewRefreshInterval)

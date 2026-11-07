@@ -689,5 +689,15 @@ func (e *Executor) PushRouteViewToNode(target string) error {
 			}
 		}
 	}
-	return e.mgr.SyncRouteViewTo(target, routes, e.selfID)
+	return e.mgr.SyncRouteViewToEpoch(target, routes, e.selfID, e.clusterTermForRouteSync())
+}
+
+// clusterTermForRouteSync 权威路由视图同步携带的集群纪元（P9）：取本机已知
+// 最大集群纪元，使接收端（重启节点）能按该 term 确认/收回归属；0 表示本机
+// 无纪元信息（epoch 未启用/从未 failover），接收端只学归属不推进纪元。
+func (e *Executor) clusterTermForRouteSync() uint64 {
+	if e.epochSrc == nil {
+		return 0
+	}
+	return e.epochSrc.Epoch()
 }

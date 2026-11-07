@@ -85,6 +85,12 @@ type Server struct {
 	// 签名：dest=路由视图接收方 NodeID（重启节点自身）。
 	// D4.4 修复：重启节点主动拉取权威 region 归属视图，不依赖对端 UP 事件检测。
 	routeSyncFn func(dest string) error
+	// ownershipNotify 节点侧集群轨归属纪元通知回调（P9，db.StartCluster 装配
+	// db.DB.NoteOwnershipView）；nil = 未装配（旧节点零回归）。
+	// 签名：term=消息携带的集群纪元（0=源端无纪元信息），selfOwns=本次应用后
+	// 本节点是否仍持有 region 归属，authoritative=是否为权威全量视图——只有
+	// 权威全量视图下的"本机不再持有任何 region"才可判定归属被更高纪元收回。
+	ownershipNotify func(term uint64, selfOwns, authoritative bool)
 }
 
 // SetTSO 注入时间戳源（M8：db.StartCluster 装配本地发号器）。
@@ -150,6 +156,50 @@ func (s *Server) SetFullAlignHandler(fn func(dest string) error) { s.fullAlignFn
 // sql.Executor.PushRouteViewToNode）；传 nil 恢复未装配（FULLALIGN_REQ{RoutesOnly} 回执 Err）。
 // D4.4 修复：重启节点经此路径主动从集群权威源刷新 region 归属视图。
 func (s *Server) SetRouteSyncHandler(fn func(dest string) error) { s.routeSyncFn = fn }
+
+// SetOwnershipNotify 注入集群轨归属纪元通知回调（P9，db.StartCluster 装配
+// db.DB.NoteOwnershipView）；传 nil 恢复未装配（不推进归属纪元，零回归）。
+// OwnershipSnapshot 上报本机当前"是否在本地视图里持有 region 归属"与"可作
+// 权威源的其它节点数"（P9 NEW-1 重启归属判定用）。
+// 重启节点若仍持有归属且存在其它节点，其归属必须由权威视图确认后才能写入；
+// 单节点集群（peerCount==0）本地视图即最终视图，不受该约束（零回归）。
+func (s *Server) OwnershipSnapshot() (selfOwns bool, peerCount int) {
+	if s.mgr != nil {
+		for _, n := range s.mgr.ListNodes() {
+			if n.ID != s.SelfID {
+				peerCount++
+			}
+		}
+	}
+	return s.selfOwnsAny(), peerCount
+}
+
+func (s *Server) SetOwnershipNotify(fn func(term uint64, selfOwns, authoritative bool)) {
+	s.ownershipNotify = fn
+}
+
+// notifyOwnership 应用完路由/装载消息后通知上层本机归属状态（P9）：
+// selfOwns 取"应用后本机路由视图中是否存在 Node 为空或等于本节点的 region"，
+// 与写路径/路由判定同源，避免另行推导出错。
+func (s *Server) notifyOwnership(term uint64, authoritative bool) {
+	if s.ownershipNotify == nil {
+		return
+	}
+	s.ownershipNotify(term, s.selfOwnsAny(), authoritative)
+}
+
+// selfOwnsAny 判断本机路由视图是否仍持有任一 region 归属。
+func (s *Server) selfOwnsAny() bool {
+	if s.router == nil {
+		return false
+	}
+	for _, rg := range s.router.AllRegions() {
+		if rg.Node == "" || rg.Node == s.SelfID {
+			return true
+		}
+	}
+	return false
+}
 
 // Serve 在已有 listener 上提供服务，返回实际监听地址（127.0.0.1:0 场景获取端口）。
 func (s *Server) Serve(ln net.Listener) (string, error) {
@@ -459,6 +509,10 @@ func (s *Server) applyPush(req *RegionPushReq) (RegionPushResp, error) {
 	if err := s.st.Write(batch); err != nil {
 		return RegionPushResp{}, err
 	}
+	// P9：装载完成即本机归属事实确定（本次接收 region 归本地），推进集群轨
+	// 归属纪元——目标节点由此获得"在纪元 term 上持有归属"的授权记录，写路径
+	// 的 fencing 门槛（AllowWrite）随之生效。
+	s.notifyOwnership(req.ClusterEpoch, req.Authoritative)
 	return RegionPushResp{Rows: len(req.Rows), Pruned: pruned, RetainedStale: retained,
 		Overwritten: overwritten, LocalExtra: localExtra}, nil
 }
@@ -565,6 +619,11 @@ func (s *Server) applyRouteSync(req *RegionPushReq) (RegionPushResp, error) {
 	if err := s.st.Write(batch); err != nil {
 		return RegionPushResp{}, err
 	}
+	// P9：路由视图应用完成 → 推进集群轨归属纪元。权威全量视图（重启刷新路径）
+	// 若显示本机不再持有任何 region，则本机归属已被更高纪元收回，写路径随即
+	// 被 fencing 拒绝（陈旧主/重启旧视图不能再写）；增量广播只用于授予，
+	// 不据"本条不含本机 region"判定收回。
+	s.notifyOwnership(req.ClusterEpoch, req.Authoritative)
 	return RegionPushResp{Pruned: pruned, RetainedStale: retained}, nil
 }
 

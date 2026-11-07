@@ -95,6 +95,11 @@ type Executor struct {
 	p3Fenced      uint64    // 分区期被拒绝的写入次数（观测）
 	p3Recovered   uint64    // 分区恢复收敛次数（观测）
 	p3RouteResync func()    // 分区恢复后拉取权威路由视图钩子（db.StartCluster 装配）
+	// P9 HA（D4.5 Phase 9 / 候选 B）：集群轨归属纪元通知（NEW-1 与 T3 同源
+	// masterEpoch 恒 0 收口）。本机接管 region 成功后经 p9OwnershipNotify
+	// 通知 db 层推进集群轨 term（见 ha_p9.go）；nil = 未装配（空操作零回归）。
+	p9Mu              sync.Mutex
+	p9OwnershipNotify func(term uint64, selfOwns, authoritative bool)
 	// 全局会话（旧单会话 API 使用：Engine.Execute/ExecuteAs、CLI、既有测试）。
 	// 服务端多连接场景使用 NewSession 创建独立会话，显式事务状态互不干扰。
 	globalSess *Session
