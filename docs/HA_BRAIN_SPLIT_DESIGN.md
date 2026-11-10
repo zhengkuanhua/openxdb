@@ -234,13 +234,15 @@ OpenXDB 现有 HA 由两条相对独立的链路构成，均**不包含 quorum /
 
 **回归记录（v1.10.0）**：`go build ./...` 通过；`pkg/db`、`pkg/replication`、`pkg/sql` 全量 `go test` 全绿（含 backup_schedule 新增 4 用例，sql 包 46.3s）。
 
-**v1.18.0 D4 灰度结论（2026-11-05，报告：docs/D4_5_ha_quorum_gray_report.md）**：
+**v1.18.0 D4 灰度结论（2026-11-10，正式版 v1.0，报告：docs/D4_5_ha_quorum_gray_report.md）**：
 
-- **演练覆盖**：D4.1 quorum 开启评估（PASS 16 / FAIL 2 预期 / GAP 2）、D4.2 宕机 failover（PASS 33 / FAIL 2 预期 / GAP 1）、D4.3 脑裂 epoch 拒绝（T3 GAP）、D4.4 节点恢复回迁（路由回迁 / 数据回灌 / 聚合读恢复三项 GAP）。
-- **通过项**：quorum 多数派仲裁门（2/3 放行、1/3 拒绝）、三节点自动升主语义未破坏、心跳 DOWN 检测、存活副本前提下的读 failover（`resolveRegionOwner` → `FailoverDownNode` → 持有校验）均 PASS。
-- **未闭环项**：① 单副本 region 宕机不可恢复（B1，设计边界，需 region 多副本 / raft）；② 中心 TSO 单点导致跨节点写失败（B2，需 TSO HA）；③ 集群轨 `masterEpoch=0` 使 `AllowWrite` 恒放行，分区期旧主写未被 fencing（T3 GAP）；④ 恢复节点路由自动回迁 / 数据回灌 / 聚合读恢复（D4.4 三 GAP，P3 源码修复已入库：`6a9f06c` join 路由同步 + SourceOwner 接管回迁 + region 级对齐、`34235f1` 注册表广播 DOWN→UP 的 `notifyUp` 补触发与自接管 `SourceOwner` 记录；VM 三节点复测尚未执行，故本版不判定闭环）。
-- **写入路径现状**：集群轨写仍为本地提交，不按 region 归属强制路由，恢复节点写入不会进入全局聚合视图（D4.4 建议 4 未落地）。
-- **评估结论**：`ha.quorumEnabled` **维持默认关闭**；仅在三节点及以上、每 region ≥2 存活副本、TSO 不与唯一副本同机的验证环境按**受限灰度**开启，单机 / 两节点 / 单副本 region 禁止开启。全量开启前须先闭环 T3 与写路径 region 归属强制路由（并入 v1.19.0 M8 2PC）。
+- **演练覆盖**：D4.1 quorum 开启评估（PASS 16 / FAIL 2 预期 / GAP 2）、D4.2 宕机 failover（PASS 33 / FAIL 2 预期 / GAP 1）、D4.3 脑裂 epoch 拒绝、D4.4 节点恢复回迁（`af727fc` 复测三项 GAP 全 PASS）、D4.5 Phase5-Phase9（TSO HA 生产接线 / NEW-1 双主分叉 / NEW-2 启动崩溃 / 集群轨归属纪元）+ Phase7 真机矩阵复测。
+- **通过项（有 VM 三节点真机证据）**：quorum 多数派仲裁门（2/3 放行、1/3 拒绝）、三节点自动升主语义未破坏、心跳 DOWN 检测、存活副本前提下的读 failover、D4.4 路由自动回迁 / 数据追平 / 聚合读恢复、B2 TSO HA（主 TSO 停机 0.10s 切备、恢复 0.09s 回切，跨节点写未中断）。
+- **代码已修、待真机复验项**：① B1 单副本 region 恢复——`396b4bb` 起 `ha_b1.go` 主动副本补齐（无存活副本时记 pending 重试，非"永久不可恢复"），Phase8 `3d8373d` 追加存储就绪栅栏，但补齐为异步推送、`ha_replica_enabled` 生产默认 off；② T3 集群轨 fencing——Phase9 `59b1c05` 落地 cluster term（grant/revoke 纪元推进并落盘、写门槛三态、重启待确认期拒写），仅进程内 e2e 取证，未做真分区；③ NEW-1 陈旧主写拒绝——Phase6 `0303c13` 字典序比较 + 双写熔断，Phase9 cluster term 收口；④ NEW-2 启动崩溃——Phase8 `3d8373d` 句柄读写锁 + Snapshot nil 校验 + B1 栅栏，单测 2×3 矩阵全绿，进程级重启矩阵未复跑。
+- **结构性缺口（未解决）**：副本间无持续复制 / 无共识提交，写提交为归属节点本地提交 + 归属强制路由，region push 仅在 rejoin 做一次性对齐 → RPO>0、分区期写可能发散、副本补齐窗口内仍单副本可写。须由 v1.19.0 M8（2PC 参与 / 持续复制）解决。
+- **写入路径现状**：写路径已按 region 归属强制路由（`529e34c`），但全局视图靠归属广播 + 一次性对齐维护，无 2PC。
+- **评估结论**：`ha.quorumEnabled` **维持默认关闭**，`ha.epochEnabled` 维持默认 on；仅在三节点及以上、每 region ≥2 存活副本、TSO 不与唯一副本同机、且接受"重启节点在权威归属确认前拒写（秒级写不可用）"的验证环境按**受限灰度**开启，单机 / 两节点 / 单副本 region 禁止开启。默认值在 v1.19.0 M8 落地前不再调整。
+- **注意（行为变化）**：Phase9 的重启待确认拒写门槛由 `ha_epochEnabled`（v1.10.0 起默认 on）驱动，**与 `ha_quorumEnabled` 无关**，默认配置下即生效；仅三种情形触发（重启后归属待权威确认 / 归属已被权威视图收回 / 曾获授权 `clusterOwnTerm>0`），单机集群与从未接管 region 的节点零回归（`AllowWrite` 在 `epochEnabled=false` 时短路）。
 
 ---
 
