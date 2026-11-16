@@ -1,6 +1,7 @@
 # 数据目录（运行时生成）
 data/
 *.db
+quickstart-data/
 
 # 构建产物
 *.exe
