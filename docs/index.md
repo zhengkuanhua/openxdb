@@ -72,6 +72,9 @@ SELECT name FROM users WHERE age >= 25 AND age < 35 ORDER BY age;
 - **OLTP write**：13.40 TPS（QPS 53.60）
 - **OLTP read-write**：12.60 TPS（QPS 226.80）
 - **TPC-C 5 仓**：tpmC 774.50 / tpm_total 1746.50，0 错误
+- **Linux 同口径复测（v1.18.0 D5，RHEL 9.7 单机 2 vCPU）**：OLTP read 8.17 / write 8.13 / read-write 8.10 TPS，TPC-C tpmC 749.50 / tpm_total 1684.50，0 错误
+
+> Linux 数值与 Windows 同脚本、同口径（8 连接、每轮 prepare 重置、3 轮中位数），差异由 CPU 配额（2 vCPU vs 16 逻辑核）解释；仅作同口径功能与稳定性验证，性能基线以 Windows 为准，详见 [D5 报告](experiments/D5_linux_e5_controlled_retest.md)。
 
 > 说明：因自研二进制协议非 MySQL wire protocol，标准 sysbench/TPC-C 工具不可直连，E5 采用 Python PEP 249 驱动等价实测；数值为单机端侧基准（8 连接），非生产级吞吐承诺。历史版本数据见 [CHANGELOG](../CHANGELOG.md)，详见 [KNOWN_LIMITATIONS](../KNOWN_LIMITATIONS.md) 与 [E5 实验文档](experiments/E5_standard_bench_alignment.md)。
 

@@ -39,7 +39,7 @@ OpenXDB 版本变更记录。
 
 ## v1.18.0 (未发布，进行中)
 
-v1.18.0（分布式纵深：跨节点数据分布 + HA quorum 灰度）按 DEV_PLAN_v1.18.0 推进中。截至 2026-11-16，D2/D3/D4/D6 已完成，剩 D5（Linux E5 受控复测，待目标机登录凭据）与 D7（发版收尾）。本节为进行中记录，正式发布时补齐 D5 实测数据并定版。
+v1.18.0（分布式纵深：跨节点数据分布 + HA quorum 灰度）按 DEV_PLAN_v1.18.0 推进中。截至 2026-11-17，D2/D3/D4/D5/D6 已完成，剩 D7（发版收尾）。本节为进行中记录，正式发布时定版。
 
 **Added**
 
@@ -49,10 +49,10 @@ v1.18.0（分布式纵深：跨节点数据分布 + HA quorum 灰度）按 DEV_P
 - **D6.1 块缓存调优（负收益，不采纳）**：块缓存调至 256MB 实测 -1.6%，已回退；确认 SQL 路径瓶颈为 cgo 往返（`runtime.cgocall` flat 63.75%）而非引擎缓存容量。
 - **D6.2 批量点查合并**：`routedJoin`（routed JOIN 回表）与 `evalInSubqueryRouted`（IN 子查询）由逐行/逐值点查改为一次 `mgetKVCluster` 批量读，保持左行原序、LEFT JOIN 补空、未命中跳过与路由错误前置返回语义；N=64 基准 33.3ms → 0.52ms（点查往返 64 次 → 1 次），验证用例断言 `Get=0` / `MGet=1`。
 - **D6.3 Snapshot 批量 Scan 评估**：核对确认快照号语句级/事务级复用、多区间单次合并扫描、版本可见性批量过滤均已具备，无新增代码；跨 region 远端区间聚合（多 `QUERY_REQ` 合并）转 v1.19.0 与写路径 2PC 一并处理。
+- **D5 Linux E5 受控复测**：D5.1 在 RHEL 9.7 目标机（2 vCPU / Go 1.22.12 / RocksDB 11.8.1 CGO，源码 HEAD `dac6843`）以 `scripts/build.sh --rocks-src/--rocks-build` 构建并安装为 `/usr/local/bin/openxdb`，bench 依赖（仓库内 `drivers/python`）对齐，Linux 从零部署链路打通；D5.2 与 Windows 同口径采集（同脚本、8 连接、每轮 prepare 重置、3 轮取中位数）——OLTP read / write / read-write **8.17 / 8.13 / 8.10 TPS**（QPS 114.33 / 32.53 / 145.80），TPC-C 5 仓 tpmC **749.50** / tpm_total 1684.50，14 组采集全部 `errs=0` / `reconnects=0`。对比 Windows v1.17.0 基线（14.15 / 13.40 / 12.60 TPS，tpmC 774.50）：OLTP 达 57.7%–64.3%，TPC-C 达 96.8%；差异主因为 CPU 配额（2 vCPU vs 16 逻辑核），非代码路径——同机 threads=2 与 threads=8 的 read TPS 同为约 8.2 而 p50 延迟差约 4 倍（0.24 s → 0.95 s），表明 2 vCPU 下吞吐已饱和、8 连接属超配口径。同步确认"每轮 prepare 重置"口径的必要性（不重置连跑 TPC-C tpmC 衰减 565.00 → 230.50 → 220.00）及 `bench_tpcc.py` 主键起点限制（库内已有历史订单时重跑触发 duplicate primary key: history / order_line）。详见 `docs/experiments/D5_linux_e5_controlled_retest.md`。
 
 **待补（发布前）**
 
-- D5 Linux E5 受控复测（RHEL 9.x，OLTP/TPC-C 3 轮中位数 + 与 Windows 口径对比）。
 - D7 收尾：工作区临时文件清理、T3/NEW-2 真机验证报告闭环、版本常量与 tag 双远端核验。
 
 ## v1.17.0 (2026-10-30)
