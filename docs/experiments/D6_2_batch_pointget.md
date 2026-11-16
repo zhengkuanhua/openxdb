@@ -73,9 +73,11 @@ go test ./pkg/sql/ -run '^$' -bench 'BenchmarkD62RoutedJoin' -benchtime 20x -cou
 
 - `go build ./...` RC=0；`go vet ./pkg/sql/` 无告警；
 - `go test ./pkg/sql/ -count=1` 单包全量 PASS（459.8s），含既有 JOIN / 子查询 / 分片用例；
-- 全仓 `go test ./...` 仍有 3 处失败（`cmd/openxdb` doctor 两例、`pkg/sql`
-  `TestBackupScheduleRetainRotation`、`pkg/db` `TestD44RestartRefreshesAuthoritativeRoutes`），
-  三者单独 `-run` 均 PASS，且改动前即存在 → 判定为既有 flaky，单列为 D6 收尾小项处理，不计入本项回归。
+- 全仓 `go test ./... -count=1`（本次改动后复跑）：**全部包 ok，0 失败**（`pkg/sql` 135.7s、`pkg/db` 89.0s、`cmd/openxdb` 22.3s）；
+- 上一次全仓曾出现 3 例失败（`cmd/openxdb` doctor 两例、`pkg/sql` `TestBackupScheduleRetainRotation`、
+  `pkg/db` `TestD44RestartRefreshesAuthoritativeRoutes`），单独 `-run` 与本次全仓均通过，
+  且改动前即存在 → 判定为负载/时序敏感的既有 flaky，与 D6.2 无关；仍作为加固项保留（失败时
+  打印检查明细以固化根因），不计入本项回归。
 
 ## 6. 结论
 
