@@ -11,7 +11,7 @@ AIGC:
 
 # OpenXDB
 
-> 从零自研的单机/分布式关系型数据库内核（Go + RocksDB），全栈自研，**v1.0.0 正式发布**。
+> 从零自研的单机/分布式关系型数据库内核（Go + RocksDB），全栈自研，**v1.17.0 正式发布**（v1.18.0 开发中）。
 
 OpenXDB 是一个从零自研的单机/分布式关系型数据库内核（Go + RocksDB），历经 M1–M21、T1–T43、E1–E5 全部里程碑。它实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务、带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA、region 自动分裂与负载均衡、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动、运维工具链、认证权限（审计 + RBAC）、商业加固（TLS / 监控告警 / 真实用户验证）与生态导出（JSON / Parquet）等能力。
 
@@ -64,14 +64,16 @@ SELECT name FROM users WHERE age >= 25 AND age < 35 ORDER BY age;
 
 ## 性能基准（E5 实测数据）
 
-标准 sysbench OLTP / TPC-C 基准对齐（Python PEP 249 驱动等价实测，8 线程 × 60s / 120s，0 错误）：
+标准 sysbench OLTP / TPC-C 基准对齐（Python PEP 249 驱动等价实测，8 连接单机受控环境，0 错误）：
 
-- **OLTP read**：1.73 TPS（QPS 24.27）
-- **OLTP write**：0.93 TPS（QPS 3.73）
-- **OLTP read-write**：1.32 TPS（QPS 23.70）
-- **TPC-C 5 仓**：tpmC 13.50 / TPM 32.50，0 错误
+以下为 **v1.17.0 E5 受控复测**（Windows 单机，3 轮中位数）：
 
-> 说明：因自研二进制协议非 MySQL wire protocol，标准 sysbench/TPC-C 工具不可直连，E5 采用 Python PEP 249 驱动等价实测；数值为单机端侧基准，非生产级吞吐承诺。详见 [KNOWN_LIMITATIONS](../KNOWN_LIMITATIONS.md) 与 [E5 实验文档](experiments/E5_standard_bench_alignment.md)。
+- **OLTP read**：14.15 TPS（QPS 198.10）
+- **OLTP write**：13.40 TPS（QPS 53.60）
+- **OLTP read-write**：12.60 TPS（QPS 226.80）
+- **TPC-C 5 仓**：tpmC 774.50 / tpm_total 1746.50，0 错误
+
+> 说明：因自研二进制协议非 MySQL wire protocol，标准 sysbench/TPC-C 工具不可直连，E5 采用 Python PEP 249 驱动等价实测；数值为单机端侧基准（8 连接），非生产级吞吐承诺。历史版本数据见 [CHANGELOG](../CHANGELOG.md)，详见 [KNOWN_LIMITATIONS](../KNOWN_LIMITATIONS.md) 与 [E5 实验文档](experiments/E5_standard_bench_alignment.md)。
 
 ## 文档与 GitHub 入口
 
@@ -79,7 +81,7 @@ SELECT name FROM users WHERE age >= 25 AND age < 35 ORDER BY age;
 - [Product Manual (English)](product_manual_en.md)：11-chapter English product manual
 - [Why RocksDB](blog_why_openxdb_rocksdb.md)：存储引擎选型博客
 - [CHANGELOG](../CHANGELOG.md)：完整版本变更记录
-- [RELEASE_NOTES](../RELEASE_NOTES.md)：v1.0.0 发布说明
+- [RELEASE_NOTES](../RELEASE_NOTES.md)：最新版本发布说明
 - [KNOWN_LIMITATIONS](../KNOWN_LIMITATIONS.md)：已知限制与边界
 - [设计文档与基准实验](https://github.com/zhengkuanhua/openxdb/tree/main/docs)：T1–T43 / M 系列 / E1–E5 全部设计记录
 
