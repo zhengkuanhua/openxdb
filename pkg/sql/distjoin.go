@@ -172,6 +172,16 @@ func dbgLog(format string, args ...interface{}) {
 // INNER 丢弃该行、LEFT 以空值补右列，语义与 joinRels 一致。
 func (e *Executor) routedJoin(sess *Session, tx txn.Txn, left, right *Rel, rmeta *TableMeta, jc *JoinClause, plan joinRoutePlan) (*Rel, error) {
 	out := &Rel{Cols: append(append([]string{}, left.Cols...), right.Cols...), Types: append(append([]string{}, left.Types...), right.Types...)}
+	// D6.2 批量点查合并：两阶段执行——先按分区键把全部右表行键路由收集齐，
+	// 再一次 mgetKVCluster 批量读（本地键单次 tx.MGet，显著削减 cgo 往返），
+	// 最后按左行原序合并。语义与逐行 getKVCluster 等价：未命中 INNER 丢弃 /
+	// LEFT 补空；路由与编码错误仍在任何读取之前立即返回。
+	type routedKey struct {
+		lr  []Value
+		key []byte
+	}
+	items := make([]routedKey, 0, len(left.Rows))
+	keys := make([][]byte, 0, len(left.Rows))
 	for _, lr := range left.Rows {
 		lv := lr[plan.leftIdx]
 		if !joinKeyCompatible(rmeta, lv) {
@@ -182,21 +192,27 @@ func (e *Executor) routedJoin(sess *Session, tx txn.Txn, left, right *Rel, rmeta
 			return nil, err
 		}
 		// 按分区键路由：驱动值编码右表主键 → locate 所属 region → 编码带 region
-		// 前缀的物理行键（与 INSERT 写入键一致）→ 本地直读 / 远端转发点查。
+		// 前缀的物理行键（与 INSERT 写入键一致）。
 		rid, err := e.locateRow(rmeta, pk)
 		if err != nil {
 			return nil, err
 		}
 		key := e.rowKeyAt(rmeta, rid, pk)
-		raw, err := e.getKVCluster(sess, tx, key)
-		if err != nil {
-			if err == storage.ErrNotFound {
-				if jc.Type == "LEFT" {
-					out.Rows = append(out.Rows, leftJoinNullRow(left, right, lr))
-				}
-				continue
+		items = append(items, routedKey{lr: lr, key: key})
+		keys = append(keys, key)
+	}
+	got, err := e.mgetKVCluster(sess, tx, keys)
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range items {
+		lr := it.lr
+		raw, hit := got[string(it.key)]
+		if !hit {
+			if jc.Type == "LEFT" {
+				out.Rows = append(out.Rows, leftJoinNullRow(left, right, lr))
 			}
-			return nil, err
+			continue
 		}
 		rr, err := decodeRow(rmeta, raw)
 		if err != nil {

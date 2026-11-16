@@ -24,7 +24,6 @@ package sql
 import (
 	"errors"
 
-	"github.com/zhengkuanhua/openxdb/pkg/storage"
 	"github.com/zhengkuanhua/openxdb/pkg/txn"
 )
 
@@ -217,8 +216,10 @@ func (e *Executor) evalInSubqueryRouted(sess *Session, tx txn.Txn, metaS *TableM
 			return nil, errSubqueryUnroutable
 		}
 	}
-	// 3. 逐值路由点查：定位归属 region → 编码带 region 前缀行键 → 本地直读/远端转发。
-	var hit []Value
+	// 3. 路由批量点查（D6.2 批量点查合并）：先把全部带 region 前缀行键路由收集齐，
+	// 再一次 mgetKVCluster 批量读（本地键单次 tx.MGet，削减 cgo 往返），
+	// 再按 vals 原序逐行做 WHERE 过滤。语义与逐值点查等价：未命中跳过。
+	keys := make([][]byte, 0, len(vals))
 	for _, v := range vals {
 		pk, err := pkBytes(metaS, v)
 		if err != nil {
@@ -228,12 +229,17 @@ func (e *Executor) evalInSubqueryRouted(sess *Session, tx txn.Txn, metaS *TableM
 		if err != nil {
 			return nil, err
 		}
-		raw, err := e.getKVCluster(sess, tx, e.rowKeyAt(metaS, rid, pk))
-		if err == storage.ErrNotFound {
+		keys = append(keys, e.rowKeyAt(metaS, rid, pk))
+	}
+	got, err := e.mgetKVCluster(sess, tx, keys)
+	if err != nil {
+		return nil, err
+	}
+	var hit []Value
+	for i, v := range vals {
+		raw, hitOK := got[string(keys[i])]
+		if !hitOK {
 			continue
-		}
-		if err != nil {
-			return nil, err
 		}
 		row, err := decodeRow(metaS, raw)
 		if err != nil {
