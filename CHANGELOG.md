@@ -37,9 +37,9 @@ OpenXDB 版本变更记录。
 
 > 版本线说明：历史版本以仓库 README Status 行、docs/ 设计文档头部标注与 git 提交记录为准。早期部分中间 -alpha 版本未单独打标（git 与文档均无显式版本号），按里程碑区间归纳，版本号不做臆造。
 
-## v1.18.0 (未发布，进行中)
+## v1.18.0 (2026-11-17)
 
-v1.18.0（分布式纵深：跨节点数据分布 + HA quorum 灰度）按 DEV_PLAN_v1.18.0 推进中。截至 2026-11-17，D2/D3/D4/D5/D6 已完成，剩 D7（发版收尾）。本节为进行中记录，正式发布时定版。
+v1.18.0（分布式纵深：跨节点数据分布 + HA quorum 灰度）按 DEV_PLAN_v1.18.0 推进并完成 D2–D7：D2/D3/D4/D5/D6 已收口，D7 发版收尾于 2026-11-17 完成本地准备（版本常量、文档同步、回归验证；tag 与远端核验另行执行）。
 
 **Added**
 
@@ -51,9 +51,12 @@ v1.18.0（分布式纵深：跨节点数据分布 + HA quorum 灰度）按 DEV_P
 - **D6.3 Snapshot 批量 Scan 评估**：核对确认快照号语句级/事务级复用、多区间单次合并扫描、版本可见性批量过滤均已具备，无新增代码；跨 region 远端区间聚合（多 `QUERY_REQ` 合并）转 v1.19.0 与写路径 2PC 一并处理。
 - **D5 Linux E5 受控复测**：D5.1 在 RHEL 9.7 目标机（2 vCPU / Go 1.22.12 / RocksDB 11.8.1 CGO，源码 HEAD `dac6843`）以 `scripts/build.sh --rocks-src/--rocks-build` 构建并安装为 `/usr/local/bin/openxdb`，bench 依赖（仓库内 `drivers/python`）对齐，Linux 从零部署链路打通；D5.2 与 Windows 同口径采集（同脚本、8 连接、每轮 prepare 重置、3 轮取中位数）——OLTP read / write / read-write **8.17 / 8.13 / 8.10 TPS**（QPS 114.33 / 32.53 / 145.80），TPC-C 5 仓 tpmC **749.50** / tpm_total 1684.50，14 组采集全部 `errs=0` / `reconnects=0`。对比 Windows v1.17.0 基线（14.15 / 13.40 / 12.60 TPS，tpmC 774.50）：OLTP 达 57.7%–64.3%，TPC-C 达 96.8%；差异主因为 CPU 配额（2 vCPU vs 16 逻辑核），非代码路径——同机 threads=2 与 threads=8 的 read TPS 同为约 8.2 而 p50 延迟差约 4 倍（0.24 s → 0.95 s），表明 2 vCPU 下吞吐已饱和、8 连接属超配口径。同步确认"每轮 prepare 重置"口径的必要性（不重置连跑 TPC-C tpmC 衰减 565.00 → 230.50 → 220.00）及 `bench_tpcc.py` 主键起点限制（库内已有历史订单时重跑触发 duplicate primary key: history / order_line）。详见 `docs/experiments/D5_linux_e5_controlled_retest.md`。
 
-**待补（发布前）**
+**D7 发版收尾（2026-11-17 完成本地准备，未打 tag、未推送）**
 
-- D7 收尾：工作区临时文件清理、T3/NEW-2 真机验证报告闭环、版本常量与 tag 双远端核验。
+- **版本口径统一**：`cmd/openxdb/main.go` 版本常量升级 `v1.18.0`（握手版本串 `8.0.36-OpenXDB v1.18.0` 与 `select version()` 由该常量同源注入，自动联动）；`cmd/oxsql` 交互提示符由 `oxsql>` 改为 `openxdb>`（头部注释与 REPL 注释同步，命令名仍为 `oxsql`）。
+- **文档同步**：`RELEASE_NOTES.md` 整体改写为 v1.18.0 口径（覆盖 D2/D3/D4/D5/D6 + D7 收尾）；`README.md` 版本口径升级 v1.18.0 并补 v1.18.0 特性亮点行与版本状态条目；`KNOWN_LIMITATIONS.md` 版本口径升级 v1.18.0（§2.1 / §3.4 既有的 v1.18.0 结论保留）。
+- **回归验证**：`go build ./...` 与 `go vet ./...` 全通过，无回归。
+- **本次未执行（需单独完成）**：工作区 bench 临时文件清理（本次范围不涉及删除文件）；annotated tag `v1.18.0` 与双远端（gitee + GitHub443）`ls-remote` SHA 核验（本次不推送、不打 tag）。T3 / NEW-1 / NEW-2 真机复验按 `docs/D4_5_ha_quorum_gray_report.md` §8.2 执行——v1.18.0 发版前不阻塞，v1.19.0 前必须完成。
 
 ## v1.17.0 (2026-10-30)
 

@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_47fed632e1c511f189bc525400248c00
+    ReservedCode1: ReRaSz43Y15O8MRnQWqaPYyYMzILdkhqDC/GfDEeg/N2AAU3SfWqRN00OjwdE1q4l4Leu1Tqywr6c/QdyZSzvLaGOFol37pOAMVZEYMMTzHK0HqAiU0U0eByWtioumJqwFeUB2UqoWzzNwuCwnZwhyYGnRptZlhK50RDdLCzz1qwCwKoUCxCfFxr5PQ=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_47fed632e1c511f189bc525400248c00
+    ReservedCode2: ReRaSz43Y15O8MRnQWqaPYyYMzILdkhqDC/GfDEeg/N2AAU3SfWqRN00OjwdE1q4l4Leu1Tqywr6c/QdyZSzvLaGOFol37pOAMVZEYMMTzHK0HqAiU0U0eByWtioumJqwFeUB2UqoWzzNwuCwnZwhyYGnRptZlhK50RDdLCzz1qwCwKoUCxCfFxr5PQ=
+---
+
 # D5 Linux E5 受控复测报告（v1.18.0 D5）
 
 - 实验编号：D5（v1.18.0 Phase C：Linux E5 受控复测 + 与 Windows 口径对比）
@@ -155,3 +166,4 @@ done
 ```
 
 原始采集日志（目标机）：`/root/e5_d5_final.log`（主口径 3 轮）、`/root/e5_d5_t2.log`（threads=2 补充）、`/root/e5_d5_t2_tpcc.log`（TPC-C 重置后补充）、`/root/e5_d5.log`（服务端日志）、`/root/e5_d5_rounds.log`（不重置连跑，仅作 §7.1 口径敏感性证据）。
+*（内容由AI生成，仅供参考）*

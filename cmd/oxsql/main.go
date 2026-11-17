@@ -1,7 +1,7 @@
 // oxsql —— OpenXDB 交互式命令行客户端（D7.5 / G2）。
 //
 // 通过 MySQL wire 协议连接 OpenXDB --mysql-port 服务端口，提供品牌提示符
-// oxsql> 的 REPL（第三方 mysql CLI 提示符固定在客户端侧，无法定制）。
+// openxdb> 的 REPL（第三方 mysql CLI 提示符固定在客户端侧，无法定制）。
 //
 // 用法：
 //
@@ -25,7 +25,7 @@ import (
 	"github.com/zhengkuanhua/openxdb/pkg/mysqlproto"
 )
 
-const prompt = "oxsql> "
+const prompt = "openxdb> "
 
 func main() {
 	host := flag.String("h", "127.0.0.1", "server host")
@@ -65,7 +65,7 @@ func main() {
 	repl(c)
 }
 
-// repl 交互循环：打印 oxsql> 提示符，逐条执行 SQL。
+// repl 交互循环：打印 openxdb> 提示符，逐条执行 SQL。
 func repl(c *mysqlproto.Client) {
 	sc := bufio.NewScanner(os.Stdin)
 	fmt.Print(prompt)

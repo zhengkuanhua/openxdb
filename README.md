@@ -9,7 +9,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 [![GitHub issues](https://img.shields.io/github/issues/zhengkuanhua/openxdb)](https://github.com/zhengkuanhua/openxdb)
 
-OpenXDB 是从零自研的单机/分布式关系型数据库内核（Go + RocksDB），定位于学习与工程实践并重的开源数据库项目。内核自底向上实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务与带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA 故障转移、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动（JDBC/Python）、运维工具链、认证权限（审计 + RBAC）与生态导出（JSON/Parquet）等能力，当前版本 **v1.17.0**。
+OpenXDB 是从零自研的单机/分布式关系型数据库内核（Go + RocksDB），定位于学习与工程实践并重的开源数据库项目。内核自底向上实现了基于 RocksDB（cgo）的存储引擎、追加式 WAL、快照隔离事务与带二级索引的 SQL 子集，并在此基础上完整交付复制、分片、多节点集群、分布式 2PC 写、HA 故障转移、分布式事务（TSO + 分布式快照隔离）、备份恢复与 PITR、客户端驱动（JDBC/Python）、运维工具链、认证权限（审计 + RBAC）与生态导出（JSON/Parquet）等能力，当前版本 **v1.18.0**。
 
 ## 快速开始
 
@@ -83,6 +83,10 @@ SELECT name FROM users WHERE age >= 25 AND age < 35 ORDER BY age;
 | **生态导出** | JDBC/Python 驱动（pipeline 批量）、mysqldump 导入（全选项）、binlog CDC、JSON/Parquet 流式导出（大结果集分片写） |
 | **写路径优化（v1.17.0）** | 显式事务写路径三项优化：UPDATE 快照刷新锁外化（`snapshot_lock_external`）、autocommit 写 pipeline（`write_pipeline`，默认 off 可热切换）、WAL 组提交主动定时窗口（`group_commit_active_window`，默认 off 回退 v1.16.0）；E5 受控复测 write QPS +61%、read-write TPS +55%、TPC-C tpmC 774.50（较 v1.16.0 约 3 倍） |
 | **可观测性（v1.17.0）** | EXPLAIN 节点级耗时/行数估算（`rows=N est_ms=X.XX`）+ `SHOW SLOWQUERIES SUMMARY TOP N` 阈值区间桶汇总，配合 `slow_query_threshold` 热配置形成慢查询诊断闭环 |
+| **跨节点数据分布（v1.18.0）** | 显式 REGION 指派（隐式 region 显式化 + ASSIGN REGION）三节点分布落地：`SHOW REGION ROUTES` 可见指派结果、跨节点点查可见、COUNT/SUM 跨节点聚合不丢不重，非并发全链路验证通过，数据分布操作指南成文 |
+| **HA quorum 灰度（v1.18.0）** | `ha.quorumEnabled=true` 三节点多数派评估 + 宕机 failover（读 failover 自动重指派）+ 脑裂 epoch fencing 拒绝旧主写 + 节点恢复回迁与路由收敛四项演练完成；结论维持 quorum 默认 off、epoch 默认 on |
+| **读路径优化（v1.18.0）** | 批量点查合并：routed JOIN 回表与 IN 子查询由逐行/逐值点查改为一次 `mgetKVCluster`（N=64 实测 33.3ms → 0.52ms，往返 64 次 → 1 次）；块缓存调优实测 -1.6% 负收益已回退，确认瓶颈为 cgo 往返 |
+| **Linux 平台口径（v1.18.0）** | RHEL 9.7 目标机以 `scripts/build.sh --rocks-src/--rocks-build` 从零构建部署，同口径 E5 受控复测 OLTP 8.17 / 8.13 / 8.10 TPS、TPC-C tpmC 749.50（errs=0 / reconnects=0），跨平台可比性边界成文 |
 
 ## 架构总览
 
@@ -151,6 +155,8 @@ Protocol / CLI (REPL · TCP server · JDBC/Python 驱动 · MySQL wire protocol 
 **v1.16.0（2026-10-28 落地）**：**SQL 执行内核并发模型优化 + WAL 持久化收敛** —— ① C1 WAL 组提交增强（单等待者免窗口 + 批量刷盘）；② C2 Begin 快照创建锁外化（ID/序号仍单调）；③ C3 ro_parallel 下沉 executor + 显式事务只读并行；④ C4 提交应用流水线化/组提交；⑤ C5 cgo 扫描拷贝优化；⑥ C6 连接内语句 pipeline / 快照复用（autocommit 顶层纯只读 SELECT 共享快照）；⑦ **WAL 自动 checkpoint/truncate**（`wal_auto_checkpoint` 默认 on、`wal_checkpoint_interval_ms` 默认 60000、`wal_checkpoint_max_mb` 默认 64；安全位点 safe=min(synced,applied)、截断前 Flush 落 SST，长期运行 wal.log 大小受控、崩溃恢复严格等价）。E5 受控复测（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read **10.37** / write **8.33** / read-write **8.15** TPS（QPS 145.13 / 33.33 / 146.70，errs=0 / reconnects=0），较 v1.15.0 TPS 提升约 **20-27 倍**、QPS 提升约 **22-27 倍**，**达成验收目标（TPS≥1.5、QPS≥30）**；TPC-C 5 仓 tpmC **254.00**（较 v1.15.0 的 81.50 提升约 3.1 倍）（详情见 docs/experiments/C7_e5_controlled_retest.md、docs/experiments/WAL_auto_checkpoint_truncate.md）。
 
 **v1.17.0（2026-10-30 落地）**：**显式事务写路径优化 + 可观测性/稳定性补强** —— ① D1.1 UPDATE 快照刷新锁外化（`snapshot_lock_external`，锁内刷新移到锁外，降低写语句延迟）；② D1.2 autocommit 写 pipeline 深化（`write_pipeline` 默认 off 可热切换，写语句接入连接内 pipeline，减少端侧逐条往返）；③ D1.3 WAL 组提交主动定时窗口（`group_commit_active_window` 默认 off 回退 v1.16.0 C1 单等待者免窗口，写密集下主动定时刷新合并 fsync，不影响 WAL 重放/崩溃恢复/复制 2PC 顺序）；④ D3 可观测性与诊断闭环（EXPLAIN 节点级耗时/行数估算 + `SHOW SLOWQUERIES SUMMARY TOP N` 阈值区间桶汇总）；⑤ D4 并发规模与稳定性验证（8 连接写密集 30min 长稳 errs=0 / wal.log 受控 45.6MB / bench 工具参数化）。D2 会话锁调度精细化因并发伸缩验收未达标整体回退（16 连接 read TPS 10.80 较 8 连接 11.85 为 -8.9%、read-write -17.1%，未达"较 8 连接提升 ≥20%"），恢复 D1 基线行为。发版前 E5 受控复测（每轮 prepare 重置 + 3 轮取中位数，8 连接）：OLTP read **14.15** / write **13.40** / read-write **12.60** TPS（QPS 198.10 / 53.60 / 226.80，errs=0 / reconnects=0），较 v1.16.0（10.37 / 8.33 / 8.15 TPS，QPS 145.13 / 33.33 / 146.70）**write QPS +61%、read-write TPS +55%、read 无回归 +36%**；TPC-C 5 仓 tpmC **774.50** / tpm_total 1746.50（较 v1.16.0 的 254.00 / 581.00 提升约 3.0 倍）。**达成 v1.17.0 验收目标：TPS read ≥11（14.15）/ write ≥9（13.40）/ rw ≥8.5（12.60）、QPS read ≥145（198.10）/ write ≥40（53.60）/ rw ≥146（226.80）、tpmC ≥300（774.50），errs=0 / reconnects=0**（详情见 docs/experiments/E5_standard_bench_alignment.md）。⑥ D7 MySQL 兼容性补齐与客户端体验：握手版本串 `8.0.36-OpenXDB v1.17.0`（G1）、`select version()`（G3）、`SHOW CREATE TABLE`（G4）、`SHOW INDEXES` 复数等价（G5）、自研 CLI 提示符 `oxsql>`（G2）；5 项验收实测全通过（详见 docs/experiments/D7_mysql_compat_validate.md）。
+
+**v1.18.0（2026-11-17 落地）**：**分布式纵深：跨节点数据分布 + HA quorum 灰度** —— ① D2 会话锁重试收口（v1.17.0 回退后干净库重建复测：16 连接 read **17.12** TPS 较基线 11.85 提升 **+44.6%**、read_write 8 连接 **13.58** TPS 无回归，errs=0）；② D3 跨节点数据分布（显式 REGION 指派 + `ASSIGN REGION` 三节点分布，`SHOW REGION ROUTES` 由空变为可见 region → node 映射、跨节点点查可见、COUNT/SUM 聚合不丢不重）；③ D4 HA quorum 灰度全链路演练（quorum 开启评估 / 宕机 failover / 脑裂 + epoch 拒绝旧主写 / 节点恢复回迁与路由收敛 + 灰度报告），最终判定维持 `ha.quorumEnabled=off`、`ha.epochEnabled=on`；④ D5 Linux E5 受控复测（RHEL 9.7 2 vCPU 同口径 OLTP **8.17 / 8.13 / 8.10 TPS**、TPC-C 5 仓 tpmC **749.50**，14 组采集 errs=0 / reconnects=0，跨平台可比性边界成文）；⑤ D6 读路径优化（块缓存调优 -1.6% 负收益已回退、批量点查合并 N=64 实测 **33.3ms → 0.52ms**、Snapshot 批量 Scan 评估确认既有能力无新增代码）；⑥ D7 发版收尾（版本常量 `v1.18.0`、RELEASE_NOTES / README / KNOWN_LIMITATIONS 文档同步、oxsql 交互提示符改 `openxdb>`、`go build ./...` + `go vet ./...` 全绿；annotated tag 与双远端 SHA 核验另行执行）。
 
 ### 完整特性
 

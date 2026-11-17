@@ -33,9 +33,9 @@ AIGC:
 
 # OpenXDB Known Limitations
 
-版本：v1.17.0（2026-10-30）
+版本：v1.18.0（2026-11-17）
 
-本文档列出 OpenXDB v1.17.0 的已知限制与边界。每条目给出限制描述、影响与建议，帮助用户在选型、部署与使用时做出合理判断。详细功能范围请以 [docs/product_manual_zh.md](docs/product_manual_zh.md)（第 4 章 SQL 参考）与设计文档 docs/ 为准。
+本文档列出 OpenXDB v1.18.0 的已知限制与边界。每条目给出限制描述、影响与建议，帮助用户在选型、部署与使用时做出合理判断。详细功能范围请以 [docs/product_manual_zh.md](docs/product_manual_zh.md)（第 4 章 SQL 参考）与设计文档 docs/ 为准。
 
 ---
 

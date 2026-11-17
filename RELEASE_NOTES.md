@@ -9,63 +9,67 @@ AIGC:
     ReservedCode2: UDm3b/NfHHOkbknWca+ttp8cSfMCckglKfbESPE7h17FKwsXlvhweB/iFshQHxuiq9o9Jk6/hIsv0Gku9XZrg2r7w9bLEXfjvZSrWIv+Lg0phzlhFgGdmu5akERzFrIeUVXhtyfq/J26k6yK9nK94KWV00B0NI8gBSiSTP5XEq+YF3qlPKs2DtT/CKM=
 ---
 
-# OpenXDB v1.17.0 Release Notes
+# OpenXDB v1.18.0 Release Notes
 
-发布日期：2026-10-30
+发布日期：2026-11-17
 
 ## 版本亮点
 
-- **显式事务写路径优化**：三项独立优化——① UPDATE 快照刷新锁外化（`snapshot_lock_external`，锁内刷新移到锁外，降低写语句延迟）；② autocommit 写 pipeline 深化（`write_pipeline`，写语句接入连接内 pipeline，减少端侧逐条往返）；③ WAL 组提交主动定时窗口（`group_commit_active_window`，写密集下主动定时刷新合并 fsync）。后两项默认关闭可热切换，不影响 WAL 重放/崩溃恢复/复制 2PC 顺序，可随时回退 v1.16.0 基线行为。
-- **性能大幅提升（发版前 E5 受控复测）**：OLTP **write QPS +61%**、**read-write TPS +55%**、read 无回归（+36%）；TPC-C 5 仓 **tpmC 774.50**（较 v1.16.0 的 254.00 提升约 **3.0 倍**），全部达成 v1.17.0 验收目标。
-- **可观测性闭环（D3）**：EXPLAIN 节点级耗时/行数估算（`rows=N est_ms=X.XX`）+ `SHOW SLOWQUERIES SUMMARY TOP N` 阈值区间桶汇总报表，配合 `slow_query_threshold` 热配置，形成慢查询诊断闭环。
-- **稳定性验证（D4）**：8 连接写密集 30min 长稳 `errs=0` / `wal.log` 受控（自动 checkpoint/truncate，45.6MB）；bench 工具 CLI 参数化，复测流程可复现。
-- **回退记录（D2）**：会话锁调度精细化因并发伸缩验收未达标整体回退（16 连接 read TPS 10.80 较 8 连接 11.85 为 -8.9%、read-write -17.1%，未达"较 8 连接提升 ≥20%"），恢复 D1 基线行为。
+- **跨节点数据分布落地（D3，P0）**：显式 REGION 指派（隐式 region 显式化 + `ASSIGN REGION`）在三节点组网完成分布，`SHOW REGION ROUTES` 由空变为可见 region → node 映射；跨节点点查可见（node-b 写、node-a 读 cnt=1），COUNT/SUM 跨节点聚合不丢不重，非并发全链路验证通过。HA 灰度长期缺失的"数据分布层未接线"前置阻塞项就此解除。
+- **HA quorum 灰度全链路演练（D4，P0）**：`ha.quorumEnabled=true` 三节点多数派开启评估、宕机 failover（读 failover 自动重指派）、脑裂 + epoch fencing 拒绝旧主写、节点恢复回迁与路由收敛四项演练完成，13 项结论矩阵中 8 项通过、4 项代码已修待真机复验、1 项部分落地；最终判定 **维持 `ha.quorumEnabled=off`、`ha.epochEnabled=on`**，结构性原因（集群轨无共识提交、写为归属节点本地提交 + 副本异步补齐）与升级路径已写入灰度报告。
+- **会话锁重试收口（D2，P0）**：v1.17.0 整体回退的会话锁重试项在干净库重建后复测通过——16 连接 read **17.12 TPS**（较 8 连接基线 11.85 提升 **+44.6%**）、read_write 8 连接 **13.58 TPS** 无回归，errs=0。
+- **读路径优化（D6，P2）**：批量点查合并把 routed JOIN 回表与 IN 子查询由逐行/逐值点查改为一次 `mgetKVCluster`（N=64 实测 **33.3ms → 0.52ms**，点查往返 64 次 → 1 次）；块缓存调优实测 **-1.6% 负收益已回退**，确认瓶颈为 cgo 往返而非缓存容量；Snapshot 批量 Scan 评估确认快照复用、多区间合并扫描、版本可见性批量过滤均已具备，无新增代码。
+- **Linux 平台口径补齐（D5，P1）**：RHEL 9.7 目标机以仓库脚本从零构建部署打通，同口径 E5 受控复测落地（OLTP 8.17 / 8.13 / 8.10 TPS、TPC-C tpmC 749.50，14 组采集 errs=0 / reconnects=0），跨平台可比性边界成文。
 
-## 新增能力（相对 v1.16.0）
+## 新增能力（相对 v1.17.0）
 
-- **D1.1 UPDATE 快照刷新锁外化**（`snapshot_lock_external`）：锁内刷新移到锁外，降低写语句延迟。
-- **D1.2 autocommit 写 pipeline 深化**（`write_pipeline`，默认 off 可热切换）：写语句接入连接内 pipeline，减少端侧逐条往返。
-- **D1.3 WAL 组提交主动定时窗口**（`group_commit_active_window`，默认 off 回退 v1.16.0 C1 单等待者免窗口）：写密集下主动定时刷新合并 fsync，不影响 WAL 重放/崩溃恢复/复制 2PC 顺序。
-- **D3 可观测性与诊断闭环**：EXPLAIN 节点级耗时/行数估算 + `SHOW SLOWQUERIES SUMMARY TOP N` 阈值区间桶汇总。
-- **D4 并发规模与稳定性验证**：8 连接写密集 30min 长稳 `errs=0`；bench 工具 CLI 参数化。
-- **D2 回退**：会话锁调度精细化因并发伸缩验收未达标整体回退，恢复 D1 基线行为（无遗留配置项）。
+- **D2 会话锁重试收口**：v1.17.0 回退后在干净库重建复测，16 连接 read 17.12 TPS（≥ 验收线 14.22，+44.6%）、read_write 8 连接 13.58 TPS 无回归，errs=0（commit `c2436cf` 三端一致）。
+- **D3 跨节点数据分布策略**：显式 REGION 指派（隐式 region 显式化 + `ASSIGN REGION`，不强制先 SPLIT）三节点分布落地；`SHOW REGION ROUTES` 可见指派结果，跨节点点查可见性、COUNT/SUM 跨节点聚合不丢不重，非并发全链路验证通过；三节点数据分布操作指南成文。
+- **D4 HA quorum 灰度全链路演练（D4.1–D4.5）**：`ha.quorumEnabled=true` 三节点多数派评估、宕机 failover（读 failover 自动重指派 + 数据可读）、脑裂与 epoch fencing 拒绝旧主写、节点恢复回迁与路由收敛四项演练完成；灰度报告（13 项结论矩阵）与 `HA_BRAIN_SPLIT_DESIGN` §5.5 结论更新。
+- **D6.1 块缓存调优（负收益，不采纳）**：块缓存调至 256MB 实测 -1.6%，已回退；确认 SQL 路径瓶颈为 cgo 往返（`runtime.cgocall` flat 63.75%）而非引擎缓存容量。
+- **D6.2 批量点查合并**：`routedJoin`（routed JOIN 回表）与 `evalInSubqueryRouted`（IN 子查询）由逐行/逐值点查改为一次 `mgetKVCluster` 批量读，保持左行原序、LEFT JOIN 补空、未命中跳过与路由错误前置返回语义；N=64 基准 33.3ms → 0.52ms，验证用例断言 `Get=0` / `MGet=1`。
+- **D6.3 Snapshot 批量 Scan 评估**：确认快照号语句级/事务级复用、多区间单次合并扫描、版本可见性批量过滤均已具备，无新增代码；跨 region 远端区间聚合（多 `QUERY_REQ` 合并）转 v1.19.0 与写路径 2PC 一并处理。
+- **D5 Linux E5 受控复测**：D5.1 在 RHEL 9.7 目标机（2 vCPU / 2.8GB / Go 1.22.12 / RocksDB 11.8.1 CGO，源码 HEAD `dac6843`）以 `scripts/build.sh --rocks-src/--rocks-build` 构建并安装为 `/usr/local/bin/openxdb`，bench 依赖（仓库内 `drivers/python`）对齐，Linux 从零部署链路打通；D5.2 与 Windows 完全同口径（同脚本、8 连接、每轮 prepare 重置、3 轮取中位数）完成采集。
+- **D7 发版收尾**：版本常量升级 `v1.18.0`（握手串 `8.0.36-OpenXDB v1.18.0` 与 `select version()` 同源注入、自动联动）；`oxsql` 交互提示符由 `oxsql>` 改为 `openxdb>`（命令名仍为 `oxsql`）；RELEASE_NOTES / README / KNOWN_LIMITATIONS 文档同步；`go build ./...` 与 `go vet ./...` 全绿。
 
 ## 性能（发版前 E5 受控复测）
 
-8 连接、每轮 prepare 重置 + 3 轮取中位数（OLTP 8 线程 × 60s、TPC-C 5 仓 × 120s）：
+同脚本、8 连接、每轮 prepare 重置、3 轮取中位数（OLTP 8 线程 × 60s、TPC-C 5 仓 × 120s）。D5 在 Linux 目标机（2 vCPU）按完全同口径复测，与 Windows v1.17.0 基线对比：
 
-| 指标 | v1.16.0 | v1.17.0 | 变化 |
+| 指标 | v1.17.0（Windows 16 逻辑核基线） | v1.18.0（RHEL 9.7 / 2 vCPU） | 相对基线 |
 |------|---------|---------|------|
-| OLTP read TPS / QPS | 10.37 / 145.13 | **14.15 / 198.10** | +36% / +37% |
-| OLTP write TPS / QPS | 8.33 / 33.33 | **13.40 / 53.60** | +61% / +61% |
-| OLTP read-write TPS / QPS | 8.15 / 146.70 | **12.60 / 226.80** | +55% / +55% |
-| TPC-C 5 仓 tpmC / tpm_total | 254.00 / 581.00 | **774.50 / 1746.50** | 约 3.0 倍 |
-| 连接错误 errs / reconnects | 0 / 0 | 0 / 0 | 保持 |
+| OLTP read TPS / QPS | 14.15 / 198.10 | **8.17 / 114.33** | 57.7% |
+| OLTP write TPS / QPS | 13.40 / 53.60 | **8.13 / 32.53** | 60.7% |
+| OLTP read-write TPS / QPS | 12.60 / 226.80 | **8.10 / 145.80** | 64.3% |
+| TPC-C 5 仓 tpmC / tpm_total | 774.50 / 1746.50 | **749.50 / 1684.50** | 96.8% |
+| 采集组数 errs / reconnects | 0 / 0 | 0 / 0（14 组） | 保持 |
 
-v1.17.0 验收目标全部达成：TPS read ≥11（14.15）/ write ≥9（13.40）/ rw ≥8.5（12.60）、QPS read ≥145（198.10）/ write ≥40（53.60）/ rw ≥146（226.80）、tpmC ≥300（774.50）、errs=0 / reconnects=0。详情见 [docs/experiments/E5_standard_bench_alignment.md](docs/experiments/E5_standard_bench_alignment.md)。
+口径说明：Linux 数值仅用于同口径功能与稳定性验证，**不作跨平台性能对标**——差异主因为 CPU 配额（2 vCPU vs 16 逻辑核），非代码路径：同机 threads=2 与 threads=8 的 read TPS 同为约 8.2，而 p50 延迟由 0.24s 升至 0.95s，表明 2 vCPU 下吞吐已饱和、8 连接属超配口径；TPC-C 因客户端 Python 8 线程 GIL 与服务端队列共同限流，跨平台差异被掩盖（仅剩 3.2%）。性能基线仍以 Windows 平台为准。另确认"每轮 prepare 重置"为可比性必要条件（不重置连跑 TPC-C tpmC 衰减 565.00 → 230.50 → 220.00，属 LSM compaction 积压而非版本回归）。详见 [docs/experiments/D5_linux_e5_controlled_retest.md](docs/experiments/D5_linux_e5_controlled_retest.md)。
 
 ## 兼容性说明
 
-- **数据目录兼容**：v1.17.0 保持既有数据文件格式版本（`pkg/db.DataFormatVersion`），已初始化的 v1.0.0 至 v1.16.0 数据目录可直接打开，无需迁移重建。
-- **协议兼容**：自研二进制协议（pkg/server，非 MySQL wire protocol）。历史客户端（JDBC/Python 驱动）按既有帧格式可继续工作；驱动与服务器版本匹配即可。
-- **配置兼容**：新增配置项（`snapshot_lock_external` / `write_pipeline` / `group_commit_active_window` 等）默认值与既有行为兼容、均可热切换回退；既有命令行参数与 SET PERSIST 配置项保持向后兼容。
-- **无破坏性变更**：本次发布未引入数据文件格式变更或协议破坏性变更；D2 会话锁调度精细化已整体回退，不遗留配置项。
+- **数据目录兼容**：v1.18.0 保持既有数据文件格式版本（`pkg/db.DataFormatVersion`），已初始化的 v1.0.0 至 v1.17.0 数据目录可直接打开，无需迁移重建。
+- **协议兼容**：自研二进制协议（pkg/server，非 MySQL wire protocol；`--mysql-port` 启用兼容监听）。历史客户端（JDBC/Python 驱动）按既有帧格式可继续工作；驱动与服务器版本匹配即可。握手版本串随版本常量升级为 `8.0.36-OpenXDB v1.18.0`。
+- **配置兼容**：D3/D4/D6 均以既有权能或独立开关推进；`ha.quorumEnabled` / `ha.epochEnabled` 默认值不变（quorum off、epoch on）；块缓存调优因负收益已回退，未引入新默认值。既有命令行参数与 SET PERSIST 配置项保持向后兼容。
+- **客户端体验变更**：`oxsql` 交互模式提示符由 `oxsql>` 改为 `openxdb>`；命令名、命令行参数与输出格式不变，脚本化调用（`-c`）不受影响。
+- **无破坏性变更**：本次发布未引入数据文件格式变更或协议破坏性变更。
 
 ## 已知问题
 
 详见 [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)。主要关注：
 
-- SQL 为子集：暂无完整 MySQL 语法覆盖（自研二进制协议 + 可选 MySQL wire 兼容监听）。
-- 性能边界：E5 实测为单机端侧基准（8 连接），非生产级吞吐；D2 会话锁调度精细化已回退，16 连接并发伸缩收益未达预期。
-- 单机 → 分布式边界：分布式写需 2PC，远程写有前置条件限制。
+- **HA quorum 仍维持默认关闭**：集群轨尚无一致性协议（无 raft 式日志复制与选举），写提交为归属节点本地提交 + 副本异步推送补齐，存在"单副本可写窗口"与 RPO>0；解除默认关闭的前置是 v1.19.0 M8（写路径强制路由 + 2PC 参与 + 副本间持续复制/共识提交）。
+- **D4.5 灰度报告 §8.2 未闭环项**：NEW-1 / T3 / NEW-2 三项真机复验与演练脚本补强，v1.18.0 发版前不阻塞，**v1.19.0 前必须完成**（T3 需三个独立 IP，属环境卡点）。
+- **跨 region 远端区间聚合**（多 `QUERY_REQ` 合并）与远端 Scan 协议未落地，顺延 v1.19.0 与写路径 2PC 共用请求骨架。
+- **通用边界**：SQL 为子集（暂无完整 MySQL 语法覆盖，自研二进制协议 + 可选 MySQL wire 兼容监听）；性能为单机端侧基准（8 连接），非生产级吞吐承诺。
 
 ## 升级路径
 
 1. 备份：`openxdb backup` 或脚本备份数据目录（参考 scripts/rolling_upgrade.ps1）。
 2. 预检：`openxdb preflight --data-dir <dir>` 确认版本与数据格式匹配。
 3. 优雅停机：`openxdb shutdown --graceful` 或 SIGTERM。
-4. 替换二进制为 v1.17.0 并启动（数据目录不变）。
-5. 验证：`openxdb doctor`、`openxdb stats`、`openxdb version` 确认 v1.17.0；抽查业务读写与备份恢复。
+4. 替换二进制为 v1.18.0 并启动（数据目录不变）。
+5. 验证：`openxdb doctor`、`openxdb stats`、`openxdb version` 确认 v1.18.0；集群拓扑下抽查 `SHOW REGION ROUTES`、跨节点点查与聚合，以及业务读写与备份恢复。
 
 ## 文档与支持
 
@@ -73,6 +77,8 @@ v1.17.0 验收目标全部达成：TPS read ≥11（14.15）/ write ≥9（13.40
 - 产品手册（英文）：docs/product_manual_en.md
 - 变更记录：CHANGELOG.md
 - 已知限制：KNOWN_LIMITATIONS.md
+- HA quorum 灰度报告：docs/D4_5_ha_quorum_gray_report.md
+- Linux E5 复测报告：docs/experiments/D5_linux_e5_controlled_retest.md
 - 设计文档：docs/（T1–T42、M 系列、E 系列）
 - 基准实验：docs/experiments/（E1–E5）
 
