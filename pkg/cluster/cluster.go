@@ -446,6 +446,18 @@ func (m *Manager) ScanSortedRemote(nodeID string, start, end []byte, beginTS uin
 	return m.clientFor(n.ID).ScanSorted(start, end, beginTS, spec, txID)
 }
 
+// ScanMultiRemote 将同一归属节点的多个物理区间合并为一次往返执行
+// （v1.19.0 远端区间聚合），返回按请求顺序分组的行。
+// beginTS>0 时远端按快照版本过滤（M8 分布式快照隔离）。
+// txID 为发起方显式事务 ID（M18-A 事务上下文），随 QUERY_MULTI_REQ 传播。
+func (m *Manager) ScanMultiRemote(nodeID string, ranges []QueryRange, beginTS uint64, txID string) ([][]QueryRow, error) {
+	n, err := m.ensureRemote(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	return m.clientFor(n.ID).ScanMulti(ranges, beginTS, txID)
+}
+
 // GetRemote 将点查转发到归属节点执行；未命中返回 storage.ErrNotFound。
 // beginTS>0 时远端按快照版本过滤（M8 分布式快照隔离）。
 // txID 为发起方显式事务 ID（M18-A 事务上下文），随 QUERY_REQ 传播；空串不携带。

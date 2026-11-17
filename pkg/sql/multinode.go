@@ -249,6 +249,11 @@ func (e *Executor) scanMergedCluster(sess *Session, tx txn.Txn, ranges []storage
 		e.incLocal()
 		return e.scanMergedVisible(tx, ranges, bs)
 	}
+	// v1.19.0：远端区间聚合开关开启时按归属节点合并单次往返（默认关闭，
+	// 关闭走下方 v1.18.0 逐区间独立 QUERY_REQ 路径，行为零回归）。
+	if e.RemoteRangeAgg() {
+		return e.scanMergedClusterAgg(sess, tx, ranges, bs)
+	}
 	var out []storage.KVPair
 	for _, r := range ranges {
 		rid, _ := sharding.DecodeRegionKey(r.Start)
@@ -298,6 +303,86 @@ func (e *Executor) scanMergedCluster(sess *Session, tx txn.Txn, ranges []storage
 			return nil, err
 		}
 		out = append(out, pairs...)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return bytes.Compare(innerOf(out[i].Key), innerOf(out[j].Key)) < 0
+	})
+	return out, nil
+}
+
+// scanMergedClusterAgg 跨 region 远端区间聚合扫描（v1.19.0 remote_range_agg）：
+// 与 scanMergedCluster 结果集语义等价——本地 region 仍走本地合并扫描，远端
+// region 按归属节点分组后**每节点单次 QUERY_MULTI_REQ 往返**（旧路径每区间一次
+// QUERY_REQ），服务端按区间流式分块回传，把跨节点多区间读的往返次数从
+// O(区间数) 降为 O(归属节点数)。以下语义与旧路径逐项对齐：
+//   - M6 读 failover：归属节点 down 时先 resolveRegionOwner 自动重指派，无存活
+//     目标回退本地扫描（逐区间判定，与旧路径相同）；
+//   - P3 读聚合 READY 前置：目标节点数据面未就绪时整体拒绝（错误前置返回）；
+//   - P2-13：返回行 key 在 Serializable 隔离级下登记 serialRemoteReads；
+//   - 行序：合并后按内层键序全局稳定排序（与扫描输出契约一致）。
+//
+// 指标口径：incRemote 按"远端请求次数"计（旧路径每区间一次、本路径每节点一次），
+// 该口径与真实网络往返数一致；incLocal 仍按本地合并扫描次数计。
+func (e *Executor) scanMergedClusterAgg(sess *Session, tx txn.Txn, ranges []storage.KeyRange, bs uint64) ([]storage.KVPair, error) {
+	// 1) 区间分类：本地区间合并为一组；远端区间按最终归属节点分组（保持区间原序）
+	localRanges := make([]storage.KeyRange, 0, len(ranges))
+	groups := make(map[string][]cluster.QueryRange, 1)
+	var order []string
+	for _, r := range ranges {
+		rid, _ := sharding.DecodeRegionKey(r.Start)
+		if e.regionLocal(rid) {
+			localRanges = append(localRanges, r)
+			continue
+		}
+		node := e.resolveRegionOwner(rid)
+		if node == e.selfID {
+			localRanges = append(localRanges, r)
+			continue
+		}
+		if err := e.checkRemoteReady(node); err != nil {
+			return nil, err
+		}
+		if _, ok := groups[node]; !ok {
+			order = append(order, node)
+		}
+		groups[node] = append(groups[node], cluster.QueryRange{Start: r.Start, End: r.End})
+	}
+	out := make([]storage.KVPair, 0, len(ranges))
+	// 2) 本地区间一次合并扫描（与旧路径逐区间本地扫描的并集等价）
+	if len(localRanges) > 0 {
+		e.incLocal()
+		pairs, err := e.scanMergedVisible(tx, localRanges, bs)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, pairs...)
+	}
+	// 3) 每个归属节点单次往返取回其全部远端区间
+	txID := e.txContextID(sess)
+	for _, node := range order {
+		e.incRemote()
+		perRange, err := e.mgr.ScanMultiRemote(node, groups[node], bs, txID)
+		if err != nil {
+			return nil, err
+		}
+		var keys [][]byte
+		for _, rows := range perRange {
+			for _, row := range rows {
+				out = append(out, storage.KVPair{Key: row.Key, Value: row.Value})
+				keys = append(keys, row.Key)
+			}
+		}
+		// P2-13：远端范围扫描返回的行 key 纳入 Serializable 读集。
+		if sess.txIso == IsoSerializable && len(keys) > 0 {
+			sess.mu.Lock()
+			if sess.serialRemoteReads == nil {
+				sess.serialRemoteReads = map[string]bool{}
+			}
+			for _, k := range keys {
+				sess.serialRemoteReads[string(k)] = true
+			}
+			sess.mu.Unlock()
+		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		return bytes.Compare(innerOf(out[i].Key), innerOf(out[j].Key)) < 0

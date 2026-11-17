@@ -189,6 +189,13 @@ type Executor struct {
 	// 显式事务与错误传播语义不变。默认 false（零回归）。v1.18.0 D2 起
 	// 原子化（服务端每批判定无锁 Load）。
 	writePipeline atomic.Bool
+	// v1.19.0：跨 region 远端区间聚合开关。开启时 scanMergedCluster 把同一
+	// 归属节点的多个远端区间合并为单次 QUERY_MULTI_REQ 往返（服务端按区间
+	// 流式分块回传），把跨节点多区间读的往返次数从 O(区间数) 降为
+	// O(归属节点数)；关闭回退 v1.18.0 逐区间独立 QUERY_REQ（默认 false，
+	// 零回归）。SET remote_range_agg=on|off 热切换；结果集、行序、
+	// serialRemoteReads 读集与 failover/READY 前置语义与旧路径完全一致。
+	remoteRangeAgg atomic.Bool
 	// v1.16.0：WAL 自动 checkpoint 控制器（nil = 未装配，SET wal_* 返回
 	// 明确错误，DB 行为零回归）。由 db.Open 注入（sql 包不依赖 db 包）。
 	chkCtl CheckpointSetter
@@ -347,6 +354,19 @@ func (e *Executor) ROParallel() bool {
 	}
 	return e.roParallel.Load()
 }
+
+// SetRemoteRangeAgg 设置跨 region 远端区间聚合开关（v1.19.0）：开启时同一
+// 归属节点的多个远端区间合并为单次往返，关闭回退逐区间独立 QUERY_REQ。
+// 运行时调用即时生效（SET remote_range_agg=on|off 热切换）；写侧持 e.mu
+// 与其它开关一致，读侧扫描路径 atomic.Load 无锁判定。
+func (e *Executor) SetRemoteRangeAgg(enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.remoteRangeAgg.Store(enabled)
+}
+
+// RemoteRangeAgg 返回跨 region 远端区间聚合开关当前状态（扫描热路径无锁读）。
+func (e *Executor) RemoteRangeAgg() bool { return e.remoteRangeAgg.Load() }
 
 // SetSnapshotShare 设置 autocommit 只读语句共享快照开关（v1.16.0 C6）：
 // 开启时连续 autocommit 只读 SELECT 复用同一临时只读事务（RocksDB 快照），

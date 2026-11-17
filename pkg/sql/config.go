@@ -10,6 +10,7 @@ package sql
 //   - snapshot_lock_external 显式事务 UPDATE 快照刷新锁外化开关（v1.17.0 D1.1，executor.go）
 //   - write_pipeline        autocommit 写 pipeline 开关（v1.17.0 D1.2，server.go REPLSession）
 //   - session_lock_split    全局会话锁拆分开关（v1.18.0 D2，executor.go）
+//   - remote_range_agg      跨 region 远端区间聚合开关（v1.19.0，multinode.go）
 //   - group_commit_active_window WAL 组提交主动定时窗口开关（v1.17.0 D1.3，wal_impl.go）
 //   - group_commit_window_ms WAL 组提交定时刷盘窗口毫秒（v1.14.0 P1，wal_impl.go）
 //   - slow_query_threshold  慢查询阈值毫秒（M13，executor.go slowThreshold）
@@ -211,6 +212,25 @@ var configSpecs = []*configSpec{
 			return nil
 		},
 		read: func(e *Executor) string { return boolValStr(e.SessionLockSplit()) },
+	},
+	{
+		key:  "remote_range_agg",
+		desc: "跨 region 远端区间聚合开关（v1.19.0）：on/off/1/0，开启时同一归属节点的多个远端区间合并为单次 QUERY_MULTI_REQ 往返（服务端按区间流式分块回传），跨节点多区间读往返次数从 O(区间数) 降为 O(归属节点数)；off（默认）回退逐区间独立 QUERY_REQ",
+		def:  "off",
+		apply: func(e *Executor, v string) error {
+			on := false
+			switch v {
+			case "on", "true", "1":
+				on = true
+			case "off", "false", "0":
+				on = false
+			default:
+				return &SQLError{Msg: "invalid value for remote_range_agg: " + v + " (expected on/off/1/0)"}
+			}
+			e.SetRemoteRangeAgg(on)
+			return nil
+		},
+		read: func(e *Executor) string { return boolValStr(e.RemoteRangeAgg()) },
 	},
 	{
 		key:  "slow_query_threshold",

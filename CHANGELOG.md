@@ -37,6 +37,14 @@ OpenXDB 版本变更记录。
 
 > 版本线说明：历史版本以仓库 README Status 行、docs/ 设计文档头部标注与 git 提交记录为准。早期部分中间 -alpha 版本未单独打标（git 与文档均无显式版本号），按里程碑区间归纳，版本号不做臆造。
 
+## v1.19.0 (未发布，进行中)
+
+**Added**
+- **远端区间聚合 + 远端 Scan 流式协议（`remote_range_agg`，默认 off）**：跨 region 多区间读由「逐区间独立 `QUERY_REQ` 往返」合并为「按归属节点聚合的单次 `QUERY_MULTI` 往返」。协议新增帧 `msgQueryMultiReq` / `msgQueryMultiResp`（编号 66/67，避开既有 REGION_PUSH 20-21、2PC 22-27、TSO 28-29、DDL 30-31、注册表 32-33、备份恢复 40-45、epoch 50、全量对齐 60-61、TSO HA 70-71）；新增 `QueryRange` / `MultiQueryReq` / `MultiQueryChunk`，服务端按区间复用既有 `scanRange`（含 `beginTS` 版本过滤与排序截窗）后以 512 行 / 4MB 预算分块流式回传，`Done` 收尾、任一区间出错即错误前置。客户端新增 `Client.ScanMulti` 与 `Manager.ScanMultiRemote`。
+- **执行器侧接线**：`pkg/sql` 的 `scanMergedCluster` 在开关开启时分流至新增 `scanMergedClusterAgg`——按 `sharding.DecodeRegionKey` 分类，本地区间一次 `scanMergedVisible` 合并扫描，同归属节点的远端区间按节点分组后单次取回，结果按内层键全局稳定排序，与旧路径逐行等价；保留 M6 读 failover（`resolveRegionOwner`）、P3 READY 前置（`checkRemoteReady`）、P2-13 Serializable 远端读集登记语义。
+- **独立 feature flag**：`remote_range_agg` 四级透传（`configSpec` 注册默认 off → `Engine` → `Executor.SetRemoteRangeAgg` / `RemoteRangeAgg` 原子读写 → `scanMergedCluster` 分流），关闭时完全走 v1.18.0 逐区间路径，不发新帧、零回归可灰度回退。
+- **测试**：`pkg/cluster/query_multi_test.go`——同节点多区间单次往返且与逐区间 `ScanRemote` 逐行等价、超 512 行分块流式、空区间与未知节点错误、服务端排序截窗语义；`pkg/sql/remote_range_agg_test.go`——同节点两远端区间往返 2 → 1、本地+远端混合结果行序与内容等价、全本地区间零远端往返、目标节点未就绪整体拒绝且不发起往返。
+
 ## v1.18.0 (2026-11-17)
 
 v1.18.0（分布式纵深：跨节点数据分布 + HA quorum 灰度）按 DEV_PLAN_v1.18.0 推进并完成 D2–D7：D2/D3/D4/D5/D6 已收口，D7 发版收尾于 2026-11-17 完成本地准备（版本常量、文档同步、回归验证；tag 与远端核验另行执行）。

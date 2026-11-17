@@ -45,6 +45,62 @@ func (c *Client) Get(key []byte, beginTS uint64, txID string) ([]byte, error) {
 	return rows[0].Value, nil
 }
 
+// ScanMulti 转发多个物理区间（v1.19.0 远端区间聚合）：一次往返提交全部区间，
+// 服务端按区间流式分块回传，返回按请求顺序分组的行（空区间返回空切片）。
+// beginTS>0 时远端按快照版本过滤（M8 分布式快照隔离）。
+// txID 为发起方显式事务 ID（M18-A 事务上下文），随 QUERY_MULTI_REQ 传播。
+func (c *Client) ScanMulti(ranges []QueryRange, beginTS uint64, txID string) ([][]QueryRow, error) {
+	return c.roundTripMulti(MultiQueryReq{Op: OpScan, Ranges: ranges, BeginTS: beginTS, TxID: txID})
+}
+
+// roundTripMulti 发送 QUERY_MULTI_REQ 并收集全部 QUERY_MULTI_RESP 分块。
+// 语义与逐区间请求保持一致：任一区间失败即整体失败（错误前置返回），
+// 连接提前断开也视为失败，不静默返回部分结果。
+func (c *Client) roundTripMulti(req MultiQueryReq) ([][]QueryRow, error) {
+	addr, err := c.mgr.NodeAddr(c.nodeID)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := dial(addr)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	payload, err := marshalJSON(req)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeFrame(conn, msgQueryMultiReq, payload); err != nil {
+		return nil, err
+	}
+	out := make([][]QueryRow, len(req.Ranges))
+	for {
+		typ, raw, err := readFrame(conn)
+		if err != nil {
+			return nil, err
+		}
+		if typ != msgQueryMultiResp {
+			return nil, errors.New("cluster: unexpected multi query reply")
+		}
+		var chunk MultiQueryChunk
+		if err := unmarshalJSON(raw, &chunk); err != nil {
+			return nil, err
+		}
+		if chunk.Err != "" {
+			return nil, errors.New("cluster: remote error: " + chunk.Err)
+		}
+		if len(chunk.Rows) > 0 {
+			if chunk.Index < 0 || chunk.Index >= len(out) {
+				return nil, errors.New("cluster: bad multi query chunk index")
+			}
+			out[chunk.Index] = append(out[chunk.Index], chunk.Rows...)
+		}
+		if chunk.Done {
+			return out, nil
+		}
+	}
+}
+
 // roundTrip 向目标节点发送一次查询并读取响应。
 func (c *Client) roundTrip(req QueryReq) ([]QueryRow, error) {
 	addr, err := c.mgr.NodeAddr(c.nodeID)

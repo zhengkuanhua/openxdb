@@ -364,6 +364,14 @@ func (e *Engine) SetROParallel(enabled bool) { e.ex.SetROParallel(enabled) }
 // ROParallel 返回只读 SELECT 并行开关当前状态。
 func (e *Engine) ROParallel() bool { return e.ex.ROParallel() }
 
+// SetRemoteRangeAgg 设置跨 region 远端区间聚合开关（v1.19.0），透传至执行器。
+// 开启时同一归属节点的多个远端区间合并为单次 QUERY_MULTI_REQ 往返（区间流式
+// 分块回传）；关闭回退逐区间独立 QUERY_REQ。SET remote_range_agg=on|off 热切换。
+func (e *Engine) SetRemoteRangeAgg(enabled bool) { e.ex.SetRemoteRangeAgg(enabled) }
+
+// RemoteRangeAgg 返回跨 region 远端区间聚合开关当前状态。
+func (e *Engine) RemoteRangeAgg() bool { return e.ex.RemoteRangeAgg() }
+
 // SetSnapshotShare 设置 autocommit 只读语句共享快照开关（v1.16.0 C6），
 // 透传至执行器。开启时连续 autocommit 只读 SELECT 复用同一快照窗口
 // （延迟隐藏）；关闭回退逐语句独立快照。可经 SET snapshot_share 热切换。

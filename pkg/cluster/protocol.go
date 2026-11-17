@@ -29,6 +29,13 @@ const (
 	msgNodeHelloOK byte = 17
 	msgQueryReq    byte = 18
 	msgQueryResp   byte = 19
+	// v1.19.0 远端区间聚合：多区间单次往返 + 区间流式分块回传。
+	// 编号 66/67 避开既有占用段（20-21 REGION_PUSH、22-27 2PC、28-29 TSO、
+	// 30-31 DDL、32-33 注册表、40-45 备份恢复、50 epoch、60-61 全量对齐、
+	// 70-71 TSO HA）。既有 QUERY_REQ/QUERY_RESP 语义与帧格式完全不变；
+	// 灰度开关关闭时不会发出新帧，老路径零回归（未知帧对端直接断开）。
+	msgQueryMultiReq  byte = 66
+	msgQueryMultiResp byte = 67
 )
 
 const (
@@ -100,6 +107,43 @@ type QueryResp struct {
 	Row  *QueryRow  `json:"row,omitempty"`
 	Rows []QueryRow `json:"rows,omitempty"`
 }
+
+// QueryRange 多区间批量扫描中的单个区间（v1.19.0 远端区间聚合）。
+// Start/End 为带 region 前缀的物理键；Limit<=0 表示不限行数；Sort 非空时
+// 该区间按 M12-2 排序窗口语义在归属节点本地排序后截窗（与 QUERY_REQ 一致）。
+type QueryRange struct {
+	Start []byte    `json:"start,omitempty"`
+	End   []byte    `json:"end,omitempty"`
+	Limit int       `json:"limit,omitempty"`
+	Sort  *SortSpec `json:"sort,omitempty"`
+}
+
+// MultiQueryReq QUERY_MULTI_REQ 载荷：一次往返携带多个物理区间。
+// 同一归属节点的多个区间合并为一次请求（原 QUERY_REQ 为每区间一次往返），
+// 把跨节点多区间读的往返次数从 O(区间数) 降为 O(归属节点数)。
+type MultiQueryReq struct {
+	Op      QueryOp      `json:"op"` // 目前支持 OpScan（多区间区间扫描）
+	Ranges  []QueryRange `json:"ranges"`
+	BeginTS uint64       `json:"begin_ts,omitempty"`
+	TxID    string       `json:"tx_id,omitempty"`
+}
+
+// MultiQueryChunk QUERY_MULTI_RESP 载荷：按区间流式回传的分块。
+// Index 为对应请求区间下标；Rows 为本次分块携带的行；Err 非空表示该区间
+// 执行失败（服务端随即以 Done=true 结束本次响应）；Done 表示全部区间结束。
+type MultiQueryChunk struct {
+	Index int        `json:"index,omitempty"`
+	Rows  []QueryRow `json:"rows,omitempty"`
+	Err   string     `json:"err,omitempty"`
+	Done  bool       `json:"done,omitempty"`
+}
+
+// multiChunkBytes 单个流式分块的行载荷字节预算（服务端按此切块，避免超大
+// 结果集单帧逼近 64MB 帧上限；JSON base64 后约放大 1.33 倍，仍留足余量）。
+const multiChunkBytes = 4 << 20
+
+// multiChunkRows 单个流式分块的行数上限（小行场景避免块过大）。
+const multiChunkRows = 512
 
 // errNotNotFound 远端点查未命中的哨兵（QueryResp.Err = "not_found"）。
 const remoteNotFound = "not_found"

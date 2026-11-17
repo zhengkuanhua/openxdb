@@ -270,6 +270,9 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.handleHello(conn, payload)
 		case msgQueryReq:
 			s.handleQuery(conn, payload)
+		case msgQueryMultiReq:
+			// v1.19.0 远端区间聚合：多区间单次请求 + 区间流式分块回传
+			s.handleQueryMulti(conn, payload)
 		case msgRegionPush:
 			s.handlePut(conn, payload)
 		case msgRegistrySync:
@@ -375,6 +378,59 @@ func (s *Server) handleQuery(conn net.Conn, payload []byte) {
 		resp = QueryResp{Err: "unknown op"}
 	}
 	writeFrame(conn, msgQueryResp, mustJSON(resp))
+}
+
+// handleQueryMulti 处理 QUERY_MULTI_REQ（v1.19.0 远端区间聚合）：
+// 逐区间执行扫描（复用 scanRange，快照版本过滤 / 排序窗口语义与 QUERY_REQ 的
+// OpScan 完全一致），并按 multiChunkBytes / multiChunkRows 预算分块流式回传
+// QUERY_MULTI_RESP，最后以 Done=true 收尾。任一区间出错即以 Done=true 终止，
+// 与逐区间请求的"错误前置返回"语义一致。
+func (s *Server) handleQueryMulti(conn net.Conn, payload []byte) {
+	var req MultiQueryReq
+	if err := unmarshalJSON(payload, &req); err != nil {
+		writeFrame(conn, msgQueryMultiResp, mustJSON(MultiQueryChunk{Err: "bad request", Done: true}))
+		return
+	}
+	if req.Op != OpScan {
+		writeFrame(conn, msgQueryMultiResp, mustJSON(MultiQueryChunk{Err: "unknown op", Done: true}))
+		return
+	}
+	for i, r := range req.Ranges {
+		rows, err := s.scanRange(r.Start, r.End, r.Limit, req.BeginTS, r.Sort)
+		if err != nil {
+			writeFrame(conn, msgQueryMultiResp, mustJSON(MultiQueryChunk{Index: i, Err: err.Error(), Done: true}))
+			return
+		}
+		if err := s.writeMultiChunks(conn, i, rows); err != nil {
+			return
+		}
+	}
+	writeFrame(conn, msgQueryMultiResp, mustJSON(MultiQueryChunk{Done: true}))
+}
+
+// writeMultiChunks 按载荷预算把单个区间的行分块回传（每块一帧）。
+// 返回错误表示连接写失败（调用方直接结束，不再写收尾帧）。
+func (s *Server) writeMultiChunks(conn net.Conn, index int, rows []QueryRow) error {
+	for start := 0; start < len(rows); {
+		end := start
+		size := 0
+		for end < len(rows) && end-start < multiChunkRows {
+			size += len(rows[end].Key) + len(rows[end].Value)
+			if size > multiChunkBytes && end > start {
+				break
+			}
+			end++
+		}
+		frame, err := marshalJSON(MultiQueryChunk{Index: index, Rows: rows[start:end]})
+		if err != nil {
+			return err
+		}
+		if err := writeFrame(conn, msgQueryMultiResp, frame); err != nil {
+			return err
+		}
+		start = end
+	}
+	return nil
 }
 
 // handlePut 处理 REGION_PUSH：同一 WriteBatch 内写入全量行 + 学习路由 + 落盘 m:regions。

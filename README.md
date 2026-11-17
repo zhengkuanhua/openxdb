@@ -87,6 +87,7 @@ SELECT name FROM users WHERE age >= 25 AND age < 35 ORDER BY age;
 | **HA quorum 灰度（v1.18.0）** | `ha.quorumEnabled=true` 三节点多数派评估 + 宕机 failover（读 failover 自动重指派）+ 脑裂 epoch fencing 拒绝旧主写 + 节点恢复回迁与路由收敛四项演练完成；结论维持 quorum 默认 off、epoch 默认 on |
 | **读路径优化（v1.18.0）** | 批量点查合并：routed JOIN 回表与 IN 子查询由逐行/逐值点查改为一次 `mgetKVCluster`（N=64 实测 33.3ms → 0.52ms，往返 64 次 → 1 次）；块缓存调优实测 -1.6% 负收益已回退，确认瓶颈为 cgo 往返 |
 | **Linux 平台口径（v1.18.0）** | RHEL 9.7 目标机以 `scripts/build.sh --rocks-src/--rocks-build` 从零构建部署，同口径 E5 受控复测 OLTP 8.17 / 8.13 / 8.10 TPS、TPC-C tpmC 749.50（errs=0 / reconnects=0），跨平台可比性边界成文 |
+| **远端区间聚合（v1.19.0）** | 跨 region 多区间读由逐区间 `QUERY_REQ` 合并为按归属节点单次 `QUERY_MULTI`（新增帧 66/67 + 512 行/4MB 分块流式回传）；`remote_range_agg` 独立 flag 默认 off，关闭完全走逐区间路径零回归，`SET remote_range_agg=on\|off` 热切换 |
 
 ## 架构总览
 
