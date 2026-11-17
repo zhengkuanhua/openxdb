@@ -96,7 +96,9 @@ func tokensToString(toks []token) string {
 		}
 		if t.kind == tokString {
 			sb.WriteByte('\'')
-			sb.WriteString(t.text)
+			// v1.19.0：变量值带入语句时按 SQL 标准转义单引号（'' 表示一个字面引号），
+			// 否则含引号的字符串值（如 MESSAGE_TEXT 的诊断文本）会破坏重建后的语句。
+			sb.WriteString(strings.ReplaceAll(t.text, "'", "''"))
 			sb.WriteByte('\'')
 		} else {
 			sb.WriteString(t.text)
@@ -347,6 +349,8 @@ type procParser struct {
 	toks      []token
 	pos       int
 	loopDepth int // 当前解析嵌套的循环层数（校验 EXIT/LEAVE 位置）
+	// v1.19.0：当前嵌套的 BEGIN ... END 块层数（块内允许 EXIT/LEAVE，仅结束本块）。
+	blockDepth int
 }
 
 func (p *procParser) eof() bool { return p.pos >= len(p.toks) }
@@ -513,9 +517,54 @@ func (p *procParser) parseOneStmt(stops map[string]bool) (procStmt, error) {
 		return p.parseDynExecute()
 	case "DEALLOCATE":
 		return p.parseDynDeallocate()
+	// v1.19.0：嵌套 BEGIN ... END 块与 GET DIAGNOSTICS。
+	case "BEGIN":
+		// 紧跟分号的 BEGIN（事务语句）保持原路径，过程体不支持事务语句时照旧报错，
+		// 避免把既有语法误判为嵌套块。
+		if p.pos+1 < len(p.toks) && p.toks[p.pos+1].kind == tokSemicolon {
+			return p.parseSQL(stops)
+		}
+		return p.parseBlock()
+	case "GET":
+		if p.pos+1 < len(p.toks) {
+			switch strings.ToUpper(p.toks[p.pos+1].text) {
+			case "DIAGNOSTICS", "CURRENT":
+				return p.parseGetDiagnostics()
+			}
+		}
+		return p.parseSQL(stops)
 	default:
 		return p.parseSQL(stops)
 	}
+}
+
+// parseBlock 解析嵌套块 BEGIN <stmts> END [<label>] ;（v1.19.0）。
+// 块内可含 DECLARE 局部变量 / 游标 / 命名条件 / HANDLER，作用域限于块内。
+func (p *procParser) parseBlock() (procStmt, error) {
+	if err := p.expect("BEGIN"); err != nil {
+		return nil, err
+	}
+	// v1.19.0：块内 EXIT/LEAVE 合法（只结束本块）。
+	p.blockDepth++
+	body, err := p.parseSeq(map[string]bool{"END": true})
+	p.blockDepth--
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expect("END"); err != nil {
+		return nil, err
+	}
+	st := procBlock{body: body}
+	// END <label> 标签形式：块尾标签仅作语法校验，不参与跳转。
+	// 仅在 ident 后紧跟分号时按标签消费，避免把后续语句首 token 误当标签。
+	if p.cur().kind == tokIdent && p.pos+1 < len(p.toks) && p.toks[p.pos+1].kind == tokSemicolon {
+		st.label = p.cur().text
+		p.next()
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return st, nil
 }
 
 // parseSQL 收集一条普通 SQL 语句（直到顶层分号 / 块结束关键字 / EOF）。
@@ -938,6 +987,11 @@ func (p *procParser) parseDeclare() (procStmt, error) {
 		strings.ToUpper(p.toks[p.pos+1].text) == "CURSOR" {
 		return p.parseCursorDecl()
 	}
+	// v1.19.0：DECLARE <name> CONDITION FOR {SQLSTATE '<code>' | <errno>} 命名条件。
+	if p.cur().kind == tokIdent && p.pos+1 < len(p.toks) &&
+		strings.ToUpper(p.toks[p.pos+1].text) == "CONDITION" {
+		return p.parseConditionDecl()
+	}
 	if p.cur().kind != tokVar {
 		return nil, &SQLError{Msg: "expected @variable or CURSOR after DECLARE in procedure body"}
 	}
@@ -1094,7 +1148,8 @@ func (p *procParser) parseSet() (procStmt, error) {
 // parseExit 解析 EXIT [WHEN <cond>] / LEAVE [WHEN <cond>]。
 func (p *procParser) parseExit() (procStmt, error) {
 	p.next() // EXIT / LEAVE
-	if p.loopDepth == 0 {
+	// v1.19.0：BEGIN ... END 块内的 EXIT 只结束本块，因此块内亦允许。
+	if p.loopDepth == 0 && p.blockDepth == 0 {
 		return nil, &SQLError{Msg: "EXIT/LEAVE outside loop in procedure body"}
 	}
 	st := procExit{}
@@ -1168,8 +1223,114 @@ func validateProcedureBody(body string) error {
 	if err := validateProcStmts(stmts); err != nil {
 		return err
 	}
+	// v1.19.0：命名条件（DECLARE ... CONDITION FOR）引用校验。
+	if err := validateNamedCondRefs(stmts); err != nil {
+		return err
+	}
 	// P1-3：游标声明唯一性 + OPEN/FETCH/CLOSE 引用校验。
 	return validateCursorRefs(stmts)
+}
+
+// collectConditionDecls 递归收集命名条件声明（v1.19.0）。
+func collectConditionDecls(stmts []procStmt, out map[string]bool) {
+	for _, s := range stmts {
+		switch st := s.(type) {
+		case procConditionDecl:
+			out[strings.ToLower(st.name)] = true
+		case procBlock:
+			collectConditionDecls(st.body, out)
+		case procHandlerDecl:
+			collectConditionDecls(st.body, out)
+		case procIf:
+			for _, br := range st.branches {
+				collectConditionDecls(br.body, out)
+			}
+		case procLoop:
+			collectConditionDecls(st.body, out)
+		case procWhile:
+			collectConditionDecls(st.body, out)
+		case procFor:
+			collectConditionDecls(st.body, out)
+		case procRepeat:
+			collectConditionDecls(st.body, out)
+		case procCase:
+			for _, w := range st.whens {
+				collectConditionDecls(w.body, out)
+			}
+			if st.hasElse {
+				collectConditionDecls(st.elseBody, out)
+			}
+		}
+	}
+}
+
+// validateNamedCondRefs 校验 HANDLER FOR / SIGNAL / RESIGNAL 引用的命名条件均已声明（v1.19.0）。
+func validateNamedCondRefs(stmts []procStmt) error {
+	decls := make(map[string]bool)
+	collectConditionDecls(stmts, decls)
+	var walk func([]procStmt) error
+	walk = func(ss []procStmt) error {
+		for _, s := range ss {
+			switch st := s.(type) {
+			case procHandlerDecl:
+				for _, c := range st.conds {
+					if c.kind == procErrNamed && !decls[strings.ToLower(c.name)] {
+						return &SQLError{Msg: "unknown condition in HANDLER FOR: " + c.name}
+					}
+				}
+				if err := walk(st.body); err != nil {
+					return err
+				}
+			case procSignal:
+				if st.hasCond && st.cond.kind == procErrNamed && !decls[strings.ToLower(st.cond.name)] {
+					return &SQLError{Msg: "unknown condition in SIGNAL: " + st.cond.name}
+				}
+			case procResignal:
+				if st.hasCond && st.cond.kind == procErrNamed && !decls[strings.ToLower(st.cond.name)] {
+					return &SQLError{Msg: "unknown condition in RESIGNAL: " + st.cond.name}
+				}
+			case procBlock:
+				if err := walk(st.body); err != nil {
+					return err
+				}
+			case procIf:
+				for _, br := range st.branches {
+					if err := walk(br.body); err != nil {
+						return err
+					}
+				}
+			case procLoop:
+				if err := walk(st.body); err != nil {
+					return err
+				}
+			case procWhile:
+				if err := walk(st.body); err != nil {
+					return err
+				}
+			case procFor:
+				if err := walk(st.body); err != nil {
+					return err
+				}
+			case procRepeat:
+				if err := walk(st.body); err != nil {
+					return err
+				}
+			case procCase:
+				for _, w := range st.whens {
+					if err := walk(w.body); err != nil {
+						return err
+					}
+				}
+				if st.hasElse {
+					if err := walk(st.elseBody); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+	return walk(stmts)
 }
 
 // validateProcStmts 递归校验语句树。
@@ -1329,6 +1490,39 @@ func validateProcStmts(stmts []procStmt) error {
 			if st.name == "" {
 				return &SQLError{Msg: "DEALLOCATE PREPARE requires statement name in procedure body"}
 			}
+		// v1.19.0：嵌套块、命名条件与 GET DIAGNOSTICS。
+		case procBlock:
+			if err := validateProcStmts(st.body); err != nil {
+				return err
+			}
+		case procConditionDecl:
+			if st.name == "" {
+				return &SQLError{Msg: "CONDITION requires a name in procedure body"}
+			}
+			if st.cond.kind != procErrSQLState && st.cond.kind != procErrErrno {
+				return &SQLError{Msg: "CONDITION FOR requires SQLSTATE value or error number in procedure body"}
+			}
+			if !st.cond.valid() {
+				return &SQLError{Msg: "CONDITION FOR requires SQLSTATE value or error number in procedure body"}
+			}
+		case procGetDiagnostics:
+			if len(st.items) == 0 {
+				return &SQLError{Msg: "GET DIAGNOSTICS requires at least one target in procedure body"}
+			}
+			for _, it := range st.items {
+				switch it.field {
+				case "ROW_COUNT":
+					if st.hasCond {
+						return &SQLError{Msg: "ROW_COUNT is not valid in GET DIAGNOSTICS CONDITION in procedure body"}
+					}
+				case "RETURNED_SQLSTATE", "MYSQL_ERRNO", "MESSAGE_TEXT":
+					if !st.hasCond {
+						return &SQLError{Msg: "GET DIAGNOSTICS " + it.field + " requires CONDITION in procedure body"}
+					}
+				default:
+					return &SQLError{Msg: "unsupported GET DIAGNOSTICS item in procedure body: " + it.field}
+				}
+			}
 		}
 	}
 	return nil
@@ -1367,6 +1561,11 @@ func collectCursorDecls(stmts []procStmt, out map[string]bool) error {
 				return err
 			}
 		case procHandlerDecl:
+			if err := collectCursorDecls(st.body, out); err != nil {
+				return err
+			}
+		case procBlock:
+			// v1.19.0：嵌套块内的游标声明同样参与唯一性校验。
 			if err := collectCursorDecls(st.body, out); err != nil {
 				return err
 			}
@@ -1434,6 +1633,11 @@ func validateCursorRefs(stmts []procStmt) error {
 					return err
 				}
 			case procHandlerDecl:
+				if err := walk(st.body); err != nil {
+					return err
+				}
+			case procBlock:
+				// v1.19.0：嵌套块内的 OPEN/FETCH/CLOSE 同样校验。
 				if err := walk(st.body); err != nil {
 					return err
 				}
@@ -1740,6 +1944,14 @@ type procRunner struct {
 	handlers []*procHandlerState
 	prepared map[string]string
 	curErr   error
+
+	// v1.19.0：命名条件、诊断区与行数状态。
+	// conditions 为当前有效命名条件表（块内声明随块退出出栈），
+	// lastRowCount 记录最近一条普通 SQL 的影响行数（GET DIAGNOSTICS ROW_COUNT），
+	// diag 记录最近一次语句错误的诊断区（GET DIAGNOSTICS CONDITION）。
+	conditions   map[string]procCond
+	lastRowCount int
+	diag         procDiagArea
 }
 
 // procHandlerState 处理器运行期状态（decl 为声明，active 标记正在执行避免自捕获）。
@@ -1782,6 +1994,10 @@ func (r *procRunner) run(stmts []procStmt) (bool, error) {
 // 处理器体自身抛出的错误不再被同一处理器捕获（active 标记），直接上抛。
 func (r *procRunner) runStmtGuarded(s procStmt) (bool, error) {
 	exited, err := r.runStmt(s)
+	if err != nil {
+		// v1.19.0：诊断区在处理器执行前登记，供 GET DIAGNOSTICS CONDITION 读取。
+		r.setDiag(err)
+	}
 	if err == nil || len(r.handlers) == 0 {
 		return exited, err
 	}
@@ -1819,8 +2035,13 @@ func (r *procRunner) runStmt(s procStmt) (bool, error) {
 		if !procedureBodySupported(stmt) {
 			return false, &SQLError{Msg: "unsupported statement in procedure body"}
 		}
-		if _, err := r.e.execStmt(r.sess, stmt); err != nil {
+		res, err := r.e.execStmt(r.sess, stmt)
+		if err != nil {
 			return false, err
+		}
+		// v1.19.0：记录影响行数，供 GET DIAGNOSTICS ROW_COUNT 读取。
+		if res != nil {
+			r.lastRowCount = res.AffectedRows
 		}
 		return false, nil
 	case *procCall:
@@ -2116,6 +2337,26 @@ func (r *procRunner) runStmt(s procStmt) (bool, error) {
 		return false, r.execDynExecute(st)
 	case procDeallocate:
 		return false, r.execDynDeallocate(st)
+	// v1.19.0：嵌套块、命名条件与 GET DIAGNOSTICS。
+	case procBlock:
+		exited, err := r.runBlock(st)
+		if err != nil {
+			return false, err
+		}
+		// 块内 ITERATE/CONTINUE 需上抛给外层循环消费；块内 EXIT（含 EXIT 处理器）
+		// 只结束本块，不终止外层块或过程体。
+		if exited && r.iterate {
+			return true, nil
+		}
+		return false, nil
+	case procConditionDecl:
+		if r.conditions == nil {
+			r.conditions = make(map[string]procCond)
+		}
+		r.conditions[strings.ToLower(st.name)] = st.cond
+		return false, nil
+	case procGetDiagnostics:
+		return false, r.execGetDiagnostics(st)
 	}
 	return false, &SQLError{Msg: "unsupported procedure statement"}
 }
@@ -2481,6 +2722,7 @@ const (
 	procErrNotFound                        // NOT FOUND：02 类无行
 	procErrSQLState                        // 指定 SQLSTATE 值
 	procErrErrno                           // 指定错误码
+	procErrNamed                           // 命名条件（DECLARE <name> CONDITION FOR ...）
 )
 
 // procCond 单个异常条件。
@@ -2488,6 +2730,7 @@ type procCond struct {
 	kind  procErrKind
 	state string // SQLSTATE 5 位码
 	code  int    // 错误码
+	name  string // 命名条件名（小写，kind==procErrNamed 时有效）
 }
 
 // valid 条件是否携带可匹配的取值（SIGNAL 目标必须有效）。
@@ -2497,6 +2740,8 @@ func (c procCond) valid() bool {
 		return c.state != ""
 	case procErrErrno:
 		return c.code != 0
+	case procErrNamed:
+		return c.name != ""
 	}
 	return true
 }
@@ -2557,6 +2802,51 @@ type procDeallocate struct {
 }
 
 func (procDeallocate) procStmt() {}
+
+// procBlock BEGIN ... END 嵌套块（v1.19.0）：块内 DECLARE 的局部变量、游标、
+// 命名条件与 HANDLER 均为块作用域，块退出时局部声明出栈；块内对块外既有变量的
+// 赋值保留，仅在块内新建的变量随块退出移除。label 为可选块标签（END <label>）。
+type procBlock struct {
+	label string
+	body  []procStmt
+}
+
+func (procBlock) procStmt() {}
+
+// procConditionDecl DECLARE <name> CONDITION FOR {SQLSTATE '<code>' | <errno>}
+// （v1.19.0）：登记命名条件，可在 HANDLER FOR / SIGNAL / RESIGNAL 中按名称引用。
+type procConditionDecl struct {
+	name string
+	cond procCond
+}
+
+func (procConditionDecl) procStmt() {}
+
+// procDiagItem GET DIAGNOSTICS 的单个赋值项 <@var> = <诊断字段>。
+type procDiagItem struct {
+	name  string // 目标变量名（不含 @，统一小写）
+	field string // ROW_COUNT / RETURNED_SQLSTATE / MYSQL_ERRNO / MESSAGE_TEXT
+}
+
+// procGetDiagnostics GET [CURRENT] DIAGNOSTICS [CONDITION <n>] <@var> = <字段>[, ...]
+// （v1.19.0）：ROW_COUNT 目标读取最近一条 DML 影响行数；CONDITION 目标读取诊断区
+// 的 RETURNED_SQLSTATE / MYSQL_ERRNO / MESSAGE_TEXT（诊断区仅保留最近一条，序号须为 1）。
+type procGetDiagnostics struct {
+	condNum int    // CONDITION 序号（仅支持 1）
+	condVar string // 序号以 @var 给出时的变量名（不含 @，统一小写）
+	hasCond bool
+	items   []procDiagItem
+}
+
+func (procGetDiagnostics) procStmt() {}
+
+// procDiagArea 过程诊断区（最近一次语句错误的 SQLSTATE / 错误码 / 文本）。
+type procDiagArea struct {
+	state string
+	code  int
+	msg   string
+	set   bool
+}
 
 // procStateError 携带 SQLSTATE / 错误码的过程异常：
 // cause 非空表示包装既有错误（错误文本保持原样），否则使用 message。
@@ -2633,10 +2923,177 @@ func (r *procRunner) matchHandler(err error) *procHandlerState {
 			continue
 		}
 		for _, c := range h.decl.conds {
-			if procCondMatch(c, state, code) {
+			// v1.19.0：命名条件（CONDITION）先解析为具体 SQLSTATE / 错误码再匹配。
+			if rc, ok := r.resolveCond(c); ok && procCondMatch(rc, state, code) {
 				return h
 			}
 		}
+	}
+	return nil
+}
+
+// resolveCond 把命名条件解析为具体条件；未声明或解析失败时返回 ok=false
+// （限制解析深度，避免自引用条件导致死循环）。
+func (r *procRunner) resolveCond(c procCond) (procCond, bool) {
+	for depth := 0; depth < 16 && c.kind == procErrNamed; depth++ {
+		d, ok := r.conditions[strings.ToLower(c.name)]
+		if !ok {
+			return procCond{}, false
+		}
+		c = d
+	}
+	if c.kind == procErrNamed {
+		return procCond{}, false
+	}
+	return c, true
+}
+
+// runBlock 执行 BEGIN ... END 嵌套块：块内声明的局部变量、游标与命名条件具有块作用域，
+// 块退出时出栈（块内对块外既有变量的赋值保留）；HANDLER 栈由 run 内部按深度截断。
+func (r *procRunner) runBlock(st procBlock) (bool, error) {
+	// 仅本块顶层声明的名字参与出栈，嵌套子块由各自的 runBlock 处理；
+	// 若与块外同名，退出时恢复块外原值（内层声明遮蔽外层）。
+	type varSnap struct {
+		val Value
+		ok  bool
+	}
+	vars := make(map[string]varSnap)
+	curSnaps := make(map[string]*procCursorState)
+	curOK := make(map[string]bool)
+	conds := make(map[string]procCond)
+	condOK := make(map[string]bool)
+	for _, s := range st.body {
+		switch d := s.(type) {
+		case procDeclare:
+			key := strings.ToLower(d.name)
+			if _, seen := vars[key]; seen {
+				continue
+			}
+			v, ok := r.env[key]
+			vars[key] = varSnap{val: v, ok: ok}
+		case procCursorDecl:
+			key := strings.ToLower(d.name)
+			if _, seen := curOK[key]; seen {
+				continue
+			}
+			curSnaps[key] = r.cursors[key]
+			curOK[key] = curSnaps[key] != nil
+		case procConditionDecl:
+			key := strings.ToLower(d.name)
+			if _, seen := condOK[key]; seen {
+				continue
+			}
+			c, ok := r.conditions[key]
+			conds[key] = c
+			condOK[key] = ok
+		}
+	}
+	outerVars := make(map[string]bool, len(r.env))
+	for k := range r.env {
+		outerVars[k] = true
+	}
+	outerCursors := make(map[string]bool, len(r.cursors))
+	for k := range r.cursors {
+		outerCursors[k] = true
+	}
+	outerConds := make(map[string]bool, len(r.conditions))
+	for k := range r.conditions {
+		outerConds[k] = true
+	}
+	defer func() {
+		for k := range r.env {
+			if !outerVars[k] {
+				delete(r.env, k)
+			}
+		}
+		for k, snap := range vars {
+			if snap.ok {
+				r.env[k] = snap.val
+			} else {
+				delete(r.env, k)
+			}
+		}
+		for k := range r.cursors {
+			if !outerCursors[k] {
+				delete(r.cursors, k)
+			}
+		}
+		for k := range curOK {
+			if curOK[k] {
+				r.cursors[k] = curSnaps[k]
+			} else {
+				if s, ok := r.cursors[k]; ok && s != nil {
+					delete(r.cursors, k)
+				}
+			}
+		}
+		for k := range r.conditions {
+			if !outerConds[k] {
+				delete(r.conditions, k)
+			}
+		}
+		for k := range condOK {
+			if condOK[k] {
+				r.conditions[k] = conds[k]
+			} else {
+				delete(r.conditions, k)
+			}
+		}
+	}()
+	return r.run(st.body)
+}
+
+// setDiag 登记诊断区（最近一次语句错误的 SQLSTATE / 错误码 / 文本）。
+func (r *procRunner) setDiag(err error) {
+	state, code := procErrInfo(err)
+	r.diag = procDiagArea{state: state, code: code, msg: err.Error(), set: true}
+}
+
+// execGetDiagnostics 执行 GET DIAGNOSTICS：ROW_COUNT 取最近一条 DML 影响行数，
+// CONDITION <n> 取诊断区条件信息项（诊断区仅保留最近一条，序号须为 1）。
+func (r *procRunner) execGetDiagnostics(st procGetDiagnostics) error {
+	condNum := st.condNum
+	if st.hasCond && st.condVar != "" {
+		v, ok := r.env[st.condVar]
+		if !ok {
+			return &SQLError{Msg: "unknown procedure variable: @" + st.condVar}
+		}
+		n, ok := procToInt(v)
+		if !ok {
+			return &SQLError{Msg: "GET DIAGNOSTICS condition number must be an integer in procedure body"}
+		}
+		condNum = int(n)
+	}
+	if st.hasCond && condNum != 1 {
+		return &SQLError{Msg: "GET DIAGNOSTICS CONDITION number out of range in procedure body"}
+	}
+	for _, it := range st.items {
+		var v Value
+		switch it.field {
+		case "ROW_COUNT":
+			if st.hasCond {
+				return &SQLError{Msg: "ROW_COUNT is not valid in GET DIAGNOSTICS CONDITION in procedure body"}
+			}
+			v = IntVal(int64(r.lastRowCount))
+		case "RETURNED_SQLSTATE":
+			if !r.diag.set {
+				return &SQLError{Msg: "GET DIAGNOSTICS CONDITION requires a prior statement condition in procedure body"}
+			}
+			v = StrVal(r.diag.state)
+		case "MYSQL_ERRNO":
+			if !r.diag.set {
+				return &SQLError{Msg: "GET DIAGNOSTICS CONDITION requires a prior statement condition in procedure body"}
+			}
+			v = IntVal(int64(r.diag.code))
+		case "MESSAGE_TEXT":
+			if !r.diag.set {
+				return &SQLError{Msg: "GET DIAGNOSTICS CONDITION requires a prior statement condition in procedure body"}
+			}
+			v = StrVal(r.diag.msg)
+		default:
+			return &SQLError{Msg: "unsupported GET DIAGNOSTICS item in procedure body: " + it.field}
+		}
+		r.env[it.name] = v
 	}
 	return nil
 }
@@ -2646,13 +3103,22 @@ func (r *procRunner) execSignal(st procSignal) error {
 	state := procDefaultSQLState
 	code := 0
 	if st.hasCond {
-		switch st.cond.kind {
+		cond := st.cond
+		if cond.kind == procErrNamed {
+			// v1.19.0：SIGNAL <命名条件> 按声明解析为具体 SQLSTATE / 错误码。
+			rc, ok := r.resolveCond(cond)
+			if !ok {
+				return &SQLError{Msg: "unknown condition in SIGNAL: " + cond.name}
+			}
+			cond = rc
+		}
+		switch cond.kind {
 		case procErrSQLState:
-			if st.cond.state != "" {
-				state = st.cond.state
+			if cond.state != "" {
+				state = cond.state
 			}
 		case procErrErrno:
-			code = st.cond.code
+			code = cond.code
 		}
 	}
 	msg := ""
@@ -2681,13 +3147,22 @@ func (r *procRunner) execResignal(st procResignal) error {
 		state, code = procErrInfo(r.curErr)
 	}
 	if st.hasCond {
-		switch st.cond.kind {
+		cond := st.cond
+		if cond.kind == procErrNamed {
+			// v1.19.0：RESIGNAL <命名条件> 按声明解析为具体 SQLSTATE / 错误码。
+			rc, ok := r.resolveCond(cond)
+			if !ok {
+				return &SQLError{Msg: "unknown condition in RESIGNAL: " + cond.name}
+			}
+			cond = rc
+		}
+		switch cond.kind {
 		case procErrSQLState:
-			if st.cond.state != "" {
-				state = st.cond.state
+			if cond.state != "" {
+				state = cond.state
 			}
 		case procErrErrno:
-			code = st.cond.code
+			code = cond.code
 		}
 	}
 	msg := ""
@@ -2894,6 +3369,15 @@ func (p *procParser) parseHandlerDecl() (procStmt, error) {
 	if p.eof() {
 		return nil, &SQLError{Msg: "HANDLER requires a statement in procedure body"}
 	}
+	// v1.19.0：处理器体支持复合语句块 BEGIN ... END（块内可 DECLARE 局部变量等）。
+	if p.kw() == "BEGIN" && !(p.pos+1 < len(p.toks) && p.toks[p.pos+1].kind == tokSemicolon) {
+		block, err := p.parseBlock()
+		if err != nil {
+			return nil, err
+		}
+		st.body = []procStmt{block}
+		return st, nil
+	}
 	body, err := p.parseOneStmt(nil)
 	if err != nil {
 		return nil, err
@@ -2905,8 +3389,119 @@ func (p *procParser) parseHandlerDecl() (procStmt, error) {
 	return st, nil
 }
 
+// atCondStart 判断当前位置是否为一个异常条件的起始（v1.19.0）。
+// 支持 SQLSTATE / CONDITION <name> / 错误码 / 裸命名条件；SET 与分号不是条件起始。
+func (p *procParser) atCondStart() bool {
+	if p.eof() {
+		return false
+	}
+	switch p.kw() {
+	case "SQLSTATE", "CONDITION":
+		return true
+	case "SET", ";":
+		return false
+	}
+	return p.cur().kind == tokNumber || p.cur().kind == tokIdent
+}
+
+// parseConditionDecl 解析 DECLARE <name> CONDITION FOR {SQLSTATE '<code>' | <errno>} ;（v1.19.0）。
+// 调用时条件名 token 尚未消费。
+func (p *procParser) parseConditionDecl() (procStmt, error) {
+	nameTok := p.cur()
+	if nameTok.kind != tokIdent {
+		return nil, &SQLError{Msg: "expected condition name after DECLARE in procedure body"}
+	}
+	p.next() // name
+	if err := p.expect("CONDITION"); err != nil {
+		return nil, err
+	}
+	if err := p.expect("FOR"); err != nil {
+		return nil, err
+	}
+	cond, err := p.parseHandlerCond()
+	if err != nil {
+		return nil, err
+	}
+	// 命名条件只能指向具体 SQLSTATE 值或错误码，不能指向分类或另一命名条件。
+	if cond.kind != procErrSQLState && cond.kind != procErrErrno {
+		return nil, &SQLError{Msg: "CONDITION FOR requires SQLSTATE value or error number in procedure body"}
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return procConditionDecl{name: nameTok.text, cond: cond}, nil
+}
+
+// parseGetDiagnostics 解析
+// GET [CURRENT] DIAGNOSTICS [CONDITION <n> | CONDITION <@var>] <@var> = <字段>[, ...] ;（v1.19.0）。
+// 支持的诊断字段：ROW_COUNT / RETURNED_SQLSTATE / MYSQL_ERRNO / MESSAGE_TEXT。
+func (p *procParser) parseGetDiagnostics() (procStmt, error) {
+	if err := p.expect("GET"); err != nil {
+		return nil, err
+	}
+	if p.kw() == "CURRENT" {
+		p.next()
+	}
+	if err := p.expect("DIAGNOSTICS"); err != nil {
+		return nil, err
+	}
+	st := procGetDiagnostics{}
+	if p.kw() == "CONDITION" {
+		p.next()
+		st.hasCond = true
+		switch {
+		case p.cur().kind == tokNumber:
+			n, err := strconv.Atoi(p.cur().text)
+			if err != nil {
+				return nil, &SQLError{Msg: "invalid GET DIAGNOSTICS condition number in procedure body: " + p.cur().text}
+			}
+			st.condNum = n
+			p.next()
+		case p.cur().kind == tokVar:
+			st.condVar = strings.ToLower(p.cur().text[1:])
+			p.next()
+		default:
+			return nil, &SQLError{Msg: "expected condition number after GET DIAGNOSTICS CONDITION in procedure body"}
+		}
+	}
+	for {
+		if p.cur().kind != tokVar {
+			return nil, &SQLError{Msg: "expected @variable in GET DIAGNOSTICS target list"}
+		}
+		it := procDiagItem{name: strings.ToLower(p.cur().text[1:])}
+		p.next()
+		if p.kw() != "=" && p.kw() != ":=" {
+			return nil, &SQLError{Msg: "expected '=' in GET DIAGNOSTICS assignment"}
+		}
+		p.next()
+		if p.cur().kind != tokIdent && p.cur().kind != tokKeyword {
+			return nil, &SQLError{Msg: "expected diagnostics item in GET DIAGNOSTICS"}
+		}
+		field := strings.ToUpper(p.cur().text)
+		switch field {
+		case "ROW_COUNT", "RETURNED_SQLSTATE", "MYSQL_ERRNO", "MESSAGE_TEXT":
+			it.field = field
+			p.next()
+		default:
+			return nil, &SQLError{Msg: "unsupported GET DIAGNOSTICS item in procedure body: " + p.cur().text}
+		}
+		st.items = append(st.items, it)
+		if p.kw() != "," {
+			break
+		}
+		p.next()
+	}
+	if len(st.items) == 0 {
+		return nil, &SQLError{Msg: "GET DIAGNOSTICS requires at least one target in procedure body"}
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return st, nil
+}
+
 // parseHandlerCond 解析处理器条件：SQLSTATE '<code>' / <错误码> / SQLEXCEPTION /
-// SQLWARNING / NOT FOUND。
+// SQLWARNING / NOT FOUND / CONDITION <name> / <命名条件>。
 func (p *procParser) parseHandlerCond() (procCond, error) {
 	switch p.kw() {
 	case "SQLSTATE":
@@ -2928,7 +3523,9 @@ func (p *procParser) parseHandlerCond() (procCond, error) {
 			return procCond{kind: procErrNotFound}, nil
 		}
 	case "CONDITION":
-		return procCond{}, &SQLError{Msg: "named conditions are not supported in procedure body"}
+		// v1.19.0：HANDLER FOR CONDITION <name> 按命名条件匹配（声明期登记、运行期解析）。
+		p.next()
+		return p.parseNamedCondRef()
 	}
 	if p.cur().kind == tokNumber {
 		n, err := strconv.Atoi(p.cur().text)
@@ -2938,7 +3535,21 @@ func (p *procParser) parseHandlerCond() (procCond, error) {
 		p.next()
 		return procCond{kind: procErrErrno, code: n}, nil
 	}
+	// v1.19.0：裸条件名（HANDLER FOR <name>）按命名条件处理。
+	if p.cur().kind == tokIdent {
+		return p.parseNamedCondRef()
+	}
 	return procCond{}, &SQLError{Msg: "unsupported HANDLER condition in procedure body: " + p.cur().text}
+}
+
+// parseNamedCondRef 解析一个命名条件引用（裸名或 CONDITION 关键字之后的名字）。
+func (p *procParser) parseNamedCondRef() (procCond, error) {
+	t := p.cur()
+	if t.kind != tokIdent {
+		return procCond{}, &SQLError{Msg: "expected condition name in procedure body"}
+	}
+	p.next()
+	return procCond{kind: procErrNamed, name: strings.ToLower(t.text)}, nil
 }
 
 // parseSQLStateValue 解析 SQLSTATE 值（5 位码，字符串或数字字面量写法）。
@@ -2959,7 +3570,7 @@ func (p *procParser) parseSQLStateValue() (procCond, error) {
 func (p *procParser) parseSignal() (procStmt, error) {
 	p.next() // SIGNAL
 	st := procSignal{}
-	if p.kw() == "SQLSTATE" || p.kw() == "CONDITION" || p.cur().kind == tokNumber {
+	if p.atCondStart() {
 		c, err := p.parseHandlerCond()
 		if err != nil {
 			return nil, err
@@ -2982,7 +3593,7 @@ func (p *procParser) parseSignal() (procStmt, error) {
 func (p *procParser) parseResignal() (procStmt, error) {
 	p.next() // RESIGNAL
 	st := procResignal{}
-	if p.kw() == "SQLSTATE" || p.kw() == "CONDITION" || p.cur().kind == tokNumber {
+	if p.atCondStart() {
 		c, err := p.parseHandlerCond()
 		if err != nil {
 			return nil, err
