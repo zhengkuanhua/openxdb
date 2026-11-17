@@ -44,6 +44,10 @@ OpenXDB 版本变更记录。
 - **执行器侧接线**：`pkg/sql` 的 `scanMergedCluster` 在开关开启时分流至新增 `scanMergedClusterAgg`——按 `sharding.DecodeRegionKey` 分类，本地区间一次 `scanMergedVisible` 合并扫描，同归属节点的远端区间按节点分组后单次取回，结果按内层键全局稳定排序，与旧路径逐行等价；保留 M6 读 failover（`resolveRegionOwner`）、P3 READY 前置（`checkRemoteReady`）、P2-13 Serializable 远端读集登记语义。
 - **独立 feature flag**：`remote_range_agg` 四级透传（`configSpec` 注册默认 off → `Engine` → `Executor.SetRemoteRangeAgg` / `RemoteRangeAgg` 原子读写 → `scanMergedCluster` 分流），关闭时完全走 v1.18.0 逐区间路径，不发新帧、零回归可灰度回退。
 - **测试**：`pkg/cluster/query_multi_test.go`——同节点多区间单次往返且与逐区间 `ScanRemote` 逐行等价、超 512 行分块流式、空区间与未知节点错误、服务端排序截窗语义；`pkg/sql/remote_range_agg_test.go`——同节点两远端区间往返 2 → 1、本地+远端混合结果行序与内容等价、全本地区间零远端往返、目标节点未就绪整体拒绝且不发起往返。
+- **存储过程异常处理**：新增 `DECLARE {CONTINUE|EXIT} [<name>] HANDLER FOR <cond>[, ...] <stmt>`，条件支持 `SQLSTATE '<值>'`、数字错误码、`SQLEXCEPTION`（非 01/02 类）、`SQLWARNING`（01 类）、`NOT FOUND`（02 类）；处理器按「最近声明优先」匹配，随块退出自动出栈（`procRunner.handlers` 栈 + 块级 `depth` 截断），`CONTINUE` 继续执行出错语句之后的语句、`EXIT` 退出当前块。游标取尽（`02000`）纳入 `NOT FOUND` 捕获范围，错误文本不变。新增 `SIGNAL SQLSTATE '<值>' [SET MESSAGE_TEXT|MYSQL_ERRNO|SQLSTATE = ...]` 与 `RESIGNAL [SET ...]`（无参重抛当前错误，处理器执行期间禁止自捕获）。无 SQLSTATE 的过程错误统一归入 `HY000` 供 `SQLEXCEPTION` 匹配。
+- **存储过程动态 SQL**：新增 `PREPARE <stmt> FROM '<文本>'|@var`、`EXECUTE <stmt> [USING <expr>[, ...]]`、`DEALLOCATE PREPARE <stmt>`。`?` 占位符按出现顺序以实参字面量绑定（个数不符报 `argument count mismatch`），绑定结果走标准 `Parse` + `execStmt` 路径，并对语句类型做过程体白名单校验（如 `SHOW` 等过程体不支持的语句不允许经动态 SQL 绕过）。预处理语句表为单次 CALL 调用级（`procRunner.prepared`），不跨调用泄漏。
+- **测试**：`pkg/sql/proc_handler_dynsql_test.go`（12 例）——CONTINUE/EXIT 语义、游标 NOT FOUND、嵌套块出栈、SQLEXCEPTION/SQLWARNING/错误码匹配、SIGNAL 未捕获冒泡与过程体中止、RESIGNAL 外层接管、PREPARE 字面量与 @var、EXECUTE USING 绑定、未定义语句 / 参数个数不匹配 / 空文本 / 白名单拒绝、创建期非法 SQLSTATE / 缺条件 / 缺语句体 / 不支持的 HANDLER 条件。
+- **文档口径同步**：`KNOWN_LIMITATIONS` §1.3 存储过程受限子集边界更新（异常处理与动态 SQL 已支持，仍不支持嵌套 `BEGIN…END` 块、`CONDITION` 命名条件等）；`README` 能力表存储过程行同步。
 
 ## v1.18.0 (2026-11-17)
 

@@ -2,6 +2,7 @@ package sql
 
 import (
 	"encoding/json"
+	"errors"
 	"sort"
 	"strconv"
 	"strings"
@@ -348,15 +349,19 @@ type procParser struct {
 	loopDepth int // 当前解析嵌套的循环层数（校验 EXIT/LEAVE 位置）
 }
 
-func (p *procParser) eof() bool  { return p.pos >= len(p.toks) }
+func (p *procParser) eof() bool { return p.pos >= len(p.toks) }
 func (p *procParser) cur() token {
 	if p.pos >= len(p.toks) {
 		return token{}
 	}
 	return p.toks[p.pos]
 }
-func (p *procParser) kw() string    { return strings.ToUpper(p.cur().text) }
-func (p *procParser) next()         { if p.pos < len(p.toks) { p.pos++ } }
+func (p *procParser) kw() string { return strings.ToUpper(p.cur().text) }
+func (p *procParser) next() {
+	if p.pos < len(p.toks) {
+		p.pos++
+	}
+}
 func (p *procParser) expect(s string) error {
 	if p.kw() != s {
 		return &SQLError{Msg: "expected " + s + " in procedure body, got " + p.cur().text}
@@ -456,38 +461,7 @@ func (p *procParser) parseSeq(stops map[string]bool) ([]procStmt, error) {
 		if stops != nil && stops[k] {
 			break
 		}
-		var s procStmt
-		var err error
-		switch k {
-		case "IF":
-			s, err = p.parseIf()
-		case "LOOP":
-			s, err = p.parseLoop()
-		case "WHILE":
-			s, err = p.parseWhile()
-		case "FOR":
-			s, err = p.parseFor()
-		case "REPEAT":
-			s, err = p.parseRepeat()
-		case "CASE":
-			s, err = p.parseCase()
-		case "DECLARE":
-			s, err = p.parseDeclare()
-		case "SET":
-			s, err = p.parseSet()
-		case "EXIT", "LEAVE":
-			s, err = p.parseExit()
-		case "ITERATE", "CONTINUE":
-			s, err = p.parseIterate()
-		case "OPEN":
-			s, err = p.parseCursorOpen()
-		case "FETCH":
-			s, err = p.parseCursorFetch()
-		case "CLOSE":
-			s, err = p.parseCursorClose()
-		default:
-			s, err = p.parseSQL(stops)
-		}
+		s, err := p.parseOneStmt(stops)
 		if err != nil {
 			return nil, err
 		}
@@ -496,6 +470,52 @@ func (p *procParser) parseSeq(stops map[string]bool) ([]procStmt, error) {
 		}
 	}
 	return out, nil
+}
+
+// parseOneStmt 解析单条过程体语句并分发到对应节点解析器。
+// 由 parseSeq（语句序列）与 HANDLER 体（单条语句）共用，保证两条路径语法一致。
+func (p *procParser) parseOneStmt(stops map[string]bool) (procStmt, error) {
+	switch p.kw() {
+	case "IF":
+		return p.parseIf()
+	case "LOOP":
+		return p.parseLoop()
+	case "WHILE":
+		return p.parseWhile()
+	case "FOR":
+		return p.parseFor()
+	case "REPEAT":
+		return p.parseRepeat()
+	case "CASE":
+		return p.parseCase()
+	case "DECLARE":
+		return p.parseDeclare()
+	case "SET":
+		return p.parseSet()
+	case "EXIT", "LEAVE":
+		return p.parseExit()
+	case "ITERATE", "CONTINUE":
+		return p.parseIterate()
+	case "OPEN":
+		return p.parseCursorOpen()
+	case "FETCH":
+		return p.parseCursorFetch()
+	case "CLOSE":
+		return p.parseCursorClose()
+	// v1.19.0：异常处理与动态 SQL。
+	case "SIGNAL":
+		return p.parseSignal()
+	case "RESIGNAL":
+		return p.parseResignal()
+	case "PREPARE":
+		return p.parseDynPrepare()
+	case "EXECUTE":
+		return p.parseDynExecute()
+	case "DEALLOCATE":
+		return p.parseDynDeallocate()
+	default:
+		return p.parseSQL(stops)
+	}
 }
 
 // parseSQL 收集一条普通 SQL 语句（直到顶层分号 / 块结束关键字 / EOF）。
@@ -755,7 +775,7 @@ func (p *procParser) parseWhile() (procStmt, error) {
 }
 
 // parseFor 解析 [label:] FOR @i IN <from> .. <to> LOOP ... END LOOP [label]
-//（也接受 TO 与 END FOR）。
+// （也接受 TO 与 END FOR）。
 // 注：lexer 数字解析会把 `1..10` 视为非法小数，范围分隔符必须写作 `1 .. 10`（带空格）。
 func (p *procParser) parseFor() (procStmt, error) {
 	label := p.parseLabel()
@@ -813,7 +833,7 @@ func (p *procParser) parseFor() (procStmt, error) {
 }
 
 // parseRepeat 解析 [label:] REPEAT <body> UNTIL <cond> END REPEAT [label]
-//（先执行后判断：UNTIL 条件为真时结束循环，与 WHILE 前置判断相反）。
+// （先执行后判断：UNTIL 条件为真时结束循环，与 WHILE 前置判断相反）。
 func (p *procParser) parseRepeat() (procStmt, error) {
 	label := p.parseLabel()
 	p.next() // REPEAT
@@ -908,6 +928,11 @@ func (p *procParser) parseCase() (procStmt, error) {
 // parseDeclare 解析 DECLARE @x [TYPE] [DEFAULT <expr>]。
 func (p *procParser) parseDeclare() (procStmt, error) {
 	p.next() // DECLARE
+	// v1.19.0：DECLARE {CONTINUE|EXIT} [<name>] HANDLER FOR <cond>[, ...] <stmt>
+	// 异常处理器声明（先于 CURSOR / 变量判定，避免与后续写法歧义）。
+	if p.isHandlerDecl() {
+		return p.parseHandlerDecl()
+	}
 	// P1-3：DECLARE <name> CURSOR FOR <SELECT ...> 游标声明（游标名为裸 ident）。
 	if p.cur().kind == tokIdent && p.pos+1 < len(p.toks) &&
 		strings.ToUpper(p.toks[p.pos+1].text) == "CURSOR" {
@@ -1258,6 +1283,52 @@ func validateProcStmts(stmts []procStmt) error {
 			}
 		case procIterate:
 			// ITERATE/CONTINUE 必须位于循环内，已在解析期校验。
+		case procHandlerDecl:
+			// v1.19.0：HANDLER 动作、条件列表与处理器体校验。
+			if st.action != "CONTINUE" && st.action != "EXIT" {
+				return &SQLError{Msg: "HANDLER action must be CONTINUE or EXIT in procedure body"}
+			}
+			if len(st.conds) == 0 {
+				return &SQLError{Msg: "HANDLER condition required in procedure body"}
+			}
+			if len(st.body) == 0 {
+				return &SQLError{Msg: "HANDLER requires a statement in procedure body"}
+			}
+			if err := validateProcStmts(st.body); err != nil {
+				return err
+			}
+		case procSignal:
+			if st.hasCond && !st.cond.valid() {
+				return &SQLError{Msg: "SIGNAL requires SQLSTATE or error code in procedure body"}
+			}
+			for _, a := range st.set {
+				if len(a.expr) == 0 {
+					return &SQLError{Msg: "SIGNAL SET requires a value in procedure body"}
+				}
+			}
+		case procResignal:
+			for _, a := range st.set {
+				if len(a.expr) == 0 {
+					return &SQLError{Msg: "RESIGNAL SET requires a value in procedure body"}
+				}
+			}
+		case procPrepare:
+			if st.name == "" || len(st.src) == 0 {
+				return &SQLError{Msg: "PREPARE requires statement name and SQL text in procedure body"}
+			}
+		case procExecute:
+			if st.name == "" {
+				return &SQLError{Msg: "EXECUTE requires prepared statement name in procedure body"}
+			}
+			for _, a := range st.using {
+				if len(a) == 0 {
+					return &SQLError{Msg: "EXECUTE USING requires a value in procedure body"}
+				}
+			}
+		case procDeallocate:
+			if st.name == "" {
+				return &SQLError{Msg: "DEALLOCATE PREPARE requires statement name in procedure body"}
+			}
 		}
 	}
 	return nil
@@ -1292,6 +1363,10 @@ func collectCursorDecls(stmts []procStmt, out map[string]bool) error {
 				return err
 			}
 		case procRepeat:
+			if err := collectCursorDecls(st.body, out); err != nil {
+				return err
+			}
+		case procHandlerDecl:
 			if err := collectCursorDecls(st.body, out); err != nil {
 				return err
 			}
@@ -1355,6 +1430,10 @@ func validateCursorRefs(stmts []procStmt) error {
 					return err
 				}
 			case procRepeat:
+				if err := walk(st.body); err != nil {
+					return err
+				}
+			case procHandlerDecl:
 				if err := walk(st.body); err != nil {
 					return err
 				}
@@ -1633,7 +1712,13 @@ func (e *Executor) execProcedureBody(sess *Session, body string, env map[string]
 	if err != nil {
 		return err
 	}
-	r := &procRunner{e: e, sess: sess, env: env, cursors: make(map[string]*procCursorState)}
+	r := &procRunner{
+		e:        e,
+		sess:     sess,
+		env:      env,
+		cursors:  make(map[string]*procCursorState),
+		prepared: make(map[string]string),
+	}
 	if _, err := r.run(stmts); err != nil {
 		return err
 	}
@@ -1646,19 +1731,75 @@ type procRunner struct {
 	sess    *Session
 	env     map[string]Value
 	cursors map[string]*procCursorState // 游标名（小写）→ 运行期状态（P1-3）
-	iterate bool // ITERATE/CONTINUE 触发（由循环层消费，表示继续下一次迭代而非退出）
+	iterate bool                        // ITERATE/CONTINUE 触发（由循环层消费，表示继续下一次迭代而非退出）
+
+	// v1.19.0：异常处理与动态 SQL 运行期状态。
+	// handlers 为当前有效处理器栈（按块入栈，块退出时截断回原深度），
+	// prepared 为本次过程调用内的动态语句表（名称小写 → SQL 文本），
+	// curErr 为正在被处理器处理的错误（供 RESIGNAL 无参重抛使用）。
+	handlers []*procHandlerState
+	prepared map[string]string
+	curErr   error
+}
+
+// procHandlerState 处理器运行期状态（decl 为声明，active 标记正在执行避免自捕获）。
+type procHandlerState struct {
+	decl   procHandlerDecl
+	active bool
 }
 
 // run 顺序执行语句列表；返回 exited=true 表示 EXIT/LEAVE 触发（由循环层消费）。
+// v1.19.0：块作用域——块内声明的 HANDLER 在本块内生效，随块退出自动出栈；
+// 无 HANDLER 声明的块完全走原执行路径（零行为变化）。
 func (r *procRunner) run(stmts []procStmt) (bool, error) {
+	depth := len(r.handlers)
+	registered := false
+	defer func() {
+		if registered {
+			r.handlers = r.handlers[:depth]
+		}
+	}()
 	for _, s := range stmts {
-		exited, err := r.runStmt(s)
+		if h, ok := s.(procHandlerDecl); ok {
+			// 声明本身不执行：注册为当前块的处理器，仅对其后语句生效。
+			r.handlers = append(r.handlers, &procHandlerState{decl: h})
+			registered = true
+			continue
+		}
+		exited, err := r.runStmtGuarded(s)
 		if err != nil {
 			return false, err
 		}
 		if exited {
 			return true, nil
 		}
+	}
+	return false, nil
+}
+
+// runStmtGuarded 执行单条语句并在出错时按处理器栈匹配（内层优先）。
+// CONTINUE 处理器执行后继续下一条语句；EXIT 处理器执行后结束当前块。
+// 处理器体自身抛出的错误不再被同一处理器捕获（active 标记），直接上抛。
+func (r *procRunner) runStmtGuarded(s procStmt) (bool, error) {
+	exited, err := r.runStmt(s)
+	if err == nil || len(r.handlers) == 0 {
+		return exited, err
+	}
+	h := r.matchHandler(err)
+	if h == nil {
+		return exited, err
+	}
+	prevErr := r.curErr
+	r.curErr = err
+	h.active = true
+	bodyExited, herr := r.run(h.decl.body)
+	h.active = false
+	r.curErr = prevErr
+	if herr != nil {
+		return false, herr
+	}
+	if h.decl.action == "EXIT" || bodyExited {
+		return true, nil
 	}
 	return false, nil
 }
@@ -1751,7 +1892,12 @@ func (r *procRunner) runStmt(s procStmt) (bool, error) {
 			return false, &SQLError{Msg: "cursor not open: " + st.name}
 		}
 		if cs.pos >= len(cs.rows) {
-			return false, &SQLError{Msg: "cursor fetch out of rows: " + st.name}
+			// v1.19.0：游标取尽按 SQLSTATE 02000（NOT FOUND）抛出，错误文本保持原样，
+			// 使 DECLARE CONTINUE HANDLER FOR NOT FOUND 可捕获。
+			return false, &procStateError{
+				state: procNotFoundState,
+				cause: &SQLError{Msg: "cursor fetch out of rows: " + st.name},
+			}
 		}
 		row := cs.rows[cs.pos]
 		cs.pos++
@@ -1956,6 +2102,20 @@ func (r *procRunner) runStmt(s procStmt) (bool, error) {
 			return true, nil
 		}
 		return false, nil
+	// v1.19.0：异常处理与动态 SQL。
+	case procHandlerDecl:
+		// 处理器声明在 run 入栈阶段注册，不产生运行时动作。
+		return false, nil
+	case procSignal:
+		return false, r.execSignal(st)
+	case procResignal:
+		return false, r.execResignal(st)
+	case procPrepare:
+		return false, r.execDynPrepare(st)
+	case procExecute:
+		return false, r.execDynExecute(st)
+	case procDeallocate:
+		return false, r.execDynDeallocate(st)
 	}
 	return false, &SQLError{Msg: "unsupported procedure statement"}
 }
@@ -1970,10 +2130,14 @@ type procExprParser struct {
 	env  map[string]Value
 }
 
-func (p *procExprParser) eof() bool { return p.pos >= len(p.toks) }
+func (p *procExprParser) eof() bool  { return p.pos >= len(p.toks) }
 func (p *procExprParser) cur() token { return p.toks[p.pos] }
 func (p *procExprParser) kw() string { return strings.ToUpper(p.cur().text) }
-func (p *procExprParser) next() { if p.pos < len(p.toks) { p.pos++ } }
+func (p *procExprParser) next() {
+	if p.pos < len(p.toks) {
+		p.pos++
+	}
+}
 
 // evalProcExpr 求值过程表达式。
 func evalProcExpr(toks []token, env map[string]Value) (Value, error) {
@@ -2290,4 +2454,693 @@ func procEqual(a, b Value) (bool, error) {
 		return false, err
 	}
 	return procTruthy(v), nil
+}
+
+// ===== v1.19.0：存储过程异常处理（HANDLER / SIGNAL / RESIGNAL）与动态 SQL =====
+//
+// 设计要点（保持纯新增、默认不改变既有路径）：
+//   - HANDLER 仅在被声明的块内生效，块退出（run 返回）时自动出栈；
+//     未声明 HANDLER 的块完全走原 runStmt 路径，行为不变。
+//   - 异常以 procStateError 承载 SQLSTATE / 错误码；无 SQLSTATE 的既有错误
+//     统一归为 HY000（general error），错误文本保持不变。
+//   - 动态 SQL 采用 PREPARE 登记文本 + EXECUTE 绑定 ? 与 @var 后重解析，
+//     复用标准 Parse + execStmt，语句白名单与过程体一致。
+
+// procNotFoundState NOT FOUND 条件的标准 SQLSTATE（游标取尽等无行场景）。
+const procNotFoundState = "02000"
+
+// procDefaultSQLState SIGNAL / RESIGNAL 未显式指定 SQLSTATE 时的默认值。
+const procDefaultSQLState = "45000"
+
+// procErrKind 处理器条件的匹配维度。
+type procErrKind int
+
+const (
+	procErrSQLEXCEPTION procErrKind = iota // SQLEXCEPTION：非 01 / 02 类异常
+	procErrSQLWARNING                      // SQLWARNING：01 类告警
+	procErrNotFound                        // NOT FOUND：02 类无行
+	procErrSQLState                        // 指定 SQLSTATE 值
+	procErrErrno                           // 指定错误码
+)
+
+// procCond 单个异常条件。
+type procCond struct {
+	kind  procErrKind
+	state string // SQLSTATE 5 位码
+	code  int    // 错误码
+}
+
+// valid 条件是否携带可匹配的取值（SIGNAL 目标必须有效）。
+func (c procCond) valid() bool {
+	switch c.kind {
+	case procErrSQLState:
+		return c.state != ""
+	case procErrErrno:
+		return c.code != 0
+	}
+	return true
+}
+
+// procHandlerDecl DECLARE {CONTINUE|EXIT} [<name>] HANDLER FOR <cond>[, ...] <stmt>。
+type procHandlerDecl struct {
+	action string // CONTINUE / EXIT
+	name   string // 可选处理器名
+	conds  []procCond
+	body   []procStmt // 处理器体（单条语句）
+}
+
+func (procHandlerDecl) procStmt() {}
+
+// procAssign SIGNAL / RESIGNAL 的 SET <条件信息项> = <表达式>。
+type procAssign struct {
+	name string
+	expr []token
+}
+
+// procSignal SIGNAL <cond> [SET ...]：抛出用户自定义异常。
+type procSignal struct {
+	cond    procCond
+	hasCond bool
+	set     []procAssign
+}
+
+func (procSignal) procStmt() {}
+
+// procResignal [<cond>] [SET ...]：处理器内重抛当前（或指定）异常。
+type procResignal struct {
+	cond    procCond
+	hasCond bool
+	set     []procAssign
+}
+
+func (procResignal) procStmt() {}
+
+// procPrepare PREPARE <name> FROM <@var|字面量>：登记动态语句文本。
+type procPrepare struct {
+	name string
+	src  []token
+}
+
+func (procPrepare) procStmt() {}
+
+// procExecute EXECUTE <name> [USING <expr>[, ...]]：执行已登记的动态语句。
+type procExecute struct {
+	name  string
+	using [][]token
+}
+
+func (procExecute) procStmt() {}
+
+// procDeallocate DEALLOCATE PREPARE <name>：释放动态语句。
+type procDeallocate struct {
+	name string
+}
+
+func (procDeallocate) procStmt() {}
+
+// procStateError 携带 SQLSTATE / 错误码的过程异常：
+// cause 非空表示包装既有错误（错误文本保持原样），否则使用 message。
+type procStateError struct {
+	state   string
+	code    int
+	message string
+	cause   error
+}
+
+func (e *procStateError) Error() string {
+	if e.cause != nil {
+		return e.cause.Error()
+	}
+	return e.message
+}
+
+func (e *procStateError) Unwrap() error { return e.cause }
+
+// newProcSignalError 构造 SIGNAL / RESIGNAL 抛出的异常（文本携带 SQLSTATE / 错误码）。
+func newProcSignalError(state string, code int, msg string) error {
+	if state == "" {
+		state = procDefaultSQLState
+	}
+	text := "SQLSTATE '" + state + "'"
+	if code != 0 {
+		text += " (errno " + strconv.Itoa(code) + ")"
+	}
+	if msg == "" {
+		text += ": unhandled user-defined exception"
+	} else {
+		text += ": " + msg
+	}
+	return &procStateError{state: state, code: code, message: text}
+}
+
+// procErrInfo 提取错误的 SQLSTATE 与错误码（无 SQLSTATE 的既有错误归为 HY000）。
+func procErrInfo(err error) (string, int) {
+	var pe *procStateError
+	if errors.As(err, &pe) {
+		return pe.state, pe.code
+	}
+	return "HY000", 0
+}
+
+// procCondMatch 条件是否匹配给定 SQLSTATE / 错误码。
+func procCondMatch(c procCond, state string, code int) bool {
+	switch c.kind {
+	case procErrSQLState:
+		return state != "" && strings.EqualFold(c.state, state)
+	case procErrErrno:
+		return c.code != 0 && c.code == code
+	case procErrNotFound:
+		return len(state) >= 2 && state[:2] == "02"
+	case procErrSQLWARNING:
+		return len(state) >= 2 && state[:2] == "01"
+	case procErrSQLEXCEPTION:
+		if len(state) < 2 {
+			return state != ""
+		}
+		cls := state[:2]
+		return cls != "01" && cls != "02"
+	}
+	return false
+}
+
+// matchHandler 自内向外匹配处理器（后声明者优先），跳过正在执行的处理器，
+// 避免处理器体内的错误被其自身再次捕获（防死循环）。
+func (r *procRunner) matchHandler(err error) *procHandlerState {
+	state, code := procErrInfo(err)
+	for i := len(r.handlers) - 1; i >= 0; i-- {
+		h := r.handlers[i]
+		if h.active {
+			continue
+		}
+		for _, c := range h.decl.conds {
+			if procCondMatch(c, state, code) {
+				return h
+			}
+		}
+	}
+	return nil
+}
+
+// execSignal 执行 SIGNAL：按 SQLSTATE / 错误码抛出异常，SET 子句可覆盖消息与错误码。
+func (r *procRunner) execSignal(st procSignal) error {
+	state := procDefaultSQLState
+	code := 0
+	if st.hasCond {
+		switch st.cond.kind {
+		case procErrSQLState:
+			if st.cond.state != "" {
+				state = st.cond.state
+			}
+		case procErrErrno:
+			code = st.cond.code
+		}
+	}
+	msg := ""
+	if len(st.set) > 0 {
+		var err error
+		state, code, msg, err = r.applySignalSet(st.set, state, code, msg)
+		if err != nil {
+			return err
+		}
+	}
+	return newProcSignalError(state, code, msg)
+}
+
+// execResignal 执行 RESIGNAL：无参时原样重抛处理器正在处理的错误。
+func (r *procRunner) execResignal(st procResignal) error {
+	if !st.hasCond && len(st.set) == 0 {
+		if r.curErr == nil {
+			return &SQLError{Msg: "RESIGNAL without active handler error in procedure body"}
+		}
+		state, code := procErrInfo(r.curErr)
+		return &procStateError{state: state, code: code, cause: r.curErr}
+	}
+	state := procDefaultSQLState
+	code := 0
+	if r.curErr != nil {
+		state, code = procErrInfo(r.curErr)
+	}
+	if st.hasCond {
+		switch st.cond.kind {
+		case procErrSQLState:
+			if st.cond.state != "" {
+				state = st.cond.state
+			}
+		case procErrErrno:
+			code = st.cond.code
+		}
+	}
+	msg := ""
+	if r.curErr != nil && !st.hasCond {
+		msg = r.curErr.Error()
+	}
+	if len(st.set) > 0 {
+		var err error
+		state, code, msg, err = r.applySignalSet(st.set, state, code, msg)
+		if err != nil {
+			return err
+		}
+	}
+	return newProcSignalError(state, code, msg)
+}
+
+// applySignalSet 计算 SIGNAL / RESIGNAL 的 SET 子句：支持 MESSAGE_TEXT / MYSQL_ERRNO /
+// SQLSTATE，其余条件信息项（CLASS_ORIGIN / SUBCLASS_ORIGIN 等）按标准接受但不参与匹配。
+func (r *procRunner) applySignalSet(items []procAssign, state string, code int, msg string) (string, int, string, error) {
+	for _, a := range items {
+		v, err := evalProcExpr(a.expr, r.env)
+		if err != nil {
+			return state, code, msg, err
+		}
+		switch a.name {
+		case "MESSAGE_TEXT":
+			msg = procValueText(v)
+		case "MYSQL_ERRNO":
+			if n, ok := procToInt(v); ok {
+				code = int(n)
+			}
+		case "SQLSTATE":
+			if s := strings.TrimSpace(procValueText(v)); len(s) == 5 {
+				state = s
+			}
+		}
+	}
+	return state, code, msg, nil
+}
+
+// execDynPrepare 执行 PREPARE：把 @var / 字面量 SQL 文本登记到本次调用的语句表。
+func (r *procRunner) execDynPrepare(st procPrepare) error {
+	text, err := r.evalDynamicSQLText(st.src)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(text) == "" {
+		return &SQLError{Msg: "PREPARE requires non-empty SQL text in procedure body"}
+	}
+	if r.prepared == nil {
+		r.prepared = make(map[string]string)
+	}
+	r.prepared[st.name] = text
+	return nil
+}
+
+// evalDynamicSQLText 求值 PREPARE 的 SQL 文本（单 token 字面量 / 变量直取，
+// 其余走过程表达式求值），结果统一转文本。
+func (r *procRunner) evalDynamicSQLText(src []token) (string, error) {
+	if len(src) == 1 {
+		switch src[0].kind {
+		case tokString:
+			return src[0].text, nil
+		case tokVar:
+			key := strings.ToLower(src[0].text[1:])
+			if v, ok := r.env[key]; ok {
+				return procValueText(v), nil
+			}
+			return "", &SQLError{Msg: "unknown procedure variable: " + src[0].text}
+		}
+	}
+	v, err := evalProcExpr(src, r.env)
+	if err != nil {
+		return "", err
+	}
+	return procValueText(v), nil
+}
+
+// execDynExecute 执行 EXECUTE：绑定 ? 占位符与 @var 后重解析，走标准执行路径。
+func (r *procRunner) execDynExecute(st procExecute) error {
+	text, ok := r.prepared[st.name]
+	if !ok {
+		return &SQLError{Msg: "prepared statement not exists: " + st.name}
+	}
+	args := make([]Value, 0, len(st.using))
+	for _, argToks := range st.using {
+		v, err := evalProcExpr(argToks, r.env)
+		if err != nil {
+			return err
+		}
+		args = append(args, v)
+	}
+	bound, err := bindDynamicSQL(text, args, r.env)
+	if err != nil {
+		return err
+	}
+	stmt, err := Parse(bound)
+	if err != nil {
+		return err
+	}
+	if !procedureBodySupported(stmt) {
+		return &SQLError{Msg: "unsupported statement in dynamic SQL"}
+	}
+	if _, err := r.e.execStmt(r.sess, stmt); err != nil {
+		return err
+	}
+	return nil
+}
+
+// execDynDeallocate 执行 DEALLOCATE PREPARE：释放动态语句。
+func (r *procRunner) execDynDeallocate(st procDeallocate) error {
+	if _, ok := r.prepared[st.name]; !ok {
+		return &SQLError{Msg: "prepared statement not exists: " + st.name}
+	}
+	delete(r.prepared, st.name)
+	return nil
+}
+
+// bindDynamicSQL 把动态 SQL 文本中的 ? 按顺序替换为实参字面量，并代入环境中的 @var
+// （未定义变量保留原文，交由标准 Parse 报错）。占位符与实参个数不一致时报错。
+func bindDynamicSQL(text string, args []Value, env map[string]Value) (string, error) {
+	toks, err := lex(text)
+	if err != nil {
+		return "", err
+	}
+	out := make([]token, 0, len(toks))
+	next := 0
+	for _, t := range toks {
+		switch t.kind {
+		case tokQuestion:
+			if next >= len(args) {
+				return "", &SQLError{Msg: "EXECUTE USING argument count mismatch: placeholders exceed arguments"}
+			}
+			out = append(out, setValueToken(t, args[next]))
+			next++
+		case tokVar:
+			key := strings.ToLower(t.text[1:])
+			if v, ok := env[key]; ok {
+				out = append(out, setValueToken(t, v))
+				continue
+			}
+			out = append(out, t)
+		default:
+			out = append(out, t)
+		}
+	}
+	if next != len(args) {
+		return "", &SQLError{Msg: "EXECUTE USING argument count mismatch: " +
+			strconv.Itoa(len(args)) + " argument(s) for " + strconv.Itoa(next) + " placeholder(s)"}
+	}
+	return tokensToString(out), nil
+}
+
+// procValueText 把过程值转为文本（MESSAGE_TEXT / 动态 SQL 文本）。
+func procValueText(v Value) string {
+	if v.Kind == "TEXT" {
+		return v.S
+	}
+	return valueToToken(v).text
+}
+
+// isHandlerDecl 判断 DECLARE 之后是否为 {CONTINUE|EXIT} [<name>] HANDLER 形式。
+func (p *procParser) isHandlerDecl() bool {
+	k := p.kw()
+	if k != "CONTINUE" && k != "EXIT" {
+		return false
+	}
+	if p.pos+1 < len(p.toks) && strings.ToUpper(p.toks[p.pos+1].text) == "HANDLER" {
+		return true
+	}
+	if p.pos+2 < len(p.toks) && p.toks[p.pos+1].kind == tokIdent &&
+		strings.ToUpper(p.toks[p.pos+2].text) == "HANDLER" {
+		return true
+	}
+	return false
+}
+
+// parseHandlerDecl 解析 DECLARE {CONTINUE|EXIT} [<name>] HANDLER FOR <cond>[, ...] <stmt>。
+func (p *procParser) parseHandlerDecl() (procStmt, error) {
+	st := procHandlerDecl{action: p.kw()}
+	p.next() // CONTINUE / EXIT
+	if p.kw() != "HANDLER" {
+		st.name = p.cur().text
+		p.next()
+	}
+	if err := p.expect("HANDLER"); err != nil {
+		return nil, err
+	}
+	if err := p.expect("FOR"); err != nil {
+		return nil, err
+	}
+	for {
+		c, err := p.parseHandlerCond()
+		if err != nil {
+			return nil, err
+		}
+		st.conds = append(st.conds, c)
+		if p.kw() == "," {
+			p.next()
+			continue
+		}
+		break
+	}
+	if p.eof() {
+		return nil, &SQLError{Msg: "HANDLER requires a statement in procedure body"}
+	}
+	body, err := p.parseOneStmt(nil)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &SQLError{Msg: "HANDLER requires a statement in procedure body"}
+	}
+	st.body = []procStmt{body}
+	return st, nil
+}
+
+// parseHandlerCond 解析处理器条件：SQLSTATE '<code>' / <错误码> / SQLEXCEPTION /
+// SQLWARNING / NOT FOUND。
+func (p *procParser) parseHandlerCond() (procCond, error) {
+	switch p.kw() {
+	case "SQLSTATE":
+		p.next()
+		if p.kw() == "VALUE" {
+			p.next()
+		}
+		return p.parseSQLStateValue()
+	case "SQLEXCEPTION":
+		p.next()
+		return procCond{kind: procErrSQLEXCEPTION}, nil
+	case "SQLWARNING":
+		p.next()
+		return procCond{kind: procErrSQLWARNING}, nil
+	case "NOT":
+		if p.pos+1 < len(p.toks) && strings.ToUpper(p.toks[p.pos+1].text) == "FOUND" {
+			p.next()
+			p.next()
+			return procCond{kind: procErrNotFound}, nil
+		}
+	case "CONDITION":
+		return procCond{}, &SQLError{Msg: "named conditions are not supported in procedure body"}
+	}
+	if p.cur().kind == tokNumber {
+		n, err := strconv.Atoi(p.cur().text)
+		if err != nil {
+			return procCond{}, &SQLError{Msg: "invalid error code in HANDLER condition: " + p.cur().text}
+		}
+		p.next()
+		return procCond{kind: procErrErrno, code: n}, nil
+	}
+	return procCond{}, &SQLError{Msg: "unsupported HANDLER condition in procedure body: " + p.cur().text}
+}
+
+// parseSQLStateValue 解析 SQLSTATE 值（5 位码，字符串或数字字面量写法）。
+func (p *procParser) parseSQLStateValue() (procCond, error) {
+	t := p.cur()
+	if t.kind != tokString && t.kind != tokNumber {
+		return procCond{}, &SQLError{Msg: "expected SQLSTATE value in procedure body"}
+	}
+	s := strings.TrimSpace(t.text)
+	if len(s) != 5 {
+		return procCond{}, &SQLError{Msg: "invalid SQLSTATE value in procedure body: " + s}
+	}
+	p.next()
+	return procCond{kind: procErrSQLState, state: s}, nil
+}
+
+// parseSignal 解析 SIGNAL [SQLSTATE '<code>' | <错误码>] [SET ...]。
+func (p *procParser) parseSignal() (procStmt, error) {
+	p.next() // SIGNAL
+	st := procSignal{}
+	if p.kw() == "SQLSTATE" || p.kw() == "CONDITION" || p.cur().kind == tokNumber {
+		c, err := p.parseHandlerCond()
+		if err != nil {
+			return nil, err
+		}
+		st.cond = c
+		st.hasCond = true
+	}
+	if !st.hasCond {
+		return nil, &SQLError{Msg: "SIGNAL requires SQLSTATE or error code in procedure body"}
+	}
+	set, err := p.parseSignalSet()
+	if err != nil {
+		return nil, err
+	}
+	st.set = set
+	return st, nil
+}
+
+// parseResignal 解析 RESIGNAL [<cond>] [SET ...]。
+func (p *procParser) parseResignal() (procStmt, error) {
+	p.next() // RESIGNAL
+	st := procResignal{}
+	if p.kw() == "SQLSTATE" || p.kw() == "CONDITION" || p.cur().kind == tokNumber {
+		c, err := p.parseHandlerCond()
+		if err != nil {
+			return nil, err
+		}
+		st.cond = c
+		st.hasCond = true
+	}
+	set, err := p.parseSignalSet()
+	if err != nil {
+		return nil, err
+	}
+	st.set = set
+	return st, nil
+}
+
+// parseSignalSet 解析 [SET] <条件信息项> = <表达式>[, ...] 并消费结束分号。
+func (p *procParser) parseSignalSet() ([]procAssign, error) {
+	var items []procAssign
+	if p.kw() == "SET" {
+		p.next()
+		for {
+			t := p.cur()
+			if t.kind != tokIdent && t.kind != tokKeyword {
+				return nil, &SQLError{Msg: "expected condition information item after SET in procedure body"}
+			}
+			name := strings.ToUpper(t.text)
+			p.next()
+			if p.kw() != "=" && p.kw() != ":=" {
+				return nil, &SQLError{Msg: "expected = after " + name + " in procedure body"}
+			}
+			p.next()
+			expr, err := p.collectUntilDelim(true)
+			if err != nil {
+				return nil, err
+			}
+			if len(expr) == 0 {
+				return nil, &SQLError{Msg: "SET " + name + " requires a value in procedure body"}
+			}
+			items = append(items, procAssign{name: name, expr: append([]token(nil), expr...)})
+			if p.kw() == "," {
+				p.next()
+				continue
+			}
+			break
+		}
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return items, nil
+}
+
+// parseDynPrepare 解析 PREPARE <name> FROM <@var|字面量>。
+func (p *procParser) parseDynPrepare() (procStmt, error) {
+	p.next() // PREPARE
+	t := p.cur()
+	if t.kind != tokIdent {
+		return nil, &SQLError{Msg: "expected prepared statement name after PREPARE in procedure body"}
+	}
+	p.next()
+	if err := p.expect("FROM"); err != nil {
+		return nil, err
+	}
+	src, err := p.collectUntil(true)
+	if err != nil {
+		return nil, err
+	}
+	if len(src) == 0 {
+		return nil, &SQLError{Msg: "PREPARE FROM requires a SQL text expression in procedure body"}
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return procPrepare{name: strings.ToLower(t.text), src: append([]token(nil), src...)}, nil
+}
+
+// parseDynExecute 解析 EXECUTE <name> [USING <expr>[, ...]]。
+func (p *procParser) parseDynExecute() (procStmt, error) {
+	p.next() // EXECUTE
+	t := p.cur()
+	if t.kind != tokIdent {
+		return nil, &SQLError{Msg: "expected prepared statement name after EXECUTE in procedure body"}
+	}
+	p.next()
+	st := procExecute{name: strings.ToLower(t.text)}
+	if p.kw() == "USING" {
+		p.next()
+		for {
+			arg, err := p.collectUntilDelim(true)
+			if err != nil {
+				return nil, err
+			}
+			if len(arg) == 0 {
+				return nil, &SQLError{Msg: "empty USING argument in procedure body"}
+			}
+			st.using = append(st.using, append([]token(nil), arg...))
+			if p.kw() == "," {
+				p.next()
+				continue
+			}
+			break
+		}
+	}
+	if p.kw() == ";" {
+		p.next()
+	}
+	return st, nil
+}
+
+// parseDynDeallocate 解析 DEALLOCATE PREPARE <name>（PREPARE 可省略）。
+func (p *procParser) parseDynDeallocate() (procStmt, error) {
+	p.next() // DEALLOCATE
+	if p.kw() == "PREPARE" {
+		p.next()
+	}
+	t := p.cur()
+	if t.kind != tokIdent {
+		return nil, &SQLError{Msg: "expected prepared statement name after DEALLOCATE in procedure body"}
+	}
+	p.next()
+	if p.kw() == ";" {
+		p.next()
+	}
+	return procDeallocate{name: strings.ToLower(t.text)}, nil
+}
+
+// collectUntilDelim 收集 token 直至顶层逗号 / 分号 / 块结束（不消费停止 token）。
+// 与 collectUntil 的差异：支持按逗号切分（SIGNAL SET 列表、EXECUTE USING 实参），
+// 且不把其余关键字（如 FOR / WHEN）视为停止符。
+func (p *procParser) collectUntilDelim(stopComma bool) ([]token, error) {
+	start := p.pos
+	parenDepth := 0
+	caseDepth := 0
+	for !p.eof() {
+		t := p.cur()
+		switch {
+		case t.kind == tokLParen:
+			parenDepth++
+		case t.kind == tokRParen:
+			if parenDepth > 0 {
+				parenDepth--
+			}
+		case t.kind == tokKeyword && t.text == "CASE":
+			caseDepth++
+		case t.kind == tokKeyword && t.text == "END":
+			if caseDepth > 0 {
+				caseDepth--
+			} else if parenDepth == 0 {
+				return p.toks[start:p.pos], nil
+			}
+		case t.kind == tokSemicolon:
+			if parenDepth == 0 && caseDepth == 0 {
+				return p.toks[start:p.pos], nil
+			}
+		case stopComma && t.kind == tokComma && parenDepth == 0 && caseDepth == 0:
+			return p.toks[start:p.pos], nil
+		}
+		p.next()
+	}
+	return p.toks[start:p.pos], nil
 }

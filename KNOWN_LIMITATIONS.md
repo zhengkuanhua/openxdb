@@ -56,9 +56,9 @@ AIGC:
 
 ### 1.3 存储过程/触发器为受限子集
 
-- **限制描述**：存储过程与触发器覆盖设计文档（T28）所定义的语法与语义：v1.2.0 补齐 IF/循环/CASE/递归深度上限，v1.6.0 补齐 DECLARE/DEFAULT、IF/ELSIF/ELSE、WHILE/LOOP/FOR/REPEAT、游标（OPEN/FETCH/CLOSE）与 OUT/INOUT 参数回写；v1.8.0 补齐触发器行级语义（FOR EACH ROW、NEW/OLD 行引用、体回滚递归策略）。仍不支持完整 SQL/PL 能力（如动态 SQL、异常处理语法等）。
-- **影响**：复杂业务逻辑若依赖完整 PL/SQL 需要改写为应用层逻辑或其他等价实现。
-- **建议**：业务逻辑优先在应用层实现；确需数据库内逻辑时，使用文档内已支持的 CREATE PROCEDURE / TRIGGER 语法子集。
+- **限制描述**：存储过程与触发器覆盖设计文档（T28）所定义的语法与语义：v1.2.0 补齐 IF/循环/CASE/递归深度上限，v1.6.0 补齐 DECLARE/DEFAULT、IF/ELSIF/ELSE、WHILE/LOOP/FOR/REPEAT、游标（OPEN/FETCH/CLOSE）与 OUT/INOUT 参数回写；v1.8.0 补齐触发器行级语义（FOR EACH ROW、NEW/OLD 行引用、体回滚递归策略）；v1.19.0 补齐异常处理（`DECLARE {CONTINUE|EXIT} HANDLER FOR SQLSTATE / 错误码 / SQLEXCEPTION / SQLWARNING / NOT FOUND`、`SIGNAL`、`RESIGNAL`）与动态 SQL（`PREPARE ... FROM`、`EXECUTE ... USING`、`DEALLOCATE PREPARE`）。仍不支持完整 SQL/PL 能力（如嵌套 `BEGIN…END` 复合语句块、`CONDITION` 命名条件、HANDLER 体多语句复合块、`GET DIAGNOSTICS` 等）。
+- **影响**：复杂业务逻辑若依赖完整 PL/SQL 需要改写为应用层逻辑或其他等价实现；动态 SQL 仅覆盖过程体已支持的语句类型（如 `SHOW` 等语句经 `EXECUTE` 会被拒绝），且 `HANDLER` 匹配按「最近声明优先」、不做同块重复条件声明校验。
+- **建议**：业务逻辑优先在应用层实现；确需数据库内逻辑时，使用文档内已支持的 CREATE PROCEDURE / TRIGGER 语法子集；异常处理建议把 `EXIT HANDLER` 放在过程顶层做统一兜底，`CONTINUE HANDLER` 限定在需要跳过失败的语句附近。
 
 ### 1.4 行协议与类型精度
 
