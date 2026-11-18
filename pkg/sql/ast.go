@@ -450,6 +450,9 @@ type CreateTriggerStmt struct {
 	Body        string // 触发器体原始 SQL 文本
 	IfNotExists bool   // T41：CREATE TRIGGER IF NOT EXISTS（触发器已存在时静默跳过）
 	RowLevel    bool   // v1.8.0：FOR EACH ROW 行级触发；false = FOR EACH STATEMENT / 无子句（语句级）
+	// v1.19.0 D3：执行顺序依赖（同一表 + 事件 + 时机组内生效，二者互斥）。
+	Follows  string // FOLLOWS <trigger>
+	Precedes string // PRECEDES <trigger>
 }
 
 func (CreateTriggerStmt) stmt() {}

@@ -2551,6 +2551,14 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 	if e.anyRowTrigger(sess, s.Table) {
 		rowSnaps = make([]triggerRow, 0)
 	}
+	// v1.19.0 D3：BEFORE INSERT 行级触发器须在行落盘前执行并回写 NEW 列，
+	// 故改为逐行钩子接入；无此类触发器时 hook 为 nil，执行路径与旧版一致。
+	var beforeHook *trigHook
+	if bl, berr := e.beforeRowTriggers(sess, s.Table, "BEFORE", "INSERT"); berr != nil {
+		return nil, berr
+	} else if len(bl) > 0 {
+		beforeHook = &trigHook{list: bl}
+	}
 	// v1.9.0 物化视图变更跟踪：表被 MV 依赖时逐行收集受影响行主键，
 	// 语句成功后合并进 dirty 日志（同事务原子落盘）；无依赖时零开销。
 	var dirtyPks [][]byte
@@ -2571,26 +2579,31 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 			return nil, err
 		}
 		for _, row := range res.Rows {
-			rops, aff, err := e.insertRowUpsertOps(sess, tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &pending)
+			rops, aff, err := e.insertRowUpsertOpsHook(sess, tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &pending, beforeHook)
 			if err != nil {
 				return nil, err
 			}
 			if aff > 0 {
 				affected += aff
 				ops = append(ops, rops...)
-				if rowSnaps != nil {
-					snap, serr := e.buildRow(meta, s.Columns, row, tx)
-					if serr != nil {
-						return nil, serr
-					}
-					rowSnaps = append(rowSnaps, triggerRow{meta: meta, newRow: snap})
-				}
-				if tracked {
+				// v1.19.0 D3：BEFORE 行级触发器已回写时以回写后行作为 NEW 快照，
+				// 保证 AFTER 触发器与物化视图跟踪看到的是最终落盘值。
+				var finalVals []Value
+				if beforeHook != nil && beforeHook.applied {
+					finalVals = beforeHook.last
+					beforeHook.applied = false
+				} else {
 					vals, verr := e.buildRow(meta, s.Columns, row, tx)
 					if verr != nil {
 						return nil, verr
 					}
-					pk, perr := e.pkOf(meta, vals)
+					finalVals = vals
+				}
+				if rowSnaps != nil {
+					rowSnaps = append(rowSnaps, triggerRow{meta: meta, newRow: finalVals})
+				}
+				if tracked {
+					pk, perr := e.pkOf(meta, finalVals)
 					if perr != nil {
 						return nil, perr
 					}
@@ -2600,26 +2613,31 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 		}
 	} else {
 		for _, row := range s.Rows {
-			rops, aff, err := e.insertRowUpsertOps(sess, tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &pending)
+			rops, aff, err := e.insertRowUpsertOpsHook(sess, tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &pending, beforeHook)
 			if err != nil {
 				return nil, err
 			}
 			if aff > 0 {
 				affected += aff
 				ops = append(ops, rops...)
-				if rowSnaps != nil {
-					snap, serr := e.buildRow(meta, s.Columns, row, tx)
-					if serr != nil {
-						return nil, serr
-					}
-					rowSnaps = append(rowSnaps, triggerRow{meta: meta, newRow: snap})
-				}
-				if tracked {
+				// v1.19.0 D3：BEFORE 行级触发器已回写时以回写后行作为 NEW 快照，
+				// 保证 AFTER 触发器与物化视图跟踪看到的是最终落盘值。
+				var finalVals []Value
+				if beforeHook != nil && beforeHook.applied {
+					finalVals = beforeHook.last
+					beforeHook.applied = false
+				} else {
 					vals, verr := e.buildRow(meta, s.Columns, row, tx)
 					if verr != nil {
 						return nil, verr
 					}
-					pk, perr := e.pkOf(meta, vals)
+					finalVals = vals
+				}
+				if rowSnaps != nil {
+					rowSnaps = append(rowSnaps, triggerRow{meta: meta, newRow: finalVals})
+				}
+				if tracked {
+					pk, perr := e.pkOf(meta, finalVals)
 					if perr != nil {
 						return nil, perr
 					}
@@ -2629,9 +2647,10 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 		}
 	}
 	// M15-2/v1.8.0：BEFORE 触发器（写入提交前执行；失败则整个 DML 随事务回滚）。
-	// 行级触发器按行快照逐行触发；语句级保持一次触发。
+	// v1.19.0 D3：行级 BEFORE INSERT 已在逐行落盘前执行并回写，此处只补语句级，
+	// 避免行级触发器重复执行。
 	if affected > 0 {
-		if err := e.fireTriggers(sess, tx, "BEFORE", s.Table, "INSERT", rowSnaps); err != nil {
+		if err := e.fireTriggersMode(sess, tx, "BEFORE", s.Table, "INSERT", rowSnaps, trigFireStmtLevel); err != nil {
 			return nil, err
 		}
 	}
@@ -2731,9 +2750,26 @@ func (e *Executor) insertRowOps(sess *Session, tx txn.Txn, tabs []*TableMeta, me
 //
 // pending 记录本语句已计划的最终行（用于语句内主键/唯一键重复判定）。
 func (e *Executor) insertRowUpsertOps(sess *Session, tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, onDup *OnDuplicateUpdate, replace bool, pending *[][]Value) ([]kvOp, int, error) {
+	return e.insertRowUpsertOpsHook(sess, tx, tabs, meta, cols, row, onDup, replace, pending, nil)
+}
+
+// insertRowUpsertOpsHook 同 insertRowUpsertOps，额外支持 v1.19.0 D3 的行级
+// BEFORE INSERT 触发器钩子：buildRow 之后、冲突判定与外键校验之前执行触发器，
+// 并把 SET NEW.col 的回写值应用到待写入行（hook 为 nil 时与旧路径完全一致）。
+func (e *Executor) insertRowUpsertOpsHook(sess *Session, tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, onDup *OnDuplicateUpdate, replace bool, pending *[][]Value, hook *trigHook) ([]kvOp, int, error) {
 	vals, err := e.buildRow(meta, cols, row, tx)
 	if err != nil {
 		return nil, 0, err
+	}
+	// v1.19.0 D3：BEFORE INSERT 行级触发器在行值成型后、冲突判定前执行，
+	// 使 SET NEW.col 的回写能影响唯一键判定与落盘值。ON DUPLICATE 更新分支
+	// 沿用既有语义（不触发 INSERT 触发器），避免与 UPDATE 语义交叉。
+	if hook != nil && len(hook.list) > 0 && onDup == nil {
+		if err := e.fireBeforeRowList(sess, hook.list, meta, nil, vals); err != nil {
+			return nil, 0, err
+		}
+		hook.applied = true
+		hook.last = append([]Value(nil), vals...)
 	}
 	if err := e.checkFKOnRow(sess, tx, tabs, meta, vals); err != nil {
 		return nil, 0, err
@@ -6000,6 +6036,12 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 	if e.anyRowTrigger(sess, s.Table) {
 		rowSnaps = make([]triggerRow, 0)
 	}
+	// v1.19.0 D3：BEFORE UPDATE 行级触发器须在行落盘前执行并回写 NEW 列，
+	// 故循环内逐行触发；无此类触发器时列表为空，路径与旧版一致。
+	beforeUpd, berr := e.beforeRowTriggers(sess, s.Table, "BEFORE", "UPDATE")
+	if berr != nil {
+		return nil, berr
+	}
 	// v1.9.0 物化视图变更跟踪：表被 MV 依赖时逐行收集受影响行主键
 	//（主键变化时新旧键都失效），语句成功后合并进 dirty 日志。
 	var dirtyPks [][]byte
@@ -6051,6 +6093,13 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 				return nil, err
 			}
 			row[idx] = v
+		}
+		// v1.19.0 D3：BEFORE UPDATE 行级触发器在 SET 求值后、写盘前执行，
+		// 其 SET NEW.col = expr 直接回写到待写入行（含主键列，后续主键变化判定可见）。
+		if len(beforeUpd) > 0 {
+			if err := e.fireBeforeRowList(sess, beforeUpd, meta, oldRow, row); err != nil {
+				return nil, err
+			}
 		}
 		// P0-3 外键：主键列值实际变化时按 ON UPDATE 动作联动引用子表
 		// （RESTRICT 报错阻止 / CASCADE 同步子行外键值 / SET NULL 置空）。
@@ -6107,8 +6156,9 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 		}
 	}
 	// M15-2/v1.8.0：BEFORE 触发器（写入提交前执行；失败则整个 DML 随事务回滚）。
+	// v1.19.0 D3：行级 BEFORE UPDATE 已在逐行写盘前执行并回写，此处只补语句级。
 	if affected > 0 {
-		if err := e.fireTriggers(sess, tx, "BEFORE", s.Table, "UPDATE", rowSnaps); err != nil {
+		if err := e.fireTriggersMode(sess, tx, "BEFORE", s.Table, "UPDATE", rowSnaps, trigFireStmtLevel); err != nil {
 			return nil, err
 		}
 	}

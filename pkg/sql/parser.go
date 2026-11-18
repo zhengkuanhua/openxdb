@@ -1827,6 +1827,59 @@ func (p *parser) parseCreateTrigger() (Stmt, error) {
 			return nil, errf("expected ROW or STATEMENT after FOR EACH at %d, got %q", p.cur().pos, p.cur().text)
 		}
 	}
+	// v1.19.0 D3 执行顺序依赖：[FOLLOWS|PRECEDES <trigger>]（可选，至多一个）。
+	// FOLLOWS/PRECEDES 未纳入保留字表，按大小写不敏感的标识符识别，避免扩大
+	// 保留字面影响既有语句解析。
+	isDepKeyword := func(t token) bool {
+		if t.kind != tokKeyword && t.kind != tokIdent {
+			return false
+		}
+		u := strings.ToUpper(t.text)
+		return u == "FOLLOWS" || u == "PRECEDES"
+	}
+	var follows, precedes string
+	for p.cur().kind != tokEOF && isDepKeyword(p.cur()) {
+		kw := strings.ToUpper(p.cur().text)
+		p.next()
+		depTok, err := p.expect(tokIdent, "trigger name")
+		if err != nil {
+			return nil, err
+		}
+		if kw == "FOLLOWS" {
+			follows = depTok.text
+		} else {
+			precedes = depTok.text
+		}
+	}
+	// v1.19.0 D3：BEGIN…END 复合块体——取 BEGIN 至收尾 END 的原文（与
+	// CREATE PROCEDURE 同口径），交给过程体解释器；单语句体保持原有接收方式。
+	if p.cur().kind == tokKeyword && p.cur().text == "BEGIN" {
+		bodyStart := p.cur().pos
+		last := p.toks[len(p.toks)-2]
+		if last.kind != tokKeyword || last.text != "END" {
+			return nil, errf("expected keyword END at %d, got %q", last.pos, last.text)
+		}
+		bodyEnd := last.pos + len(last.text)
+		if bodyEnd > len(p.src) {
+			bodyEnd = len(p.src)
+		}
+		body := strings.TrimSpace(p.src[bodyStart:bodyEnd])
+		if body == "" {
+			return nil, errf("trigger body required at %d", bodyStart)
+		}
+		p.pos = len(p.toks) - 1
+		return &CreateTriggerStmt{
+			Name:        nameTok.text,
+			Timing:      timing,
+			Event:       event,
+			Table:       tableTok.text,
+			Body:        body,
+			IfNotExists: ifNot,
+			RowLevel:    rowLevel,
+			Follows:     follows,
+			Precedes:    precedes,
+		}, nil
+	}
 	body := strings.TrimSpace(p.remaining())
 	if body == "" {
 		return nil, errf("trigger body required at %d", p.cur().pos)
@@ -1839,7 +1892,7 @@ func (p *parser) parseCreateTrigger() (Stmt, error) {
 	}
 	// 消耗剩余 token（body 已整体接收）
 	p.pos = len(p.toks) - 1
-	return &CreateTriggerStmt{Name: nameTok.text, Timing: timing, Event: event, Table: tableTok.text, Body: body, IfNotExists: ifNot, RowLevel: rowLevel}, nil
+	return &CreateTriggerStmt{Name: nameTok.text, Timing: timing, Event: event, Table: tableTok.text, Body: body, IfNotExists: ifNot, RowLevel: rowLevel, Follows: follows, Precedes: precedes}, nil
 }
 
 // parseCreateProcedure 解析 CREATE PROCEDURE <name> [( [IN] <param> <TYPE> [, ...] )]

@@ -117,6 +117,76 @@ func needSpace(prev, cur string) bool {
 	return identByte(prevEnd) && identByte(curStart)
 }
 
+// markBareVar 登记一个 MySQL 兼容的无 @ 局部变量名（v1.19.0 D3）。
+func (r *procRunner) markBareVar(name string) {
+	if r.bareVars == nil {
+		r.bareVars = make(map[string]bool)
+	}
+	r.bareVars[strings.ToLower(name)] = true
+}
+
+// loadColumnNames 惰性加载库内全部表列名（小写）用于"列名优先"判定。
+// 只在过程/触发器体确实声明了无 @ 局部变量时才会被调用，普通路径零开销。
+func (r *procRunner) loadColumnNames() {
+	if r.colNames != nil {
+		return
+	}
+	r.colNames = make(map[string]bool)
+	tx, err := r.e.getTx(r.sess)
+	if err != nil {
+		return
+	}
+	tabs, err := loadTables(tx.Get)
+	if err != nil {
+		return
+	}
+	for _, t := range tabs {
+		for _, c := range t.Columns {
+			r.colNames[strings.ToLower(c.Name)] = true
+		}
+	}
+}
+
+// substituteBareVars 把过程/触发器体内无 @ 声明的局部变量在 SQL 语句中代入取值
+// （v1.19.0 D3 MySQL 兼容）。采用"列名优先"的保守策略：名字与库内任一表列名
+// 相同的位置按列名保留，不代入变量值，避免误伤既有 SQL 语义；未声明同名局部
+// 变量时直接返回原文（既有 @var 路径完全不变）。
+func (r *procRunner) substituteBareVars(src string) (string, error) {
+	if len(r.bareVars) == 0 || src == "" {
+		return src, nil
+	}
+	toks, err := lex(src)
+	if err != nil {
+		// 原文交由后续 replaceVars / Parse 报错，保持既有错误口径。
+		return src, nil
+	}
+	changed := false
+	for i := range toks {
+		if toks[i].kind != tokIdent {
+			continue
+		}
+		key := strings.ToLower(toks[i].text)
+		if !r.bareVars[key] {
+			continue
+		}
+		v, ok := r.env[key]
+		if !ok {
+			continue
+		}
+		r.loadColumnNames()
+		if r.colNames[key] {
+			// 列名优先：与列同名的裸标识符保持列引用语义。
+			continue
+		}
+		toks[i] = setValueToken(toks[i], v)
+		changed = true
+	}
+	if !changed {
+		return src, nil
+	}
+	return tokensToString(toks), nil
+}
+
 // replaceVars 扫描语句文本，把 @name 变量引用替换为当前环境中的值。
 // env 的 key 统一小写（参数名 / 局部变量名大小写不敏感）。
 // missingErr=true 时未定义变量直接报错（执行期）；false 用于创建期预校验
@@ -196,19 +266,33 @@ type procCall struct {
 func (procCall) procStmt() {}
 
 // procSet 局部变量赋值 SET @x = <expr> 或 SET @x := <expr>。
+// bare 表示 MySQL 兼容的无 @ 前缀写法（SET <name> = <expr>，v1.19.0 D3），
+// 其名字与表列名冲突时按列名优先，不代入变量值。
 type procSet struct {
 	name string
 	expr []token
+	bare bool
 }
 
 func (procSet) procStmt() {}
 
+// procSetRow 触发器行上下文赋值 SET NEW.<col> = <expr>（v1.19.0 D3）。
+// target 形如 "NEW.col" / "OLD.col"；OLD 行只读，执行期报错。
+type procSetRow struct {
+	target string
+	expr   []token
+}
+
+func (procSetRow) procStmt() {}
+
 // procDeclare 局部变量声明 DECLARE @x [TYPE] [DEFAULT <expr>]。
+// bare 表示 MySQL 兼容的无 @ 前缀写法（DECLARE <name> <type>，v1.19.0 D3）。
 type procDeclare struct {
 	name    string
 	typ     string
 	init    []token
 	hasInit bool
+	bare    bool
 }
 
 func (procDeclare) procStmt() {}
@@ -992,12 +1076,20 @@ func (p *procParser) parseDeclare() (procStmt, error) {
 		strings.ToUpper(p.toks[p.pos+1].text) == "CONDITION" {
 		return p.parseConditionDecl()
 	}
-	if p.cur().kind != tokVar {
+	var name string
+	bare := false
+	if p.cur().kind == tokVar {
+		name = p.cur().text[1:]
+	} else if p.cur().kind == tokIdent {
+		// v1.19.0 D3：MySQL 兼容的局部变量声明 DECLARE <name> <type>（名字不带 @），
+		// 与既有 DECLARE @name 并存；CURSOR/CONDITION 分支已在上方拦截。
+		name = p.cur().text
+		bare = true
+	} else {
 		return nil, &SQLError{Msg: "expected @variable or CURSOR after DECLARE in procedure body"}
 	}
-	name := p.cur().text[1:]
 	p.next()
-	st := procDeclare{name: name}
+	st := procDeclare{name: name, bare: bare}
 	if p.kw() != "" && p.kw() != "DEFAULT" && p.kw() != "=" && p.kw() != ":=" && p.kw() != ";" {
 		st.typ = p.cur().text
 		p.next()
@@ -1123,10 +1215,43 @@ func (p *procParser) parseCursorClose() (procStmt, error) {
 // parseSet 解析 SET @x = <expr> 或 SET @x := <expr>（过程局部变量赋值）。
 func (p *procParser) parseSet() (procStmt, error) {
 	p.next() // SET
-	if p.cur().kind != tokVar {
+	// v1.19.0 D3：触发器行上下文赋值 SET NEW.<col> = <expr>（OLD 只读）。
+	// 仅当 NEW/OLD 后接 ". <column>" 时才走该分支，其余保持既有 @variable 解析。
+	if p.cur().kind == tokIdent && p.pos+2 < len(p.toks) && p.toks[p.pos+1].kind == tokDot &&
+		(p.toks[p.pos+2].kind == tokIdent || p.toks[p.pos+2].kind == tokKeyword) {
+		prefix := strings.ToUpper(p.cur().text)
+		if prefix == "NEW" || prefix == "OLD" {
+			target := prefix + "." + p.toks[p.pos+2].text
+			p.pos += 3
+			if p.kw() != "=" && p.kw() != ":=" {
+				return nil, &SQLError{Msg: "expected = or := after SET " + target + " in trigger body"}
+			}
+			p.next()
+			expr, err := p.collectUntil(true)
+			if err != nil {
+				return nil, err
+			}
+			if len(expr) == 0 {
+				return nil, &SQLError{Msg: "SET requires an expression in trigger body"}
+			}
+			if p.kw() == ";" {
+				p.next()
+			}
+			return procSetRow{target: target, expr: expr}, nil
+		}
+	}
+	// v1.19.0 D3：MySQL 兼容的局部变量赋值 SET <name> = <expr>（名字不带 @），
+	// NEW/OLD 行上下文分支已在上方拦截，其余标识符按过程局部变量处理。
+	var name string
+	bare := false
+	if p.cur().kind == tokVar {
+		name = p.cur().text[1:]
+	} else if p.cur().kind == tokIdent {
+		name = p.cur().text
+		bare = true
+	} else {
 		return nil, &SQLError{Msg: "expected @variable after SET in procedure body"}
 	}
-	name := p.cur().text[1:]
 	p.next()
 	if p.kw() != "=" && p.kw() != ":=" {
 		return nil, &SQLError{Msg: "expected = or := after SET @variable in procedure body"}
@@ -1142,7 +1267,7 @@ func (p *procParser) parseSet() (procStmt, error) {
 	if p.kw() == ";" {
 		p.next()
 	}
-	return procSet{name: name, expr: expr}, nil
+	return procSet{name: name, expr: expr, bare: bare}, nil
 }
 
 // parseExit 解析 EXIT [WHEN <cond>] / LEAVE [WHEN <cond>]。
@@ -1952,6 +2077,17 @@ type procRunner struct {
 	conditions   map[string]procCond
 	lastRowCount int
 	diag         procDiagArea
+
+	// v1.19.0 D3：触发器行级上下文（NEW./OLD. 行值）；过程体执行为 nil，
+	// 此时 NEW./OLD. 语法不可用、既有执行路径完全不变。
+	rowRefs *rowTRIGRefs
+
+	// v1.19.0 D3：MySQL 兼容无 @ 局部变量的名字集合（小写）。
+	// bareVars 为空时 SQL 语句完全走原 replaceVars 路径（零开销、零行为变化）；
+	// 非空时在代入前按"列名优先"策略替换裸标识符（见 substituteBareVars）。
+	bareVars map[string]bool
+	// colNames 为库内所有表列名（小写）缓存，用于裸标识符的列名优先判定。
+	colNames map[string]bool
 }
 
 // procHandlerState 处理器运行期状态（decl 为声明，active 标记正在执行避免自捕获）。
@@ -2024,7 +2160,11 @@ func (r *procRunner) runStmtGuarded(s procStmt) (bool, error) {
 func (r *procRunner) runStmt(s procStmt) (bool, error) {
 	switch st := s.(type) {
 	case procSQL:
-		sub, err := replaceVars(st.raw, r.env, true)
+		raw, err := r.substituteBareVars(st.raw)
+		if err != nil {
+			return false, err
+		}
+		sub, err := replaceVars(raw, r.env, true)
 		if err != nil {
 			return false, err
 		}
@@ -2034,6 +2174,12 @@ func (r *procRunner) runStmt(s procStmt) (bool, error) {
 		}
 		if !procedureBodySupported(stmt) {
 			return false, &SQLError{Msg: "unsupported statement in procedure body"}
+		}
+		// v1.19.0 D3：触发器块体内的 NEW./OLD. 引用在体语句执行前物化为行值。
+		if r.rowRefs != nil {
+			if err := r.e.replaceTrigRefs(stmt, r.rowRefs); err != nil {
+				return false, err
+			}
 		}
 		res, err := r.e.execStmt(r.sess, stmt)
 		if err != nil {
@@ -2082,8 +2228,12 @@ func (r *procRunner) runStmt(s procStmt) (bool, error) {
 		if !ok {
 			return false, &SQLError{Msg: "unknown cursor: " + st.name}
 		}
-		// 查询内 @var 代入当前环境后走标准 SELECT 执行，收集行集快照。
-		sub, err := replaceVars(tokensToString(cs.query), r.env, true)
+		// 查询内 @var / 无 @ 局部变量代入当前环境后走标准 SELECT 执行，收集行集快照。
+		qraw, err := r.substituteBareVars(tokensToString(cs.query))
+		if err != nil {
+			return false, err
+		}
+		sub, err := replaceVars(qraw, r.env, true)
 		if err != nil {
 			return false, err
 		}
@@ -2141,7 +2291,29 @@ func (r *procRunner) runStmt(s procStmt) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		r.env[strings.ToLower(st.name)] = v
+		key := strings.ToLower(st.name)
+		if st.bare {
+			r.markBareVar(key)
+		}
+		r.env[key] = v
+		return false, nil
+	case procSetRow:
+		// v1.19.0 D3：触发器行上下文赋值（NEW 可写、OLD 只读）。
+		if r.rowRefs == nil {
+			return false, &SQLError{Msg: "SET " + st.target + " requires trigger row context"}
+		}
+		if strings.HasPrefix(strings.ToUpper(st.target), "OLD.") {
+			return false, &SQLError{Msg: "OLD row is read-only in trigger body: SET " + st.target}
+		}
+		v, err := evalProcExpr(st.expr, r.env)
+		if err != nil {
+			return false, err
+		}
+		if err := r.rowRefs.setNewColumn(r.rowRefs.meta, st.target[4:], v); err != nil {
+			return false, err
+		}
+		// 表达式环境同步，便于同块内后续语句读到回写后的 NEW 值。
+		r.env[strings.ToLower("new."+st.target[4:])] = v
 		return false, nil
 	case procDeclare:
 		if st.hasInit {
@@ -2152,6 +2324,9 @@ func (r *procRunner) runStmt(s procStmt) (bool, error) {
 			r.env[strings.ToLower(st.name)] = v
 		} else {
 			r.env[strings.ToLower(st.name)] = procDefaultValue(st.typ)
+		}
+		if st.bare {
+			r.markBareVar(strings.ToLower(st.name))
 		}
 		return false, nil
 	case procIf:
@@ -2578,6 +2753,17 @@ func (p *procExprParser) parsePrimary() (Value, error) {
 		if k == "FALSE" {
 			p.next()
 			return IntVal(0), nil
+		}
+		// v1.19.0 D3：触发器行上下文——NEW.<col> / OLD.<col> 按 env 键
+		// "new.<col>" / "old.<col>"（小写）取值；未命中时回落既有解析路径，
+		// 过程体（env 不含此类键）行为零变化。
+		if t.kind == tokIdent && p.pos+2 < len(p.toks) &&
+			p.toks[p.pos+1].kind == tokDot &&
+			(p.toks[p.pos+2].kind == tokIdent || p.toks[p.pos+2].kind == tokKeyword) {
+			if v, ok := p.env[strings.ToLower(t.text)+"."+strings.ToLower(p.toks[p.pos+2].text)]; ok {
+				p.pos += 3
+				return v, nil
+			}
 		}
 		// P0-2：裸参数名/局部变量名（过程体习惯风格）按小写查环境；
 		// 命中则作为其当前值参与运算（优先级低于关键字/运算符）。

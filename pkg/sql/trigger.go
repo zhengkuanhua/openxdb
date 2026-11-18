@@ -3,6 +3,7 @@ package sql
 import (
 	"encoding/json"
 	"sort"
+	"strings"
 
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 	"github.com/zhengkuanhua/openxdb/pkg/txn"
@@ -18,6 +19,11 @@ type TriggerMeta struct {
 	Table    string `json:"table"`               // 源表
 	Body     string `json:"body"`                // 触发器体原始 SQL 文本
 	RowLevel bool   `json:"row_level,omitempty"` // v1.8.0：FOR EACH ROW 行级触发
+	// v1.19.0 D3：执行顺序依赖（同一 timing + event + table 组内生效）。
+	// 二者互斥，均有值时以 Follows 为准（创建期已拒绝同时指定）；
+	// 未声明依赖的触发器按目录顺序（即创建顺序）执行。
+	Follows  string `json:"follows,omitempty"`
+	Precedes string `json:"precedes,omitempty"`
 }
 
 // triggersKey 触发器目录键（独立于 m:tables / m:views / m:matviews）。
@@ -87,13 +93,24 @@ func (e *Executor) execCreateTrigger(sess *Session, s *CreateTriggerStmt) (*Resu
 	if s.Body == "" {
 		return nil, &SQLError{Msg: "trigger body required"}
 	}
-	bodyStmt, err := Parse(s.Body)
-	if err != nil {
-		return nil, &SQLError{Msg: "invalid trigger body: " + err.Error()}
-	}
-	bodyTable := triggerBodyTable(bodyStmt)
-	if bodyTable == "" {
-		return nil, &SQLError{Msg: "unsupported trigger body: only UPDATE and INSERT statements are supported"}
+	// v1.19.0 D3：体分流——BEGIN…END 复合块走过程体解释器校验
+	// （块作用域/DECLARE/控制流/HANDLER/动态 SQL 全套）；单语句保持既有
+	// Parse 预校验路径零回归。
+	var bodyStmt Stmt
+	isBlock := triggerBodyIsBlock(s.Body)
+	if isBlock {
+		if err := validateProcedureBody(s.Body); err != nil {
+			return nil, &SQLError{Msg: "invalid trigger body: " + err.Error()}
+		}
+	} else {
+		var perr error
+		bodyStmt, perr = Parse(s.Body)
+		if perr != nil {
+			return nil, &SQLError{Msg: "invalid trigger body: " + perr.Error()}
+		}
+		if triggerBodyTable(bodyStmt) == "" {
+			return nil, &SQLError{Msg: "unsupported trigger body: only UPDATE and INSERT statements are supported"}
+		}
 	}
 	tx, err := e.getTx(sess)
 	if err != nil {
@@ -110,23 +127,29 @@ func (e *Executor) execCreateTrigger(sess *Session, s *CreateTriggerStmt) (*Resu
 	if findTable(tabs, s.Table) == nil {
 		return nil, &SQLError{Msg: "table not exists: " + s.Table}
 	}
-	if bodyTable != "" && findTable(tabs, bodyTable) == nil {
-		return nil, &SQLError{Msg: "table not exists: " + bodyTable}
-	}
-	// 轻量预校验：UPDATE 体引用的 SET 列必须存在于体表中（执行期仍会复检）。
-	if u, ok := bodyStmt.(*UpdateStmt); ok {
-		bm := findTable(tabs, bodyTable)
-		for _, set := range u.Sets {
-			if colIndex(bm, set.Col) < 0 {
-				return nil, &SQLError{Msg: "unknown column: " + set.Col}
+	// 单语句体：体表存在性 + UPDATE SET 列预校验（复合块体在执行期复检）。
+	if !isBlock {
+		bodyTable := triggerBodyTable(bodyStmt)
+		if findTable(tabs, bodyTable) == nil {
+			return nil, &SQLError{Msg: "table not exists: " + bodyTable}
+		}
+		// 轻量预校验：UPDATE 体引用的 SET 列必须存在于体表中（执行期仍会复检）。
+		if u, ok := bodyStmt.(*UpdateStmt); ok {
+			bm := findTable(tabs, bodyTable)
+			for _, set := range u.Sets {
+				if colIndex(bm, set.Col) < 0 {
+					return nil, &SQLError{Msg: "unknown column: " + set.Col}
+				}
 			}
 		}
 	}
 	// v1.8.0 行级触发器：NEW./OLD. 引用的事件语义与列存在性校验。
 	// INSERT 仅 NEW、DELETE 仅 OLD、UPDATE 双引用；未定义列明确报错。
+	// v1.19.0 D3：复合块体按文本扫描收集引用（collectTriggerBodyRowRefs），
+	// 单语句沿用原有 AST 收集，行为不变。
 	if s.RowLevel {
 		src := findTable(tabs, s.Table)
-		for _, r := range collectTRIGRefs(bodyStmt) {
+		for _, r := range collectTriggerBodyRowRefs(s.Body, bodyStmt) {
 			if len(r) < 5 {
 				return nil, &SQLError{Msg: "invalid trigger row reference: " + r}
 			}
@@ -153,6 +176,29 @@ func (e *Executor) execCreateTrigger(sess *Session, s *CreateTriggerStmt) (*Resu
 		}
 		return nil, &SQLError{Msg: "trigger already exists: " + s.Name}
 	}
+	// v1.19.0 D3：FOLLOWS/PRECEDES 执行顺序依赖校验——二者互斥、不得自引用、
+	// 依赖触发器必须已存在且属于同一表同一事件同一时机（与 MySQL 口径一致）。
+	if s.Follows != "" && s.Precedes != "" {
+		return nil, &SQLError{Msg: "FOLLOWS and PRECEDES are mutually exclusive"}
+	}
+	for _, dep := range []struct {
+		keyword string
+		name    string
+	}{{"FOLLOWS", s.Follows}, {"PRECEDES", s.Precedes}} {
+		if dep.name == "" {
+			continue
+		}
+		if strings.EqualFold(dep.name, s.Name) {
+			return nil, &SQLError{Msg: dep.keyword + " cannot reference the trigger itself: " + dep.name}
+		}
+		other := findTrigger(trs, dep.name)
+		if other == nil {
+			return nil, &SQLError{Msg: dep.keyword + " trigger not exists: " + dep.name}
+		}
+		if other.Timing != s.Timing || other.Event != s.Event || other.Table != s.Table {
+			return nil, &SQLError{Msg: dep.keyword + " trigger must share the same table, timing and event: " + dep.name}
+		}
+	}
 	trs = append(trs, &TriggerMeta{
 		Name:     s.Name,
 		Timing:   s.Timing,
@@ -160,6 +206,8 @@ func (e *Executor) execCreateTrigger(sess *Session, s *CreateTriggerStmt) (*Resu
 		Table:    s.Table,
 		Body:     s.Body,
 		RowLevel: s.RowLevel,
+		Follows:  s.Follows,
+		Precedes: s.Precedes,
 	})
 	raw, err := saveTriggers(trs)
 	if err != nil {
@@ -310,19 +358,43 @@ func (e *Executor) loadTriggerCatalog(sess *Session) ([]*TriggerMeta, error) {
 //     最外层 DML + 1 层嵌套触发器链式执行；第 2 层嵌套起抑制）时整批抑制；
 //     上限可配置化放宽，保留链式触发能力。
 func (e *Executor) fireTriggers(sess *Session, tx txn.Txn, timing, table, event string, rows []triggerRow) error {
+	return e.fireTriggersMode(sess, tx, timing, table, event, rows, trigFireAll)
+}
+
+// 触发过滤模式（v1.19.0 D3）：BEFORE 行级触发器改为在 DML 写入前逐行触发
+// （以便 SET NEW.col 回写生效），因此外层语句级调用只触发语句级触发器，
+// 避免同一触发器被重复执行；AFTER 与 DELETE 路径仍整批触发。
+const (
+	trigFireAll = iota
+	trigFireStmtLevel
+	trigFireRowLevel
+)
+
+// fireTriggersMode 按模式触发匹配 timing/event/table 的触发器。
+// 执行顺序：FOLLOWS/PRECEDES 依赖排序，未声明依赖时按创建顺序兜底；
+// 体执行细节见 execTriggerBody（单语句路径 / BEGIN…END 复合块路径）。
+func (e *Executor) fireTriggersMode(sess *Session, tx txn.Txn, timing, table, event string, rows []triggerRow, mode int) error {
 	trs, err := e.loadTriggerCatalog(sess)
 	if err != nil {
 		return err
 	}
 	var hit []*TriggerMeta
 	for _, t := range trs {
-		if t.Timing == timing && t.Event == event && t.Table == table {
-			hit = append(hit, t)
+		if t.Timing != timing || t.Event != event || t.Table != table {
+			continue
 		}
+		if mode == trigFireStmtLevel && t.RowLevel {
+			continue
+		}
+		if mode == trigFireRowLevel && !t.RowLevel {
+			continue
+		}
+		hit = append(hit, t)
 	}
 	if len(hit) == 0 {
 		return nil
 	}
+	hit = orderTriggers(hit)
 	key := timing + "\x00" + event + "\x00" + table
 	for _, k := range sess.triggerStack {
 		if k == key {
@@ -336,26 +408,16 @@ func (e *Executor) fireTriggers(sess *Session, tx txn.Txn, timing, table, event 
 	defer func() { sess.triggerStack = sess.triggerStack[:len(sess.triggerStack)-1] }()
 	for _, t := range hit {
 		if !t.RowLevel {
-			stmt, err := Parse(t.Body)
-			if err != nil {
-				return &SQLError{Msg: "trigger " + t.Name + ": invalid body: " + err.Error()}
-			}
-			if _, err := e.execStmt(sess, stmt); err != nil {
-				return &SQLError{Msg: "trigger " + t.Name + " failed: " + err.Error()}
+			if err := e.execTriggerBody(sess, t, nil); err != nil {
+				return err
 			}
 			continue
 		}
-		// 行级：逐行物化 NEW./OLD. 引用后执行体（每行独立 Parse，体通常很小）。
-		for _, tr := range rows {
-			stmt, err := Parse(t.Body)
-			if err != nil {
-				return &SQLError{Msg: "trigger " + t.Name + ": invalid body: " + err.Error()}
-			}
-			if err := e.replaceTrigRefs(stmt, tr.refs()); err != nil {
-				return &SQLError{Msg: "trigger " + t.Name + ": " + err.Error()}
-			}
-			if _, err := e.execStmt(sess, stmt); err != nil {
-				return &SQLError{Msg: "trigger " + t.Name + " failed: " + err.Error()}
+		// 行级：逐行物化 NEW./OLD. 引用后执行体（每行独立执行）。
+		for i := range rows {
+			rc := rows[i].refs()
+			if err := e.execTriggerBody(sess, t, rc); err != nil {
+				return err
 			}
 		}
 	}
