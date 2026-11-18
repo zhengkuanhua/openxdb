@@ -77,6 +77,16 @@ func (p *parser) parseStmt() (Stmt, error) {
 	if p.cur().kind == tokIdent && strings.EqualFold(p.cur().text, "USE") {
 		return p.parseUse()
 	}
+	// v1.19.0 D4：SAVEPOINT / RELEASE 同样未注册进关键字表（避免与列名/
+	// 表名冲突），与 USE 一致按标识符文本匹配；关键字大小写不敏感。
+	if p.cur().kind == tokIdent {
+		switch {
+		case strings.EqualFold(p.cur().text, "SAVEPOINT"):
+			return p.parseSavepoint()
+		case strings.EqualFold(p.cur().text, "RELEASE"):
+			return p.parseReleaseSavepoint()
+		}
+	}
 	if p.cur().kind != tokKeyword {
 		return nil, errf("expected statement at %d, got %q", p.cur().pos, p.cur().text)
 	}
@@ -105,8 +115,7 @@ func (p *parser) parseStmt() (Stmt, error) {
 		p.next()
 		return &CommitStmt{}, nil
 	case "ROLLBACK":
-		p.next()
-		return &RollbackStmt{}, nil
+		return p.parseRollback()
 	case "EXPORT":
 		return p.parseExport()
 	case "IMPORT":
@@ -1593,6 +1602,89 @@ func (p *parser) parseRefClause(fk ForeignKey) (ForeignKey, error) {
 		}
 	}
 	return fk, nil
+}
+
+// isWord 判断当前 token 是否为指定词（标识符或关键字，大小写不敏感）。
+// v1.19.0 D4：事务子语句的可选修饰词（WORK / TO / SAVEPOINT）用此匹配，
+// 避免把它们注册成全局关键字而影响列名解析。
+func (p *parser) isWord(w string) bool {
+	t := p.cur()
+	if t.kind != tokIdent && t.kind != tokKeyword {
+		return false
+	}
+	return strings.EqualFold(t.text, w)
+}
+
+// parseSavepointName 读取保存点名（标识符或关键字均可，保留原始大小写；
+// 保存点名的同名判定由事务层按大小写不敏感处理）。
+func (p *parser) parseSavepointName() (string, error) {
+	name, err := p.expectName("savepoint name")
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(name.text) == "" {
+		return "", errf("expected savepoint name at %d", name.pos)
+	}
+	return name.text, nil
+}
+
+// parseRollback 解析 ROLLBACK 语句族（v1.19.0 D4）：
+//
+//	ROLLBACK                              整事务回滚
+//	ROLLBACK WORK                         整事务回滚（WORK 可省略）
+//	ROLLBACK TO <name>                    回滚到保存点
+//	ROLLBACK TO SAVEPOINT <name>          回滚到保存点（SAVEPOINT 可省略）
+//	ROLLBACK WORK TO [SAVEPOINT] <name>   同上（WORK 与 SAVEPOINT 均可省略）
+func (p *parser) parseRollback() (Stmt, error) {
+	if err := p.expectKeyword("ROLLBACK"); err != nil {
+		return nil, err
+	}
+	if p.isWord("WORK") {
+		p.next()
+	}
+	if p.isWord("TO") {
+		p.next()
+		if p.isWord("SAVEPOINT") {
+			p.next()
+		}
+		name, err := p.parseSavepointName()
+		if err != nil {
+			return nil, err
+		}
+		return &RollbackToSavepointStmt{Name: name}, nil
+	}
+	return &RollbackStmt{}, nil
+}
+
+// parseSavepoint 解析 SAVEPOINT <name>（v1.19.0 D4）。
+func (p *parser) parseSavepoint() (Stmt, error) {
+	if !p.isWord("SAVEPOINT") {
+		return nil, errf("expected SAVEPOINT at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	p.next()
+	name, err := p.parseSavepointName()
+	if err != nil {
+		return nil, err
+	}
+	return &SavepointStmt{Name: name}, nil
+}
+
+// parseReleaseSavepoint 解析 RELEASE SAVEPOINT <name>（v1.19.0 D4）。
+// SAVEPOINT 关键字在 MySQL 中必须显式给出，此处保持同样要求。
+func (p *parser) parseReleaseSavepoint() (Stmt, error) {
+	if !p.isWord("RELEASE") {
+		return nil, errf("expected RELEASE at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	p.next()
+	if !p.isWord("SAVEPOINT") {
+		return nil, errf("expected SAVEPOINT at %d, got %q", p.cur().pos, p.cur().text)
+	}
+	p.next()
+	name, err := p.parseSavepointName()
+	if err != nil {
+		return nil, err
+	}
+	return &ReleaseSavepointStmt{Name: name}, nil
 }
 
 // parseUse USE <db>（T39）：切换会话级默认库；库名合法性由 executor 校验。

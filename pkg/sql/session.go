@@ -82,6 +82,11 @@ type Session struct {
 	// 会话复位）统一清空。
 	pendingLocal  []kvOp
 	pendingRemote map[string][]kvOp
+	// v1.19.0 D4 保存点水位：与事务层保存点一一对应，记录登记时刻
+	// pendingLocal 长度与各节点 pendingRemote 长度。ROLLBACK TO 时按
+	// 水位截断两份暂存，使 2PC 提交写集与本地事务层写集前缀一致
+	// （见 executor.rollbackToSavepointTx）；RELEASE / 事务结束同步清理。
+	spPending []savepointPending
 	// 递归防护深度：triggerDepth 防触发器无限递归；
 	// procDepth 防存储过程嵌套展开。
 	triggerDepth int
@@ -148,6 +153,16 @@ func (s *Session) ReleaseAutoResources() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closeSharedROTxLocked()
+}
+
+// savepointPending 保存点登记时刻的 2PC 暂存水位（v1.19.0 D4）。
+// local 为 pendingLocal 长度；remote 记录各远端节点 pendingRemote 长度。
+// ROLLBACK TO 时按水位截断两份暂存，使跨节点提交写集与本地事务层写集
+// 保持同一前缀；同名保存点覆盖时旧水位一并替换。
+type savepointPending struct {
+	name   string
+	local  int
+	remote map[string]int
 }
 
 // InTx 返回会话当前是否处于显式事务内（BEGIN 后 true，COMMIT/ROLLBACK 复位）。

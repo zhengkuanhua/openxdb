@@ -2,6 +2,7 @@ package sql
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -868,6 +869,21 @@ func (e *Executor) execStmt(sess *Session, stmt Stmt) (*Result, error) {
 			return nil, err
 		}
 		return &Result{}, nil
+	case *SavepointStmt:
+		if err := e.savepointTx(sess, s.Name); err != nil {
+			return nil, err
+		}
+		return &Result{}, nil
+	case *RollbackToSavepointStmt:
+		if err := e.rollbackToSavepointTx(sess, s.Name); err != nil {
+			return nil, err
+		}
+		return &Result{}, nil
+	case *ReleaseSavepointStmt:
+		if err := e.releaseSavepointTx(sess, s.Name); err != nil {
+			return nil, err
+		}
+		return &Result{}, nil
 	case *ExportStmt:
 		return e.execExport(sess, s)
 	case *ImportStmt:
@@ -1087,6 +1103,8 @@ func (e *Executor) beginTx(sess *Session) error {
 	// 此处兜底异常残留，避免跨事务串扰）。
 	sess.pendingLocal = nil
 	sess.pendingRemote = map[string][]kvOp{}
+	// v1.19.0 D4：保存点不跨事务边界，开新事务一并清空水位。
+	sess.spPending = nil
 	// P2-13：事务隔离级别：默认会话级（SET SESSION TRANSACTION
 	// ISOLATION LEVEL）；语句级设置（SET TRANSACTION ISOLATION LEVEL）
 	// 仅影响下一事务，BEGIN 时消费并复位。
@@ -1130,6 +1148,8 @@ func (e *Executor) commitTx(sess *Session) error {
 	sess.curTx = nil
 	sess.curBeginTS = 0
 	sess.curTxID = ""
+	// v1.19.0 D4：事务结束（COMMIT）清空保存点，保存点不可跨事务复用。
+	sess.spPending = nil
 	sess.mu.Unlock()
 	if e.ts != nil {
 		// 事务结束后刷新 TSO 缓存：后续新事务/新语句取权威当前序列
@@ -1218,6 +1238,8 @@ func (e *Executor) rollbackTx(sess *Session) error {
 	sess.pendingLocal = nil
 	sess.pendingRemote = map[string][]kvOp{}
 	sess.serialRemoteReads = nil
+	// v1.19.0 D4：事务结束（ROLLBACK）清空保存点与水位。
+	sess.spPending = nil
 	sess.mu.Unlock()
 	if e.ts != nil {
 		e.ts.Reset()
@@ -1233,6 +1255,126 @@ func (e *Executor) rollbackTx(sess *Session) error {
 		e.m.IncRollback()
 	}
 	return nil
+}
+
+// savepointTx 在会话显式事务内登记保存点（v1.19.0 D4）。
+// 校验顺序与既有事务语句一致：未开启事务先报 "no active transaction"；
+// 事务句柄不支持保存点（非本地事务实现）时给出明确错误而非静默降级；
+// 登记成功后记录 2PC 暂存水位（同名覆盖时旧水位一并替换）。
+func (e *Executor) savepointTx(sess *Session, name string) error {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if !sess.inTx || sess.curTx == nil {
+		return &SQLError{Msg: "no active transaction"}
+	}
+	sp, ok := sess.curTx.(txn.SavepointTxn)
+	if !ok {
+		return &SQLError{Msg: "savepoint is not supported by current transaction"}
+	}
+	if err := sp.Savepoint(name); err != nil {
+		return savepointError(name, err)
+	}
+	// 重名覆盖：先移除同名水位再追加，与事务层「同名覆盖旧标记」一致。
+	kept := sess.spPending[:0]
+	for _, m := range sess.spPending {
+		if !strings.EqualFold(m.name, name) {
+			kept = append(kept, m)
+		}
+	}
+	sess.spPending = kept
+	mark := savepointPending{name: name, local: len(sess.pendingLocal), remote: map[string]int{}}
+	for node, ops := range sess.pendingRemote {
+		mark.remote[node] = len(ops)
+	}
+	sess.spPending = append(sess.spPending, mark)
+	return nil
+}
+
+// rollbackToSavepointTx 回滚到显式事务内的保存点（v1.19.0 D4）。
+// 2PC 语义（本文档所选策略）：本地保存点生效；跨节点写集同样按前缀丢弃。
+// 远端写在本阶段仅暂存于 pendingRemote、尚未向参与者 PREPARE，故按登记
+// 时刻水位截断即可丢弃，无需与参与者交互；pendingLocal 同水位截断，保证
+// COMMIT 时 2PC 提交的写集与本地事务层重建后的写集完全一致。
+func (e *Executor) rollbackToSavepointTx(sess *Session, name string) error {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if !sess.inTx || sess.curTx == nil {
+		return &SQLError{Msg: "no active transaction"}
+	}
+	sp, ok := sess.curTx.(txn.SavepointTxn)
+	if !ok {
+		return &SQLError{Msg: "savepoint is not supported by current transaction"}
+	}
+	idx := sess.findSavepointPendingLocked(name)
+	if idx < 0 {
+		return &SQLError{Msg: "savepoint " + name + " does not exist"}
+	}
+	if err := sp.RollbackToSavepoint(name); err != nil {
+		return savepointError(name, err)
+	}
+	mark := sess.spPending[idx]
+	if mark.local < len(sess.pendingLocal) {
+		sess.pendingLocal = sess.pendingLocal[:mark.local]
+	}
+	for node, ops := range sess.pendingRemote {
+		n, seen := mark.remote[node]
+		if !seen || n <= 0 {
+			// 该节点在保存点之后才首次承接写：整节点丢弃。
+			delete(sess.pendingRemote, node)
+			continue
+		}
+		if n < len(ops) {
+			sess.pendingRemote[node] = ops[:n]
+		}
+	}
+	return nil
+}
+
+// releaseSavepointTx 释放显式事务内的保存点（v1.19.0 D4）。
+// 级联语义：删除该点及其之后登记的所有保存点（对应水位同步截断），
+// 已写入的数据保持不变；更早的保存点仍可继续回滚。
+func (e *Executor) releaseSavepointTx(sess *Session, name string) error {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if !sess.inTx || sess.curTx == nil {
+		return &SQLError{Msg: "no active transaction"}
+	}
+	sp, ok := sess.curTx.(txn.SavepointTxn)
+	if !ok {
+		return &SQLError{Msg: "savepoint is not supported by current transaction"}
+	}
+	idx := sess.findSavepointPendingLocked(name)
+	if idx < 0 {
+		return &SQLError{Msg: "savepoint " + name + " does not exist"}
+	}
+	if err := sp.ReleaseSavepoint(name); err != nil {
+		return savepointError(name, err)
+	}
+	sess.spPending = sess.spPending[:idx]
+	return nil
+}
+
+// findSavepointPendingLocked 自栈顶向下查找同名保存点水位（调用方持会话锁）。
+func (s *Session) findSavepointPendingLocked(name string) int {
+	for i := len(s.spPending) - 1; i >= 0; i-- {
+		if strings.EqualFold(s.spPending[i].name, name) {
+			return i
+		}
+	}
+	return -1
+}
+
+// savepointError 把事务层保存点错误翻译为 SQL 层错误文案（v1.19.0 D4）：
+// 未知保存点对齐 MySQL「savepoint <name> does not exist」；事务已结束时
+// 复用既有 "no active transaction" 文案。
+func savepointError(name string, err error) error {
+	switch {
+	case errors.Is(err, txn.ErrSavepointNotFound):
+		return &SQLError{Msg: "savepoint " + name + " does not exist"}
+	case errors.Is(err, txn.ErrTxnClosed):
+		return &SQLError{Msg: "no active transaction"}
+	}
+	return err
 }
 
 // resetSessionTxState 复位会话事务状态（T42：INSERT INTO ... SELECT 在
@@ -1252,6 +1394,8 @@ func (e *Executor) resetSessionTxState(sess *Session) {
 	// P0-1：同步清空显式事务 2PC 暂存（异常路径复位时防御）。
 	sess.pendingLocal = nil
 	sess.pendingRemote = map[string][]kvOp{}
+	// v1.19.0 D4：异常复位同样清空保存点水位，避免残留跨事务串扰。
+	sess.spPending = nil
 	// P2-13：异常复位清空 Serializable 远端读集累积。
 	sess.serialRemoteReads = nil
 	// v1.16.0 C6：异常复位一并关闭共享快照窗口（释放窗口事务/快照）。

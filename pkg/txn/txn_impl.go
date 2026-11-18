@@ -3,6 +3,7 @@ package txn
 import (
 	"bytes"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -312,6 +313,17 @@ type txnImpl struct {
 	serEnabled bool
 	readSet    map[string]bool
 	writeSet   map[string]bool
+	// v1.19.0 D4：SAVEPOINT 标记栈（按声明顺序，末元素为最新）。
+	// 标记记录声明时刻的 ops 前缀长度；ROLLBACK TO 按该前缀截断 ops 并
+	// 重建 batch/writeSet，读己写（dirty 反向扫描）随之回到标记点状态。
+	// 事务结束（Commit/Rollback/finish）整体清空。
+	savepoints []savepointMark
+}
+
+// savepointMark 事务内保存点标记（v1.19.0 D4）。
+type savepointMark struct {
+	name string
+	ops  int // 声明时刻的操作序位（ops 前缀长度）
 }
 
 type opEntry struct {
@@ -590,6 +602,116 @@ func (t *txnImpl) SetDeferSync(enabled bool) {
 	t.mgr.mu.Lock()
 	t.deferSync = enabled
 	t.mgr.mu.Unlock()
+}
+
+// Savepoint 登记事务内保存点（v1.19.0 D4）。
+// 语义对齐 MySQL：同名保存点覆盖旧标记（旧标记移除、新标记落在当前
+// 操作序位），因此重名登记等价于把该点移到最新位置；历史操作不删除。
+// 仅活动事务可登记，事务已结束返回 ErrTxnClosed。
+func (t *txnImpl) Savepoint(name string) error {
+	if t.state != TxnActive {
+		return ErrTxnClosed
+	}
+	t.dropSavepointNamed(name)
+	t.savepoints = append(t.savepoints, savepointMark{name: name, ops: len(t.ops)})
+	return nil
+}
+
+// RollbackToSavepoint 回滚到指定保存点（v1.19.0 D4）。
+// 语义对齐 MySQL：标记点之后的操作全部丢弃（ops 按标记序位截断），
+// batch 与 writeSet 按截断后的 ops 前缀重建，读己写路径（Get/MGet/Scan
+// 的 dirty 反向扫描）随之回到标记点状态；保存点本身保留，可重复回滚。
+// readSet 不做收缩：已读事实不因回滚消失，保留可避免漏检写偏斜冲突。
+func (t *txnImpl) RollbackToSavepoint(name string) error {
+	if t.state != TxnActive {
+		return ErrTxnClosed
+	}
+	idx := t.findSavepoint(name)
+	if idx < 0 {
+		return ErrSavepointNotFound
+	}
+	t.rewindOpsTo(t.savepoints[idx].ops)
+	return nil
+}
+
+// ReleaseSavepoint 释放保存点（v1.19.0 D4）。
+// 语义对齐 MySQL：释放该点及其之后登记的所有保存点；更早的保存点不受
+// 影响，已写入的数据保持不变。
+func (t *txnImpl) ReleaseSavepoint(name string) error {
+	if t.state != TxnActive {
+		return ErrTxnClosed
+	}
+	idx := t.findSavepoint(name)
+	if idx < 0 {
+		return ErrSavepointNotFound
+	}
+	t.savepoints = t.savepoints[:idx]
+	return nil
+}
+
+// findSavepoint 自栈顶向下查找同名保存点（保存点名大小写不敏感，与
+// MySQL 对象名语义一致），返回下标；未找到返回 -1。
+func (t *txnImpl) findSavepoint(name string) int {
+	for i := len(t.savepoints) - 1; i >= 0; i-- {
+		if strings.EqualFold(t.savepoints[i].name, name) {
+			return i
+		}
+	}
+	return -1
+}
+
+// dropSavepointNamed 删除所有同名保存点标记（重名覆盖语义）。
+func (t *txnImpl) dropSavepointNamed(name string) {
+	if len(t.savepoints) == 0 {
+		return
+	}
+	kept := t.savepoints[:0]
+	for _, sp := range t.savepoints {
+		if !strings.EqualFold(sp.name, name) {
+			kept = append(kept, sp)
+		}
+	}
+	t.savepoints = kept
+}
+
+// rewindOpsTo 把操作日志截断到 n 条，并按前缀重建 batch 与写集。
+// batch 重新分配（不复用旧底层数组），避免截断后残留的后段条目被后续
+// append 误引用；writeSet 是 Serializable 注册到协调者的共享 map，必须
+// 原地清理重填，不能替换引用，否则协调者侧将看不到后续写集。
+func (t *txnImpl) rewindOpsTo(n int) {
+	if n < 0 {
+		n = 0
+	}
+	if n > len(t.ops) {
+		return
+	}
+	t.ops = t.ops[:n]
+	batch := &storage.WriteBatch{}
+	if n > 0 {
+		batch.Puts = make([]storage.KVPair, 0, n)
+		batch.Deletes = make([][]byte, 0, n)
+		for i := 0; i < n; i++ {
+			op := t.ops[i]
+			if op.isDelete {
+				batch.Deletes = append(batch.Deletes, op.key)
+				continue
+			}
+			batch.Puts = append(batch.Puts, storage.KVPair{Key: op.key, Value: op.value})
+		}
+	}
+	t.batch = batch
+	if t.serEnabled {
+		if t.writeSet == nil {
+			t.writeSet = make(map[string]bool, n)
+		} else {
+			for k := range t.writeSet {
+				delete(t.writeSet, k)
+			}
+		}
+		for i := 0; i < n; i++ {
+			t.writeSet[string(t.ops[i].key)] = true
+		}
+	}
 }
 
 // Commit：WAL 先行 → 存储原子应用 → 释放快照。
@@ -892,6 +1014,9 @@ func (t *txnImpl) Rollback() error {
 
 func (t *txnImpl) finish(s TxnState) {
 	t.state = s
+	// v1.19.0 D4：事务结束（Commit/Rollback）清空全部保存点，
+	// 保存点不可跨越事务边界复用。
+	t.savepoints = nil
 	if t.snap != nil {
 		t.snap.Release()
 		t.snap = nil

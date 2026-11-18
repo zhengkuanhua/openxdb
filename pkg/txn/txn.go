@@ -112,7 +112,26 @@ type AppliedLSNProvider interface {
 	AppliedLSN() storage.LSN
 }
 
+// SavepointTxn 事务内保存点扩展接口（v1.19.0 D4）。
+// 不属于 Txn 基础接口语义，通过类型断言使用（如 t.(txn.SavepointTxn)）；
+// 不支持的实现直接不满足断言，由调用方给出明确报错，避免静默降级。
+// 语义对齐 MySQL：同名保存点覆盖旧标记；ROLLBACK TO 不删除该保存点
+// （可重复回到同一点）；RELEASE 删除该点及其之后的所有保存点；事务结束
+// （Commit/Rollback）清空全部保存点。
+type SavepointTxn interface {
+	// Savepoint 在当前操作序位登记保存点（同名覆盖旧标记）。
+	Savepoint(name string) error
+	// RollbackToSavepoint 丢弃标记点之后的全部事务内操作（含 batch 与
+	// 写集前缀重建、读己写状态回退），保存点保留。
+	RollbackToSavepoint(name string) error
+	// ReleaseSavepoint 释放该保存点及其之后登记的所有保存点。
+	ReleaseSavepoint(name string) error
+}
+
 // 标准错误。
 var (
 	ErrTxnClosed = errors.New("txn: transaction already finished")
+	// ErrSavepointNotFound 回滚/释放引用了事务内不存在的保存点
+	// （未登记或已被 RELEASE 删除），由 SQL 层翻译为 MySQL 风格报错。
+	ErrSavepointNotFound = errors.New("txn: savepoint does not exist")
 )

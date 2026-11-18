@@ -534,7 +534,9 @@ func (e *Engine) ClusterSelfNode() (cluster.NodeInfo, bool) {
 // IsSQL 判断一行命令是否以 SQL 关键字开头（供协议层路由）。
 func IsSQL(line string) bool {
 	trimmed := strings.TrimLeft(line, " \t\r\n")
-	for _, kw := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "GRANT", "REVOKE", "BEGIN", "COMMIT", "ROLLBACK", "EXPORT", "IMPORT", "SHOW", "EXPLAIN", "SPLIT", "BALANCE", "BACKUP", "RESTORE", "ALTER", "SET", "REFRESH", "USE", "CALL"} {
+	// v1.19.0 D4：补充事务保存点子语句（SAVEPOINT / RELEASE SAVEPOINT），
+	// 使其在协议层被识别为 SQL 而不落入其他命令路由。
+	for _, kw := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "GRANT", "REVOKE", "BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT", "RELEASE", "EXPORT", "IMPORT", "SHOW", "EXPLAIN", "SPLIT", "BALANCE", "BACKUP", "RESTORE", "ALTER", "SET", "REFRESH", "USE", "CALL"} {
 		if strings.HasPrefix(strings.ToUpper(trimmed), kw+" ") ||
 			strings.EqualFold(trimmed, kw) {
 			return true

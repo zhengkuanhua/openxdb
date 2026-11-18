@@ -542,6 +542,30 @@ type RollbackStmt struct{}
 
 func (RollbackStmt) stmt() {}
 
+// SavepointStmt 在显式事务内登记保存点（v1.19.0 D4）。
+// 语法：SAVEPOINT <name>（保存点名大小写不敏感；同名覆盖旧标记）。
+type SavepointStmt struct {
+	Name string
+}
+
+func (SavepointStmt) stmt() {}
+
+// RollbackToSavepointStmt 回滚到显式事务内的保存点（v1.19.0 D4）。
+// 语法：ROLLBACK [WORK] TO [SAVEPOINT] <name>；保存点保留、可重复回滚。
+type RollbackToSavepointStmt struct {
+	Name string
+}
+
+func (RollbackToSavepointStmt) stmt() {}
+
+// ReleaseSavepointStmt 释放显式事务内的保存点（v1.19.0 D4）。
+// 语法：RELEASE SAVEPOINT <name>；级联删除该点及其之后的所有保存点。
+type ReleaseSavepointStmt struct {
+	Name string
+}
+
+func (ReleaseSavepointStmt) stmt() {}
+
 // ExportStmt 导出表数据（EXPORT TABLE t [(cols)] TO 'path' [FORMAT CSV|JSON|PARQUET]）。
 type ExportStmt struct {
 	Table   string
