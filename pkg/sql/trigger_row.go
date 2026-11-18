@@ -208,6 +208,12 @@ func (e *Executor) replaceTrigRefExpr(ex *Expr, ctx *rowTRIGRefs) error {
 	if ex == nil {
 		return nil
 	}
+	// v1.19.0 D6：函数调用实参中的 NEW./OLD. 引用同样需要替换。
+	for _, a := range ex.Args {
+		if err := e.replaceTrigRefExpr(a, ctx); err != nil {
+			return err
+		}
+	}
 	if ex.Op == "" {
 		if ex.Val != nil {
 			return e.replaceTrigRefValue(ex.Val, ctx)
@@ -314,6 +320,10 @@ func collectTrigRefsCase(cc *CaseWhenClause, out *[]string) {
 func collectTrigRefsExpr(ex *Expr, out *[]string) {
 	if ex == nil {
 		return
+	}
+	// v1.19.0 D6：收集函数调用实参中的 NEW./OLD. 引用。
+	for _, a := range ex.Args {
+		collectTrigRefsExpr(a, out)
 	}
 	if ex.Op == "" {
 		collectTrigRefsValue(ex.Val, out)

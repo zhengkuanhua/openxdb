@@ -285,14 +285,24 @@ type Expr struct {
 	Col   string // 叶子：裸列名（Val 为 nil 时有效）
 	Val   *Value // 叶子：字面量（nil = 列引用）
 	Raw   string // 原始文本
+	// v1.19.0 D6：函数调用节点。Fn 非空时固定 Op == ""、Left/Right 为 nil、
+	// Ref/Col/Val 不使用，实参取 Args（可含列引用、字面量与嵌套函数）；
+	// 既有 Op 语义与叶子判定不受影响。
+	Fn   string
+	Args []*Expr
 }
 
-// isPlainColumn 判断 Expr 是否为纯列引用叶子（Op 为空且非字面量）。
-func (e *Expr) isPlainColumn() bool { return e != nil && e.Op == "" && e.Val == nil }
+// isPlainColumn 判断 Expr 是否为纯列引用叶子（Op 为空、非函数调用且非字面量）。
+func (e *Expr) isPlainColumn() bool {
+	return e != nil && e.Op == "" && e.Fn == "" && e.Val == nil
+}
 
-// isLiteral 判断 Expr 是否为纯字面量叶子（Op 为空、无列引用），
+// isLiteral 判断 Expr 是否为纯字面量叶子（Op 为空、无列引用、非函数调用），
 // 用于 WHERE 右值回落为旧路径常量 c.Val，保持 matchWhere 语义。
-func (e *Expr) isLiteral() bool { return e != nil && e.Op == "" && e.Val != nil }
+func (e *Expr) isLiteral() bool { return e != nil && e.Op == "" && e.Fn == "" && e.Val != nil }
+
+// isFuncCall 判断 Expr 是否为函数调用节点（v1.19.0 D6）。
+func (e *Expr) isFuncCall() bool { return e != nil && e.Fn != "" }
 
 // JoinClause JOIN 子句（INNER / LEFT，支持子查询右表）。
 type JoinClause struct {

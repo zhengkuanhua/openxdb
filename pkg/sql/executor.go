@@ -4110,6 +4110,13 @@ func collectExprCols(e *Expr, set map[string]bool) {
 	if e == nil {
 		return
 	}
+	// v1.19.0 D6：函数调用节点递归收集实参列，避免 JSON 函数入参列漏下推。
+	if e.Fn != "" {
+		for _, a := range e.Args {
+			collectExprCols(a, set)
+		}
+		return
+	}
 	if e.Op == "" {
 		if e.Val == nil && e.Col != "" {
 			set[e.Col] = true
@@ -4454,6 +4461,15 @@ func hasColRef(e *Expr) bool {
 	if e == nil {
 		return false
 	}
+	// v1.19.0 D6：函数调用节点按实参判定列引用（JSON_EXTRACT('...','$.a') 无列不报错）。
+	if e.Fn != "" {
+		for _, a := range e.Args {
+			if hasColRef(a) {
+				return true
+			}
+		}
+		return false
+	}
 	if e.Op == "" {
 		return e.Val == nil && (e.Col != "" || e.Ref != "")
 	}
@@ -4478,6 +4494,20 @@ func caseHasColRef(cc *CaseWhenClause) bool {
 func evalExprForRow(rel *Rel, row []Value, e *Expr) (Value, error) {
 	if e == nil {
 		return Value{}, &SQLError{Msg: "empty expression"}
+	}
+	// v1.19.0 D6：JSON 函数调用节点，先按行上下文求值各实参再分派。
+	if e.Fn != "" {
+		args := make([]Value, len(e.Args))
+		isJSON := make([]bool, len(e.Args))
+		for i, a := range e.Args {
+			v, err := evalExprForRow(rel, row, a)
+			if err != nil {
+				return Value{}, err
+			}
+			args[i] = v
+			isJSON[i] = a.isFuncCall()
+		}
+		return jsonFuncValue(e.Fn, args, isJSON)
 	}
 	switch e.Op {
 	case "":
@@ -4518,6 +4548,20 @@ func evalExprForRow(rel *Rel, row []Value, e *Expr) (Value, error) {
 func evalSetExpr(meta *TableMeta, row []Value, e *Expr) (Value, error) {
 	if e == nil {
 		return Value{}, &SQLError{Msg: "empty expression"}
+	}
+	// v1.19.0 D6：UPDATE SET 中的 JSON 函数调用（列索引取自 TableMeta）。
+	if e.Fn != "" {
+		args := make([]Value, len(e.Args))
+		isJSON := make([]bool, len(e.Args))
+		for i, a := range e.Args {
+			v, err := evalSetExpr(meta, row, a)
+			if err != nil {
+				return Value{}, err
+			}
+			args[i] = v
+			isJSON[i] = a.isFuncCall()
+		}
+		return jsonFuncValue(e.Fn, args, isJSON)
 	}
 	switch e.Op {
 	case "":

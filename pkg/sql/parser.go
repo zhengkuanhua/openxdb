@@ -2930,8 +2930,12 @@ func (p *parser) parseSelectColumn() (SelectColumn, error) {
 				// D7.2：无参标量内置函数 version()，executor 直接求值。
 				return p.parseScalarFuncColumn("VERSION")
 			}
-			p.next()
-			return SelectColumn{}, errf("function %q not supported", first)
+			// v1.19.0 D6：JSON 函数列交给下方通用 parseExpr 解析（Expr 承载 Fn 节点），
+			// 以便与算术表达式、别名等组合；其余未注册函数名保持原有报错。
+			if !isJSONFuncName(upper) {
+				p.next()
+				return SelectColumn{}, errf("function %q not supported", first)
+			}
 		}
 		// 普通列或算术表达式（T40）：parseExpr 从当前 ident 开始，
 		// 纯列引用保持既有 Ref/Col 路径（索引/点查优化），复杂表达式填 Expr。
@@ -3062,6 +3066,37 @@ func (p *parser) parseScalarFuncColumn(upper string) (SelectColumn, error) {
 		return SelectColumn{}, err
 	}
 	return sc, nil
+}
+
+// parseJSONFuncExpr 解析 JSON 函数调用表达式（v1.19.0 D6）。
+// 语法：NAME '(' [expr [',' expr]*] ')'，实参可嵌套函数并保留原始文本。
+func (p *parser) parseJSONFuncExpr() (*Expr, error) {
+	name := strings.ToUpper(p.cur().text)
+	p.next() // 函数名
+	if _, err := p.expect(tokLParen, "("); err != nil {
+		return nil, err
+	}
+	args := make([]*Expr, 0, 4)
+	raws := make([]string, 0, 4)
+	if p.cur().kind != tokRParen {
+		for {
+			arg, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, arg)
+			raws = append(raws, arg.Raw)
+			if p.cur().kind == tokComma {
+				p.next()
+				continue
+			}
+			break
+		}
+	}
+	if _, err := p.expect(tokRParen, ")"); err != nil {
+		return nil, err
+	}
+	return &Expr{Fn: name, Args: args, Raw: name + "(" + strings.Join(raws, ", ") + ")"}, nil
 }
 
 // parseExpr 解析算术表达式。表达式结束时不消费后续 token（由调用方决定边界）。
@@ -3205,6 +3240,11 @@ func (p *parser) parseExprPrimary() (*Expr, error) {
 			p.next()
 			v := Value{Kind: "TRIGREF", S: prefix + "." + col}
 			return &Expr{Val: &v, Raw: prefix + "." + col}, nil
+		}
+		// v1.19.0 D6：JSON 函数调用（表达式位置，可在 WHERE / UPDATE SET / CASE /
+		// 其它函数实参中嵌套使用）。先于列引用识别，避免被当成裸列名。
+		if isJSONFuncName(p.cur().text) && p.pos+1 < len(p.toks) && p.toks[p.pos+1].kind == tokLParen {
+			return p.parseJSONFuncExpr()
 		}
 		ref, col, err := p.parseColumnRef()
 		if err != nil {

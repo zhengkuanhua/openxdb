@@ -271,5 +271,11 @@ func exprHasUserVar(x *Expr) bool {
 	if x.Val != nil && x.Val.Kind == "VAR" {
 		return true
 	}
+	// v1.19.0 D6：函数调用实参同样需要走批量化前的用户变量替换。
+	for _, a := range x.Args {
+		if exprHasUserVar(a) {
+			return true
+		}
+	}
 	return exprHasUserVar(x.Left) || exprHasUserVar(x.Right)
 }

@@ -423,6 +423,15 @@ func joinExprResolvable(left *Rel, e *Expr) bool {
 	if e == nil {
 		return true
 	}
+	// v1.19.0 D6：函数调用节点要求全部实参可在左行解析。
+	if e.Fn != "" {
+		for _, a := range e.Args {
+			if !joinExprResolvable(left, a) {
+				return false
+			}
+		}
+		return true
+	}
 	if e.Op == "" {
 		if e.Val != nil {
 			return true

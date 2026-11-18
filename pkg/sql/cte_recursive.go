@@ -457,6 +457,12 @@ func (s *cteRefScanner) exprHasCTECol(ex *Expr) bool {
 	if ex.Op == "" && ex.Val == nil && s.isCTECol(ex.Ref, ex.Col) {
 		return true
 	}
+	// v1.19.0 D6：函数调用节点按实参判定递归 CTE 列引用。
+	for _, a := range ex.Args {
+		if s.exprHasCTECol(a) {
+			return true
+		}
+	}
 	return s.exprHasCTECol(ex.Left) || s.exprHasCTECol(ex.Right)
 }
 
