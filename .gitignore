@@ -15,6 +15,8 @@ quickstart-data/
 
 # 基准实验数据（大文件，不入库）
 tests/bench/e1_data_*/
+tests/bench/e2_data_*/
+tests/bench/rocksdb/e2_fsync_run*/
 tests/bench/*.exe
 
 # IDE / 系统

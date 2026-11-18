@@ -2,12 +2,14 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_ff45e042d40011f1a0da525400393706
-    ReservedCode1: TcPDRY0dBYZwCCXFhchhBsqryA6vBzCIQcP+TFimUfVMUKK0eHlw62uqEYsw+hU+DOP2Bo2uBOk3db8N81FnY4EhNWH4veixF9Rbx7orKu9Y3zi2SV8OGOwkYDHSrBUVJn8q2/CLONg4wXDqq6ZbsIm35jpTH9xSKjtnnfX6lLaxh5YateaIWkvz60g=
+    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_78c959d3e30d11f1913b525400393706
+    ReservedCode1: nucB5a131X3JrmedPbHJSm4SFUQg6VPltCR6o7d+PJBnH9b7zqcPacu2QqkV3F1iVcAvduytT6x04jC5v3MYKUn8G28tZV75pMAK69t91q8DGc7l7hBBweQl+ynDEcMYk/1H8p8kQ8drpqYryCgUvEoBKOMAMGI2XKHM0jpeyKfc5COoXZcpIjSCNYY=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_ff45e042d40011f1a0da525400393706
-    ReservedCode2: TcPDRY0dBYZwCCXFhchhBsqryA6vBzCIQcP+TFimUfVMUKK0eHlw62uqEYsw+hU+DOP2Bo2uBOk3db8N81FnY4EhNWH4veixF9Rbx7orKu9Y3zi2SV8OGOwkYDHSrBUVJn8q2/CLONg4wXDqq6ZbsIm35jpTH9xSKjtnnfX6lLaxh5YateaIWkvz60g=
+    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_78c959d3e30d11f1913b525400393706
+    ReservedCode2: nucB5a131X3JrmedPbHJSm4SFUQg6VPltCR6o7d+PJBnH9b7zqcPacu2QqkV3F1iVcAvduytT6x04jC5v3MYKUn8G28tZV75pMAK69t91q8DGc7l7hBBweQl+ynDEcMYk/1H8p8kQ8drpqYryCgUvEoBKOMAMGI2XKHM0jpeyKfc5COoXZcpIjSCNYY=
 ---
+
+
 
 ---
 AIGC:
@@ -70,7 +72,7 @@ OpenXDB 版本变更记录。
 
 ## v1.18.0 (2026-11-17)
 
-v1.18.0（分布式纵深：跨节点数据分布 + HA quorum 灰度）按 DEV_PLAN_v1.18.0 推进并完成 D2–D7：D2/D3/D4/D5/D6 已收口，D7 发版收尾于 2026-11-17 完成本地准备（版本常量、文档同步、回归验证；tag 与远端核验另行执行）。
+v1.18.0（分布式纵深：跨节点数据分布 + HA quorum 灰度）按 DEV_PLAN_v1.18.0 推进并完成 D2–D7：D2/D3/D4/D5/D6 已收口，D7 发版收尾于 2026-11-17 完成本地准备（版本常量、文档同步、回归验证），2026-11-18 完成 annotated tag 创建与双远端核验。
 
 **Added**
 
@@ -82,12 +84,14 @@ v1.18.0（分布式纵深：跨节点数据分布 + HA quorum 灰度）按 DEV_P
 - **D6.3 Snapshot 批量 Scan 评估**：核对确认快照号语句级/事务级复用、多区间单次合并扫描、版本可见性批量过滤均已具备，无新增代码；跨 region 远端区间聚合（多 `QUERY_REQ` 合并）转 v1.19.0 与写路径 2PC 一并处理。
 - **D5 Linux E5 受控复测**：D5.1 在 RHEL 9.7 目标机（2 vCPU / Go 1.22.12 / RocksDB 11.8.1 CGO，源码 HEAD `dac6843`）以 `scripts/build.sh --rocks-src/--rocks-build` 构建并安装为 `/usr/local/bin/openxdb`，bench 依赖（仓库内 `drivers/python`）对齐，Linux 从零部署链路打通；D5.2 与 Windows 同口径采集（同脚本、8 连接、每轮 prepare 重置、3 轮取中位数）——OLTP read / write / read-write **8.17 / 8.13 / 8.10 TPS**（QPS 114.33 / 32.53 / 145.80），TPC-C 5 仓 tpmC **749.50** / tpm_total 1684.50，14 组采集全部 `errs=0` / `reconnects=0`。对比 Windows v1.17.0 基线（14.15 / 13.40 / 12.60 TPS，tpmC 774.50）：OLTP 达 57.7%–64.3%，TPC-C 达 96.8%；差异主因为 CPU 配额（2 vCPU vs 16 逻辑核），非代码路径——同机 threads=2 与 threads=8 的 read TPS 同为约 8.2 而 p50 延迟差约 4 倍（0.24 s → 0.95 s），表明 2 vCPU 下吞吐已饱和、8 连接属超配口径。同步确认"每轮 prepare 重置"口径的必要性（不重置连跑 TPC-C tpmC 衰减 565.00 → 230.50 → 220.00）及 `bench_tpcc.py` 主键起点限制（库内已有历史订单时重跑触发 duplicate primary key: history / order_line）。详见 `docs/experiments/D5_linux_e5_controlled_retest.md`。
 
-**D7 发版收尾（2026-11-17 完成本地准备，未打 tag、未推送）**
+**D7 发版收尾（2026-11-17 完成本地准备；2026-11-18 完成 tag 与双远端核验）**
 
 - **版本口径统一**：`cmd/openxdb/main.go` 版本常量升级 `v1.18.0`（握手版本串 `8.0.36-OpenXDB v1.18.0` 与 `select version()` 由该常量同源注入，自动联动）；`cmd/oxsql` 交互提示符由 `oxsql>` 改为 `openxdb>`（头部注释与 REPL 注释同步，命令名仍为 `oxsql`）。
 - **文档同步**：`RELEASE_NOTES.md` 整体改写为 v1.18.0 口径（覆盖 D2/D3/D4/D5/D6 + D7 收尾）；`README.md` 版本口径升级 v1.18.0 并补 v1.18.0 特性亮点行与版本状态条目；`KNOWN_LIMITATIONS.md` 版本口径升级 v1.18.0（§2.1 / §3.4 既有的 v1.18.0 结论保留）。
 - **回归验证**：`go build ./...` 与 `go vet ./...` 全通过，无回归。
-- **本次未执行（需单独完成）**：工作区 bench 临时文件清理（本次范围不涉及删除文件）；annotated tag `v1.18.0` 与双远端（gitee + GitHub443）`ls-remote` SHA 核验（本次不推送、不打 tag）。T3 / NEW-1 / NEW-2 真机复验按 `docs/D4_5_ha_quorum_gray_report.md` §8.2 执行——v1.18.0 发版前不阻塞，v1.19.0 前必须完成。
+- **tag 与远端核验（2026-11-18 完成）**：annotated tag `v1.18.0` 打在 `302b8a2`（v1.18.0 收尾提交），gitee 与 origin（GitHub443）双远端推送成功；`git rev-parse refs/tags/v1.18.0^{}` 本地与 `git ls-remote` 双端 deref 结果均为 `302b8a2f013be4f61edfa75cca0221d76d4d72c4`，tag 对象 SHA 双端一致。tag 注释内已留痕 D4/D5/D6 变更摘要与三项真机验证欠账说明。
+- **工作区清理（2026-11-18 完成）**：删除 `tests/bench/c5_sql_bench/result_*.md` 12 份基准散落结果、`tests/bench/tmp_c6_smoke_out.md`、两个空中间目录（`bench_data/d45`、`tmp_mini/c6_slowcheck`）与三个 bench 数据目录（`e2_data_1m`、`rocksdb/e2_fsync_run1m`、`rocksdb/e2_fsync_run2m_b1000`，各 68.2MB，共约 204.6MB，均由脚本可重建）。`DEV_PLAN_v1.17.0.md`、`DEV_PLAN_v1.18.0.md`、`docs/DEV_PLAN_2026Q6/Q7/Q8.md` 按项目约定保留为 untracked 排期文档。
+- **口径裁定（A6）**：T3 / NEW-1 / NEW-2 真机复验按 `docs/D4_5_ha_quorum_gray_report.md` §8.2 执行——**v1.18.0 发版前不阻塞，v1.19.0 前必须完成**。打 `v1.18.0` tag 仅表示版本节点落定，**不改变**该三项欠账状态，也不构成 `ha_quorum` 可开启的依据；`ha_quorum` 维持默认关闭，三项真机验证完成前不得在文档中改写为 PASS。
 
 ## v1.17.0 (2026-10-30)
 
@@ -312,6 +316,7 @@ v1.5.0（协议与吞吐）第 1 项「客户端 pipeline 协议」先行启动�
 
 - **M1 基础内核**：RocksDB cgo 桥存储层（+ 纯 Go 内存 B+Tree 参考实现）、追加式 WAL 与重放恢复、快照隔离本地事务、SQL 子集与二级索引、CLI/REPL 与 TCP 服务。见 [docs/T1_rocksdb_storage_impl.md](docs/T1_rocksdb_storage_impl.md)、[docs/T2_wal_impl.md](docs/T2_wal_impl.md)、[docs/T3_sql_layer.md](docs/T3_sql_layer.md)、[docs/T3_txn_impl.md](docs/T3_txn_impl.md)、[docs/T5_cli_impl.md](docs/T5_cli_impl.md)、[docs/T6_index_layer.md](docs/T6_index_layer.md)。
 - **设计决策与早期文档**：ACID 笔记（[docs/T4_acid_notes.md](docs/T4_acid_notes.md)）、M2/M3 接口预留（[docs/T7_m2m3_reservations.md](docs/T7_m2m3_reservations.md)）、引擎选型 ADR（[docs/W4_adr_engine_selection.md](docs/W4_adr_engine_selection.md)）、博客 [docs/blog_why_openxdb_rocksdb.md](docs/blog_why_openxdb_rocksdb.md)。
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
