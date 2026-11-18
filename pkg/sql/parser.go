@@ -1826,6 +1826,11 @@ func (p *parser) parseCreateView() (Stmt, error) {
 	if !ok {
 		return nil, errf("expected SELECT after AS at %d", p.cur().pos)
 	}
+	// v1.19.0 A1：本阶段不实现 WITH CHECK OPTION，定义尾部出现即明确报
+	// 不支持，禁止静默忽略（否则用户会误以为写入已受视图条件约束）。
+	if p.cur().kind == tokKeyword && (p.cur().text == "WITH" || p.cur().text == "CHECK") {
+		return nil, errf("WITH CHECK OPTION is not supported yet")
+	}
 	return &CreateViewStmt{Name: nameTok.text, Select: sel, IfNotExists: ifNot}, nil
 }
 

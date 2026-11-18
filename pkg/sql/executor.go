@@ -761,8 +761,17 @@ func (e *Executor) ExecuteTextAsSession(stmt Stmt, sqlText, user string, sess *S
 	if e.isReplicaRO() && e.replicaBarrier != nil {
 		e.replicaBarrier()
 	}
+	// v1.19.0 A1：目标为可更新视图的写语句先按持久化映射重写为基表写操作
+	// （表名 / 列清单 / SET 列 / WHERE 列名），使随后的权限校验与执行都落在
+	// 基表上；视图不存在时不做重写，保持既有 table not exists 口径。
+	// 不可更新视图的报错延后到权限校验之后抛出，无权限用户仍得到 permission
+	// denied，避免泄露视图定义细节。
+	viewErr := e.rewriteUpdatableViewDML(sess, stmt)
 	if err := e.checkPrivilege(stmt, user); err != nil {
 		return nil, err
+	}
+	if viewErr != nil {
+		return nil, viewErr
 	}
 	return e.execTimed(sess, user, sqlText, stmt, func() (*Result, error) {
 		// M9 查询缓存：仅 autocommit 下的 SELECT 参与缓存（显式事务内
@@ -840,6 +849,16 @@ func (e *Executor) execStmt(sess *Session, stmt Stmt) (*Result, error) {
 	// v1.16.0 C6：可共享 autocommit 只读 SELECT 保持共享窗口快照；
 	// 其余语句关闭窗口恢复独立快照。
 	e.resetStmtSnapshot(sess, stmt)
+	// v1.19.0 A1：可更新视图写重写下沉层——存储过程体与动态 SQL 由
+	// procRunner 直接调用 execStmt（见 procedure.go 的过程体分发），不经过
+	// ExecuteTextAsSession，若只在顶层重写则过程内对可更新视图的写会绕过
+	// 列映射。故在分发到 execInsert/execUpdate/execDelete 之前统一重写一次：
+	// 顶层已重写过的语句由 viewWrite 幂等标记直接复用结论（不重复映射、
+	// 不重复读视图目录、不重复报错），因此顶层「先重写、再权限校验」的
+	// 既有顺序不受影响；非 DML 语句立即返回 nil。
+	if err := e.rewriteUpdatableViewDML(sess, stmt); err != nil {
+		return nil, err
+	}
 	switch s := stmt.(type) {
 	case *CreateTableStmt:
 		return e.execCreateTable(sess, s)
@@ -7234,7 +7253,18 @@ func (e *Executor) execCreateView(sess *Session, s *CreateViewStmt) (*Result, er
 			return nil, &SQLError{Msg: "table not exists: " + n}
 		}
 	}
-	views = append(views, &ViewMeta{Name: s.Name, Select: s.Select})
+	// v1.19.0 A1：CREATE VIEW 时静态判定可更新性，把「视图列名 → 基表列名」
+	// 映射或不可更新原因随视图元数据一并持久化（见 updatable_view.go）。
+	vw := &ViewMeta{Name: s.Name, Select: s.Select}
+	if plan, reason := buildViewUpdatable(tabs, views, s.Select); plan != nil {
+		vw.Updatable = true
+		vw.BaseTable = plan.Base
+		vw.ColumnMap = plan.ColMap
+		vw.ColumnOrder = plan.Order
+	} else {
+		vw.NotUpdatableReason = reason
+	}
+	views = append(views, vw)
 	raw, err := saveViews(views)
 	if err != nil {
 		return nil, err

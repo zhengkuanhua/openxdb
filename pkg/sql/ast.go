@@ -246,6 +246,10 @@ type InsertStmt struct {
 	OnDup   *OnDuplicateUpdate // M10：ON DUPLICATE KEY UPDATE 赋值项
 	Replace bool               // M10：REPLACE INTO 语义
 	Select  *SelectStmt        // T42：INSERT INTO ... SELECT 源（非空时忽略 Rows）
+	// viewWrite 可更新视图写重写标记（v1.19.0 A1）：非 nil 表示本语句对象
+	// 已由 rewriteUpdatableViewDML 处理过，再次进入直接复用首次结论；
+	// 不参与解析、比较与输出。
+	viewWrite *viewWriteMark
 }
 
 func (InsertStmt) stmt() {}
@@ -396,6 +400,8 @@ type UpdateStmt struct {
 	Table string
 	Sets  []SetItem
 	Where *Where
+	// viewWrite 可更新视图写重写标记（v1.19.0 A1），语义同 InsertStmt。
+	viewWrite *viewWriteMark
 }
 
 func (UpdateStmt) stmt() {}
@@ -404,6 +410,8 @@ func (UpdateStmt) stmt() {}
 type DeleteStmt struct {
 	Table string
 	Where *Where
+	// viewWrite 可更新视图写重写标记（v1.19.0 A1），语义同 InsertStmt。
+	viewWrite *viewWriteMark
 }
 
 func (DeleteStmt) stmt() {}

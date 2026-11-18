@@ -13,6 +13,14 @@ import (
 type ViewMeta struct {
 	Name   string      `json:"name"`
 	Select *SelectStmt `json:"select"`
+	// v1.19.0 A1 可更新视图：CREATE VIEW 时静态判定并持久化，写语句据此把
+	// 视图目标重写为基表（见 updatable_view.go）。字段全部 omitempty，
+	// 保证旧视图目录（无这些字段）反序列化后按「不可更新」处理且不损坏数据。
+	Updatable          bool              `json:"updatable,omitempty"`
+	NotUpdatableReason string            `json:"not_updatable_reason,omitempty"`
+	BaseTable          string            `json:"base_table,omitempty"`
+	ColumnMap          map[string]string `json:"column_map,omitempty"`
+	ColumnOrder        []string          `json:"column_order,omitempty"`
 }
 
 // viewsKey 视图目录键。
