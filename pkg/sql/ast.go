@@ -304,9 +304,20 @@ type JoinClause struct {
 }
 
 // CTE 公共表表达式（M10）：WITH name AS (SELECT ...)。
+// v1.19.0 D5 扩展递归 CTE：WITH RECURSIVE name [(col, ...)] AS (
+// anchor UNION [ALL] recursive)。
 type CTE struct {
 	Name   string
-	Select *SelectStmt
+	Select *SelectStmt // 非递归 CTE：定义体；递归 CTE：anchor 段（UNION 之前）
+	// Columns 可选列名列表（v1.19.0 D5）：空 = 沿用 anchor 输出列名。
+	Columns []string
+	// Recursive 为 true 表示递归 CTE（RECURSIVE 前缀 + UNION 分隔），走
+	// worktable 物化迭代执行；false 保持 M10 宏展开语义完全不变。
+	Recursive bool
+	// UnionAll 为 true 表示 UNION ALL（保留重复行）；false 表示 UNION（去重）。
+	UnionAll bool
+	// RecursiveSelect 递归项（UNION 之后的自引用段），仅 Recursive 时非空。
+	RecursiveSelect *SelectStmt
 }
 
 // WindowSpec 窗口函数规格（M10）：OVER(PARTITION BY ... ORDER BY ... [frame])。

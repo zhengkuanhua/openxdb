@@ -119,6 +119,11 @@ type Session struct {
 	// 返回的行 key 不走本地 txn.Get/Scan，无法由 txn 层 readSet 记录，
 	// 提交时作为 extraRead 并入读集参与 rw-antidependency 检测。
 	serialRemoteReads map[string]bool
+	// v1.19.0 D5 递归 CTE 语句级作用域栈：每条语句执行期间压入本语句
+	// 物化出的递归 CTE 结果（名→Rel），执行结束出栈。嵌套 SELECT（子查询、
+	// 派生表、JOIN 右端）按栈顶向下查找，使递归结果在整条语句内可见；
+	// 栈随语句结束清空，不跨语句泄漏。非递归 CTE 不进本栈（仍走宏展开）。
+	recCTEScopes []map[string]*Rel
 }
 
 // NewSession 创建独立会话。服务端每 TCP 连接调用一次；

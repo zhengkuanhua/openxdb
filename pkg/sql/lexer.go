@@ -93,6 +93,11 @@ var keywords = map[string]bool{
 	// M17：审计日志（SHOW AUDITLOG；SET audit_log 配置名走 ident 不注册关键字，
 	// 避免保留 audit 作为表名破坏既有测试/用户库表）
 	"AUDITLOG": true,
+	// v1.19.0 D5：递归 CTE（WITH RECURSIVE name AS (anchor UNION [ALL] recursive)）。
+	// RECURSIVE 仅出现在 WITH 之后；UNION/UNION ALL 仅出现在 CTE 体内作
+	// anchor/递归项分隔，二者作为关键字注册可让各子句解析循环在 UNION 处自然
+	// 终止（子句入口均按关键字判别，不会吞掉 UNION）。
+	"RECURSIVE": true, "UNION": true,
 }
 
 type lexer struct {

@@ -11,6 +11,7 @@ package sql
 //   - write_pipeline        autocommit 写 pipeline 开关（v1.17.0 D1.2，server.go REPLSession）
 //   - session_lock_split    全局会话锁拆分开关（v1.18.0 D2，executor.go）
 //   - remote_range_agg      跨 region 远端区间聚合开关（v1.19.0，multinode.go）
+//   - recursive_cte_max_depth 递归 CTE 最大迭代深度（v1.19.0 D5，cte_recursive.go）
 //   - group_commit_active_window WAL 组提交主动定时窗口开关（v1.17.0 D1.3，wal_impl.go）
 //   - group_commit_window_ms WAL 组提交定时刷盘窗口毫秒（v1.14.0 P1，wal_impl.go）
 //   - slow_query_threshold  慢查询阈值毫秒（M13，executor.go slowThreshold）
@@ -231,6 +232,20 @@ var configSpecs = []*configSpec{
 			return nil
 		},
 		read: func(e *Executor) string { return boolValStr(e.RemoteRangeAgg()) },
+	},
+	{
+		key:  "recursive_cte_max_depth",
+		desc: "递归 CTE 最大迭代深度（v1.19.0 D5）：整数 >=1，worktable 迭代轮数上限，超过即报错（不静默截断结果），默认 1000（MySQL 兼容口径）",
+		def:  "1000",
+		apply: func(e *Executor, v string) error {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 1 || n > 1000000 {
+				return &SQLError{Msg: "invalid value for recursive_cte_max_depth: " + v + " (expected integer 1-1000000)"}
+			}
+			e.SetRecursiveCTEMaxDepth(int(n))
+			return nil
+		},
+		read: func(e *Executor) string { return strconv.Itoa(e.RecursiveCTEMaxDepth()) },
 	},
 	{
 		key:  "slow_query_threshold",

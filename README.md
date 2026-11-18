@@ -76,7 +76,7 @@ SELECT name FROM users WHERE age >= 25 AND age < 35 ORDER BY age;
 | **Storage** | RocksDB cgo 桥存储引擎 + 内存 B+Tree 参考实现（LSM comparator） |
 | **WAL** | 追加式 WAL + 崩溃重放恢复，group commit 批量 fsync；自动 checkpoint/truncate（安全位点截断，长期运行 wal.log 大小受控） |
 | **事务** | 本地快照隔离事务 + 分布式事务（TSO 全局时间戳 + 2PC + 分布式快照隔离）+ 保存点（`SAVEPOINT` / `ROLLBACK [WORK] TO [SAVEPOINT]` / `RELEASE SAVEPOINT`，MySQL 兼容语义，支持任意层嵌套，v1.19.0） |
-| **SQL** | SELECT/JOIN/GROUP BY/子查询/CTE/窗口函数（含多列 ORDER BY）/upsert/视图/物化视图（增量刷新）/触发器（行级语义，含 BEGIN…END 复合体、SET NEW 回写、FOLLOWS/PRECEDES 顺序）/存储过程（受限子集，含嵌套 BEGIN…END 块、命名条件 CONDITION、GET DIAGNOSTICS、异常处理 HANDLER·SIGNAL·RESIGNAL 与动态 SQL PREPARE·EXECUTE·DEALLOCATE）/ALTER 列级/CREATE DATABASE/INSERT INTO SELECT 等 |
+| **SQL** | SELECT/JOIN/GROUP BY/子查询/CTE（含递归 CTE `WITH RECURSIVE`：物化 worktable 迭代、`UNION` 去重 vs `UNION ALL`、深度上限 `recursive_cte_max_depth` 默认 1000 可热切换，v1.19.0）/窗口函数（含多列 ORDER BY）/upsert/视图/物化视图（增量刷新）/触发器（行级语义，含 BEGIN…END 复合体、SET NEW 回写、FOLLOWS/PRECEDES 顺序）/存储过程（受限子集，含嵌套 BEGIN…END 块、命名条件 CONDITION、GET DIAGNOSTICS、异常处理 HANDLER·SIGNAL·RESIGNAL 与动态 SQL PREPARE·EXECUTE·DEALLOCATE）/ALTER 列级/CREATE DATABASE/INSERT INTO SELECT 等 |
 | **RBAC 与安全** | 细粒度角色/权限体系、审计日志、TLS 加密传输（AutoTLS + 证书热轮换）、监控告警（规则级 webhook） |
 | **集群** | 复制（异步/半同步/同步）、region 分片、多节点 2PC、HA 故障转移（epoch 脑裂防护 + 回迁自动化）、自动分裂与负载均衡 |
 | **备份恢复** | 一致性快照备份（并发分片）、幂等恢复、LSN 基 PITR、分布式一致备份、备份调度/远程 push-pull |

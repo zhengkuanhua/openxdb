@@ -107,6 +107,9 @@ type Executor struct {
 	// v1.8.0 触发器递归深度上限：允许的嵌套触发层数（默认 1：最外层 DML +
 	// 1 层链式不同触发器；更深层与直接/同键递归被抑制）。配置化可热更新。
 	triggerMaxDepth int
+	// v1.19.0 D5 递归 CTE 最大迭代深度：worktable 迭代轮数上限（默认 1000，
+	// SET recursive_cte_max_depth 热更新），超限报错而非静默截断结果。
+	recCTEMaxDepth int
 	// M3 分片路由（sql.New 注入默认 Router；db.Open 加载落盘元数据后覆盖）
 	router *sharding.Router
 	// M4 集群管理器（nil = 单机模式，转发路径零触发）。
@@ -292,6 +295,8 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 		slowLog:       NewSlowLog(),
 		// v1.8.0：触发器递归深度默认 1（允许 1 层链式，禁止直接/更深递归）。
 		triggerMaxDepth: 1,
+		// v1.19.0 D5：递归 CTE 迭代深度默认 1000（MySQL 兼容口径）。
+		recCTEMaxDepth: recCTEMaxDepthDefault,
 		// M17-1：审计默认开启（安全默认）+ 内存环 1000 条；落盘器懒创建。
 		auditEnabled: true,
 		auditMax:     auditMaxDefault,
@@ -3435,6 +3440,17 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (res *Result, err er
 	} else if ok {
 		return res, nil
 	}
+	// v1.19.0 D5 递归 CTE：先物化语句内 Recursive 定义并压入会话语句级作用域
+	// （执行结束 defer 出栈）。非递归 CTE 不经过此处，仍由下方 expandCTEs 走
+	// M10 宏展开，语义与 v1.18.0 完全一致（零回归）。
+	if pop, err := e.materializeRecursiveCTEs(sess, s); err != nil {
+		return nil, err
+	} else if pop != nil {
+		// 递归定义已物化进作用域栈，从 CTEs 中摘除，使下方 expandCTEs 只处理
+		// 非递归定义（否则会把 CTE 名替换成 anchor 定义副本，绕过 worktable）。
+		s.CTEs = stripRecursiveCTEs(s.CTEs)
+		defer pop()
+	}
 	// M10 CTE：执行前展开语句级 WITH 子句（引用 CTE 名替换为定义子查询），
 	// 先于视图展开执行（语句内作用域优先）；循环引用在此阶段报错。
 	if err := e.expandCTEs(s); err != nil {
@@ -3445,8 +3461,10 @@ func (e *Executor) execSelect(sess *Session, s *SelectStmt) (res *Result, err er
 	if err := e.expandViews(tx, s); err != nil {
 		return nil, err
 	}
-	// P0 增强路径：JOIN / GROUP BY / FROM 子查询 / BETWEEN / IN / 限定列引用
-	if hasAdvancedSelect(s) {
+	// P0 增强路径：JOIN / GROUP BY / FROM 子查询 / BETWEEN / IN / 限定列引用；
+	// v1.19.0 D5：递归 CTE 的定义或 FROM/JOIN 引用也强制走 Rel 路径，
+	// 使物化结果以派生表形式进入既有 JOIN/过滤/排序管线（沿用 region 路由）。
+	if hasAdvancedSelect(s) || e.hasRecursiveCTE(sess, s) {
 		return e.execSelectRel(sess, tx, s)
 	}
 	tabs, err := loadTables(tx.Get)
@@ -4706,6 +4724,11 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 	}
 	alias := orAlias(s.From, s.FromAlias)
 	var rel *Rel
+	// v1.19.0 D5：FROM 命中本语句物化的递归 CTE 时，直接以物化结果为左输入源
+	// （列名按 FROM 别名重限定，行集只读复用），跳过物理表扫描分支。
+	if r := sess.recCTELookup(s.From); r != nil && s.Subquery == nil {
+		rel = r.asRel(alias)
+	}
 	// IN 子查询物化缓存：pkCondPlan 前缀后主键列 IN 需要命中值做逐值点查；
 	// WHERE 过滤阶段复用同一缓存避免重复执行子查询。
 	var subCache map[*Cond]subqueryResult
@@ -4894,9 +4917,16 @@ func (e *Executor) execSelectRel(sess *Session, tx txn.Txn, s *SelectStmt) (*Res
 				}
 			}
 		}
-		right, err := e.relFromTable(sess, tx, tabs, jc.Table, orAlias(jc.Table, jc.Alias), jc.Subquery, jc.Alias, nil)
-		if err != nil {
-			return nil, err
+		// v1.19.0 D5：JOIN 右端引用本语句物化的递归 CTE 时，直接以物化结果
+		// 作右输入（跳过物理表/派生表读取分支）。
+		var right *Rel
+		if rc := sess.recCTELookup(jc.Table); rc != nil && jc.Subquery == nil {
+			right = rc.asRel(orAlias(jc.Table, jc.Alias))
+		} else {
+			right, err = e.relFromTable(sess, tx, tabs, jc.Table, orAlias(jc.Table, jc.Alias), jc.Subquery, jc.Alias, nil)
+			if err != nil {
+				return nil, err
+			}
 		}
 		// M12：右表物理表且 ON 含右主键等值条件时走分布式路由 JOIN（跨 region/节点
 		// 路由点查 + 合并）；否则回退 joinRels 全量拼接，行为与单机一致。

@@ -2504,10 +2504,37 @@ func (p *parser) parseSelect() (Stmt, error) {
 	// M10 CTE：WITH name AS (SELECT ...) [, ...] 前缀（可嵌套，子查询 FROM 亦可带 WITH）
 	if p.cur().kind == tokKeyword && p.cur().text == "WITH" {
 		p.next()
+		// v1.19.0 D5：WITH RECURSIVE 前缀（可选）。带该前缀时定义体内允许
+		// anchor UNION [ALL] recursive 两段式；不带前缀时行为与 M10 完全一致。
+		recursive := false
+		if p.cur().kind == tokKeyword && p.cur().text == "RECURSIVE" {
+			recursive = true
+			p.next()
+		}
 		for {
 			nameTok, err := p.expect(tokIdent, "CTE name")
 			if err != nil {
 				return nil, err
+			}
+			// v1.19.0 D5：可选列名列表 name (col, ...)。
+			var cteCols []string
+			if p.cur().kind == tokLParen {
+				p.next()
+				for {
+					colTok, err := p.expectName("CTE column name")
+					if err != nil {
+						return nil, err
+					}
+					cteCols = append(cteCols, colTok.text)
+					if p.cur().kind == tokComma {
+						p.next()
+						continue
+					}
+					break
+				}
+				if _, err := p.expect(tokRParen, ")"); err != nil {
+					return nil, err
+				}
 			}
 			if err := p.expectKeyword("AS"); err != nil {
 				return nil, err
@@ -2523,10 +2550,41 @@ func (p *parser) parseSelect() (Stmt, error) {
 			if !ok {
 				return nil, errf("invalid CTE definition")
 			}
+			cte := CTE{Name: nameTok.text, Select: subSel, Columns: cteCols}
+			// v1.19.0 D5：UNION [ALL] 拆分 anchor / 递归项。各子句解析循环均在
+			// 关键字处终止，anchor 段解析结束后当前 token 即为 UNION。
+			if p.cur().kind == tokKeyword && p.cur().text == "UNION" {
+				if !recursive {
+					return nil, errf("UNION in CTE requires WITH RECURSIVE")
+				}
+				p.next()
+				unionAll := false
+				if p.cur().kind == tokKeyword && p.cur().text == "ALL" {
+					unionAll = true
+					p.next()
+				} else if p.cur().kind == tokKeyword && p.cur().text == "DISTINCT" {
+					// UNION DISTINCT 与 UNION 同义（显式去重）。
+					p.next()
+				}
+				recSub, err := p.parseSelect()
+				if err != nil {
+					return nil, err
+				}
+				recSel, ok := recSub.(*SelectStmt)
+				if !ok {
+					return nil, errf("invalid recursive CTE definition")
+				}
+				if p.cur().kind == tokKeyword && p.cur().text == "UNION" {
+					return nil, errf("recursive CTE " + nameTok.text + " supports a single UNION")
+				}
+				cte.Recursive = true
+				cte.UnionAll = unionAll
+				cte.RecursiveSelect = recSel
+			}
 			if _, err := p.expect(tokRParen, ")"); err != nil {
 				return nil, err
 			}
-			stmt.CTEs = append(stmt.CTEs, CTE{Name: nameTok.text, Select: subSel})
+			stmt.CTEs = append(stmt.CTEs, cte)
 			if p.cur().kind == tokComma {
 				p.next()
 				continue
@@ -2774,8 +2832,13 @@ func (p *parser) parseJoin() (JoinClause, error) {
 	if p.cur().kind == tokKeyword && p.cur().text == "ON" {
 		p.next()
 		// 兼容 MySQL 的 ON (cond) 括号包裹写法（TPC-C JOIN 条件带括号）。
+		// parenBudget 记录本 ON 子句自身消费的括号数：只有确实打开过括号时才把
+		// 结尾的 ) 视为本 ON 的闭合符，避免误吞外层括号（如 CTE 定义体 / 派生表
+		// 收尾的 )），否则 `... JOIN t ON a.x = t.y)` 会丢失 CTE 闭合括号。
+		parenBudget := 0
 		if p.cur().kind == tokLParen {
 			p.next()
+			parenBudget++
 		}
 		for {
 			c, err := p.parseCond()
@@ -2783,8 +2846,9 @@ func (p *parser) parseJoin() (JoinClause, error) {
 				return jc, err
 			}
 			jc.On = append(jc.On, c)
-			if p.cur().kind == tokRParen {
+			if p.cur().kind == tokRParen && parenBudget > 0 {
 				p.next()
+				parenBudget--
 			}
 			if p.cur().kind == tokKeyword && p.cur().text == "AND" {
 				p.next()
