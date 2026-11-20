@@ -286,6 +286,17 @@ go build ./...
 Darwin `-lstdc++`), so only the RocksDB include/lib dirs need to be supplied
 via `CGO_CFLAGS` / `CGO_LDFLAGS`.
 
+**Windows: MinGW runtime must be linked statically.** `scripts/build.ps1`
+always appends `-static -static-libgcc -static-libstdc++` to `CGO_LDFLAGS`,
+then verifies the import table of `bin\openxdb.exe` with `objdump -p`: if the
+binary still imports `libwinpthread-1.dll` (or `libgcc_s_*.dll` /
+`libstdc++-6.dll`), the script prints the offending DLLs and exits non-zero
+instead of shipping the artifact. A dynamically linked Windows build imports
+`libwinpthread-1.dll`, which is not part of Windows; on a machine without
+MinGW installed the process exits silently at startup with no error output at
+all ("process just vanishes"). Keep those three flags in `CGO_LDFLAGS` if you
+build for Windows manually. See `KNOWN_LIMITATIONS.md` §5 for details.
+
 ## Demo
 
 OpenXDB REPL session: create table, insert, secondary index, query, update, delete, explain.

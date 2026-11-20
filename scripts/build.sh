@@ -58,6 +58,13 @@ export CGO_ENABLED=1
 export CGO_CFLAGS="-I$ROCKS_SRC/include"
 export CGO_CXXFLAGS="-I$ROCKS_SRC/include"
 export CGO_LDFLAGS="-L$ROCKS_BUILD -lrocksdb"
+# NOTE (Windows): this script targets Linux/macOS. Windows builds must go through
+# scripts/build.ps1, which appends -static -static-libgcc -static-libstdc++ to
+# CGO_LDFLAGS and then verifies bin/openxdb.exe with objdump. Windows release
+# binaries must link the MinGW runtime statically: a dynamically linked exe
+# imports libwinpthread-1.dll, and on a machine without MinGW installed the
+# process exits silently at startup (missing DLL, no error shown). If you build
+# Windows manually (cross or native), keep those three flags in CGO_LDFLAGS too.
 
 if [[ "$SKIP_BUILD" == "1" ]]; then
   echo "[build] CGO_CFLAGS=$CGO_CFLAGS"

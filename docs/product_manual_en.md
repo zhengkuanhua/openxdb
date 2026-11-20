@@ -137,6 +137,8 @@ go build ./...
 
 > **Note**: the repository `#cgo` flags include `-static-libstdc++ -static-libgcc`; do not add undeclared link flags such as `-lstdc++` / `-lz`, which can cause link conflicts.
 
+**Windows runtime requirement (known issue)**: Windows release packages must link the MinGW runtime statically. `scripts/build.ps1` always appends `-static -static-libgcc -static-libstdc++` to `CGO_LDFLAGS` and then verifies the import table with `objdump -p bin/openxdb.exe`; if the binary still imports `libwinpthread-1.dll` (or `libgcc_s_*.dll`, `libstdc++-6.dll`), the build fails and no artifact is produced. These DLLs are MinGW-private runtime libraries and are not part of Windows, so a dynamically linked build exits silently at process startup on a machine without MinGW installed, with no error output at all (the service "just vanishes"; nothing shows up in Event Viewer or OpenXDB logs). If you build for Windows manually or cross-compile, keep those three link flags and verify the import table yourself.
+
 ### 2.3 Start REPL / TCP Server
 
 ```sh

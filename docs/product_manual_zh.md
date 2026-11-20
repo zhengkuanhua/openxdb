@@ -148,6 +148,8 @@ go build ./...
 
 > **注意**：仓库 #cgo 附加标志含 `-static-libstdc++ -static-libgcc`，请勿额外追加 `-lstdc++` / `-lz` 等未声明链接参数，避免链接冲突。
 
+**Windows 运行时要求（已知问题）**：Windows 发行包必须静态链接 MinGW 运行时。`scripts/build.ps1` 已固定把 `-static -static-libgcc -static-libstdc++` 追加进 `CGO_LDFLAGS`，并在构建后用 `objdump -p bin/openxdb.exe` 校验导入表；若仍导入 `libwinpthread-1.dll`（或 `libgcc_s_*.dll`、`libstdc++-6.dll`）即报错退出、不出包。原因是这类 DLL 为 MinGW 私有运行时、不在 Windows 系统目录中：产物一旦动态依赖它，在未安装 MinGW 的机器上进程会在启动阶段静默退出、无任何报错输出（现象为服务"启动即飞掉"，事件查看器与 OpenXDB 日志中均无痕迹）。手工或交叉构建 Windows 版时请保留上述三个链接参数，并自行核对导入表。
+
 ### 2.3 启动 REPL / TCP server
 
 ```sh

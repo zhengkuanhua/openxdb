@@ -160,6 +160,7 @@ AIGC:
 - **备份格式**：BACKUP 产物为单文件逻辑备份（version + CRC32），跨版本恢复请先确认 DataFormatVersion 兼容（`openxdb version` 查看）。
 - **告警通知通道**：告警引擎内置 logx 通知与 v1.11.0 新增的规则级 webhook 回调（触发/恢复异步 POST JSON 载荷）；钉钉/企业微信等原生渠道未接入，可经 webhook 网关转发。
 - **测试规模**：全仓回归 694+ 测试覆盖主要路径，但非商用级验证范围；E5 真实用户验证覆盖 30+ 商业场景检查，生产使用仍需独立验收。
+- **Windows 发行包运行时依赖（构建期强制）**：Windows 版 `openxdb.exe` 必须静态链接 MinGW 运行时——`scripts/build.ps1` 已固定把 `-static -static-libgcc -static-libstdc++` 追加进 `CGO_LDFLAGS`，并在构建后用 `objdump -p` 校验导入表，一旦仍含 `libwinpthread-1.dll`（或 `libgcc_s_*.dll`、`libstdc++-6.dll`）即报错退出、不出包。**影响**：若动态链接，exe 会导入 `libwinpthread-1.dll` 等 MinGW 私有 DLL；这类 DLL 不在 Windows 系统目录中，在未安装 MinGW 的机器上进程会在启动阶段直接静默退出、无任何报错输出（表现为"进程飞掉"，用户与应用日志均无痕迹可查）。**建议**：Windows 发行包一律经 `scripts/build.ps1` 构建，不要绕过其校验；手工或交叉构建 Windows 版时切勿省略上述三个链接参数，并自行用 `objdump -p bin\openxdb.exe`（查看 `DLL Name` 项）确认无 MinGW 运行时 DLL。
 
 ---
 

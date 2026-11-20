@@ -14,6 +14,12 @@
 go build ./...
 ```
 
+Windows 上请使用 `powershell -ExecutionPolicy Bypass -File scripts\build.ps1` 出包：脚本固定把
+`-static -static-libgcc -static-libstdc++` 追加进 `CGO_LDFLAGS`，并在构建后用 `objdump -p`
+校验 `bin\openxdb.exe` 导入表，若仍依赖 `libwinpthread-1.dll` 等 MinGW 运行时 DLL 会报错退出。
+动态链接的 Windows 产物在未安装 MinGW 的机器上会于启动阶段静默退出（无任何报错），
+细节见 `KNOWN_LIMITATIONS.md` §5。
+
 ## 测试
 
 ```bash
