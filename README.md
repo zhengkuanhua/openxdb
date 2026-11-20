@@ -81,6 +81,82 @@ CREATE INDEX idx_age ON users (age);
 SELECT name FROM users WHERE age >= 25 AND age < 35 ORDER BY age;
 ```
 
+### 5. 登录与常用命令
+
+> 以下路径均在 v1.19.0 + Windows 上实测通过，按场景选一条即可。
+
+#### 5.1 本地登录：REPL
+
+```sh
+openxdb.exe repl --data-dir .\data
+```
+
+进入后直接写 SQL，内置命令有 `HELP` / `PING` / `GET` / `SET` / `DEL` / `BEGIN` / `COMMIT` / `ROLLBACK` / `METRICS` / `STATUS` / `SHUTDOWN` / `QUIT`。REPL 走本地文件入口，不受 `--auth` 握手约束——能读到数据目录的人就是管理员，生产环境请用操作系统权限保护该目录。
+
+#### 5.2 网络登录：7788 自研协议 + Python 驱动
+
+```sh
+openxdb.exe start --data-dir .\data
+pip install -e drivers/python
+```
+
+```python
+import openxdb
+
+conn = openxdb.connect(host="127.0.0.1", port=7788)
+cur = conn.cursor()
+cur.execute("SHOW TABLES")
+print(cur.fetchall())
+```
+
+#### 5.3 启用鉴权后如何登录
+
+```sh
+# 首启引导 root（无 root 用户时自动创建），也可用环境变量 OPENXDB_ROOT_PASSWORD 传入
+openxdb.exe start --data-dir .\data --auth --root-password <你的密码>
+```
+
+```python
+conn = openxdb.connect(host="127.0.0.1", port=7788, user="root", password="你的密码")
+```
+
+带凭据时驱动自动发送行协议 `AUTH <user> <password>`，成功返回 `AUTH OK`。未带凭据报 `auth required: send AUTH <user> <password> first`；密码错误报 `auth failed: invalid user or password`。
+
+建用户与授权（REPL 或任一已登录会话中执行）：
+
+```sql
+CREATE USER 'alice' IDENTIFIED BY 'pwd123';
+GRANT SELECT, INSERT ON users TO 'alice';
+SHOW USERS;
+SHOW GRANTS FOR 'alice';
+```
+
+#### 5.4 MySQL 客户端连接（受限，仅供兼容用途）
+
+```sh
+openxdb.exe start --data-dir .\data --mysql-port 3306
+mysql -h127.0.0.1 -P3306 -uroot --ssl-mode=DISABLED
+```
+
+v1.19.0 + MySQL 8.0 客户端实测限制：必须显式加 `--ssl-mode=DISABLED` 才能完成握手；非交互执行（`-e` 或管道输入）不返回结果集回显；服务端开启 `--auth` 时客户端在认证阶段失败（服务端日志 `mysql auth failed: user=root err=EOF`）。日常登录与操作请走 5.1 / 5.2。
+
+#### 5.5 常用运维命令
+
+| 命令 | 用途 |
+| --- | --- |
+| `openxdb.exe version` | 打印版本 / 构建 / commit / 数据格式版本 |
+| `openxdb.exe doctor --data-dir .\data [--addr 127.0.0.1:7788] [--json]` | 数据目录与在线服务健康巡检（退出码 0 通过 / 1 警告 / 2 错误） |
+| `openxdb.exe preflight --data-dir .\data [--target-version <ver>]` | 升级前健康检查 |
+| `openxdb.exe stats --addr 127.0.0.1:7788 [--interval 5] [--json]` | 拉取运行指标 |
+| `openxdb.exe metrics --addr 127.0.0.1:7788` | 拉取 Prometheus 文本指标 |
+| `openxdb.exe status --addr 127.0.0.1:7788 [--json]` | 拉取聚合状态快照 |
+| `openxdb.exe import --data-dir .\data --dump dump.sql [--batch 500]` | mysqldump 兼容导入 |
+| `openxdb.exe gen-cert [--cn localhost] [--days 365]` | 生成自签名 TLS 证书（ECDSA P-256） |
+| `openxdb.exe backup push --file <path> --url <http(s) url>` | 备份上传远端（pull 反向） |
+| `openxdb.exe replica --data-dir .\data --master <host:7788>` | 以从节点身份连接主节点异步复制 |
+
+停止服务：REPL 内执行 `SHUTDOWN`、会话内执行 `SHUTDOWN GRACEFUL`、控制台 Ctrl+C，或另开窗口 `taskkill /IM openxdb.exe /F`。
+
 ## 特性亮点
 
 | 维度 | 能力 |
