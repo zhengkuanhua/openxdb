@@ -39,6 +39,18 @@ openxdb start --data-dir ./data --mysql-port 3306   # 可选：启用 MySQL wire
 openxdb repl --data-dir ./data    # 或直接进入本地 REPL
 ```
 
+**Windows 说明**：`openxdb.exe` 是命令行程序，直接双击（不带子命令）只会打印 Usage 并以退出码 1 退出，窗口一闪而过属正常行为，不是崩溃；判断二进制是否可用看 `openxdb.exe version` 能否打印版本号。
+
+本机常驻有三种方式：
+
+| 方式 | 操作 | 适用场景 |
+| --- | --- | --- |
+| 前台运行 | PowerShell 中执行 `openxdb.exe start --data-dir .\data` | 调试、临时使用 |
+| 双击启动器 | 双击 `scripts\start-windows.bat`（自动 init、检查端口、出错停住窗口） | 本机快速起服 |
+| 注册为服务 | 用 NSSM 把 `openxdb.exe start --data-dir <目录>` 包装成 Windows 服务（`openxdb.exe` 未实现 SCM 接口，不要用 `sc.exe` 直接托管，否则报 1053） | 开机自启、长期运行 |
+
+`scripts\start-windows.bat` 用法：与 `openxdb.exe` 放在同一目录后双击；默认数据目录为同目录下的 `data\`；换目录时传入参数，如 `start-windows.bat D:\openxdb-data`。
+
 ### 3. 连接数据库
 
 - **REPL**：`openxdb repl --data-dir ./data`
@@ -446,12 +458,4 @@ Docs live in `docs/` (implementation records) and `docs/experiments/` (benchmark
 ## License
 
 MIT — see [LICENSE](LICENSE).
-*（内容由AI生成，仅供参考）*
-*（内容由AI生成，仅供参考）*
-*（内容由AI生成，仅供参考）*
-*（内容由AI生成，仅供参考）*
-*（内容由AI生成，仅供参考）*
-*（内容由AI生成，仅供参考）*
-*（内容由AI生成，仅供参考）*
-*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

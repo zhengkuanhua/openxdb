@@ -816,3 +816,4 @@ All performance numbers come from the E5 standard bench alignment experiment (`d
 
 *This manual is compiled from the OpenXDB README.md and docs/ design documents, v1.0.0.*
 *（内容由AI生成，仅供参考）*
+*（内容由AI生成，仅供参考）*

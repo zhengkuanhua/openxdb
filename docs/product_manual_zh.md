@@ -835,3 +835,4 @@ JDBC：`jdbc:openxdb://host:7788`；Python：`openxdb.connect("host", 7788)`。�
 *本文档由 OpenXDB 项目 README.md 与 docs/ 目录设计文档整理而成，v1.0.0。*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
+*（内容由AI生成，仅供参考）*
