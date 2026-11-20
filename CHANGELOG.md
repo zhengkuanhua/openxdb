@@ -39,7 +39,7 @@ OpenXDB 版本变更记录。
 
 > 版本线说明：历史版本以仓库 README Status 行、docs/ 设计文档头部标注与 git 提交记录为准。早期部分中间 -alpha 版本未单独打标（git 与文档均无显式版本号），按里程碑区间归纳，版本号不做臆造。
 
-## v1.19.0 (未发布，进行中)
+## v1.19.0 (2026-11-20)
 
 **Added**
 - **远端区间聚合 + 远端 Scan 流式协议（`remote_range_agg`，默认 off）**：跨 region 多区间读由「逐区间独立 `QUERY_REQ` 往返」合并为「按归属节点聚合的单次 `QUERY_MULTI` 往返」。协议新增帧 `msgQueryMultiReq` / `msgQueryMultiResp`（编号 66/67，避开既有 REGION_PUSH 20-21、2PC 22-27、TSO 28-29、DDL 30-31、注册表 32-33、备份恢复 40-45、epoch 50、全量对齐 60-61、TSO HA 70-71）；新增 `QueryRange` / `MultiQueryReq` / `MultiQueryChunk`，服务端按区间复用既有 `scanRange`（含 `beginTS` 版本过滤与排序截窗）后以 512 行 / 4MB 预算分块流式回传，`Done` 收尾、任一区间出错即错误前置。客户端新增 `Client.ScanMulti` 与 `Manager.ScanMultiRemote`。
@@ -81,6 +81,14 @@ OpenXDB 版本变更记录。
 - **校验挂载点**：`viewCheckPlan` 由 DML 重写阶段（`rewriteUpdatableViewDML`，含顶层与 `execStmt` 下沉层）挂到 `InsertStmt` / `UpdateStmt` 上，`execInsert` 在冲突判定后、写集收集处对普通插入行校验（`insertRowUpsertOpsHook` 的 `buildRow` 与 BEFORE 触发器回写之后，保证校验的是最终落盘值），`execUpdate` 在 `SET` 表达式应用后、外键校验前校验；两处均只产出待应用写集、语句末尾统一提交，故校验失败天然整条回滚。存储过程体、动态 SQL 与触发器体内的视图写经同一下沉层，约束与顶层一致。
 - **测试**：`pkg/sql/check_option_test.go`（13 例）——`INSERT` 越界拒绝与拒绝后基表零残留、多行 `INSERT` 任一行越界整条回滚、未暴露列按默认值参与求值、`UPDATE` 改出边界拒绝与改回边界内放行、多行 `UPDATE` 整条回滚、`DELETE` 不受限、无 `CHECK OPTION` 视图不校验、`LOCAL` / `CASCADED` / 裸写法等价、限定列名与 `AS` 别名列引用、复合条件（`AND` / 比较组合）、无 `WHERE` 定义恒通过、不可更新视图带 `CHECK OPTION` 建表期拒绝、存储过程体内的写入约束。
 - **文档口径同步（A2）**：`KNOWN_LIMITATIONS` §1.8 改写为 A2 语义（`CHECK OPTION` 支持范围、`LOCAL` / `CASCADED` 等价理由、整语句回滚粒度、`ON DUPLICATE KEY UPDATE` 更新分支不校验的差异、校验条件随 `ALTER TABLE` 陈旧的口径与建议），`README` 能力表 SQL 行同步。
+
+**D7 发版收尾（2026-11-20 完成本地准备）**
+
+- **版本常量单点化**：新增零依赖包 `pkg/version`（`Version` / `MySQLServerPrefix` / `ServerVersion`），`cmd/openxdb/main.go` 的版本常量、`pkg/mysqlproto` 的握手版本串与 `pkg/sql` 的 `select version()` 全部取自同一常量，消除 `main.go` 与 `handshake.go` 两处独立版本常量，发版只需改 `pkg/version.Version` 一处。
+- **版本串漂移修正**：握手版本串与 `select version()` 此前各自硬编码且停留在 `v1.17.0`（落后版本线两轮），本次随单点化一并修正为 `8.0.36-OpenXDB v1.19.0`；相关测试改为对 `pkg/version` 常量的同源断言，避免下次发版再次漂移。
+- **文档同步**：`RELEASE_NOTES.md` 整体改写为 v1.19.0 口径；`README.md` 版本口径升级 v1.19.0 并补版本状态条目；`KNOWN_LIMITATIONS.md` 版本口径升级 v1.19.0（§1.3 / §1.4 / §1.5 / §1.7 / §1.8 既有的 v1.19.0 能力条目保留）；`docs/index.md` 头部版本口径同步。
+- **回归验证**：`go build ./...`、`go vet ./...`、`go test ./...` 全通过（33 个包：22 个 ok、11 个无测试文件，无 FAIL）。`gofmt` 仅在仓库工作区 CRLF 换行约定下会把全部 CRLF 文件列出，按 LF 归一化后本次改动文件无格式差异；`pkg/server/status.go` 存在一处历史遗留对齐差异，非本次引入，未纳入本轮改动。
+- **tag 与远端核验**：annotated tag `v1.19.0` 与 gitee / origin 双远端推送及三方 SHA 比对由主链在本地改动落库后执行。
 
 ## v1.18.0 (2026-11-17)
 

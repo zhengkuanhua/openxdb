@@ -9,58 +9,57 @@ AIGC:
     ReservedCode2: UDm3b/NfHHOkbknWca+ttp8cSfMCckglKfbESPE7h17FKwsXlvhweB/iFshQHxuiq9o9Jk6/hIsv0Gku9XZrg2r7w9bLEXfjvZSrWIv+Lg0phzlhFgGdmu5akERzFrIeUVXhtyfq/J26k6yK9nK94KWV00B0NI8gBSiSTP5XEq+YF3qlPKs2DtT/CKM=
 ---
 
-# OpenXDB v1.18.0 Release Notes
+# OpenXDB v1.19.0 Release Notes
 
-发布日期：2026-11-17
+发布日期：2026-11-20
 
 ## 版本亮点
 
-- **跨节点数据分布落地（D3，P0）**：显式 REGION 指派（隐式 region 显式化 + `ASSIGN REGION`）在三节点组网完成分布，`SHOW REGION ROUTES` 由空变为可见 region → node 映射；跨节点点查可见（node-b 写、node-a 读 cnt=1），COUNT/SUM 跨节点聚合不丢不重，非并发全链路验证通过。HA 灰度长期缺失的"数据分布层未接线"前置阻塞项就此解除。
-- **HA quorum 灰度全链路演练（D4，P0）**：`ha.quorumEnabled=true` 三节点多数派开启评估、宕机 failover（读 failover 自动重指派）、脑裂 + epoch fencing 拒绝旧主写、节点恢复回迁与路由收敛四项演练完成，13 项结论矩阵中 8 项通过、4 项代码已修待真机复验、1 项部分落地；最终判定 **维持 `ha.quorumEnabled=off`、`ha.epochEnabled=on`**，结构性原因（集群轨无共识提交、写为归属节点本地提交 + 副本异步补齐）与升级路径已写入灰度报告。
-- **会话锁重试收口（D2，P0）**：v1.17.0 整体回退的会话锁重试项在干净库重建后复测通过——16 连接 read **17.12 TPS**（较 8 连接基线 11.85 提升 **+44.6%**）、read_write 8 连接 **13.58 TPS** 无回归，errs=0。
-- **读路径优化（D6，P2）**：批量点查合并把 routed JOIN 回表与 IN 子查询由逐行/逐值点查改为一次 `mgetKVCluster`（N=64 实测 **33.3ms → 0.52ms**，点查往返 64 次 → 1 次）；块缓存调优实测 **-1.6% 负收益已回退**，确认瓶颈为 cgo 往返而非缓存容量；Snapshot 批量 Scan 评估确认快照复用、多区间合并扫描、版本可见性批量过滤均已具备，无新增代码。
-- **Linux 平台口径补齐（D5，P1）**：RHEL 9.7 目标机以仓库脚本从零构建部署打通，同口径 E5 受控复测落地（OLTP 8.17 / 8.13 / 8.10 TPS、TPC-C tpmC 749.50，14 组采集 errs=0 / reconnects=0），跨平台可比性边界成文。
+- **存储过程能力补齐（D2，P0）**：异常处理与动态 SQL 同时落地——`DECLARE {CONTINUE|EXIT} HANDLER FOR <cond>`（`SQLSTATE` / 数字错误码 / `SQLEXCEPTION` / `SQLWARNING` / `NOT FOUND`，按"最近声明优先"匹配、随块退出自动出栈）、`SIGNAL` / `RESIGNAL`（含 `SET MESSAGE_TEXT|MYSQL_ERRNO|SQLSTATE`）、`PREPARE <stmt> FROM '<文本>'|@var` / `EXECUTE <stmt> [USING ...]` / `DEALLOCATE PREPARE`（`?` 按序绑定、过程体白名单校验、不跨 CALL 泄漏）；同时支持嵌套 `BEGIN…END` 独立作用域、`DECLARE <name> CONDITION FOR ...` 命名条件与 `GET [CURRENT] DIAGNOSTICS`（`ROW_COUNT` / `CONDITION <n>` 的 `RETURNED_SQLSTATE` / `MYSQL_ERRNO` / `MESSAGE_TEXT`）。
+- **触发器体升级为复合块（D3，P0）**：`CREATE TRIGGER ... FOR EACH ROW BEGIN <stmt>; ... END` 复用存储过程解析与执行器，自动获得块级 `DECLARE`、`IF` / `LOOP` / `WHILE` / `REPEAT` / `CASE` 与 `HANDLER`；`BEFORE INSERT/UPDATE` 支持行级 `SET NEW.<col> = <expr>` 回写（该行全部 BEFORE 触发器执行完毕后按表结构统一写回，`OLD.<col>` 只读）；`FOLLOWS` / `PRECEDES` 同表同事件命中集做稳定拓扑排序，无依赖保持创建顺序、成环按创建顺序兜底。
+- **事务保存点（D4，P1）**：`SAVEPOINT <name>` / `ROLLBACK [WORK] TO [SAVEPOINT] <name>` / `RELEASE SAVEPOINT <name>` 全语义落地，ORM 嵌套事务可直接依赖。
+- **递归 CTE（D5，P1）**：`WITH RECURSIVE <name> [(<col>, ...)] AS (<anchor> UNION [ALL] <recursive>) [, ...] <SELECT>`，支持与非递归 CTE 混用、作 `FROM` / `JOIN` 右端；深度上限由配置项 `recursive_cte_max_depth`（默认 1000，对齐 MySQL `cte_max_recursion_depth`）控制，超限报错不静默截断。附带修正 `JOIN ... ON <cond>` 紧跟外层 `)` 时被吞括号的解析缺陷。
+- **SQL JSON 函数族（D6，P1）**：新增 `JSON_VALID` / `JSON_EXTRACT` / `JSON_UNQUOTE` / `JSON_TYPE` / `JSON_LENGTH` / `JSON_OBJECT` / `JSON_ARRAY` / `JSON_SET` 共 8 个函数，自带保序文档模型（键序不被打乱、数字按 `UseNumber` 保真），输出对齐 MySQL 紧凑风格；可在投影列、`WHERE`、`UPDATE SET`、`CALL` 参数等任意表达式位置使用。
+- **远端区间聚合 + 远端 Scan 流式协议（D1，P1，`remote_range_agg` 默认 off）**：跨 region 多区间读由"逐区间独立 `QUERY_REQ` 往返"合并为"按归属节点聚合的单次 `QUERY_MULTI` 往返"，服务端按区间复用既有扫描路径后以 512 行 / 4MB 预算分块流式回传；结果与逐区间路径逐行等价，开关关闭时完全走 v1.18.0 旧路径、不发新帧。
+- **可更新视图与 `CHECK OPTION`（A1 / A2）**：单表裸列视图的 `INSERT` / `UPDATE` / `DELETE` 由视图列映射重写到基表并下沉至 `execStmt`，存储过程体、动态 SQL 与触发器体内的视图写与顶层同口径；`WITH [CASCADED|LOCAL] CHECK OPTION` 对新行求值，越界报 `CHECK OPTION failed '<view>'` 并整条语句回滚。
+- **发版口径收口（D7）**：版本常量单点化到零依赖包 `pkg/version`，`cmd/openxdb` 版本输出、MySQL 握手版本串与 `select version()` 三者同源；握手串此前停留在 `v1.17.0` 的历史漂移一并修正为 `8.0.36-OpenXDB v1.19.0`。
 
-## 新增能力（相对 v1.17.0）
+## 新增能力（相对 v1.18.0）
 
-- **D2 会话锁重试收口**：v1.17.0 回退后在干净库重建复测，16 连接 read 17.12 TPS（≥ 验收线 14.22，+44.6%）、read_write 8 连接 13.58 TPS 无回归，errs=0（commit `c2436cf` 三端一致）。
-- **D3 跨节点数据分布策略**：显式 REGION 指派（隐式 region 显式化 + `ASSIGN REGION`，不强制先 SPLIT）三节点分布落地；`SHOW REGION ROUTES` 可见指派结果，跨节点点查可见性、COUNT/SUM 跨节点聚合不丢不重，非并发全链路验证通过；三节点数据分布操作指南成文。
-- **D4 HA quorum 灰度全链路演练（D4.1–D4.5）**：`ha.quorumEnabled=true` 三节点多数派评估、宕机 failover（读 failover 自动重指派 + 数据可读）、脑裂与 epoch fencing 拒绝旧主写、节点恢复回迁与路由收敛四项演练完成；灰度报告（13 项结论矩阵）与 `HA_BRAIN_SPLIT_DESIGN` §5.5 结论更新。
-- **D6.1 块缓存调优（负收益，不采纳）**：块缓存调至 256MB 实测 -1.6%，已回退；确认 SQL 路径瓶颈为 cgo 往返（`runtime.cgocall` flat 63.75%）而非引擎缓存容量。
-- **D6.2 批量点查合并**：`routedJoin`（routed JOIN 回表）与 `evalInSubqueryRouted`（IN 子查询）由逐行/逐值点查改为一次 `mgetKVCluster` 批量读，保持左行原序、LEFT JOIN 补空、未命中跳过与路由错误前置返回语义；N=64 基准 33.3ms → 0.52ms，验证用例断言 `Get=0` / `MGet=1`。
-- **D6.3 Snapshot 批量 Scan 评估**：确认快照号语句级/事务级复用、多区间单次合并扫描、版本可见性批量过滤均已具备，无新增代码；跨 region 远端区间聚合（多 `QUERY_REQ` 合并）转 v1.19.0 与写路径 2PC 一并处理。
-- **D5 Linux E5 受控复测**：D5.1 在 RHEL 9.7 目标机（2 vCPU / 2.8GB / Go 1.22.12 / RocksDB 11.8.1 CGO，源码 HEAD `dac6843`）以 `scripts/build.sh --rocks-src/--rocks-build` 构建并安装为 `/usr/local/bin/openxdb`，bench 依赖（仓库内 `drivers/python`）对齐，Linux 从零部署链路打通；D5.2 与 Windows 完全同口径（同脚本、8 连接、每轮 prepare 重置、3 轮取中位数）完成采集。
-- **D7 发版收尾**：版本常量升级 `v1.18.0`（握手串 `8.0.36-OpenXDB v1.18.0` 与 `select version()` 同源注入、自动联动）；`oxsql` 交互提示符由 `oxsql>` 改为 `openxdb>`（命令名仍为 `oxsql`）；RELEASE_NOTES / README / KNOWN_LIMITATIONS 文档同步；`go build ./...` 与 `go vet ./...` 全绿。
+- **D1 远端区间聚合**：新增帧 `msgQueryMultiReq` / `msgQueryMultiResp`（编号 66/67，避开既有 REGION_PUSH 20-21、2PC 22-27、TSO 28-29、DDL 30-31、注册表 32-33、备份恢复 40-45、epoch 50、全量对齐 60-61、TSO HA 70-71）；客户端新增 `Client.ScanMulti` 与 `Manager.ScanMultiRemote`；`pkg/sql` 的 `scanMergedCluster` 在开关开启时分流至 `scanMergedClusterAgg`（按 `sharding.DecodeRegionKey` 分类，本地区间一次合并扫描、同归属节点远端区间分组单次取回，结果按内层键全局稳定排序），保留 M6 读 failover、P3 READY 前置与 P2-13 Serializable 远端读集登记语义；`remote_range_agg` 四级透传（配置默认 off → Engine → Executor 原子读写 → 执行器分流），关闭零回归可灰度回退。
+- **D2 存储过程异常处理**：条件匹配覆盖 `SQLSTATE '<值>'`、数字错误码、`SQLEXCEPTION`（非 01/02 类）、`SQLWARNING`（01 类）、`NOT FOUND`（02 类）；游标取尽（`02000`）纳入 `NOT FOUND`；无 SQLSTATE 的过程错误统一归入 `HY000`；处理器执行期间禁止 `RESIGNAL` 自捕获，`RESIGNAL` 无参即重抛当前错误。
+- **D2 存储过程动态 SQL**：`?` 占位符按出现顺序以实参字面量绑定（个数不符报 `argument count mismatch`），绑定结果走标准 `Parse` + `execStmt`，语句类型受过程体白名单校验（防止经动态 SQL 绕过过程体限制）；预处理语句表为单次 CALL 调用级。
+- **D2 嵌套块与诊断**：嵌套 `BEGIN…END` 独立作用域（块级快照整体出栈，同名变量/游标/处理器不跨块泄漏）；`GET [CURRENT] DIAGNOSTICS` 可取 `ROW_COUNT` 与 `CONDITION <n>` 的 `RETURNED_SQLSTATE` / `MYSQL_ERRNO` / `MESSAGE_TEXT`；`HANDLER` 体支持复合块，变量代入普通 SQL 时单引号按 SQL 标准转义。
+- **D3 触发器体复合块与执行顺序**：`BEGIN…END` 触发器体复用 `parseProcedureBody` + `procRunner`；`BEFORE INSERT/UPDATE` 的 `SET NEW.<col>` 行上下文累积后统一回写；`FOLLOWS` / `PRECEDES` 创建期校验互斥声明、自引用与依赖存在性。
+- **D4 事务保存点**：`pkg/txn` 新增 `SavepointTxn` 接口与 `ErrSavepointNotFound`；保存点回滚按 2PC 写集前缀截断，跨 region 保存点回滚边界见 `KNOWN_LIMITATIONS` §1.5。
+- **D5 递归 CTE**：anchor + 递归项、`UNION` / `UNION ALL`、列名列表、与非递归 CTE 混用；深度超限即报错，不静默截断。
+- **D6 JSON 函数族**：仅使用既有 `Value` 的 TEXT / INT / NULL 类型，不引入新 Kind、协议层零改动；错误口径明确（非法文本统一报 `invalid JSON text`）。
+- **A1 可更新视图**：`ViewMeta` 新增 `Updatable` / `NotUpdatableReason` / `BaseTable` / `ColumnMap` / `ColumnOrder`（均 `omitempty`，旧视图目录反序列化后按不可更新处理）；`INSERT` 无列清单时按视图列顺序映射、视图未暴露基表列走类型默认值，`UPDATE` 的 `SET` 列必须落在视图列集合内，`WHERE` 与 `ON DUPLICATE KEY UPDATE` 中的视图列引用一并重写，未暴露列报 `view <name> has no column: <col>`；写目标改为基表后权限按基表判定。
+- **A2 `WITH CHECK OPTION`**：建视图时把定义 `WHERE` 规范化为"基表裸列名"条件副本随视图目录持久化，`INSERT` / `UPDATE` 对新行求值、失败整条语句回滚；`DELETE` 不受限；`ON DUPLICATE KEY UPDATE` 更新分支与 `REPLACE` 冲突替换分支不施加校验；本版本 `LOCAL` 与 `CASCADED` 语义等价（可更新性判定要求基表为真实表，不存在下层视图级联）。
+- **D7 发版收尾**：新增零依赖包 `pkg/version`（`Version` / `MySQLServerPrefix` / `ServerVersion`），`cmd/openxdb/main.go` 版本常量、`pkg/mysqlproto` 握手版本串与 `pkg/sql` 的 `select version()` 全部取自同一常量（消除两处独立常量、修正握手串停留 `v1.17.0` 的漂移）；`RELEASE_NOTES` / `README` / `KNOWN_LIMITATIONS` / `docs/index.md` 文档口径同步；`go build ./...`、`go vet ./...`、`gofmt -l`、`go test ./...` 全绿。
 
-## 性能（发版前 E5 受控复测）
+## 性能
 
-同脚本、8 连接、每轮 prepare 重置、3 轮取中位数（OLTP 8 线程 × 60s、TPC-C 5 仓 × 120s）。D5 在 Linux 目标机（2 vCPU）按完全同口径复测，与 Windows v1.17.0 基线对比：
+本版本以 SQL 兼容能力补齐为主，未改动存储引擎、WAL、事务提交与复制主路径，未重新执行 E5 标准基准复测；性能基线沿用 v1.18.0 口径（Windows 平台、8 连接、每轮 prepare 重置、3 轮取中位数）：OLTP read / write / read-write **14.15 / 13.40 / 12.60 TPS**（QPS 198.10 / 53.60 / 226.80），TPC-C 5 仓 tpmC **774.50** / tpm_total 1746.50，errs=0 / reconnects=0。Linux（RHEL 9.7 / 2 vCPU）同口径结果为 8.17 / 8.13 / 8.10 TPS、tpmC 749.50，仅作功能与稳定性验证、不作跨平台性能对标（详见 [docs/experiments/D5_linux_e5_controlled_retest.md](docs/experiments/D5_linux_e5_controlled_retest.md)）。
 
-| 指标 | v1.17.0（Windows 16 逻辑核基线） | v1.18.0（RHEL 9.7 / 2 vCPU） | 相对基线 |
-|------|---------|---------|------|
-| OLTP read TPS / QPS | 14.15 / 198.10 | **8.17 / 114.33** | 57.7% |
-| OLTP write TPS / QPS | 13.40 / 53.60 | **8.13 / 32.53** | 60.7% |
-| OLTP read-write TPS / QPS | 12.60 / 226.80 | **8.10 / 145.80** | 64.3% |
-| TPC-C 5 仓 tpmC / tpm_total | 774.50 / 1746.50 | **749.50 / 1684.50** | 96.8% |
-| 采集组数 errs / reconnects | 0 / 0 | 0 / 0（14 组） | 保持 |
-
-口径说明：Linux 数值仅用于同口径功能与稳定性验证，**不作跨平台性能对标**——差异主因为 CPU 配额（2 vCPU vs 16 逻辑核），非代码路径：同机 threads=2 与 threads=8 的 read TPS 同为约 8.2，而 p50 延迟由 0.24s 升至 0.95s，表明 2 vCPU 下吞吐已饱和、8 连接属超配口径；TPC-C 因客户端 Python 8 线程 GIL 与服务端队列共同限流，跨平台差异被掩盖（仅剩 3.2%）。性能基线仍以 Windows 平台为准。另确认"每轮 prepare 重置"为可比性必要条件（不重置连跑 TPC-C tpmC 衰减 565.00 → 230.50 → 220.00，属 LSM compaction 积压而非版本回归）。详见 [docs/experiments/D5_linux_e5_controlled_retest.md](docs/experiments/D5_linux_e5_controlled_retest.md)。
+D1 远端区间聚合的收益为往返次数下降（同归属节点多区间由"区间数"次 `QUERY_REQ` 降为"节点数"次 `QUERY_MULTI`），该项默认关闭、未纳入标准基准口径。
 
 ## 兼容性说明
 
-- **数据目录兼容**：v1.18.0 保持既有数据文件格式版本（`pkg/db.DataFormatVersion`），已初始化的 v1.0.0 至 v1.17.0 数据目录可直接打开，无需迁移重建。
-- **协议兼容**：自研二进制协议（pkg/server，非 MySQL wire protocol；`--mysql-port` 启用兼容监听）。历史客户端（JDBC/Python 驱动）按既有帧格式可继续工作；驱动与服务器版本匹配即可。握手版本串随版本常量升级为 `8.0.36-OpenXDB v1.18.0`。
-- **配置兼容**：D3/D4/D6 均以既有权能或独立开关推进；`ha.quorumEnabled` / `ha.epochEnabled` 默认值不变（quorum off、epoch on）；块缓存调优因负收益已回退，未引入新默认值。既有命令行参数与 SET PERSIST 配置项保持向后兼容。
-- **客户端体验变更**：`oxsql` 交互模式提示符由 `oxsql>` 改为 `openxdb>`；命令名、命令行参数与输出格式不变，脚本化调用（`-c`）不受影响。
+- **数据目录兼容**：v1.19.0 保持既有数据文件格式版本（`pkg/db.DataFormatVersion`），已初始化的 v1.0.0 至 v1.18.0 数据目录可直接打开，无需迁移重建。
+- **协议兼容**：自研二进制协议（pkg/server，非 MySQL wire protocol；`--mysql-port` 启用兼容监听）。新增帧 66/67 仅在 `remote_range_agg` 开启时使用，关闭时与 v1.18.0 完全一致；握手版本串随版本常量升级为 `8.0.36-OpenXDB v1.19.0`，`select version()` 同源联动。
+- **配置兼容**：新增配置项 `recursive_cte_max_depth`（默认 1000）与 `remote_range_agg`（默认 off），均为新增项、不改变既有默认值；`ha.quorumEnabled` / `ha.epochEnabled` 默认值不变（quorum off、epoch on）；既有命令行参数与 SET PERSIST 配置项保持向后兼容。
+- **SQL 语义增量**：新增过程 `HANDLER` / `SIGNAL` / 动态 SQL / 嵌套块 / `GET DIAGNOSTICS`、触发器体复合块与 `SET NEW`、`FOLLOWS` / `PRECEDES`、`SAVEPOINT` 系列、`WITH RECURSIVE`、8 个 JSON 函数、可更新视图与 `CHECK OPTION`，均为新语法/新能力，不改变既有语句语义。
 - **无破坏性变更**：本次发布未引入数据文件格式变更或协议破坏性变更。
 
 ## 已知问题
 
 详见 [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)。主要关注：
 
-- **HA quorum 仍维持默认关闭**：集群轨尚无一致性协议（无 raft 式日志复制与选举），写提交为归属节点本地提交 + 副本异步推送补齐，存在"单副本可写窗口"与 RPO>0；解除默认关闭的前置是 v1.19.0 M8（写路径强制路由 + 2PC 参与 + 副本间持续复制/共识提交）。
-- **D4.5 灰度报告 §8.2 未闭环项**：NEW-1 / T3 / NEW-2 三项真机复验与演练脚本补强，v1.18.0 发版前不阻塞，**v1.19.0 前必须完成**（T3 需三个独立 IP，属环境卡点）。
-- **跨 region 远端区间聚合**（多 `QUERY_REQ` 合并）与远端 Scan 协议未落地，顺延 v1.19.0 与写路径 2PC 共用请求骨架。
+- **HA quorum 仍维持默认关闭**：集群轨尚无一致性协议（无 raft 式日志复制与选举），写提交为归属节点本地提交 + 副本异步推送补齐，存在"单副本可写窗口"与 RPO>0；解除默认关闭的前置为写路径强制路由 + 2PC 参与 + 副本间持续复制/共识提交，已列入下一轮候选。
+- **HA 灰度报告未闭环项**：`docs/D4_5_ha_quorum_gray_report.md` §8.2 三项真机欠账的状态与结论以该报告原文为准，本次发布不改写其表述。
+- **跨 region 远端区间聚合默认关闭**：`remote_range_agg` 为灰度开关，开启前须通过逐行等价验证；关闭即走 v1.18.0 逐区间路径。
+- **视图能力边界**：可更新视图仅支持单表裸列定义（聚合、`JOIN`、子查询、视图套视图等定义不可更新，报错带具体条款）；列映射在建视图期固化，基表 `ALTER TABLE` 后需重建视图；`LOCAL` 与 `CASCADED` 本版本语义等价。
 - **通用边界**：SQL 为子集（暂无完整 MySQL 语法覆盖，自研二进制协议 + 可选 MySQL wire 兼容监听）；性能为单机端侧基准（8 连接），非生产级吞吐承诺。
 
 ## 升级路径
@@ -68,8 +67,8 @@ AIGC:
 1. 备份：`openxdb backup` 或脚本备份数据目录（参考 scripts/rolling_upgrade.ps1）。
 2. 预检：`openxdb preflight --data-dir <dir>` 确认版本与数据格式匹配。
 3. 优雅停机：`openxdb shutdown --graceful` 或 SIGTERM。
-4. 替换二进制为 v1.18.0 并启动（数据目录不变）。
-5. 验证：`openxdb doctor`、`openxdb stats`、`openxdb version` 确认 v1.18.0；集群拓扑下抽查 `SHOW REGION ROUTES`、跨节点点查与聚合，以及业务读写与备份恢复。
+4. 替换二进制为 v1.19.0 并启动（数据目录不变）。
+5. 验证：`openxdb doctor`、`openxdb stats`、`openxdb version` 确认 v1.19.0；集群拓扑下抽查 `SHOW REGION ROUTES`、跨节点点查与聚合，以及业务读写与备份恢复。
 
 ## 文档与支持
 
@@ -81,7 +80,6 @@ AIGC:
 - Linux E5 复测报告：docs/experiments/D5_linux_e5_controlled_retest.md
 - 设计文档：docs/（T1–T42、M 系列、E 系列）
 - 基准实验：docs/experiments/（E1–E5）
-
 ---
 
 # OpenXDB v1.0.0 Release Notes

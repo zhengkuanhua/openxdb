@@ -33,9 +33,9 @@ AIGC:
 
 # OpenXDB Known Limitations
 
-版本：v1.18.0（2026-11-17）
+版本：v1.19.0（2026-11-20）
 
-本文档列出 OpenXDB v1.18.0 的已知限制与边界。每条目给出限制描述、影响与建议，帮助用户在选型、部署与使用时做出合理判断。详细功能范围请以 [docs/product_manual_zh.md](docs/product_manual_zh.md)（第 4 章 SQL 参考）与设计文档 docs/ 为准。
+本文档列出 OpenXDB v1.19.0 的已知限制与边界。每条目给出限制描述、影响与建议，帮助用户在选型、部署与使用时做出合理判断。详细功能范围请以 [docs/product_manual_zh.md](docs/product_manual_zh.md)（第 4 章 SQL 参考）与设计文档 docs/ 为准。
 
 ---
 
@@ -53,6 +53,7 @@ AIGC:
 - **影响**：MySQL 生态监控、备份、管理工具链中依赖更新协议扩展（如 GTID、半同步原生协议、复制过滤）的场景仍不可直接复用；E5 基准采用 Python PEP 249 驱动等价实测，而非标准 sysbench/TPC-C 工具直连。
 - **建议**：标准 MySQL 客户端与驱动场景使用 `openxdb start --mysql-port <port>` 直连；需要完整生态工具链的场景请使用驱动包装层或适配层，或使用内置 REPL（`openxdb repl`）与随仓库交付的 JDBC / Python 驱动。
 - **v1.17.0 D7 更新**：补齐 MySQL 兼容缺口五项——① 握手版本串由硬编码 `8.0.36-OpenXDB` 改为与 v1.17.0 版本常量同源注入，mysql CLI 登录显示 `8.0.36-OpenXDB v1.17.0`（G1）；② `select version();` 返回 `8.0.36-OpenXDB v1.17.0`（G3）；③ `SHOW CREATE TABLE <t>` 基于存储元数据重建可执行 schema（列定义/类型/主键/二级索引/约束）（G4）；④ `SHOW INDEXES` 与 `SHOW INDEX` 等价（含大小写归一化）（G5）；⑤ 自研交互 CLI 提示符 `oxsql>` 生效（G2）。边界：握手/`version()` 版本号与版本常量同源、发版需同步更新；`oxsql>` 为自研 CLI 提示符，第三方 mysql CLI 的 `mysql>` 属客户端侧展示不受影响；五项均为读路径/客户端体验改动，不触碰事务、复制与 WAL 语义，全仓回归全绿。详见 [docs/experiments/D7_mysql_compat_validate.md](docs/experiments/D7_mysql_compat_validate.md)。
+- **v1.19.0 D7 更新（版本常量单点化与漂移修正）**：新增零依赖包 `pkg/version`（`Version` / `MySQLServerPrefix` / `ServerVersion`），`cmd/openxdb` 版本输出、`pkg/mysqlproto` 握手版本串与 `pkg/sql` 的 `select version()` 全部取自同一常量，消除 `cmd/openxdb/main.go` 与 `pkg/mysqlproto/handshake.go` 两处独立版本常量。同时修正历史漂移：握手串与 `select version()` 此前各自硬编码且停留在 `v1.17.0`（落后版本线两轮，未随 v1.18.0 发版更新），现均为 `8.0.36-OpenXDB v1.19.0`。边界：后续发版只需修改 `pkg/version.Version` 一处，握手串与 `select version()` 自动联动；客户端若硬编码校验过 `8.0.36-OpenXDB v1.17.0` 需相应调整。
 
 ### 1.3 存储过程/触发器为受限子集
 
