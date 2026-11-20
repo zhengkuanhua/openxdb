@@ -2747,7 +2747,7 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 			return nil, err
 		}
 		for _, row := range res.Rows {
-			rops, aff, err := e.insertRowUpsertOpsHook(sess, tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &pending, beforeHook)
+			rops, aff, err := e.insertRowUpsertOpsHook(sess, tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &pending, beforeHook, s.viewCheck)
 			if err != nil {
 				return nil, err
 			}
@@ -2781,7 +2781,7 @@ func (e *Executor) execInsert(sess *Session, s *InsertStmt) (*Result, error) {
 		}
 	} else {
 		for _, row := range s.Rows {
-			rops, aff, err := e.insertRowUpsertOpsHook(sess, tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &pending, beforeHook)
+			rops, aff, err := e.insertRowUpsertOpsHook(sess, tx, tabs, meta, s.Columns, row, s.OnDup, s.Replace, &pending, beforeHook, s.viewCheck)
 			if err != nil {
 				return nil, err
 			}
@@ -2918,13 +2918,16 @@ func (e *Executor) insertRowOps(sess *Session, tx txn.Txn, tabs []*TableMeta, me
 //
 // pending 记录本语句已计划的最终行（用于语句内主键/唯一键重复判定）。
 func (e *Executor) insertRowUpsertOps(sess *Session, tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, onDup *OnDuplicateUpdate, replace bool, pending *[][]Value) ([]kvOp, int, error) {
-	return e.insertRowUpsertOpsHook(sess, tx, tabs, meta, cols, row, onDup, replace, pending, nil)
+	return e.insertRowUpsertOpsHook(sess, tx, tabs, meta, cols, row, onDup, replace, pending, nil, nil)
 }
 
 // insertRowUpsertOpsHook 同 insertRowUpsertOps，额外支持 v1.19.0 D3 的行级
 // BEFORE INSERT 触发器钩子：buildRow 之后、冲突判定与外键校验之前执行触发器，
 // 并把 SET NEW.col 的回写值应用到待写入行（hook 为 nil 时与旧路径完全一致）。
-func (e *Executor) insertRowUpsertOpsHook(sess *Session, tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, onDup *OnDuplicateUpdate, replace bool, pending *[][]Value, hook *trigHook) ([]kvOp, int, error) {
+// cp 为 v1.19.0 A2 的 WITH CHECK OPTION 新行校验计划（nil = 不校验）：普通插入
+// 在行值最终成型后求值视图定义条件，不满足则本行不产生任何 ops，由调用方整条
+// 语句失败回滚。
+func (e *Executor) insertRowUpsertOpsHook(sess *Session, tx txn.Txn, tabs []*TableMeta, meta *TableMeta, cols []string, row []Value, onDup *OnDuplicateUpdate, replace bool, pending *[][]Value, hook *trigHook, cp *viewCheckPlan) ([]kvOp, int, error) {
 	vals, err := e.buildRow(meta, cols, row, tx)
 	if err != nil {
 		return nil, 0, err
@@ -2964,6 +2967,12 @@ func (e *Executor) insertRowUpsertOpsHook(sess *Session, tx txn.Txn, tabs []*Tab
 	}
 	if len(conflicts) == 0 {
 		// 无冲突：普通插入
+		// v1.19.0 A2：带 WITH CHECK OPTION 的视图写入，新行（含未暴露列的
+		// 默认取值）须满足视图定义条件；不满足则本行不产生任何 ops，整条语句
+		// 失败回滚（此处仅收集 ops，尚未落盘）。
+		if err := e.viewCheckRow(sess, tx, meta, vals, cp); err != nil {
+			return nil, 0, err
+		}
 		raw, err := encodeRow(meta, vals)
 		if err != nil {
 			return nil, 0, err
@@ -6352,6 +6361,11 @@ func (e *Executor) execUpdate(sess *Session, s *UpdateStmt) (*Result, error) {
 			}
 			ops = append(ops, fops...)
 		}
+		// v1.19.0 A2：带 WITH CHECK OPTION 的视图写入，更新后的新行须满足
+		// 视图定义条件（此处尚未落盘，ops 统一在语句末尾应用，整条回滚）。
+		if err := e.viewCheckRow(sess, tx, meta, row, s.viewCheck); err != nil {
+			return nil, err
+		}
 		// 更新后行须满足自身引用完整性。
 		if err := e.checkFKOnRow(sess, tx, tabs, meta, row); err != nil {
 			return nil, err
@@ -7261,7 +7275,30 @@ func (e *Executor) execCreateView(sess *Session, s *CreateViewStmt) (*Result, er
 		vw.BaseTable = plan.Base
 		vw.ColumnMap = plan.ColMap
 		vw.ColumnOrder = plan.Order
+		// v1.19.0 A2：WITH CHECK OPTION 记录写法（缺省按 CASCADED），并把视图
+		// 定义 WHERE 规范化为「基表裸列名」副本随元数据持久化，供 INSERT /
+		// UPDATE 经视图写入时对新行求值（见 updatable_view.go viewCheckRow）。
+		// 本实现基表必为真实表（不支持视图套视图），故 LOCAL 与 CASCADED 等价。
+		if s.CheckOption != "" {
+			base := findTable(tabs, plan.Base)
+			if base == nil {
+				return nil, &SQLError{Msg: "table not exists: " + plan.Base}
+			}
+			cond, cerr := buildViewCheckCond(base, s.Select, s.Name)
+			if cerr != nil {
+				return nil, cerr
+			}
+			vw.CheckOption = s.CheckOption
+			vw.CheckCond = cond
+		}
 	} else {
+		// 不可更新视图没有写入路径，WITH CHECK OPTION 无从施加，建库期即拒绝。
+		if s.CheckOption != "" {
+			if reason == "" {
+				reason = "view definition is not a simple single-table select"
+			}
+			return nil, &SQLError{Msg: "view " + s.Name + " is not updatable: " + reason}
+		}
 		vw.NotUpdatableReason = reason
 	}
 	views = append(views, vw)

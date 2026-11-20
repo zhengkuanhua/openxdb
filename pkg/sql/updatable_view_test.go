@@ -180,16 +180,16 @@ func TestUpdatableViewMissingViewKeepsNotExists(t *testing.T) {
 	mustErr(t, e, "DELETE FROM nosuch WHERE id = 1", "table not exists: nosuch")
 }
 
-// TestUpdatableViewCheckOptionUnsupported WITH CHECK OPTION 明确报不支持，不得静默接受。
+// TestUpdatableViewCheckOptionUnsupported v1.19.0 A2 起 WITH CHECK OPTION 已被真正
+// 支持：原「解析期报不支持」的断言改写为兼容性验证——带 CHECK OPTION 的视图可正常
+// 创建（详见 check_option_test.go 的语义用例）。
 func TestUpdatableViewCheckOptionUnsupported(t *testing.T) {
 	e := newEngine(t)
 	mustExec(t, e, "CREATE TABLE t (id INT PRIMARY KEY, score INT)")
-	mustErr(t, e, "CREATE VIEW vc AS SELECT id FROM t WHERE score > 10 WITH CHECK OPTION",
-		"WITH CHECK OPTION is not supported")
-	mustErr(t, e, "CREATE VIEW vc2 AS SELECT id FROM t WITH LOCAL CHECK OPTION",
-		"WITH CHECK OPTION is not supported")
-	// 定义被拒绝后视图不存在，不留下半成品目录项
-	mustErr(t, e, "SELECT * FROM vc", "table not exists: vc")
+	mustExec(t, e, "CREATE VIEW vc AS SELECT id, score FROM t WHERE score > 10 WITH CHECK OPTION")
+	mustExec(t, e, "CREATE VIEW vc2 AS SELECT id, score FROM t WITH LOCAL CHECK OPTION")
+	// 残缺写法（WITH CHECK 缺 OPTION）仍按语法错误拒绝，不静默接受。
+	mustErr(t, e, "CREATE VIEW vc3 AS SELECT id, score FROM t WITH CHECK", "expected OPTION")
 }
 
 // TestUpdatableViewPrivilegeOnBaseTable 写权限按基表判定：非 root 用户

@@ -57,6 +57,16 @@ func (p *parser) expectKeyword(kw string) error {
 	return nil
 }
 
+// acceptWord 按大小写不敏感文本匹配当前 token（关键字与标识符均可），
+// 匹配则消费并返回 true。用于 CHECK / OPTION 这类未登记为关键字的词。
+func (p *parser) acceptWord(want string) bool {
+	if !strings.EqualFold(p.cur().text, want) {
+		return false
+	}
+	p.next()
+	return true
+}
+
 // expectName 读取一个对象名（标识符或关键字均可，如 information_schema.tables
 // 中的 TABLES 是关键字），返回消费掉的 token。
 func (p *parser) expectName(what string) (token, error) {
@@ -1826,12 +1836,35 @@ func (p *parser) parseCreateView() (Stmt, error) {
 	if !ok {
 		return nil, errf("expected SELECT after AS at %d", p.cur().pos)
 	}
-	// v1.19.0 A1：本阶段不实现 WITH CHECK OPTION，定义尾部出现即明确报
-	// 不支持，禁止静默忽略（否则用户会误以为写入已受视图条件约束）。
-	if p.cur().kind == tokKeyword && (p.cur().text == "WITH" || p.cur().text == "CHECK") {
-		return nil, errf("WITH CHECK OPTION is not supported yet")
+	// v1.19.0 A2：视图定义尾部可选 WITH [CASCADED|LOCAL] CHECK OPTION。
+	// 缺省 CASCADED；单独出现 CHECK OPTION（缺 WITH）按语法错误拒绝。
+	checkOpt := ""
+	{
+		tok := p.cur()
+		if tok.text == "WITH" {
+			p.next()
+			switch p.cur().text {
+			case "CASCADED":
+				checkOpt = "CASCADED"
+				p.next()
+			case "LOCAL":
+				checkOpt = "LOCAL"
+				p.next()
+			}
+			if !p.acceptWord("CHECK") {
+				return nil, errf("expected CHECK at %d, got %q", p.cur().pos, p.cur().text)
+			}
+			if !p.acceptWord("OPTION") {
+				return nil, errf("expected OPTION at %d, got %q", p.cur().pos, p.cur().text)
+			}
+			if checkOpt == "" {
+				checkOpt = "CASCADED"
+			}
+		} else if tok.text == "CHECK" {
+			return nil, errf("expected WITH before CHECK OPTION at %d", tok.pos)
+		}
 	}
-	return &CreateViewStmt{Name: nameTok.text, Select: sel, IfNotExists: ifNot}, nil
+	return &CreateViewStmt{Name: nameTok.text, Select: sel, IfNotExists: ifNot, CheckOption: checkOpt}, nil
 }
 
 // parseDropView DROP VIEW [IF EXISTS] <name>。

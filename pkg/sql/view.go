@@ -21,6 +21,12 @@ type ViewMeta struct {
 	BaseTable          string            `json:"base_table,omitempty"`
 	ColumnMap          map[string]string `json:"column_map,omitempty"`
 	ColumnOrder        []string          `json:"column_order,omitempty"`
+	// v1.19.0 A2 WITH CHECK OPTION：CheckOption 记录 ""/"CASCADED"/"LOCAL"；
+	// CheckCond 是视图定义 WHERE 的「基表列名」规范化副本（限定名已剥离），
+	// 供 INSERT / UPDATE 经视图写入时对新行求值。同样 omitempty，旧视图目录
+	// 反序列化后为空 = 无约束，行为与 A1 一致。
+	CheckOption string `json:"check_option,omitempty"`
+	CheckCond   *Where `json:"check_cond,omitempty"`
 }
 
 // viewsKey 视图目录键。

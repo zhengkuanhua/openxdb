@@ -13,9 +13,14 @@ AIGC:
 
 package sql
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
 
-// ---- v1.19.0 A1：可更新视图（本阶段不含 WITH CHECK OPTION）----
+	"github.com/zhengkuanhua/openxdb/pkg/txn"
+)
+
+// ---- v1.19.0 A1：可更新视图（A2 起补充 WITH CHECK OPTION 新行校验）----
 //
 // 判定时机：CREATE VIEW 静态判定可更新性，结果与「视图列名 → 基表列名」
 // 映射一并持久化在视图目录（m:views）的 ViewMeta 内；不满足条件时记录
@@ -26,8 +31,10 @@ import "strings"
 // 执行路径——触发器、外键、索引维护、约束校验、物化视图增量跟踪全部复用，
 // 权限校验也因重写后的表名为基表而自动落到基表。
 //
-// 口径说明：本阶段不实现 WITH CHECK OPTION，视图定义中的 WHERE 不参与写
-// 过滤（写操作只做列映射重写）；INSERT 未暴露的基表列走默认值 / AUTO_INCREMENT。
+// 口径说明：无 WITH CHECK OPTION 的视图，定义中的 WHERE 不参与写过滤（写操作
+// 只做列映射重写）；带 WITH CHECK OPTION 的视图由 A2 在写入期对新行求值视图
+// 定义条件（见文件末尾「WITH CHECK OPTION 新行校验」段）。INSERT 未暴露的
+// 基表列走默认值 / AUTO_INCREMENT。
 
 // viewWritePlan 可更新视图的写入重写计划（由 ViewMeta 持久化字段投影而来）。
 type viewWritePlan struct {
@@ -236,10 +243,20 @@ func (e *Executor) rewriteUpdatableViewDMLOnce(sess *Session, stmt Stmt) error {
 	plan := &viewWritePlan{Base: v.BaseTable, ColMap: v.ColumnMap, Order: v.ColumnOrder}
 	switch s := stmt.(type) {
 	case *InsertStmt:
-		return rewriteInsertToView(s, name, plan)
+		if err := rewriteInsertToView(s, name, plan); err != nil {
+			return err
+		}
+		// v1.19.0 A2：带 CHECK OPTION 时挂载新行校验计划（无则 nil，零回归）。
+		s.viewCheck = viewCheckPlanOf(v)
+		return nil
 	case *UpdateStmt:
-		return rewriteUpdateToView(s, name, plan)
+		if err := rewriteUpdateToView(s, name, plan); err != nil {
+			return err
+		}
+		s.viewCheck = viewCheckPlanOf(v)
+		return nil
 	case *DeleteStmt:
+		// DELETE 不施加 CHECK OPTION 约束（与 MySQL 语义一致），不挂载校验计划。
 		return rewriteDeleteToView(s, name, plan)
 	}
 	return nil
@@ -416,4 +433,204 @@ func rewriteViewExpr(e *Expr, plan *viewWritePlan) {
 	}
 	rewriteViewExpr(e.Left, plan)
 	rewriteViewExpr(e.Right, plan)
+}
+
+// ---- v1.19.0 A2：WITH CHECK OPTION 新行校验 ----
+//
+// 语义：CREATE VIEW ... [WITH [CASCADED|LOCAL] CHECK OPTION] 之后，经该视图
+// INSERT / UPDATE 写入时，写入后的新行必须满足视图定义中的 WHERE，否则整条
+// 语句拒绝并报 CHECK OPTION failed '<view>'（失败即回滚，不留部分写入）。
+// DELETE 不施加约束（删除只减少行，不产生越界新行），与 MySQL 语义一致。
+//
+// 求值口径：视图定义 WHERE 在 CREATE VIEW 时被规范化成「基表裸列名」副本
+// （剥离限定名并校验列存在于基表）持久化到 ViewMeta.CheckCond；写入时只对
+// 当前新行调用 matchWhereRel 做行级求值，不新增表扫描，也不改变既有 DML 的
+// 主扫描与索引选择路径。INSERT 未提供的基表列按 buildRow 后的实际取值（默认
+// 值 / AUTO_INCREMENT）参与求值；引用视图未暴露的基表列同样可求值。
+//
+// LOCAL / CASCADED：本实现要求视图基表为真实表（不支持视图套视图），不存在
+// 需要区分的内层视图，故两种写法在语义上等价，仅按写法原样记录。
+
+// viewCheckPlan 一条 DML 经带 CHECK OPTION 视图写入时的新行校验计划。
+type viewCheckPlan struct {
+	View string // 视图名（报错口径使用）
+	Cond *Where // 视图定义 WHERE 的基表裸列名副本（nil = 定义无 WHERE，恒真）
+	rel  *Rel   // 惰性构建的单表 Rel（列名 = 基表列名，行 = 当前待校验行）
+}
+
+// viewCheckPlanOf 按视图元数据构造校验计划（无 CHECK OPTION 返回 nil）。
+func viewCheckPlanOf(v *ViewMeta) *viewCheckPlan {
+	if v == nil || v.CheckOption == "" {
+		return nil
+	}
+	return &viewCheckPlan{View: v.Name, Cond: v.CheckCond}
+}
+
+// viewCheckRow 校验写入后的新行是否满足视图定义条件；不满足返回
+// CHECK OPTION failed '<view>'。复用 matchWhereRel 的行级条件求值能力
+// （支持限定列、BETWEEN / IN / IN 子查询、CASE、算术表达式），只对当前行
+// 求值，不做任何表扫描。
+func (e *Executor) viewCheckRow(sess *Session, tx txn.Txn, meta *TableMeta, row []Value, cp *viewCheckPlan) error {
+	if cp == nil || cp.Cond == nil {
+		return nil
+	}
+	rel := cp.rel
+	if rel == nil {
+		rel = &Rel{
+			Cols:  make([]string, 0, len(meta.Columns)),
+			Types: make([]string, 0, len(meta.Columns)),
+		}
+		for i := range meta.Columns {
+			rel.Cols = append(rel.Cols, meta.Columns[i].Name)
+			rel.Types = append(rel.Types, meta.Columns[i].Type)
+		}
+		cp.rel = rel
+	}
+	ok, err := e.matchWhereRel(sess, tx, rel, row, cp.Cond)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return &SQLError{Msg: "CHECK OPTION failed '" + cp.View + "'"}
+	}
+	return nil
+}
+
+// buildViewCheckCond 把视图定义 WHERE 规范化为「基表裸列名」副本供写入期求值：
+// 深拷贝（不污染视图定义 AST）、剥离限定名（须为基表名或其别名）、校验所有
+// 列均存在于基表。定义无 WHERE 时返回 nil（恒真，校验恒通过）。
+func buildViewCheckCond(meta *TableMeta, sel *SelectStmt, viewName string) (*Where, error) {
+	if sel == nil || sel.Where == nil || len(sel.Where.Conds) == 0 {
+		return nil, nil
+	}
+	raw, err := json.Marshal(sel.Where)
+	if err != nil {
+		return nil, &SQLError{Msg: "view " + viewName + " check option condition: " + err.Error()}
+	}
+	var out Where
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, &SQLError{Msg: "view " + viewName + " check option condition: " + err.Error()}
+	}
+	if err := normalizeCheckWhere(&out, meta, sel.From, sel.FromAlias, viewName); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// normalizeCheckWhere 规范化条件组的列引用（基表裸列名）。
+func normalizeCheckWhere(w *Where, meta *TableMeta, from, alias, viewName string) error {
+	if w == nil {
+		return nil
+	}
+	for i := range w.Conds {
+		if err := normalizeCheckCond(&w.Conds[i], meta, from, alias, viewName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// normalizeCheckCond 规范化单条件的列引用：剥离基表名/别名限定、按基表校验
+// 列存在（视图定义 WHERE 只允许引用基表列，别名不参与 WHERE 解析）。
+func normalizeCheckCond(c *Cond, meta *TableMeta, from, alias, viewName string) error {
+	if err := checkCondTableRef(c.Ref, from, alias, viewName); err != nil {
+		return err
+	}
+	switch {
+	case c.LeftCase != nil:
+		for i := range c.LeftCase.Branches {
+			if err := normalizeCheckWhere(&c.LeftCase.Branches[i].Conds, meta, from, alias, viewName); err != nil {
+				return err
+			}
+		}
+	case c.LeftExpr != nil:
+		if err := normalizeCheckExpr(c.LeftExpr, meta, from, alias, viewName); err != nil {
+			return err
+		}
+	default:
+		if c.Col != "" {
+			bc, err := checkCondColumn(stripColQualifier(c.Col), meta, viewName)
+			if err != nil {
+				return err
+			}
+			c.Col = bc
+			c.Ref = ""
+		}
+	}
+	for j := range c.TupleLeft {
+		bc, err := checkCondColumn(stripColQualifier(c.TupleLeft[j]), meta, viewName)
+		if err != nil {
+			return err
+		}
+		c.TupleLeft[j] = bc
+	}
+	if c.RightRef != "" {
+		bc, err := checkCondColumn(stripColQualifier(c.RightRef), meta, viewName)
+		if err != nil {
+			return err
+		}
+		c.RightRef = bc
+	}
+	if c.RightExpr != nil {
+		if err := normalizeCheckExpr(c.RightExpr, meta, from, alias, viewName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// normalizeCheckExpr 规范化算术表达式叶子列引用（Fn 节点递归实参）。
+func normalizeCheckExpr(e *Expr, meta *TableMeta, from, alias, viewName string) error {
+	if e == nil {
+		return nil
+	}
+	if e.Fn != "" {
+		for _, a := range e.Args {
+			if err := normalizeCheckExpr(a, meta, from, alias, viewName); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if e.Left == nil && e.Right == nil && e.Val == nil && e.Col != "" {
+		if err := checkCondTableRef(e.Ref, from, alias, viewName); err != nil {
+			return err
+		}
+		bc, err := checkCondColumn(e.Col, meta, viewName)
+		if err != nil {
+			return err
+		}
+		e.Col = bc
+		e.Ref = ""
+		return nil
+	}
+	if err := normalizeCheckExpr(e.Left, meta, from, alias, viewName); err != nil {
+		return err
+	}
+	return normalizeCheckExpr(e.Right, meta, from, alias, viewName)
+}
+
+// checkCondTableRef 校验限定名：空、基表名或基表别名之外一律视为未知表。
+func checkCondTableRef(ref, from, alias, viewName string) error {
+	if ref == "" || ref == from || ref == alias {
+		return nil
+	}
+	return &SQLError{Msg: "view " + viewName + " check option references unknown table: " + ref}
+}
+
+// checkCondColumn 校验列存在于基表（视图定义 WHERE 引用视图未暴露的基表列
+// 合法，但引用不存在的列属建库期定义错误，此处显式拒绝）。
+func checkCondColumn(name string, meta *TableMeta, viewName string) (string, error) {
+	if colIndex(meta, name) < 0 {
+		return "", &SQLError{Msg: "view " + viewName + " check option references unknown column: " + name}
+	}
+	return name, nil
+}
+
+// stripColQualifier 去掉列引用中的限定前缀（t.col → col）。
+func stripColQualifier(name string) string {
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		return name[i+1:]
+	}
+	return name
 }

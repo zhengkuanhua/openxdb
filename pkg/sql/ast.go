@@ -250,6 +250,10 @@ type InsertStmt struct {
 	// 已由 rewriteUpdatableViewDML 处理过，再次进入直接复用首次结论；
 	// 不参与解析、比较与输出。
 	viewWrite *viewWriteMark
+	// viewCheck WITH CHECK OPTION 新行校验计划（v1.19.0 A2）：目标为带
+	// CHECK OPTION 的可更新视图时由重写阶段挂载，execInsert 对新行求值，
+	// 不满足视图定义条件则整条语句失败回滚；不参与解析、比较与输出。
+	viewCheck *viewCheckPlan
 }
 
 func (InsertStmt) stmt() {}
@@ -402,6 +406,8 @@ type UpdateStmt struct {
 	Where *Where
 	// viewWrite 可更新视图写重写标记（v1.19.0 A1），语义同 InsertStmt。
 	viewWrite *viewWriteMark
+	// viewCheck WITH CHECK OPTION 新行校验计划（v1.19.0 A2），语义同 InsertStmt。
+	viewCheck *viewCheckPlan
 }
 
 func (UpdateStmt) stmt() {}
@@ -421,6 +427,10 @@ type CreateViewStmt struct {
 	Name        string
 	Select      *SelectStmt
 	IfNotExists bool // T41：CREATE VIEW IF NOT EXISTS（视图已存在时静默跳过）
+	// CheckOption WITH CHECK OPTION 语义（v1.19.0 A2）：取值 ""（无约束）/
+	// "CASCADED" / "LOCAL"；语法上省略 CASCADED|LOCAL 时按 CASCADED 记录。
+	// 本实现基表必为真实表（不支持视图套视图），故 LOCAL 与 CASCADED 等价。
+	CheckOption string
 }
 
 func (CreateViewStmt) stmt() {}
