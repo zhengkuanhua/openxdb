@@ -45,8 +45,8 @@ func TestHandshakeV10Structure(t *testing.T) {
 	if verEnd < 0 || string(p[off:off+verEnd]) != serverVersion {
 		t.Fatalf("server version = %q, want %q", p[off:off+verEnd], serverVersion)
 	}
-	if serverVersion != "8.0.36-OpenXDB v1.17.0" {
-		t.Fatalf("server version = %q, want %q", serverVersion, "8.0.36-OpenXDB v1.17.0")
+	if serverVersion != "8.0.36-OpenXDB "+OpenxdbVersion {
+		t.Fatalf("server version = %q, want %q", serverVersion, "8.0.36-OpenXDB "+OpenxdbVersion)
 	}
 	if !bytes.HasPrefix(p[off:off+verEnd], []byte("8.0.36-OpenXDB")) {
 		t.Fatalf("server version prefix lost: %q", p[off:off+verEnd])
@@ -520,10 +520,10 @@ func TestParseBinaryParamsExtended(t *testing.T) {
 	p := make([]byte, 0, 64)
 	p = append(p, 0x00, 0x00, 0xc0, 0x3f)
 	p = append(p, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x40)
-	p = append(p, 0xfe, 0xff, 0xff, 0xff) // -2 (INT)
+	p = append(p, 0xfe, 0xff, 0xff, 0xff)                         // -2 (INT)
 	p = append(p, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff) // -2 (LONGLONG)
-	p = append(p, 0x01) // BIT=1
-	p = append(p, 0xea, 0x07) // YEAR=2026
+	p = append(p, 0x01)                                           // BIT=1
+	p = append(p, 0xea, 0x07)                                     // YEAR=2026
 	args, err := parseBinaryParams(p, 0, 6, make([]byte, 1), types, nil)
 	if err != nil {
 		t.Fatalf("parse: %v", err)

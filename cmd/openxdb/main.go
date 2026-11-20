@@ -25,9 +25,12 @@ import (
 	"github.com/zhengkuanhua/openxdb/pkg/server"
 	"github.com/zhengkuanhua/openxdb/pkg/sql"
 	"github.com/zhengkuanhua/openxdb/pkg/storage/rocksdb"
+	ver "github.com/zhengkuanhua/openxdb/pkg/version"
 )
 
-const version = "v1.18.0"
+// version 发布版本号：单一事实源在 pkg/version（与 MySQL 握手版本串、
+// select version() 同源），此处仅为兼容文件内既有引用而做的别名。
+const version = ver.Version
 
 func main() {
 	if len(os.Args) < 2 {

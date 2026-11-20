@@ -35,7 +35,8 @@ func Dial(addr, user, password string) (*Client, error) {
 	return c, nil
 }
 
-// ServerVersion 返回握手包中的服务端版本串（如 "8.0.36-OpenXDB v1.17.0"）。
+// ServerVersion 返回握手包中的服务端版本串（如 "8.0.36-OpenXDB vX.Y.Z"，
+// 具体版本由 pkg/version.ServerVersion 单一事实源派生）。
 func (c *Client) ServerVersion() string { return c.serverVersion }
 
 // Close 关闭连接。

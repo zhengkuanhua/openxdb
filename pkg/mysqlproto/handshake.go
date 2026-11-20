@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+
+	"github.com/zhengkuanhua/openxdb/pkg/version"
 )
 
 // MySQL 能力标志（capability flags，协议 10）。
@@ -45,20 +47,20 @@ var serverCapabilities uint32 = capLongPassword | capFoundRows | capLongFlag |
 
 // serverStatus 常量。
 const (
-	statusAutocommit       = 0x0002
-	statusInTransaction    = 0x0001
-	statusMoreResults      = 0x0008 // SERVER_MORE_RESULTS_EXISTS：多语句结果流中仍有后续结果
+	statusAutocommit    = 0x0002
+	statusInTransaction = 0x0001
+	statusMoreResults   = 0x0008 // SERVER_MORE_RESULTS_EXISTS：多语句结果流中仍有后续结果
 )
 
 // authPlugin 当前认证插件（MySQL 8 默认 caching_sha2_password）。
 const authPlugin = "caching_sha2_password"
 
-// OpenxdbVersion OpenXDB 自身发布版本号（与发版版本常量同源注入）。
-const OpenxdbVersion = "v1.17.0"
+// OpenxdbVersion OpenXDB 自身发布版本号（取自 pkg/version 单一事实源）。
+const OpenxdbVersion = version.Version
 
 // serverVersion 服务器版本串：前缀 8.0.36-OpenXDB 保持 MySQL 兼容
-// （mysql CLI 可识别），OpenXDB 自身版本部分与 OpenxdbVersion 同源拼接。
-const serverVersion = "8.0.36-OpenXDB " + OpenxdbVersion
+// （mysql CLI 可识别），OpenXDB 自身版本部分与 pkg/version.ServerVersion 同源。
+const serverVersion = version.ServerVersion
 
 // handshakeV10 构造服务端初始握手包（Server Greeting，协议 10）。
 // scramble 为 20 字节随机串（auth-plugin-data，含结尾 0）。

@@ -19,6 +19,7 @@ import (
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 	"github.com/zhengkuanhua/openxdb/pkg/tso"
 	"github.com/zhengkuanhua/openxdb/pkg/txn"
+	"github.com/zhengkuanhua/openxdb/pkg/version"
 )
 
 // Executor SQL 执行器（开发手册 §4.2 算子最小集）。
@@ -274,14 +275,14 @@ type splitConfig struct {
 
 func NewExecutor(tm txn.TxnManager) *Executor {
 	e := &Executor{
-		tm:            tm,
-		globalSess:    &Session{prepared: map[string]string{}, userVars: map[string]Value{}, pendingRemote: map[string][]kvOp{}},
-		serial:        newSerialRegistry(), // P2-13：Serializable 提交冲突检测注册表
-		router:        sharding.NewRouter(),
-		failoverDone:  map[string]bool{},
-		p1Epoch:       map[storage.ID]p1RegionEpoch{},
-		splitAcc:      map[uint64]int64{},
-		qc:            NewQueryCache(),
+		tm:           tm,
+		globalSess:   &Session{prepared: map[string]string{}, userVars: map[string]Value{}, pendingRemote: map[string][]kvOp{}},
+		serial:       newSerialRegistry(), // P2-13：Serializable 提交冲突检测注册表
+		router:       sharding.NewRouter(),
+		failoverDone: map[string]bool{},
+		p1Epoch:      map[storage.ID]p1RegionEpoch{},
+		splitAcc:     map[uint64]int64{},
+		qc:           NewQueryCache(),
 		// D4.5 Phase8：B1 存储就绪栅栏默认放行（直接 sql.New 构造零回归），
 		// 经 db.Open 装配的实例由 MarkStorageStarting/Ready/Closed 显式驱动。
 		b1Gate: newB1StorageGate(),
@@ -290,9 +291,9 @@ func NewExecutor(tm txn.TxnManager) *Executor {
 		// Set* 热切换路径一致，构造后统一 Store（见 NewExecutor 尾部）。
 		// v1.14.0 P1：WAL 组提交定时刷盘窗口默认 0.5ms（SET group_commit_window_ms=0 回退被动攒批）。
 		groupCommitWindowMs: groupCommitWindowMsDefault,
-		slowThreshold: slowThresholdDefault, // M13：默认 100ms
-		slowQueryMax:  slowQueryMaxDefault,
-		slowLog:       NewSlowLog(),
+		slowThreshold:       slowThresholdDefault, // M13：默认 100ms
+		slowQueryMax:        slowQueryMaxDefault,
+		slowLog:             NewSlowLog(),
 		// v1.8.0：触发器递归深度默认 1（允许 1 层链式，禁止直接/更深递归）。
 		triggerMaxDepth: 1,
 		// v1.19.0 D5：递归 CTE 迭代深度默认 1000（MySQL 兼容口径）。
@@ -3335,9 +3336,10 @@ func (e *Executor) resolveWhereVars(sess *Session, w *Where) error {
 	return nil
 }
 
-// serverVersionString 与 pkg/mysqlproto/handshake.go 的 serverVersion 保持一致
-// （D7.2 同源约束：sql 包与 mysqlproto 存在依赖环，无法直接引用，改动需两处同步）。
-const serverVersionString = "8.0.36-OpenXDB v1.17.0"
+// serverVersionString 与 pkg/mysqlproto/handshake.go 的 serverVersion 同源
+// （D7.2 同源约束：sql 包与 mysqlproto 存在依赖环，二者统一取自零依赖的
+// pkg/version，发版只需改 pkg/version.Version 一处）。
+const serverVersionString = version.ServerVersion
 
 // evalScalarFunc 求值无参标量内置函数（D7.2：VERSION()）。
 func evalScalarFunc(name string) (Value, error) {

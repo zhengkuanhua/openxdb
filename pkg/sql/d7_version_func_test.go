@@ -2,10 +2,12 @@ package sql_test
 
 import (
 	"testing"
+
+	"github.com/zhengkuanhua/openxdb/pkg/version"
 )
 
 // D7.2：select version() 标量函数支持（排期 Phase G / G3）。
-// 版本串与 mysqlproto 握手版本同源（G1：8.0.36-OpenXDB v1.17.0）。
+// 版本串与 mysqlproto 握手版本同源（G1：取自 pkg/version.ServerVersion）。
 
 func TestD7VersionFunction(t *testing.T) {
 	e := newEngine(t)
@@ -13,10 +15,10 @@ func TestD7VersionFunction(t *testing.T) {
 		stmt string
 		want string
 	}{
-		{"SELECT version()", "8.0.36-OpenXDB v1.17.0"},
-		{"SELECT VERSION()", "8.0.36-OpenXDB v1.17.0"},
-		{"SELECT Version()", "8.0.36-OpenXDB v1.17.0"},
-		{"SELECT version() AS v", "8.0.36-OpenXDB v1.17.0"},
+		{"SELECT version()", version.ServerVersion},
+		{"SELECT VERSION()", version.ServerVersion},
+		{"SELECT Version()", version.ServerVersion},
+		{"SELECT version() AS v", version.ServerVersion},
 	}
 	for _, c := range cases {
 		rows := mustRows(t, e, c.stmt)
@@ -41,7 +43,7 @@ func TestD7VersionFunctionMixed(t *testing.T) {
 	if len(rows) != 1 || len(rows[0]) != 2 {
 		t.Fatalf("mixed: got %+v", rows)
 	}
-	if rows[0][0].String() != "1" || rows[0][1].String() != "8.0.36-OpenXDB v1.17.0" {
+	if rows[0][0].String() != "1" || rows[0][1].String() != version.ServerVersion {
 		t.Fatalf("mixed values: got %+v", rows[0])
 	}
 	// 带 FROM 的投影路径（Rel/meta 投影同样生效）
@@ -52,7 +54,7 @@ func TestD7VersionFunctionMixed(t *testing.T) {
 		t.Fatalf("from: got %d rows", len(rows))
 	}
 	for i, r := range rows {
-		if len(r) != 2 || r[1].String() != "8.0.36-OpenXDB v1.17.0" {
+		if len(r) != 2 || r[1].String() != version.ServerVersion {
 			t.Fatalf("from row %d: got %+v", i, r)
 		}
 	}

@@ -37,7 +37,7 @@ func TestD7ClientHandshakeAndVersion(t *testing.T) {
 	t.Cleanup(func() { c.Close() })
 
 	// G1：握手版本串。
-	if want := "8.0.36-OpenXDB v1.17.0"; c.ServerVersion() != want {
+	if want := serverVersion; c.ServerVersion() != want {
 		t.Fatalf("ServerVersion = %q, want %q", c.ServerVersion(), want)
 	}
 
@@ -46,15 +46,15 @@ func TestD7ClientHandshakeAndVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("select version(): %v", err)
 	}
-	if len(rows) != 1 || rows[0][0] != "8.0.36-OpenXDB v1.17.0" {
-		t.Fatalf("version() = %v (cols=%v), want single row v1.17.0", rows, cols)
+	if len(rows) != 1 || rows[0][0] != serverVersion {
+		t.Fatalf("version() = %v (cols=%v), want single row %s", rows, cols, serverVersion)
 	}
 	_, rows, err = c.Query("SELECT VERSION() AS v")
 	if err != nil {
 		t.Fatalf("select VERSION() as v: %v", err)
 	}
-	if len(rows) != 1 || rows[0][0] != "8.0.36-OpenXDB v1.17.0" {
-		t.Fatalf("VERSION() = %v, want v1.17.0", rows)
+	if len(rows) != 1 || rows[0][0] != serverVersion {
+		t.Fatalf("VERSION() = %v, want %s", rows, serverVersion)
 	}
 
 	// G5 / G4：客户端链路冒烟（SHOW INDEXES 复数 + SHOW CREATE TABLE）。
