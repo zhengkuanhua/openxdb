@@ -47,6 +47,11 @@ type Executor struct {
 	// P0 HA：ha_epoch_enabled / ha_quorum_enabled 开关节流控制器
 	// （nil = 未装配，SET ha_* 返回明确错误）；实现见 HAConfigSetter。
 	haCfg HAConfigSetter
+	// v1.20.0 C2：写路径强制路由开关（ha_write_route_enforce）。
+	// 显式置位（SET 或持久化配置）后写语句按 routeDecision 强制校验归属；
+	// ha_quorum_enabled=on 时自动生效（见 writeRouteEnforce）。
+	// 受 e.mu 保护（低频配置读写；写热路径只在开关打开时额外做持有校验）。
+	routeEnforce bool
 	// P1 HA：clusterEpoch 取号源与 quorum 仲裁器（nil = 未装配，M6 旧行为零回归）。
 	// epochSrc 供 failoverRegion/CheckRegionPushEpoch 取新号与对照；
 	// quorumArb 供 FailoverDownNode 前置多数派确认（不足则降级只读）。

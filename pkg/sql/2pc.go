@@ -139,24 +139,69 @@ func (e *Executor) hasRemoteOps(ops []kvOp) bool {
 // B 簇加固（D4.4 未闭合根因）：远端归属的 op 只允许经 2PC 协调者转发到权威
 // owner，绝不允许静默改写本地副本造成跨节点读分裂（GAP C）。协调者能力
 // 缺失（未装配管理面或 TSO）时无法保证转发原子性，直接以明确错误拒绝，
-// 与 checkWritable 语义一致，不做本地降级写。
+// 与 v1.20.0 C2 写路径强制路由（routeDecision）语义一致，不做本地降级写。
+//
+// v1.20.0 C2 强制路由（ha_write_route_enforce，默认 off）：
+//   - routeLocalOwned：保留 regionOwnerFence 校验；开关生效且集群装配时
+//     追加"本机是否物理持有该 region"校验（未持有返回 REGION_NOT_LOCAL），
+//     防止本机路由视图把别处的 region 误记为本机后静默写空洞副本；
+//   - routeUnassigned：开关生效且集群存在远端节点时拒绝写
+//     （REGION_NOT_ASSIGNED），切断 D4.5 "未指派 region 静默落本地"孤立视图
+//     根因；开关关闭时走旧本地路径，零回归；
+//   - routeUnknownOwner：开关生效时拒绝写（REGION_OWNER_UNREACHABLE）；
+//     关闭时进入远端组，交给尾部既有硬拒绝逻辑（文本不变）；
+//   - routeRemoteOwned：进入远端组（行为不变）。
 func (e *Executor) groupOps(ops []kvOp) ([]kvOp, map[string][]kvOp, error) {
+	enforce := e.writeRouteEnforce()
 	var local []kvOp
 	remote := map[string][]kvOp{}
+	// 持有校验按 rid 去重：同批多次写同一 region 只扫一次键空间。
+	holdsChecked := map[storage.ID]bool{}
 	for _, op := range ops {
 		rid, _ := sharding.DecodeRegionKey(op.Key)
-		if e.regionLocal(rid) {
+		owner, kind := e.routeDecision(rid)
+		switch kind {
+		case routeUnassigned:
+			if enforce && e.mgr != nil && e.mgr.HasRemoteNodes() {
+				return nil, nil, &SQLError{Code: ErrCodeRegionNotAssigned, Msg: fmt.Sprintf(
+					"write to region %d rejected: region has no assigned owner in cluster view (run ASSIGN REGION to repair route view)", rid)}
+			}
+			// 开关关闭：走旧本地路径（含归属 epoch fencing），保证零回归。
+			if err := e.regionOwnerFence(rid); err != nil {
+				return nil, nil, err
+			}
+			local = append(local, op)
+		case routeUnknownOwner:
+			if enforce {
+				return nil, nil, &SQLError{Code: ErrCodeRegionOwnerUnreachable, Msg: fmt.Sprintf(
+					"write to region %d rejected: region owner %q is not a registered node (write route enforce)", rid, owner)}
+			}
+			// 开关关闭：交给尾部既有硬拒绝逻辑（协调者能力缺失时拒绝）。
+			remote[owner] = append(remote[owner], op)
+		case routeRemoteOwned:
+			remote[owner] = append(remote[owner], op)
+		default: // routeLocalOwned
 			// P3（D4.5 §6-3 / T3）：本地写入前按 epoch 快照校验 region 归属——
 			// 该 region 已被更高 regionEpoch 指派给其它 owner 而本地路由条目
 			// 仍陈旧时拒绝提交，避免恢复窗口内旧主继续写已被接管的 region。
 			if err := e.regionOwnerFence(rid); err != nil {
 				return nil, nil, err
 			}
+			// 持有校验只对显式分区生效：隐式单 region 首次写入前本机无任何键，
+			// 不能据此判"路由视图把别处 region 误记为本机"。
+			if enforce && e.mgr != nil && e.regionIsExplicit(rid) && !holdsChecked[rid] {
+				holdsChecked[rid] = true
+				ok, err := e.regionHoldsLocalByID(rid)
+				if err != nil {
+					return nil, nil, err
+				}
+				if !ok {
+					return nil, nil, &SQLError{Code: ErrCodeRegionNotLocal, Msg: fmt.Sprintf(
+						"write to region %d rejected: region is routed to node %s but this node holds no data for it (write route enforce)", rid, e.selfID)}
+				}
+			}
 			local = append(local, op)
-			continue
 		}
-		node := e.regionNode(rid)
-		remote[node] = append(remote[node], op)
 	}
 	if len(remote) > 0 && (e.mgr == nil || e.ts == nil) {
 		for node, nops := range remote {

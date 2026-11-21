@@ -518,7 +518,7 @@ func (ShowTriggersStmt) stmt() {}
 // "INOUT"（双向，实参须为 @var）；空串等价于 IN。
 type ParamMeta struct {
 	Name string `json:"name"`
-	Type string `json:"type"` // "INT" | "TEXT"
+	Type string `json:"type"`           // "INT" | "TEXT"
 	Mode string `json:"mode,omitempty"` // "IN" | "OUT" | "INOUT"；空=IN
 }
 
@@ -911,12 +911,34 @@ type Result struct {
 }
 
 // ErrUnsupported 子集外语法。
-var ErrUnsupported = &SQLError{"unsupported statement"}
+var ErrUnsupported = &SQLError{Msg: "unsupported statement"}
+
+// v1.20.0 C2 写路径强制路由错误码（SQLError.Code）。
+// 客户端/驱动可据此区分"路由视图缺归属"与"本机不持有"两类可修复状态，
+// 无需解析错误文本；未设置 Code 的旧错误文本与解析语义完全不变。
+const (
+	// ErrCodeRegionNotAssigned region 在集群视图内无归属节点（路由视图缺指派）。
+	ErrCodeRegionNotAssigned = "REGION_NOT_ASSIGNED"
+	// ErrCodeRegionNotLocal 路由归属本机但本机物理未持有该 region 数据。
+	ErrCodeRegionNotLocal = "REGION_NOT_LOCAL"
+	// ErrCodeRegionOwnerUnreachable region 归属节点不在注册表内（owner 不可达）。
+	ErrCodeRegionOwnerUnreachable = "REGION_OWNER_UNREACHABLE"
+)
 
 // SQLError SQL 层错误。
-type SQLError struct{ Msg string }
+// Code 为空时 Error() 文本与 v1.19.0 完全一致（"SQL error: "+Msg），
+// 保证既有错误文本断言与客户端解析零变化；非空时前缀带机器可读错误码。
+type SQLError struct {
+	Code string
+	Msg  string
+}
 
-func (e *SQLError) Error() string { return "SQL error: " + e.Msg }
+func (e *SQLError) Error() string {
+	if e.Code == "" {
+		return "SQL error: " + e.Msg
+	}
+	return "SQL error [" + e.Code + "]: " + e.Msg
+}
 
 func errf(format string, a ...interface{}) error {
 	return &SQLError{Msg: fmt.Sprintf(format, a...)}

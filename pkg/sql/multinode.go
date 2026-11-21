@@ -55,17 +55,85 @@ func (e *Executor) regionNode(rid storage.ID) string {
 	return node
 }
 
-// checkWritable 第一簇写路径约束：仅允许写本节点持有的 region。
-// 远端 region 的写入返回语义错误（分布式写事务/2PC 留待下一簇），
-// 防止静默写本地副本造成跨节点读不一致。单机模式（mgr==nil）零触发。
-func (e *Executor) checkWritable(rid storage.ID) error {
+// routeKind 写路径 region 归属判定结果（v1.20.0 C2 强制路由三态+未知归属）。
+type routeKind int
+
+const (
+	// routeLocalOwned 归属本机（含单机模式与"集群未装配远端节点"兼容路径）。
+	routeLocalOwned routeKind = iota
+	// routeRemoteOwned 归属已注册的远端节点，需经 2PC 协调者转发。
+	routeRemoteOwned
+	// routeUnassigned 集群模式下 region 无归属节点（D4.5 孤立视图根因）。
+	routeUnassigned
+	// routeUnknownOwner 归属节点不在注册表内（owner 不可达/路由残留）。
+	routeUnknownOwner
+)
+
+// routeDecision 判定写路径 region 归属（v1.20.0 C2）。
+//
+// 与读路径 regionLocal/regionNode 的区别：读路径把"未指派归属"视为本机
+// （M3 单机数据兼容），写路径在集群模式下必须把"未指派"识别为
+// routeUnassigned，才能让 ha_write_route_enforce 拒绝静默本地写。
+// 单机（mgr==nil）或集群无远端节点时，未指派仍返回 routeLocalOwned，
+// 保证 M1-M4 单机语义零回归。
+func (e *Executor) routeDecision(rid storage.ID) (string, routeKind) {
+	node := e.router.RegionNode(rid)
+	if node == "" {
+		if e.mgr == nil || !e.mgr.HasRemoteNodes() {
+			return e.selfID, routeLocalOwned
+		}
+		// 隐式单 region（表尚未切分，路由不落盘）没有条目是正常状态，不能
+		// 等同于"显式分区丢归属"：否则强制路由会把未切分表的首写判为
+		// REGION_NOT_ASSIGNED（D4.5 的孤立视图专指显式 region 的归属缺失）。
+		if !e.regionIsExplicit(rid) {
+			return e.selfID, routeLocalOwned
+		}
+		return "", routeUnassigned
+	}
+	if node == e.selfID {
+		return node, routeLocalOwned
+	}
 	if e.mgr == nil {
-		return nil
+		return node, routeUnknownOwner
 	}
-	if !e.regionLocal(rid) {
-		return &SQLError{Msg: fmt.Sprintf("write to remote region %d not supported in first cluster (distributed write txn next cluster)", rid)}
+	if _, ok := e.mgr.GetNode(node); !ok {
+		return node, routeUnknownOwner
 	}
-	return nil
+	return node, routeRemoteOwned
+}
+
+// regionHoldsLocalByID 判定本节点是否物理持有该 region 的键空间数据
+// （写路径强制路由的"持有校验"，v1.20.0 C2）。
+// 显式 region 取路由条目 RegionInfo；隐式单 region（rid 带 1<<63 位、
+// 路由不落盘）走 implicitRegion 构造；两者都解析不到视为不持有。
+// tm 未装配（离线装配/测试）时无法判定，放行保持零回归。
+func (e *Executor) regionHoldsLocalByID(rid storage.ID) (bool, error) {
+	if e.tm == nil {
+		return true, nil
+	}
+	rg, ok := e.router.FindRegion(rid)
+	if !ok {
+		rg, ok = e.implicitRegion(rid)
+		if !ok {
+			return false, nil
+		}
+	}
+	return e.regionHoldsLocal(rg)
+}
+
+// regionIsExplicit 判定 region 是否为显式分区（表已切分、路由条目已落盘）。
+// 写路径强制路由的"持有校验"只对显式 region 生效：隐式单 region 表示该表尚未
+// 切分，首次写入前本机当然没有任何键，按持有校验判"不持有"会把正常首写误拒
+// （v1.20.0 C2 实测：quorum 用例的空隐式 region 首写被判 REGION_NOT_LOCAL）。
+func (e *Executor) regionIsExplicit(rid storage.ID) bool {
+	if e.router == nil {
+		return false
+	}
+	rg, ok := e.router.FindRegion(rid)
+	if !ok {
+		return false
+	}
+	return rg.Explicit
 }
 
 // checkRemoteReady 跨节点读前校验目标节点数据面就绪（P3 读聚合 READY 前置）。

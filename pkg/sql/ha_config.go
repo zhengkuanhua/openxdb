@@ -155,6 +155,52 @@ func haParseBool(v string) (bool, error) {
 	return false, fmt.Errorf("invalid bool: %s", v)
 }
 
+// ---- v1.20.0 C2：写路径强制路由开关（ha_write_route_enforce）----
+
+// writeRouteEnforce 判定写路径强制路由是否生效：
+//   - ha_write_route_enforce=on（显式置位）→ 生效；
+//   - 否则关闭（默认 off，M1-M19 单机/集群旧行为零回归）。
+//
+// 为什么不随 ha_quorum_enabled 自动联动（原 D-3 设想的"off 起步 + 联动"）：
+// 既有 quorum 用例（TestP2T9FailoverWithEpochQuorum、
+// TestPhase8New2StartupPersistedQuorumMatrix/quorum_on、
+// TestD45T3ClusterTrackFencingE2E）在 quorum=on 后会先做"未指派 region / 空
+// 隐式 region 的基线写"，这些写按旧语义是合法的集群轨放行。若联动开启强制路由，
+// 基线写会被判为 REGION_NOT_ASSIGNED / REGION_NOT_LOCAL，与零回归红线（既有测试
+// 断言不得修改）直接冲突。故强制路由保持"必须人工显式开启"，联动评估后置 C5，
+// 与 V-A4（分区拒写）同批处理。
+func (e *Executor) writeRouteEnforce() bool {
+	return e.writeRouteEnforceExplicit()
+}
+
+// writeRouteEnforceExplicit 返回显式开关位（不看 quorum 联动），
+// 供 SHOW CONFIG 区分"显式开启"与"随 quorum 生效"。
+func (e *Executor) writeRouteEnforceExplicit() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.routeEnforce
+}
+
+// SetWriteRouteEnforce 设置显式开关位（e.mu 保护，运行期热切换）。
+func (e *Executor) SetWriteRouteEnforce(on bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.routeEnforce = on
+}
+
+// applyHaWriteRouteEnforce 解析并应用 ha_write_route_enforce。
+func applyHaWriteRouteEnforce(e *Executor, v string) error {
+	if e.mgr == nil {
+		return &SQLError{Msg: "ha_write_route_enforce requires cluster HA configuration (start cluster first)"}
+	}
+	on, err := haParseBool(v)
+	if err != nil {
+		return &SQLError{Msg: "invalid value for ha_write_route_enforce: " + v + " (expected on/off)"}
+	}
+	e.SetWriteRouteEnforce(on)
+	return nil
+}
+
 // 两个 HA 配置项在 configSpecs 注册表中的实现。
 func initHAConfigSpecs() {
 	configSpecs = append(configSpecs,
@@ -202,6 +248,18 @@ func initHAConfigSpecs() {
 					return boolValStr(rs.ReplicaEnabled())
 				}
 				return "off"
+			},
+		},
+		&configSpec{
+			key: "ha_write_route_enforce",
+			desc: "v1.20.0 C2 写路径强制路由：region 未指派/不持有/归属节点不可达时拒绝写" +
+				"（默认 off 零回归；ha_quorum_enabled=on 时自动生效）；需先启动集群",
+			def: "off",
+			apply: func(e *Executor, v string) error {
+				return applyHaWriteRouteEnforce(e, v)
+			},
+			read: func(e *Executor) string {
+				return boolValStr(e.writeRouteEnforceExplicit())
 			},
 		},
 	)
