@@ -401,6 +401,11 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// 落库（Txn.Begin/Put/Delete/Commit），产生 WAL 与 binlog，使参与者侧数据
 	// 可被从端复制（此前参与者提交绕过 db.Txn 钩子、不产 binlog）。
 	srv.SetParticipantCommit(d.ApplyParticipantBatch)
+	// v1.20.0 C3：装配参与者归属校验开关提供者（ha_2pc_replica_quorum）。
+	// 开关关闭（默认）时参与者 PREPARE 不做归属校验，与 v1.19.0 逐字一致；
+	// 开启后参与者侧校验 ops 中 region 归属（owner 或副本），否则返回
+	// 2PC_NOT_OWNER 且不落盘 m:2pc:p:<txid>（缺口 B-3 修复）。
+	srv.SetParticipantOwnershipCheck(d.SQL.TwoPCReplicaQuorum)
 	// P9 修复（NEW-1 与 T3 同源收口）：装配集群轨归属纪元通知——路由/装载
 	// 消息应用后由 d.NoteOwnershipView 推进已知 term 并记录本机归属，
 	// 使 AllowWrite 的归属 fencing 在集群轨（无复制链路的部署）真正生效。

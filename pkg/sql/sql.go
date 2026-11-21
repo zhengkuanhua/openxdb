@@ -49,6 +49,11 @@ func (e *Engine) LocateRegion(name string, pk []byte) (storage.ID, error) {
 // ExecutorRouter 返回执行器共享的路由表指针（供 db.StartCluster 注入节点服务端）。
 func (e *Engine) ExecutorRouter() *sharding.Router { return e.ex.Router() }
 
+// TwoPCReplicaQuorum 返回 v1.20.0 C3 的 2PC 参与面扩展开关
+// （ha_2pc_replica_quorum，默认 off）。供 db.StartCluster 注入参与者侧
+// 归属校验提供者（cluster.Server.SetParticipantOwnershipCheck）。
+func (e *Engine) TwoPCReplicaQuorum() bool { return e.ex.TwoPCReplicaQuorum() }
+
 // SetCluster 注入 M4 集群管理器与本节点 ID（供 db.Open 装配，节点注册/转发/路由展开）。
 func (e *Engine) SetCluster(mgr *cluster.Manager, selfID string) { e.ex.SetCluster(mgr, selfID) }
 

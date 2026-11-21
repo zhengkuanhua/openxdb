@@ -296,22 +296,16 @@ func (e *Executor) exec2pcWrite(sess *Session, tx txn.Txn, ops []kvOp) error {
 	if err := e.writeCoord(rec); err != nil {
 		return &SQLError{Msg: fmt.Sprintf("TXN_PREPARE_FAILED: persist coord %s: %v", txID, err)}
 	}
-	prepared := make([]string, 0, len(remote))
-	for node, nops := range remote {
-		if err := e.mgr.PrepareTxn(node, txID, beginTS, toClusterTxnOps(nops)); err != nil {
-			for _, n := range prepared {
-				_ = e.mgr.AbortTxn(n, txID)
-			}
-			_ = e.deleteCoord(txID)
-			return &SQLError{Msg: fmt.Sprintf("TXN_PREPARE_FAILED: 2pc %s participant %s: %v", txID, node, err)}
-		}
-		prepared = append(prepared, node)
+	// v1.20.0 C3：PREPARE 公共逻辑（参与者集合规划 + quorum 判定 + 失败回滚）
+	// 收敛到 prepareParticipants，与显式事务路径 execExplicitCommit2PC 共用。
+	prepared, perr := e.prepareParticipants(txID, beginTS, remote)
+	if perr != nil {
+		_ = e.deleteCoord(txID)
+		return perr
 	}
 	commitTS, err := e.tsoGet()
 	if err != nil {
-		for _, n := range prepared {
-			_ = e.mgr.AbortTxn(n, txID)
-		}
+		e.abortPrepared(prepared, txID)
 		_ = e.deleteCoord(txID)
 		return &SQLError{Msg: fmt.Sprintf("TXN_PREPARE_FAILED: tso unavailable: %v", err)}
 	}
@@ -319,9 +313,7 @@ func (e *Executor) exec2pcWrite(sess *Session, tx txn.Txn, ops []kvOp) error {
 	rec.Participants = prepared
 	rec.State = cluster.CoordPrepared
 	if err := e.writeCoord(rec); err != nil {
-		for _, n := range prepared {
-			_ = e.mgr.AbortTxn(n, txID)
-		}
+		e.abortPrepared(prepared, txID)
 		return &SQLError{Msg: fmt.Sprintf("TXN_PREPARE_FAILED: persist coord %s: %v", txID, err)}
 	}
 	// 版本记录入本地事务（与本地数据同批次提交）
@@ -330,9 +322,7 @@ func (e *Executor) exec2pcWrite(sess *Session, tx txn.Txn, ops []kvOp) error {
 	}
 	// 全部就绪：提交协调者本地事务
 	if err := tx.Commit(); err != nil {
-		for _, n := range prepared {
-			_ = e.mgr.AbortTxn(n, txID)
-		}
+		e.abortPrepared(prepared, txID)
 		return &SQLError{Msg: fmt.Sprintf("TXN_COMMIT_ABORTED: local commit failed for 2pc %s: %v", txID, err)}
 	}
 	// 本地已提交：记录 committing（崩溃后恢复决策 commit）。
@@ -604,23 +594,17 @@ func (e *Executor) execExplicitCommit2PC(sess *Session, tx txn.Txn, beginTS uint
 		_ = tx.Rollback()
 		return &SQLError{Msg: fmt.Sprintf("TXN_PREPARE_FAILED: persist coord %s: %v", txID, err)}
 	}
-	prepared := make([]string, 0, len(remote))
-	for node, nops := range remote {
-		if err := e.mgr.PrepareTxn(node, txID, beginTS, toClusterTxnOps(nops)); err != nil {
-			for _, n := range prepared {
-				_ = e.mgr.AbortTxn(n, txID)
-			}
-			_ = e.deleteCoord(txID)
-			_ = tx.Rollback()
-			return &SQLError{Msg: fmt.Sprintf("TXN_PREPARE_FAILED: 2pc %s participant %s: %v", txID, node, err)}
-		}
-		prepared = append(prepared, node)
+	// v1.20.0 C3：与 autocommit 路径共用 PREPARE 公共逻辑（参与者集合规划 +
+	// quorum 判定 + 失败回滚），保证两条 2PC 路径行为一致。
+	prepared, perr := e.prepareParticipants(txID, beginTS, remote)
+	if perr != nil {
+		_ = e.deleteCoord(txID)
+		_ = tx.Rollback()
+		return perr
 	}
 	commitTS, err := e.tsoGet()
 	if err != nil {
-		for _, n := range prepared {
-			_ = e.mgr.AbortTxn(n, txID)
-		}
+		e.abortPrepared(prepared, txID)
 		_ = e.deleteCoord(txID)
 		_ = tx.Rollback()
 		return &SQLError{Msg: fmt.Sprintf("TXN_PREPARE_FAILED: tso unavailable: %v", err)}
@@ -629,9 +613,7 @@ func (e *Executor) execExplicitCommit2PC(sess *Session, tx txn.Txn, beginTS uint
 	rec.Participants = prepared
 	rec.State = cluster.CoordPrepared
 	if err := e.writeCoord(rec); err != nil {
-		for _, n := range prepared {
-			_ = e.mgr.AbortTxn(n, txID)
-		}
+		e.abortPrepared(prepared, txID)
 		_ = tx.Rollback()
 		return &SQLError{Msg: fmt.Sprintf("TXN_PREPARE_FAILED: persist coord %s: %v", txID, err)}
 	}
@@ -642,9 +624,7 @@ func (e *Executor) execExplicitCommit2PC(sess *Session, tx txn.Txn, beginTS uint
 	}
 	// 全部就绪：提交协调者本地事务
 	if err := tx.Commit(); err != nil {
-		for _, n := range prepared {
-			_ = e.mgr.AbortTxn(n, txID)
-		}
+		e.abortPrepared(prepared, txID)
 		_ = tx.Rollback()
 		return &SQLError{Msg: fmt.Sprintf("TXN_COMMIT_ABORTED: local commit failed for 2pc %s: %v", txID, err)}
 	}

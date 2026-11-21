@@ -52,6 +52,12 @@ type Executor struct {
 	// ha_quorum_enabled=on 时自动生效（见 writeRouteEnforce）。
 	// 受 e.mu 保护（低频配置读写；写热路径只在开关打开时额外做持有校验）。
 	routeEnforce bool
+	// v1.20.0 C3：2PC 参与面扩展开关（ha_2pc_replica_quorum）。
+	// 开启后协调者参与者集合 = owner + region 副本，prepare 按多数派 n/2+1
+	// 判定；参与者侧同时启用 region 归属校验（2PC_NOT_OWNER）。
+	// 默认 off：参与者集合仅 owner、失败即回滚，与 v1.19.0 逐字一致。
+	// 受 e.mu 保护（低频配置读写；写热路径只在开关打开时多读一次副本元数据）。
+	twoPCQuorum bool
 	// P1 HA：clusterEpoch 取号源与 quorum 仲裁器（nil = 未装配，M6 旧行为零回归）。
 	// epochSrc 供 failoverRegion/CheckRegionPushEpoch 取新号与对照；
 	// quorumArb 供 FailoverDownNode 前置多数派确认（不足则降级只读）。

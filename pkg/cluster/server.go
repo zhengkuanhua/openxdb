@@ -98,6 +98,13 @@ type Server struct {
 	// 签名：txID=2PC 事务 ID，commitTS=提交时间戳，batch=参与者提交批次
 	// （数据键 + 版本记录 + 2PC 元键），与旧路径 st.Write 的批次完全一致。
 	participantCommit func(txID string, commitTS uint64, batch *storage.WriteBatch) error
+	// participantOwnerCheck 参与者归属校验开关提供者（v1.20.0 C3，db.StartCluster
+	// 装配 sql.Executor.TwoPCReplicaQuorum）；nil 或返回 false = 关闭：prepare 不
+	// 校验 region 归属，与 v1.19.0 逐字一致（默认 off 零回归）。详见 replicas.go。
+	participantOwnerCheck func() bool
+	// muOwner 保护 participantOwnerCheck（与 mu2pc 分离，避免校验入口持
+	// 2PC 状态锁回调 SQL 层开关造成锁序问题）。仅启动期装配、运行期只读。
+	muOwner sync.Mutex
 }
 
 // SetTSO 注入时间戳源（M8：db.StartCluster 装配本地发号器）。

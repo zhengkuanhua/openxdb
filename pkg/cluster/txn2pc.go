@@ -415,6 +415,13 @@ func (c *Client) abortTxn(txID string) error {
 
 // ---- 参与者侧：Server ----
 
+// PrepareTxn 参与者侧 PREPARE 的公开入口（v1.20.0 C3，验收 V-B3 直调使用）：
+// 语义与网络入口 handle2pcPrepare 完全一致（含幂等与 region 归属校验），
+// 供测试/内部诊断在不搭建网络的情况下验证参与者侧决策。
+func (s *Server) PrepareTxn(txID string, beginTS uint64, ops []TxnOp) error {
+	return s.prepare2pc(txID, beginTS, ops)
+}
+
 // handle2pcPrepare 处理 PREPARE_REQ。
 func (s *Server) handle2pcPrepare(conn net.Conn, payload []byte) {
 	var req PrepareReq
@@ -494,6 +501,14 @@ func (s *Server) prepare2pc(txID string, beginTS uint64, ops []TxnOp) error {
 	}
 	raw, err := marshalJSON(PrepareReq{TxID: txID, BeginTS: beginTS, Ops: ops})
 	if err != nil {
+		return err
+	}
+	// v1.20.0 C3（B-3）：参与者归属校验。放在幂等分支之后的"首次落盘前"
+	// 位置执行——既保证本节点既非 owner 也非副本时不写 m:2pc:p:<txid>
+	// （无暂存残留），又不破坏已 prepared/已提交/已中止事务的幂等重放语义。
+	// 校验只读路由视图与副本元数据键，不回调 2PC 状态机（无重入），
+	// 开关关闭时直接放行（v1.19.0 零回归）。
+	if err := s.checkParticipantOwnership(ops); err != nil {
 		return err
 	}
 	batch := &storage.WriteBatch{}

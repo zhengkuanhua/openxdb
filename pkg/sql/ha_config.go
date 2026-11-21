@@ -262,6 +262,20 @@ func initHAConfigSpecs() {
 				return boolValStr(e.writeRouteEnforceExplicit())
 			},
 		},
+		&configSpec{
+			key: "ha_2pc_replica_quorum",
+			desc: "v1.20.0 C3 2PC 参与面扩展：参与者集合 = region owner + 副本，" +
+				"PREPARE 按多数派 n/2+1 判定（未达 quorum 回滚并返回 TXN_PREPARE_QUORUM_FAILED），" +
+				"同时启用参与者侧 region 归属校验（2PC_NOT_OWNER）" +
+				"（默认 off 零回归：参与者仅 owner、任一失败即回滚）；需先启动集群",
+			def: "off",
+			apply: func(e *Executor, v string) error {
+				return applyHaTwoPCReplicaQuorum(e, v)
+			},
+			read: func(e *Executor) string {
+				return boolValStr(e.TwoPCReplicaQuorum())
+			},
+		},
 	)
 }
 

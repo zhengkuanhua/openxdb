@@ -925,6 +925,13 @@ const (
 	ErrCodeRegionOwnerUnreachable = "REGION_OWNER_UNREACHABLE"
 )
 
+// v1.20.0 C3 2PC 参与面扩展错误码（SQLError.Code）。
+const (
+	// ErrCodeTxnPrepareQuorumFailed 2PC PREPARE 未达成多数派（n/2+1），
+	// 已 prepare 的参与者已全部回滚，两侧无数据残留（缺口 B-4）。
+	ErrCodeTxnPrepareQuorumFailed = "TXN_PREPARE_QUORUM_FAILED"
+)
+
 // SQLError SQL 层错误。
 // Code 为空时 Error() 文本与 v1.19.0 完全一致（"SQL error: "+Msg），
 // 保证既有错误文本断言与客户端解析零变化；非空时前缀带机器可读错误码。
