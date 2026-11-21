@@ -557,7 +557,14 @@ func (s *Server) commit2pc(txID string, commitTS uint64) error {
 	versionPuts(batch, commitTS, ops)
 	batch.Deletes = append(batch.Deletes, prepared2pcKey(txID))
 	batch.Puts = append(batch.Puts, storage.KVPair{Key: committed2pcKey(txID), Value: []byte("1")})
-	if err := s.st.Write(batch); err != nil {
+	// v1.20.0 C1：参与者提交经事务提交钩子落库（非 nil 时由 db 层走
+	// Txn.Begin → Put/Delete → Commit，产生 WAL 与 binlog，使参与者侧数据
+	// 可被从端复制）；未装配时保持旧行为直接写存储（零回归）。
+	if s.participantCommit != nil {
+		if err := s.participantCommit(txID, commitTS, batch); err != nil {
+			return err
+		}
+	} else if err := s.st.Write(batch); err != nil {
 		return err
 	}
 	delete(s.pending2pc, txID)

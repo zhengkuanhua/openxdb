@@ -91,11 +91,28 @@ type Server struct {
 	// 本节点是否仍持有 region 归属，authoritative=是否为权威全量视图——只有
 	// 权威全量视图下的"本机不再持有任何 region"才可判定归属被更高纪元收回。
 	ownershipNotify func(term uint64, selfOwns, authoritative bool)
+	// participantCommit 参与者提交落库回调（v1.20.0 C1，db.StartCluster 装配
+	// db.DB.ApplyParticipantBatch）；nil = 未装配：commit2pc 直接写存储
+	// （旧行为，单机/未启用复制时零回归）。非 nil 时参与者 COMMIT 经事务层
+	// 提交链路落库，产生 WAL 与 binlog 条目，使参与者侧数据可被从端复制。
+	// 签名：txID=2PC 事务 ID，commitTS=提交时间戳，batch=参与者提交批次
+	// （数据键 + 版本记录 + 2PC 元键），与旧路径 st.Write 的批次完全一致。
+	participantCommit func(txID string, commitTS uint64, batch *storage.WriteBatch) error
 }
 
 // SetTSO 注入时间戳源（M8：db.StartCluster 装配本地发号器）。
 // nil 表示不启用快照隔离（单机旧路径零回归）。
 func (s *Server) SetTSO(src tso.Source) { s.tso = src }
+
+// SetParticipantCommit 装配参与者提交落库回调（v1.20.0 C1，由 db.StartCluster
+// 注入 db.DB.ApplyParticipantBatch）。
+// 回调负责把参与者 COMMIT 的整批写入（数据键 + 版本记录 + 2PC 元键）经事务
+// 层提交链路落库，从而产生 WAL 与 binlog 条目供从端复制；返回错误时
+// commit2pc 原样上抛且不清除 pending2pc（协调者重试可重放）。
+// 传 nil 恢复旧行为：commit2pc 直接 st.Write（未装配/未启用复制零回归）。
+func (s *Server) SetParticipantCommit(fn func(txID string, commitTS uint64, batch *storage.WriteBatch) error) {
+	s.participantCommit = fn
+}
 
 // SetPrepareFail 设置参与者 prepare 阶段故障钩子（仅测试使用；传 nil 恢复）。
 func (s *Server) SetPrepareFail(fn func(txID string) error) {

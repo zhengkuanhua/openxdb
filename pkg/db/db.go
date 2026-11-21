@@ -397,6 +397,10 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// D4.4 修复：装配权威路由视图同步回调（FULLALIGN_REQ{RoutesOnly} 接收端）：
 	// 重启节点主动请求本节点下发权威 region 归属视图，用于修正陈旧 owner。
 	srv.SetRouteSyncHandler(d.SQL.PushRouteViewToNode)
+	// v1.20.0 C1：装配参与者提交落库回调——参与者 2PC COMMIT 经事务提交链路
+	// 落库（Txn.Begin/Put/Delete/Commit），产生 WAL 与 binlog，使参与者侧数据
+	// 可被从端复制（此前参与者提交绕过 db.Txn 钩子、不产 binlog）。
+	srv.SetParticipantCommit(d.ApplyParticipantBatch)
 	// P9 修复（NEW-1 与 T3 同源收口）：装配集群轨归属纪元通知——路由/装载
 	// 消息应用后由 d.NoteOwnershipView 推进已知 term 并记录本机归属，
 	// 使 AllowWrite 的归属 fencing 在集群轨（无复制链路的部署）真正生效。
@@ -628,6 +632,49 @@ func (d *DB) StartReplicationTLS(addr string, tlsCfg *tls.Config) error {
 		d.broadcastEpoch(e)
 	}
 	d.Replicator = r
+	return nil
+}
+
+// ApplyParticipantBatch 把集群 2PC 参与者的提交批次落到本地存储（v1.20.0 C1）。
+// 由 cluster.Server.SetParticipantCommit 装配为参与者提交钩子：参与者 COMMIT
+// 不再直接 st.Write，而是经本方法走事务层提交链路
+// （Txn.Begin → 逐键 Put/Delete → Commit），从而产生 WAL 记录并经 commitHook
+// 追加 binlog 条目，使参与者侧提交的数据可被从端复制（M8 复制链路）。
+// 未装配本方法（单机部署/未启用复制）时 commit2pc 仍走旧直写路径，零回归。
+//
+// 键序语义：storage.WriteBatch 的真实应用顺序是"先全部 Puts、后全部 Deletes"
+// （btree 与 rocksdb 的 Write 实现均如此），同批次内同键既写又删时删除生效。
+// 本方法按完全相同的顺序施加（先 Puts 后 Deletes，分批调用），保证落库结果
+// 与原 s.st.Write(batch) 逐键等价；事务层 Commit 内部也是按该顺序拼装批次。
+//
+// 幂等由调用方保证（commit2pc 的 m:2pc:c:* 标记 + 已提交早退），本方法不做
+// 去重：重复调用同一批次会重复产生 binlog 条目（同键同值覆盖，重放结果等价）。
+func (d *DB) ApplyParticipantBatch(txID string, commitTS uint64, batch *storage.WriteBatch) error {
+	if batch == nil || (len(batch.Puts) == 0 && len(batch.Deletes) == 0) {
+		return nil
+	}
+	tx, err := d.Txn.Begin()
+	if err != nil {
+		return fmt.Errorf("db: participant batch begin (tx %s, commit_ts %d): %w", txID, commitTS, err)
+	}
+	// ① 先施加 Puts（与 storage.Write 顺序一致）。
+	for _, p := range batch.Puts {
+		if err := tx.Put(p.Key, p.Value); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("db: participant batch put key %q (tx %s, commit_ts %d): %w", p.Key, txID, commitTS, err)
+		}
+	}
+	// ② 再施加 Deletes（与 storage.Write 顺序一致：同键删除覆盖写入）。
+	for _, k := range batch.Deletes {
+		if err := tx.Delete(k); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("db: participant batch delete key %q (tx %s, commit_ts %d): %w", k, txID, commitTS, err)
+		}
+	}
+	// ③ 提交：WAL 先行落盘 → 存储原子应用 → commitHook 追加 binlog。
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("db: participant batch commit (tx %s, commit_ts %d): %w", txID, commitTS, err)
+	}
 	return nil
 }
 
