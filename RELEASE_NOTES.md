@@ -9,6 +9,58 @@ AIGC:
     ReservedCode2: UDm3b/NfHHOkbknWca+ttp8cSfMCckglKfbESPE7h17FKwsXlvhweB/iFshQHxuiq9o9Jk6/hIsv0Gku9XZrg2r7w9bLEXfjvZSrWIv+Lg0phzlhFgGdmu5akERzFrIeUVXhtyfq/J26k6yK9nK94KWV00B0NI8gBSiSTP5XEq+YF3qlPKs2DtT/CKM=
 ---
 
+# OpenXDB v1.20.0 Release Notes
+
+发布日期：2026-11-22
+
+## 版本亮点
+
+- **集群写轨结构性收口（C1~C5 全闭环）**：本版不解新 SQL 语法，而是把「2PC 远端写不产 binlog」「未指派 region 默认本地」「副本不参与提交与复制」「分区判定逐语句真实探活」四个结构性缺口按顺序堵上，使 `ha_quorum` 的一系列前置条件第一次真正具备可实施性。
+- **2PC 参与者提交纳入提交钩子（C1，P0）**：参与者侧 COMMIT 改走 `db.Txn` 钩子，2PC 远端提交从此同样产 binlog——这是 C4 持续复制能真正跟随提交流的前提。
+- **写路径强制路由（C2，P1）**：集群模式下显式 region 的未指派场景不再「静默落到本地」，孤立视图被显式拒绝（错误码可分辨）。
+- **2PC 参与面扩展至副本（C3，P2）**：副本进入参与者集合，参与 PREPARE 归属校验与副本 quorum 判定。
+- **持续复制 region 化（C4，P3）**：影子副本从一次性 bootstrap 改为持续跟随 owner 写入，binlog 携带 region 维度，旧 binlog 向下兼容。
+- **集群轨写授权统一（C5，P4）**：新增分区状态快照（心跳采样 + `stale-while-refresh`），把「分区拒写」从逐语句真实探活改造为写路径零 IO 的快照读取；P3 语句级 fence 与 2PC `groupOps` 统一到同一数据源，节点级分区授权（`CLUSTER_MINORITY`）先于 region 归属判定。
+
+## 新增能力（相对 v1.19.0）
+
+- **C1 提交钩子接入**：新增开关 `ha_2pc_participant_hook`（默认 `off`）；关闭时参与者直写路径与 v1.19.0 逐字一致。
+- **C2 强制路由**：新增开关 `ha_write_route_enforce`（默认 `off`）；`routeDecision` 四态判定取代原 `checkWritable` 死代码。
+- **C3 参与面扩展**：副本集合落独立元数据键 `m:repl:replicas:<rid>`（不动 `sharding.RegionInfo` 结构）；参与者自身 region 归属校验 + 副本 quorum。
+- **C4 持续复制**：新增 `pkg/db/ha_region_sync.go`（持续跟随同步）、`pkg/replication/binlog_region.go`（binlog region 维度编解码）。
+- **C5 分区快照与授权统一**：新增 `pkg/cluster/partition_snapshot.go`（`RefreshPartitionSnapshot` / `PartitionSnapshot` / `PartitionMinority` / `PartitionSnapshotAge`，TTL 2s、`stale-while-refresh`）与 `pkg/sql/ha_c5.go`；新增错误码 `CLUSTER_MINORITY`；`majorityProbe` 优先读快照、快照不可用时回退仲裁器同步判定。
+
+## 性能
+
+本版改动集中在集群写轨授权与复制路径，**未改动存储引擎、WAL、单机事务提交与读路径主路**，因此不重跑 E5 标准基准；单机 OLTP 性能基线沿用 v1.18.0 / v1.19.0 口径（Windows、1 连接、每轮 prepare 重置、3 轮取中位数）：OLTP read / write / read-write **14.15 / 13.40 / 12.60 TPS**（QPS 198.10 / 53.60 / 226.80），TPC-C 5 仓 tpmC **774.50**。
+
+写路径延迟的关键改善是结构性的：C5 之前分区判定经 `MajorityOK()` 对每个远端节点逐次真实 PING（无缓存、无失败短路），挂在逐语句热路径会把 P95 与远端 RTT 绑定；C5 后写路径只读快照（最多一个调用者触发采样，其余立即复用旧值），远端探活移出请求路径。
+
+## 兼容性说明
+
+- **开关全部默认 `off`**：`ha_2pc_participant_hook`、`ha_write_route_enforce` 新增且默认关闭；`mgr == nil`（单机模式）不分组、不落 `m:2pc:*`、不启维护协程、不产 binlog（零回归红线）。
+- **元数据向下兼容**：副本集合使用独立元数据键，不改 `sharding.RegionInfo`；`BinlogEntry` 变更仅追加 region 字段，旧 binlog 可读。
+- **版本串**：`8.0.36-OpenXDB v1.20.0`，握手与 `select version()` 同源。
+- **行为差异（仅在显式开启时）**：开启 `ha_write_route_enforce` 或 `ha_quorum_enabled` 后，未指派 region 的集群轨写会被拒绝（`REGION_NOT_ASSIGNED` / `CLUSTER_MINORITY`），这正是本版要交付的语义；单机与默认配置不受影响。
+
+## 已知问题
+
+- `ha_quorum` 仍默认关闭（决策点 D-5 未在本簇解除）；D-3「C5 完成后再议默认 on」本轮不执行。
+- **环境级验收记为欠账**：T3 真分区 fencing、NEW-1 陈旧主写拒绝、NEW-2 重启矩阵需三独立 IP 真机复跑，本版未执行，不阻塞发版（代码级验收 C1~C5 全部用例已全绿）。
+- 既有 flaky：`pkg/db` 的 `TestV1200C4TwoPCWriteEntersRegionRepl` 偶发失败（单跑与二轮全量均 PASS）；`pkg/sql` 全量随机 hang 经 HEAD 基线对照确认与本次改动无关。
+
+## 升级路径
+
+- 从 v1.19.0 升级：无迁移动作，默认配置行为与 v1.19.0 一致；如需集群写轨保护，先开 `ha_write_route_enforce` 观察，再评估 `ha_quorum`。
+- 回退：任意新增开关置 `off` 即退回 v1.19.0 行为（提交直写、无分区 fence、参与者集合仅 owner）。
+
+## 文档与支持
+
+- 计划与实测结论：`DEV_PLAN_v1.20.0.md`（本地文档，含 C1~C5 完成态与 §8 实测记录）。
+- 已知限制与边界：`KNOWN_LIMITATIONS.md`。
+- 变更明细：`CHANGELOG.md` 的 v1.20.0 条目。
+- 设计文档：`docs/` 下 HA / 2PC / 复制相关章节。
+
 # OpenXDB v1.19.0 Release Notes
 
 发布日期：2026-11-20

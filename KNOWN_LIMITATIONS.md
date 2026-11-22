@@ -33,9 +33,9 @@ AIGC:
 
 # OpenXDB Known Limitations
 
-版本：v1.19.0（2026-11-20）
+版本：v1.20.0（2026-11-22）
 
-本文档列出 OpenXDB v1.19.0 的已知限制与边界。每条目给出限制描述、影响与建议，帮助用户在选型、部署与使用时做出合理判断。详细功能范围请以 [docs/product_manual_zh.md](docs/product_manual_zh.md)（第 4 章 SQL 参考）与设计文档 docs/ 为准。
+本文档列出 OpenXDB v1.20.0 的已知限制与边界。每条目给出限制描述、影响与建议，帮助用户在选型、部署与使用时做出合理判断。详细功能范围请以 [docs/product_manual_zh.md](docs/product_manual_zh.md)（第 4 章 SQL 参考）与设计文档 docs/ 为准。
 
 ---
 
@@ -53,6 +53,7 @@ AIGC:
 - **影响**：MySQL 生态监控、备份、管理工具链中依赖更新协议扩展（如 GTID、半同步原生协议、复制过滤）的场景仍不可直接复用；E5 基准采用 Python PEP 249 驱动等价实测，而非标准 sysbench/TPC-C 工具直连。
 - **建议**：标准 MySQL 客户端与驱动场景使用 `openxdb start --mysql-port <port>` 直连；需要完整生态工具链的场景请使用驱动包装层或适配层，或使用内置 REPL（`openxdb repl`）与随仓库交付的 JDBC / Python 驱动。
 - **v1.17.0 D7 更新**：补齐 MySQL 兼容缺口五项——① 握手版本串由硬编码 `8.0.36-OpenXDB` 改为与 v1.17.0 版本常量同源注入，mysql CLI 登录显示 `8.0.36-OpenXDB v1.17.0`（G1）；② `select version();` 返回 `8.0.36-OpenXDB v1.17.0`（G3）；③ `SHOW CREATE TABLE <t>` 基于存储元数据重建可执行 schema（列定义/类型/主键/二级索引/约束）（G4）；④ `SHOW INDEXES` 与 `SHOW INDEX` 等价（含大小写归一化）（G5）；⑤ 自研交互 CLI 提示符 `oxsql>` 生效（G2）。边界：握手/`version()` 版本号与版本常量同源、发版需同步更新；`oxsql>` 为自研 CLI 提示符，第三方 mysql CLI 的 `mysql>` 属客户端侧展示不受影响；五项均为读路径/客户端体验改动，不触碰事务、复制与 WAL 语义，全仓回归全绿。详见 [docs/experiments/D7_mysql_compat_validate.md](docs/experiments/D7_mysql_compat_validate.md)。
+- **v1.20.0 更新（集群写轨默认值口径）**：`ha_2pc_participant_hook` / `ha_write_route_enforce` 为本版新增开关，均默认 `off`；`ha_quorum` 仍默认关闭，D-5（是否解除默认关闭）未在本版解除。**行为边界**：开启 `ha_write_route_enforce` 或 `ha_quorum_enabled` 后，集群轨未指派 region 的写会被拒绝（`REGION_NOT_ASSIGNED`），副本少数派侧写被拒绝（`CLUSTER_MINORITY`）——这是本版交付的防护语义，单机与默认配置不受影响。**验收口径**：代码级验收（C1~C5 进程内双/三节点模拟）已全绿并阻塞发版；环境级验收（T3 真分区 / NEW-1 陈旧主写 / NEW-2 重启矩阵，三独立 IP 真机）记为欠账，未执行不改变本版发布，但 D-5 默认值评估必须待其转 PASS。
 - **v1.19.0 D7 更新（版本常量单点化与漂移修正）**：新增零依赖包 `pkg/version`（`Version` / `MySQLServerPrefix` / `ServerVersion`），`cmd/openxdb` 版本输出、`pkg/mysqlproto` 握手版本串与 `pkg/sql` 的 `select version()` 全部取自同一常量，消除 `cmd/openxdb/main.go` 与 `pkg/mysqlproto/handshake.go` 两处独立版本常量。同时修正历史漂移：握手串与 `select version()` 此前各自硬编码且停留在 `v1.17.0`（落后版本线两轮，未随 v1.18.0 发版更新），现均为 `8.0.36-OpenXDB v1.19.0`。边界：后续发版只需修改 `pkg/version.Version` 一处，握手串与 `select version()` 自动联动；客户端若硬编码校验过 `8.0.36-OpenXDB v1.17.0` 需相应调整。
 
 - **v1.19.0 客户端实测边界（MySQL 8 CLI，Windows）**：MySQL 官方命令行客户端直连 `--mysql-port` 监听可完成握手、鉴权与查询，但存在两处客户端侧差异：① 非交互模式 `mysql ... -e "<SQL>"` 执行时结果集不回显（无表头与数据行输出），交互模式下查询结果正常；② 以 `--auth` 触发客户端侧密码交互流程时连接被 EOF 中断，需改用 `--ssl-mode=DISABLED` 且不使用 `--auth` 的直连方式。Python PEP 249 驱动与 JDBC 驱动不受上述两项影响（AUTH 握手实测正常）。
@@ -143,7 +144,7 @@ AIGC:
 - **限制描述**：HA 脑裂防护含 `ha.epochEnabled`（epoch fencing，v1.10.0 起默认开启）与 `ha.quorumEnabled`（多数派仲裁）两个开关。quorum 保持默认关闭：开启后升主需多数派节点确认，单节点/两节点部署无法满足多数派时将拒绝升主。
 - **影响**：v1.10.0 单机/测试框架评估结论为直接全量开启会破坏单节点自动升主与两节点主从场景的主节点恢复语义（详见 docs/HA_BRAIN_SPLIT_DESIGN.md §5.5）；保持默认关闭不影响 epoch fencing 的防脑裂效果。v1.18.0 已在 VM 三节点完成 quorum 灰度全链路演练（D4.1 quorum 开启评估 / D4.2 宕机 failover / D4.3 脑裂 + epoch 拒绝 / D4.4 节点恢复回迁），结论维持 `ha.quorumEnabled=off`、`ha.epochEnabled=on`，不给全量开启建议。结构性原因：集群轨尚无一致性协议（无 raft 式日志复制与选举），写提交为归属节点本地提交 + 归属强制路由、副本补齐为异步推送，任何时刻可能存在"单副本可写窗口"与 RPO>0，与开关是否打开无关。详见 [D4.5 HA quorum 灰度报告](docs/D4_5_ha_quorum_gray_report.md) §7.1。
 - **行为变化（Phase9）**：重启节点在 region 归属未经集群权威视图确认期间拒绝写入（把原"错误放行"改为"正确拒绝"），代价是秒级写不可用窗口。该门槛由 `ha_epoch_enabled`（默认 `on`）驱动、与 `ha_quorum_enabled` 无关，即默认配置下也生效；仅三种情形触发（重启后归属待权威确认 / 归属已被权威收回 / 曾获授权 `clusterOwnTerm>0`），单节点集群与从未接管 region 的普通节点恒放行，对既有单机与普通部署零回归。**集群部署的重启操作需按报告 §7「重启窗口」一行摘流。**
-- **建议**：三节点及以上真实组网灰度验证 quorum 仲裁行为后再评估全量开启；单机/两节点部署维持默认关闭。升级路径：v1.19.0 M8（写路径强制路由 + 2PC 参与 + 持续复制）落地后，以三独立 IP 真机复跑 T3 真分区 fencing / NEW-1 陈旧主写拒绝 / NEW-2 重启矩阵三项，转 PASS 且 2PC 落地后再评估默认值改为 `on`。
+- **建议**：三节点及以上真实组网灰度验证 quorum 仲裁行为后再评估全量开启；单机/两节点部署维持默认关闭。升级路径：v1.20.0 已完成 M8 代码级收口（C1 提交钩子 / C2 写路径强制路由 / C3 参与面扩展 / C4 持续复制 / C5 分区授权统一），下一步以三独立 IP 真机复跑 T3 真分区 fencing / NEW-1 陈旧主写拒绝 / NEW-2 重启矩阵三项，转 PASS 且 2PC 落地后再评估默认值改为 `on`。
 
 ### 3.5 跨 region 多区间读的远端往返（`remote_range_agg`，默认关闭）
 

@@ -83,7 +83,7 @@ SELECT name FROM users WHERE age >= 25 AND age < 35 ORDER BY age;
 
 ### 5. 登录与常用命令
 
-> 以下路径均在 v1.19.0 + Windows 上实测通过，按场景选一条即可。
+> 以下路径均在 v1.20.0 + Windows 上实测通过，按场景选一条即可。
 
 #### 5.1 本地登录：REPL
 
@@ -138,7 +138,7 @@ openxdb.exe start --data-dir .\data --mysql-port 3306
 mysql -h127.0.0.1 -P3306 -uroot --ssl-mode=DISABLED
 ```
 
-v1.19.0 + MySQL 8.0 客户端实测限制：必须显式加 `--ssl-mode=DISABLED` 才能完成握手；非交互执行（`-e` 或管道输入）不返回结果集回显；服务端开启 `--auth` 时客户端在认证阶段失败（服务端日志 `mysql auth failed: user=root err=EOF`）。日常登录与操作请走 5.1 / 5.2。
+v1.20.0 + MySQL 8.0 客户端实测限制：必须显式加 `--ssl-mode=DISABLED` 才能完成握手；非交互执行（`-e` 或管道输入）不返回结果集回显；服务端开启 `--auth` 时客户端在认证阶段失败（服务端日志 `mysql auth failed: user=root err=EOF`）。日常登录与操作请走 5.1 / 5.2。
 
 #### 5.5 常用运维命令
 
@@ -250,6 +250,8 @@ Protocol / CLI (REPL · TCP server · JDBC/Python 驱动 · MySQL wire protocol 
 **v1.18.0（2026-11-17 落地）**：**分布式纵深：跨节点数据分布 + HA quorum 灰度** —— ① D2 会话锁重试收口（v1.17.0 回退后干净库重建复测：16 连接 read **17.12** TPS 较基线 11.85 提升 **+44.6%**、read_write 8 连接 **13.58** TPS 无回归，errs=0）；② D3 跨节点数据分布（显式 REGION 指派 + `ASSIGN REGION` 三节点分布，`SHOW REGION ROUTES` 由空变为可见 region → node 映射、跨节点点查可见、COUNT/SUM 聚合不丢不重）；③ D4 HA quorum 灰度全链路演练（quorum 开启评估 / 宕机 failover / 脑裂 + epoch 拒绝旧主写 / 节点恢复回迁与路由收敛 + 灰度报告），最终判定维持 `ha.quorumEnabled=off`、`ha.epochEnabled=on`；④ D5 Linux E5 受控复测（RHEL 9.7 2 vCPU 同口径 OLTP **8.17 / 8.13 / 8.10 TPS**、TPC-C 5 仓 tpmC **749.50**，14 组采集 errs=0 / reconnects=0，跨平台可比性边界成文）；⑤ D6 读路径优化（块缓存调优 -1.6% 负收益已回退、批量点查合并 N=64 实测 **33.3ms → 0.52ms**、Snapshot 批量 Scan 评估确认既有能力无新增代码）；⑥ D7 发版收尾（版本常量 `v1.18.0`、RELEASE_NOTES / README / KNOWN_LIMITATIONS 文档同步、oxsql 交互提示符改 `openxdb>`、`go build ./...` + `go vet ./...` 全绿；annotated tag 与双远端 SHA 核验另行执行）。
 
 **v1.19.0（2026-11-20 落地）**：**SQL 兼容深水区：过程/触发器子集、递归 CTE、JSON、远端聚合** —— ① D1 远端区间聚合 + 远端 Scan 流式协议（`remote_range_agg` 默认 off，同归属节点多区间往返由「区间数」降为「节点数」，服务端 512 行 / 4MB 分块流式回传，关闭即走 v1.18.0 逐区间路径）；② D2 存储过程异常处理与动态 SQL（`DECLARE {CONTINUE|EXIT} HANDLER FOR`、`SIGNAL` / `RESIGNAL`、`PREPARE` / `EXECUTE` / `DEALLOCATE PREPARE`、嵌套 `BEGIN…END` 作用域、`DECLARE ... CONDITION FOR` 命名条件、`GET DIAGNOSTICS`）；③ D3 触发器体 `BEGIN…END` 复合块、`BEFORE` 行级 `SET NEW.<col>` 回写、`FOLLOWS` / `PRECEDES` 稳定拓扑排序；④ D4 事务保存点 `SAVEPOINT` / `ROLLBACK TO` / `RELEASE SAVEPOINT`（含 2PC 写集前缀截断边界）；⑤ D5 递归 CTE `WITH RECURSIVE`（`UNION` / `UNION ALL`、列名列表、深度上限 `recursive_cte_max_depth` 默认 1000）；⑥ D6 SQL JSON 函数族 8 个（`JSON_VALID` / `EXTRACT` / `UNQUOTE` / `TYPE` / `LENGTH` / `OBJECT` / `ARRAY` / `SET`，保序文档模型，TEXT 列承载）；⑦ A1 可更新视图（单表裸列视图 DML 重写下沉 `execStmt`）与 A2 `WITH [CASCADED|LOCAL] CHECK OPTION`（写入越界整语句回滚，`LOCAL` / `CASCADED` 本版本等价）；⑧ D7 发版收尾（版本常量单点化到 `pkg/version`，握手版本串与 `select version()` 同源修正为 `8.0.36-OpenXDB v1.19.0`，RELEASE_NOTES / README / KNOWN_LIMITATIONS / docs/index 文档同步，`go build ./...` + `go vet ./...` + `go test ./...` 全绿）。
+
+**v1.20.0（2026-11-22 落地）**：**集群写轨结构性收口：2PC 提交钩子、强制路由、参与面扩展、持续复制、写授权统一** —— ① C1 2PC 参与者 COMMIT 改走 `db.Txn` 提交钩子，远端写从此产 binlog（`ha_2pc_participant_hook` 默认 off）；② C2 写路径强制路由闭环（`ha_write_route_enforce` 默认 off，`routeDecision` 四态判定取代死代码 `checkWritable`，显式 region 未指派不再默认本地）；③ C3 2PC 参与面扩展至 region 副本（副本集合落 `m:repl:replicas:<rid>` 独立元数据键，参与者校验自身归属 + 副本 quorum）；④ C4 持续复制 region 化（binlog 携带 region 维度、影子副本由一次性 bootstrap 改为持续跟随 owner 写入、旧 binlog 向下兼容）；⑤ C5 集群轨写授权统一（分区状态快照由心跳采样刷新、写路径零 IO 复用、`stale-while-refresh`，节点级 `CLUSTER_MINORITY` 拒写先于归属判定，P3 语句级 fence 与 2PC `groupOps` 共用同一快照数据源，交付原 C2 后置的 V-A4）；⑥ C6 发版收尾（`pkg/version` → v1.20.0，握手串 / CLI / `select version()` 同源，全仓回归全绿）。`ha_quorum` 仍默认关闭，真机三 IP 环境级验收记为欠账。
 
 ### 完整特性
 

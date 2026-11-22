@@ -39,6 +39,30 @@ OpenXDB 版本变更记录。
 
 > 版本线说明：历史版本以仓库 README Status 行、docs/ 设计文档头部标注与 git 提交记录为准。早期部分中间 -alpha 版本未单独打标（git 与文档均无显式版本号），按里程碑区间归纳，版本号不做臆造。
 
+## v1.20.0 (2026-11-22)
+
+**Added**
+- **C1 2PC 参与者提交接入提交钩子（989503c，P0）**：`pkg/cluster/txn2pc.go` 参与者侧 COMMIT 不再直接 `st.Write(batch)`，改走 `db.Txn` 提交钩子路径，使 2PC 远端提交同样产生 binlog（此前绕过钩子导致远端写无 binlog）。开关 `ha_2pc_participant_hook` 默认 `off`，关闭时退回直写路径；测试 `pkg/db/v1200_c1_participant_hook_test.go`（V-B1）。
+- **C2 写路径强制路由闭环（e386d47，P1）**：新增开关 `ha_write_route_enforce`（默认 `off`），以 `routeDecision` 四态判定取代死代码 `checkWritable`（已删除）；显式分区的未指派场景不再默认本地，集群模式下孤立视图被显式拒绝。测试 `pkg/sql/write_route_enforce_test.go`（V-A1/A2/A3/A5）。
+- **C3 2PC 参与面扩展（7588810，P2）**：参与者集合纳入 region 副本（副本集合落独立元数据键 `m:repl:replicas:<rid>`，不改 `sharding.RegionInfo`），参与者 PREPARE 校验自身 region 归属并做副本 quorum 判定；开关默认 `off`，关闭时参与者集合退化为仅 owner，语义与 v1.19.0 逐字一致。测试见 `pkg/cluster/v1200_c3_participant_owner_test.go` 等（V-B2/B3）。
+- **C4 持续复制 region 化（aeecbca，P3）**：binlog 记录携带 region 维度，影子副本由「静态一次性 bootstrap」改为持续跟随 owner 写入（新增 `pkg/db/ha_region_sync.go`、`pkg/replication/binlog_region.go`）；旧格式 binlog 向下兼容。V-C1~V-C6 通过（V-C7 为静态基线核对，非运行期用例）。
+- **C5 集群轨写授权统一（e63c6c0，P4）**：新增 `pkg/cluster/partition_snapshot.go` 分区状态快照——由心跳 watcher 每秒采样刷新，写路径最多一个调用者触发真实采样、其余立即复用旧快照（`stale-while-refresh`，TTL 2s），彻底消除「逐语句真实 PING 远端」带来的 P95 延迟绑定点；新增 `pkg/sql/ha_c5.go` 节点级分区写授权（错误码 `CLUSTER_MINORITY`），在 `groupOps` 中先于 region 归属校验生效；`majorityProbe`（P3 语句级 fence）改为优先读快照，快照不可用时回退仲裁器同步判定。原 C2 后置的 V-A4「分区场景拒写」由此交付。
+- **测试**：`pkg/sql/ha_c5_test.go`（分区少数派拒写与恢复放行、quorum 仅联动分区拒写不联动归属判定、单机零回归）、`pkg/cluster/partition_snapshot_test.go`（采样刷新与 TTL 复用、未采样返回 unknown、watcher 刷新后快照可见）。
+- **C6 发版收尾**：`pkg/version` 版本常量升级至 `v1.20.0`，CLI 版本输出、MySQL 握手版本串与 `select version()` 三者同源；`RELEASE_NOTES` / `README` / `KNOWN_LIMITATIONS` / `docs/index.md` 文档口径同步。
+
+**Changed**
+- `CheckPartitionRecovery` 改为经 `RefreshPartitionSnapshot` 刷新快照，由 watcher 周期采样承担探活，取代逐语句真实探活。
+- 分区拒写由 `ha_write_route_enforce=on` **或** `ha_quorum_enabled=on` 触发；而 region 归属的三类判定（LOCAL / NOT_ASSIGNED / NOT_LOCAL）仍只读显式位，不随 quorum 联动——既有 quorum 用例的集群轨基线写保持放行，避免误拒导致的零回归破坏。
+- 拒绝计数复用 P3 fence 计数器（`PartitionMinorityFencedCount`），不新增独立统计口径。
+
+**Docs**
+- `DEV_PLAN_v1.20.0.md` 回填 C1~C5 完成态（含提交号）与 §8 本轮实测结论；本轮计划文档仍为本地 untracked 文件，不入库。
+
+**Known**
+- `ha_quorum` 仍默认关闭（决策点 D-5 未解除）；D-3「C5 后再议默认 on」本轮不执行，待真机证据后单独评估。
+- 环境级验收（T3 真分区 fencing、NEW-1 陈旧主写拒绝、NEW-2 重启矩阵，三独立 IP 真机）记为欠账，不阻塞本版发版；阻塞项仅代码级验收（C1~C5 全部用例）。
+- 已定位的既有 flaky：`pkg/db` 的 `TestV1200C4TwoPCWriteEntersRegionRepl` 偶发失败（单跑与二轮全量均 PASS）；`pkg/sql` 全量随机 hang 经与 HEAD 基线对照确认与 v1.20.0 改动无关。
+
 ## v1.19.0 (2026-11-20)
 
 **Added**
