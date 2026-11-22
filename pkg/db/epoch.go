@@ -255,6 +255,23 @@ func (d *DB) AllowWrite() error {
 	if err := d.clusterOwnershipFenceLocked(); err != nil {
 		return err
 	}
+	// P9 修复（T3 真机分区复验）：本节点在权威视图中持有集群轨 region 归属时，
+	// 写入合法性由归属视图仲裁，复制轨的陈旧主/只读降级判定一律不适用——两条
+	// 轨道授权来源不同，集群轨授权不写 masterEpoch（见 TestP9ClusterTermGrantAndRevoke
+	// 契约）。缺陷现场：owner 节点 session 持续取 TSO 单调号推进 d.epoch，而
+	// masterEpoch 停留在复制轨旧授权或 0，d.epoch > masterEpoch 恒成立，合法 owner
+	// 被永久误判陈旧主拒写；若该 owner 曾被复制轨广播降级（readOnly），还会被
+	// "demoted stale master is read-only" 永久挡住，导致其持有的 region 整段不可写。
+	// 归属收回/待确认仍由上方 clusterOwnershipFenceLocked 拒写。
+	if d.clusterOwned {
+		return nil
+	}
+	// 分区恢复合并降级（NoteEpoch 识别到复制轨更高授权）：仅在无集群轨归属时
+	// 生效，陈旧复制主不得写入。
+	if d.readOnly {
+		d.conflictCount++
+		return fmt.Errorf("%w: demoted stale master is read-only", ErrFenced)
+	}
 	if d.masterEpoch == 0 {
 		return nil
 	}
