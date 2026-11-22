@@ -663,9 +663,42 @@ func (e *Executor) implicitRegion(rid storage.ID) (sharding.RegionInfo, bool) {
 	return sharding.RegionInfo{}, false
 }
 
+// normalizeRegionOwnerView 落盘前按「归属唯一事实源」归一 Local 标记（v1.20.1 P0-2）。
+//
+// 不变量（与 pkg/cluster.normalizeRouteOwner 同语义）：RegionInfo.Node 是 region 归属的
+// 唯一事实源，Local 必须由 Node 推导 —— Node 为本节点或未指派时 Local 保持 true；
+// Node 为远端时 Local 必须为 false。
+//
+// 本地 ASSIGN REGION / 迁移 / balance / failover 只调 router.SetRegionNode* 改 Node，
+// 并不改 Local，于是"归属已外移、远端视图同步尚未到达"的窗口内，本机视图会短暂出现
+// "owner 是远端 + local=true" 的矛盾条目：SHOW REGION ROUTES 与 waitRoute 类断言随同步
+// 时机抖动（v1.20.0 期 TestV1200C4TwoPCWriteEntersRegionRepl 偶发失败即此），读路径也可能
+// 把权威归属在远端的 region 误当本地副本。统一在落盘前收敛，保证任何持久化视图都满足
+// 不变量，且不依赖远端推送时机。
+//
+// 仅改内存 Local 标记与序列化结果，不触碰物理键；返回被归一的条目数。
+func (e *Executor) normalizeRegionOwnerView() int {
+	if e.router == nil || e.selfID == "" {
+		return 0
+	}
+	fixed := 0
+	for _, rg := range e.router.AllRegions() {
+		if rg.Node == "" || rg.Node == e.selfID || !rg.Local {
+			continue
+		}
+		rg.Local = false
+		if err := e.router.UpsertRegion(rg); err != nil {
+			continue
+		}
+		fixed++
+	}
+	return fixed
+}
+
 // persistRegions 将当前路由表落盘 m:regions（直接写引擎，不经过事务）。
 // 仅用于集群管理语句的路由元数据持久化（数据已存在于对应节点）。
 func (e *Executor) persistRegions() error {
+	e.normalizeRegionOwnerView()
 	raw, err := saveRegionMeta(e)
 	if err != nil {
 		return err

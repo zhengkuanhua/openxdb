@@ -284,7 +284,7 @@ func TestSplitTableEmptyTable(t *testing.T) {
 }
 
 func TestRegionMetaPersistRoundTrip(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "data")
+	dir := filepath.Join(testDir(t), "data")
 	if err := db.Init(dir); err != nil {
 		t.Fatalf("db.Init: %v", err)
 	}

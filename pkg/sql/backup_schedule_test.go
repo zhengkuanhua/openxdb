@@ -58,7 +58,7 @@ func waitBackupCount(t *testing.T, bs *BackupScheduler, n int64) {
 // 生成备份文件并记录状态（run_count/last_file/next_run 均更新）。
 func TestBackupScheduleTriggerOnInterval(t *testing.T) {
 	_, bs := newBackupSchedTestEngine(t)
-	dir := t.TempDir()
+	dir := testDir(t)
 
 	bs.Update(BackupScheduleConfig{IntervalSec: 1, Keep: 0, Dir: dir})
 	if st := bs.Status(); !st.Enabled || st.NextRunAt == "" {
@@ -92,7 +92,7 @@ func TestBackupScheduleTriggerOnInterval(t *testing.T) {
 // TestBackupScheduleSkipDisabled 跳过：interval=0（未开启）与未到点均不执行。
 func TestBackupScheduleSkipDisabled(t *testing.T) {
 	_, bs := newBackupSchedTestEngine(t)
-	dir := t.TempDir()
+	dir := testDir(t)
 
 	// 未开启（interval=0）：Start 后无任何执行，且无 next_run 计划。
 	bs.Update(BackupScheduleConfig{IntervalSec: 0, Dir: dir})
@@ -126,7 +126,7 @@ func TestBackupScheduleSkipDisabled(t *testing.T) {
 // 补齐 Dir 后再次执行成功 → last_error 清空、备份文件生成。
 func TestBackupScheduleFailureAndRecovery(t *testing.T) {
 	_, bs := newBackupSchedTestEngine(t)
-	dir := t.TempDir()
+	dir := testDir(t)
 
 	// 失败：备份目录未配置。
 	bs.Update(BackupScheduleConfig{IntervalSec: 0, Keep: 0, Dir: ""})
@@ -172,7 +172,7 @@ func TestBackupScheduleFailureAndRecovery(t *testing.T) {
 // TestBackupScheduleRetainRotation 保留轮转：keep=2 时仅保留最近 2 份，
 // 删除最旧 3 份（文件名时间戳前缀字典序 = 新旧序）；keep<=0 不删除。
 func TestBackupScheduleRetainRotation(t *testing.T) {
-	dir := t.TempDir()
+	dir := testDir(t)
 	for _, ts := range []string{
 		"20261001_000001", "20261002_000001", "20261003_000001",
 		"20261004_000001", "20261005_000001",

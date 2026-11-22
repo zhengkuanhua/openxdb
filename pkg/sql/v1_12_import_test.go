@@ -15,7 +15,7 @@ import (
 func TestV112CSVImportDecimalHighPrecision(t *testing.T) {
 	e := newEngine(t)
 	mustExec(t, e, "CREATE TABLE ci (id INT, price DECIMAL(12,6), PRIMARY KEY (id))")
-	p := filepath.Join(t.TempDir(), "hp.csv")
+	p := filepath.Join(testDir(t), "hp.csv")
 	if err := os.WriteFile(p, []byte("id,price\n1,123.456789\n2,-0.000001\n3,1.5\n"), 0o644); err != nil {
 		t.Fatalf("write csv: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestV112CSVImportBatchByRows(t *testing.T) {
 	for i := 0; i < 7; i++ {
 		sb = append(sb, []byte{byte('0' + i), ',', byte('0' + i), ',', byte('0' + i), ',', byte('0' + i), '\n'}...)
 	}
-	p := filepath.Join(t.TempDir(), "batch.csv")
+	p := filepath.Join(testDir(t), "batch.csv")
 	if err := os.WriteFile(p, sb, 0o644); err != nil {
 		t.Fatalf("write csv: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestV112DumpImportDecimalHighPrecision(t *testing.T) {
 	e := newEngine(t)
 	content := "CREATE TABLE `dmp` (`id` INT PRIMARY KEY, `price` DECIMAL(10,6));\n" +
 		"INSERT INTO `dmp` VALUES (1, 123.456789), (2, -0.000001);\n"
-	p := filepath.Join(t.TempDir(), "hp.sql")
+	p := filepath.Join(testDir(t), "hp.sql")
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		t.Fatalf("write dump: %v", err)
 	}

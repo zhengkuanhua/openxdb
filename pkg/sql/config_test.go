@@ -28,7 +28,7 @@ func openEngineDir(t *testing.T, dir string) *db.DB {
 // initEngineDir 初始化全新数据目录（Init + Open）。
 func initEngineDir(t *testing.T) (string, *db.DB) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testDir(t)
 	if err := db.Init(dir); err != nil {
 		t.Fatalf("db.Init: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestHotConfigCorruptFileRejected(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := testDir(t)
 			if err := db.Init(dir); err != nil {
 				t.Fatalf("db.Init: %v", err)
 			}

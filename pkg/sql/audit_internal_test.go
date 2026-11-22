@@ -215,7 +215,7 @@ func TestM17AuditShowQuery(t *testing.T) {
 // TestM17AuditPersistence 落盘：JSON 行追加、关闭后停止写入。
 func TestM17AuditPersistence(t *testing.T) {
 	e := newExecutorInternal()
-	logPath := filepath.Join(t.TempDir(), "audit.log")
+	logPath := filepath.Join(testDir(t), "audit.log")
 	e.SetAuditLog(logPath, true)
 	e.RecordAuditConnect("alice", true)
 	e.RecordAuditDisconnect("alice")

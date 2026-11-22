@@ -18,7 +18,7 @@ import (
 // 不自动装配；注入后规则评估可手动触发）。
 func initAlertEngineDir(t *testing.T) (string, *db.DB) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testDir(t)
 	if err := db.Init(dir); err != nil {
 		t.Fatalf("db.Init: %v", err)
 	}

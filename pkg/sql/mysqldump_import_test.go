@@ -12,7 +12,7 @@ import (
 // writeDump 将 dump 文本写入临时文件并返回路径。
 func writeDump(t *testing.T, content string) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "dump.sql")
+	p := filepath.Join(testDir(t), "dump.sql")
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		t.Fatalf("write dump: %v", err)
 	}
@@ -423,7 +423,7 @@ func TestP2ImportDumpConcurrencySyntax(t *testing.T) {
 	e := newEngine(t)
 	p := writeDump(t, "CREATE TABLE t (id INT PRIMARY KEY, v TEXT);\nINSERT INTO t VALUES (1,'a');\n")
 	mustExec(t, e, "IMPORT MYSQLDUMP FROM '"+p+"' BATCH 1 CONCURRENCY 1") // 并发度 1 = 串行
-	csv := filepath.Join(t.TempDir(), "d.csv")
+	csv := filepath.Join(testDir(t), "d.csv")
 	if err := os.WriteFile(csv, []byte("1,a\n"), 0o644); err != nil {
 		t.Fatalf("write csv: %v", err)
 	}

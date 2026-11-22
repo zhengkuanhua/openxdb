@@ -36,7 +36,7 @@ import (
 func newWriteRouteEnv(t *testing.T, selfID string) (*Executor, storage.Storage) {
 	t.Helper()
 	st := btree.NewKV(32)
-	w, err := wal.Open(filepath.Join(t.TempDir(), "wal.log"))
+	w, err := wal.Open(filepath.Join(testDir(t), "wal.log"))
 	if err != nil {
 		t.Fatalf("wal.Open: %v", err)
 	}

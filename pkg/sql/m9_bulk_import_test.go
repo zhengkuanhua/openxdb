@@ -14,7 +14,7 @@ import (
 
 func writeCSV(t *testing.T, content string) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "data.csv")
+	p := filepath.Join(testDir(t), "data.csv")
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		t.Fatalf("write csv: %v", err)
 	}

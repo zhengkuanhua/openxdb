@@ -57,7 +57,7 @@ func TestP211RowProtoNullEmptyRoundtrip(t *testing.T) {
 	mustExec(t, e, "CREATE TABLE t (id INT, txt TEXT, num DECIMAL, d DATE, b BLOB, PRIMARY KEY (id))")
 
 	// 构造 CSV：\N 表示 NULL，空字段表示 TEXT 空串
-	src := filepath.Join(t.TempDir(), "null.csv")
+	src := filepath.Join(testDir(t), "null.csv")
 	body := "id,txt,num,d,b\n" +
 		"1,alice,123.4500,2024-03-15,0A1B\n" +
 		"2,\\N,\\N,\\N,\\N\n" +
@@ -81,7 +81,7 @@ func TestP211RowProtoNullEmptyRoundtrip(t *testing.T) {
 	}
 
 	// 导出：NULL → \N，空串 → 空字段
-	out := filepath.Join(t.TempDir(), "out.csv")
+	out := filepath.Join(testDir(t), "out.csv")
 	mustExec(t, e, "EXPORT TABLE t TO '"+out+"'")
 	recs := readCSV(t, out)
 	if len(recs) != 5 {
@@ -113,7 +113,7 @@ func TestP211RowProtoLiteralNullToken(t *testing.T) {
 	mustExec(t, e, "CREATE TABLE t (id INT, txt TEXT, PRIMARY KEY (id))")
 
 	// CSV 单元格 \\N（两个反斜杠 + N）= 字面 "\N"
-	src := filepath.Join(t.TempDir(), "lit.csv")
+	src := filepath.Join(testDir(t), "lit.csv")
 	if err := os.WriteFile(src, []byte("id,txt\n1,\\\\N\n"), 0o644); err != nil {
 		t.Fatalf("write csv: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestP211RowProtoLiteralNullToken(t *testing.T) {
 	}
 
 	// 导出：单元格为 \\N
-	out := filepath.Join(t.TempDir(), "out.csv")
+	out := filepath.Join(testDir(t), "out.csv")
 	mustExec(t, e, "EXPORT TABLE t TO '"+out+"'")
 	recs := readCSV(t, out)
 	if recs[1][1] != escapedNullTok {
@@ -147,7 +147,7 @@ func TestP211RowProtoEmbeddedNewline(t *testing.T) {
 	e := newEngine(t)
 	mustExec(t, e, "CREATE TABLE t (id INT, txt TEXT, PRIMARY KEY (id))")
 
-	src := filepath.Join(t.TempDir(), "nl.csv")
+	src := filepath.Join(testDir(t), "nl.csv")
 	f, err := os.Create(src)
 	if err != nil {
 		t.Fatalf("create csv: %v", err)
@@ -174,7 +174,7 @@ func TestP211RowProtoEmbeddedNewline(t *testing.T) {
 	}
 
 	// 导出文件：含换行字段被引号包裹、内部引号翻倍、换行保留
-	out := filepath.Join(t.TempDir(), "out.csv")
+	out := filepath.Join(testDir(t), "out.csv")
 	mustExec(t, e, "EXPORT TABLE t TO '"+out+"'")
 	raw, err := os.ReadFile(out)
 	if err != nil {
@@ -200,7 +200,7 @@ func TestP211RowProtoDecimalPrecision(t *testing.T) {
 	mustExec(t, e, "CREATE TABLE t (id INT, v DECIMAL, PRIMARY KEY (id))")
 
 	// ① 精度内无损往返
-	src := filepath.Join(t.TempDir(), "dec.csv")
+	src := filepath.Join(testDir(t), "dec.csv")
 	body := "id,v\n" +
 		"1,12345.5000\n" +
 		"2,-0.2500\n" +
@@ -214,7 +214,7 @@ func TestP211RowProtoDecimalPrecision(t *testing.T) {
 	if rows[0][1].S != "12345.5000" || rows[1][1].S != "-0.2500" || rows[2][1].S != "1.0001" || rows[3][1].S != "42.0000" {
 		t.Fatalf("decimal canonical: got %q %q %q %q", rows[0][1].S, rows[1][1].S, rows[2][1].S, rows[3][1].S)
 	}
-	out := filepath.Join(t.TempDir(), "out.csv")
+	out := filepath.Join(testDir(t), "out.csv")
 	mustExec(t, e, "EXPORT TABLE t TO '"+out+"'")
 	recs := readCSV(t, out)
 	if recs[1][1] != "12345.5000" || recs[3][1] != "1.0001" {
@@ -226,7 +226,7 @@ func TestP211RowProtoDecimalPrecision(t *testing.T) {
 	compareRows(t, rows, rows2)
 
 	// ② 超 4 位小数导入报错（原子回滚：不新增行）
-	bad := filepath.Join(t.TempDir(), "bad.csv")
+	bad := filepath.Join(testDir(t), "bad.csv")
 	if err := os.WriteFile(bad, []byte("id,v\n1,1.12345\n"), 0o644); err != nil {
 		t.Fatalf("write csv: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestP211RowProtoDecimalPrecision(t *testing.T) {
 	}
 
 	// ③ IGNORE ERRORS 跳过超精度行
-	bad2 := filepath.Join(t.TempDir(), "bad2.csv")
+	bad2 := filepath.Join(testDir(t), "bad2.csv")
 	if err := os.WriteFile(bad2, []byte("id,v\n10,2.5000\n11,3.12345\n"), 0o644); err != nil {
 		t.Fatalf("write csv: %v", err)
 	}

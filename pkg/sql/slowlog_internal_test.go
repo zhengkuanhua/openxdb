@@ -28,7 +28,7 @@ func TestM13SlowThresholdDefault(t *testing.T) {
 func TestM13ExecTimedErr(t *testing.T) {
 	e := newExecutorInternal()
 	e.SetSlowThreshold(1)
-	logPath := filepath.Join(t.TempDir(), "slow.log")
+	logPath := filepath.Join(testDir(t), "slow.log")
 	e.SetSlowLog(logPath, true)
 	_, err := e.execTimed(e.globalSess, "alice", "SELECT FAIL", nil, func() (*Result, error) {
 		time.Sleep(2 * time.Millisecond)
@@ -103,7 +103,7 @@ func TestM13SlowLogConfigure(t *testing.T) {
 	if e.SlowLogEnabled() {
 		t.Fatal("slow log with empty path should stay off")
 	}
-	path := filepath.Join(t.TempDir(), "slow.log")
+	path := filepath.Join(testDir(t), "slow.log")
 	e.SetSlowLog(path, true)
 	if !e.SlowLogEnabled() || e.SlowLogPath() != path {
 		t.Fatalf("slow log config: enabled=%v path=%q", e.SlowLogEnabled(), e.SlowLogPath())

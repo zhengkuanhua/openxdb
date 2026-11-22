@@ -14,7 +14,7 @@ import (
 
 func exportPath(t *testing.T, name string) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), name)
+	p := filepath.Join(testDir(t), name)
 	return p
 }
 

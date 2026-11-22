@@ -10,7 +10,7 @@ import (
 // openDB 打开一个真实引擎（含 binlog 路径注入，但未启用复制）。
 func openDB(t *testing.T) *db.DB {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testDir(t)
 	if err := db.Init(dir); err != nil {
 		t.Fatalf("db.Init: %v", err)
 	}

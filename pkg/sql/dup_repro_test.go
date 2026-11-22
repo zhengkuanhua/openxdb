@@ -12,7 +12,7 @@ import (
 // TestDupReproConcurrent 单机引擎复现：8 会话并发显式事务
 // UPDATE district + INSERT order_line，统计 duplicate 报错。
 func TestDupReproConcurrent(t *testing.T) {
-	dir := t.TempDir()
+	dir := testDir(t)
 	if err := db.Init(dir); err != nil {
 		t.Fatal(err)
 	}

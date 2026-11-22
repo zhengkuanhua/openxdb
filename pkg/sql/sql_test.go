@@ -7,14 +7,70 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/db"
 	"github.com/zhengkuanhua/openxdb/pkg/sql"
 )
 
+// testDir 创建用例专用临时目录，等价于 tb.TempDir()，但清理带超时保护（v1.20.1 P0-2）。
+//
+// Windows 上 rocksdb 关闭后其 SST/WAL 的 mmap 映射与文件句柄可能短暂滞留，testing 框架
+// 在 Cleanup 阶段执行 os.RemoveAll 会阻塞在 NtSetInformationFile（DELETE_PENDING 等待），
+// 整个测试进程随之挂死（v1.20.0 期 pkg/sql 全量随机超时即卡在此处）。删除动作改在独立
+// goroutine 中限时执行，超时即放弃删除（目录留在 %TEMP%，由系统清理），用例结果不受影响。
+func testDir(tb testing.TB) string {
+	tb.Helper()
+	dir, err := os.MkdirTemp("", "openxdb-sqltest-")
+	if err != nil {
+		tb.Fatalf("MkdirTemp: %v", err)
+	}
+	tb.Cleanup(func() {
+		done := make(chan struct{})
+		go func() {
+			_ = os.RemoveAll(dir)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			tb.Logf("testDir: 清理 %s 超时，已放弃删除（Windows delete-pending）", dir)
+		}
+	})
+	return dir
+}
+
+// testDBCloseTimeout 单次 db.Close 的最长等待时间（v1.20.1 P0-2）。
+const testDBCloseTimeout = 30 * time.Second
+
+// safeCloseDB 关闭测试用 DB，并对 Close 加超时保护（v1.20.1 P0-2）。
+//
+// 现象：Windows 上偶发 xdb_close 长时间不返回——rocksdb DB::Close 内部等待后台
+// compaction/flush 线程 join，与 WAL checkpoint / 复制循环的 IO 抢占叠加后可能数十秒
+// 甚至更久，整个测试进程随之挂死，表现为 pkg/sql 全量随机超时（422s / 480s 两轮实测均
+// 卡在此处）。处理：Close 放入独立 goroutine，超时即放弃等待并记日志，用例结果不受影响，
+// 全量测试不再被单次 Close 拖死。产品侧 Close 偶发慢的根因（后台线程 join）登记在
+// KNOWN_LIMITATIONS，随 v1.21.0 写轨生产化统一处理。
+func safeCloseDB(tb testing.TB, d *db.DB) {
+	tb.Helper()
+	if d == nil {
+		return
+	}
+	done := make(chan error, 1)
+	go func() { done <- d.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			tb.Logf("db.Close: %v", err)
+		}
+	case <-time.After(testDBCloseTimeout):
+		tb.Logf("db.Close 超时 %s（rocksdb 后台线程 join 阻塞），放弃等待", testDBCloseTimeout)
+	}
+}
+
 func newEngine(t *testing.T) *sql.Engine {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testDir(t)
 	if err := db.Init(dir); err != nil {
 		t.Fatalf("db.Init: %v", err)
 	}
@@ -22,7 +78,7 @@ func newEngine(t *testing.T) *sql.Engine {
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
-	t.Cleanup(func() { _ = d.Close() })
+	t.Cleanup(func() { safeCloseDB(t, d) })
 	return d.SQL
 }
 
@@ -234,7 +290,7 @@ func TestCreateInlinePrimaryKey(t *testing.T) {
 }
 
 func TestPersistenceAcrossReopen(t *testing.T) {
-	dir := t.TempDir()
+	dir := testDir(t)
 	if err := db.Init(dir); err != nil {
 		t.Fatalf("db.Init: %v", err)
 	}
@@ -415,7 +471,7 @@ func TestMultiColumnIndexes(t *testing.T) {
 }
 
 func TestIndexPersistenceAcrossReopen(t *testing.T) {
-	dir := t.TempDir()
+	dir := testDir(t)
 	if err := db.Init(dir); err != nil {
 		t.Fatalf("db.Init: %v", err)
 	}
@@ -877,7 +933,7 @@ func TestP1CsvExportImportRoundtrip(t *testing.T) {
 	mustExec(t, e, "INSERT INTO src VALUES (1, 'alice', '2024-03-15', 12345.5, '0a1b')")
 	mustExec(t, e, "INSERT INTO src VALUES (2, 'bob, \"jr\"', '2023-12-31', 99.9999, 'ff00aa')")
 	// 含引号与逗号的 TEXT 也要往返保真
-	csvPath := filepath.Join(t.TempDir(), "src.csv")
+	csvPath := filepath.Join(testDir(t), "src.csv")
 	res := mustExec(t, e, "EXPORT TABLE src TO '"+csvPath+"'")
 	if res.AffectedRows != 2 {
 		t.Fatalf("export affected: got %d", res.AffectedRows)
@@ -934,7 +990,7 @@ func TestP1CsvExportColumns(t *testing.T) {
 	e := newEngine(t)
 	mustExec(t, e, "CREATE TABLE t (id INT, name TEXT, age INT, PRIMARY KEY (id))")
 	mustExec(t, e, "INSERT INTO t VALUES (1, 'alice', 30), (2, 'bob', 25)")
-	csvPath := filepath.Join(t.TempDir(), "cols.csv")
+	csvPath := filepath.Join(testDir(t), "cols.csv")
 	res := mustExec(t, e, "EXPORT TABLE t (name, age) TO '"+csvPath+"'")
 	if len(res.Columns) != 2 || res.Columns[0] != "name" || res.Columns[1] != "age" {
 		t.Fatalf("export columns: got %v", res.Columns)
@@ -947,7 +1003,7 @@ func TestP1CsvExportColumns(t *testing.T) {
 		t.Fatalf("cols csv: got %v", recs)
 	}
 	// 未知列报错
-	mustErr(t, e, "EXPORT TABLE t (nope) TO '"+filepath.Join(t.TempDir(), "x.csv")+"'", "unknown column")
+	mustErr(t, e, "EXPORT TABLE t (nope) TO '"+filepath.Join(testDir(t), "x.csv")+"'", "unknown column")
 }
 
 // P1-8 CSV 导入：重复主键跳过、非法单元格整体回滚。
@@ -955,7 +1011,7 @@ func TestP1CsvImportSemantics(t *testing.T) {
 	e := newEngine(t)
 	mustExec(t, e, "CREATE TABLE t (id INT, v TEXT, PRIMARY KEY (id))")
 	mustExec(t, e, "INSERT INTO t VALUES (1, 'existing')")
-	bad := filepath.Join(t.TempDir(), "bad.csv")
+	bad := filepath.Join(testDir(t), "bad.csv")
 	os.WriteFile(bad, []byte("id,v\n1,dup\nabc,no\n"), 0o644)
 	if _, err := e.Execute("IMPORT INTO t FROM '" + bad + "'"); err == nil {
 		t.Fatal("import with invalid INT should fail")
@@ -966,7 +1022,7 @@ func TestP1CsvImportSemantics(t *testing.T) {
 		t.Fatalf("atomic rollback: got %+v", rows)
 	}
 	// 重复主键跳过
-	dup := filepath.Join(t.TempDir(), "dup.csv")
+	dup := filepath.Join(testDir(t), "dup.csv")
 	os.WriteFile(dup, []byte("id,v\n1,dup\n2,new\n"), 0o644)
 	res := mustExec(t, e, "IMPORT INTO t FROM '"+dup+"'")
 	if res.Rows[0][0].I != 1 || res.Rows[0][1].I != 1 {
@@ -977,7 +1033,7 @@ func TestP1CsvImportSemantics(t *testing.T) {
 		t.Fatalf("after dup import: got %+v", rows)
 	}
 	// 表头不匹配报错
-	hd := filepath.Join(t.TempDir(), "hd.csv")
+	hd := filepath.Join(testDir(t), "hd.csv")
 	os.WriteFile(hd, []byte("id,wrong\n1,x\n"), 0o644)
 	if _, err := e.Execute("IMPORT INTO t FROM '" + hd + "'"); err == nil || !strings.Contains(err.Error(), "header") {
 		t.Fatalf("header mismatch: got %v", err)
@@ -1308,7 +1364,7 @@ func TestM13SlowQueryPublic(t *testing.T) {
 	mustExec(t, e, "GRANT SELECT ON big TO 'alice'")
 
 	// 阈值调低即时生效；落盘路径由服务装配（模拟 cmd start 的 SetSlowLog）。
-	logPath := filepath.Join(t.TempDir(), "slow.log")
+	logPath := filepath.Join(testDir(t), "slow.log")
 	e.SetSlowLog(logPath, true)
 	mustExec(t, e, "SET slow_query_log = on")
 	mustExec(t, e, "SET slow_query_threshold = 1")
