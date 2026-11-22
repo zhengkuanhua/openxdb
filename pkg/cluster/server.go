@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
@@ -105,6 +106,9 @@ type Server struct {
 	// muOwner 保护 participantOwnerCheck（与 mu2pc 分离，避免校验入口持
 	// 2PC 状态锁回调 SQL 层开关造成锁序问题）。仅启动期装配、运行期只读。
 	muOwner sync.Mutex
+	// ownerConflicts 归属视图冲突累计计数（v1.20.1 P0-1）：本机路由视图中
+	// "归属他人却标本地"的自相矛盾条目经 reconcileOwnerView 收敛的次数。
+	ownerConflicts atomic.Int64
 }
 
 // SetTSO 注入时间戳源（M8：db.StartCluster 装配本地发号器）。
@@ -213,12 +217,23 @@ func (s *Server) notifyOwnership(term uint64, authoritative bool) {
 }
 
 // selfOwnsAny 判断本机路由视图是否仍持有任一 region 归属。
+//
+// v1.20.1 P0-1（归属视图分裂收敛）：Node=="" 的"未指派即本节点"兼容语义只在
+// Local=true（本机确实持有该 region 的数据/装载归属）时成立。此前无条件把
+// Node=="" 视为本机归属，于是"本机不持有、来源也未声明归属"的未指派条目
+// （applyRouteSync/applyPush 学习远端视图时 Local=false）会让节点凭空自认
+// owner，与真实 owner 形成归属视图分裂（真机 192.168.100.201/203 同时报
+// self_owns=true），写路径被 P9 误授权 → 双写风险。
+// 显式归属（Node==SelfID）仍无条件成立，保持既有接管/迁移语义不变。
 func (s *Server) selfOwnsAny() bool {
 	if s.router == nil {
 		return false
 	}
 	for _, rg := range s.router.AllRegions() {
-		if rg.Node == "" || rg.Node == s.SelfID {
+		if rg.Node == s.SelfID {
+			return true
+		}
+		if rg.Node == "" && rg.Local {
 			return true
 		}
 	}
@@ -580,6 +595,9 @@ func (s *Server) applyPush(req *RegionPushReq) (RegionPushResp, error) {
 			s.SelfID, req.Region.RegionID, overwritten, localExtra)
 	}
 	// 落盘 m:regions（路由表变更随数据同批次原子提交）
+	// v1.20.1 P0-1：装载完成先收敛"归属他人却标本地"的自相矛盾标记，
+	// 再落盘，避免矛盾视图被持久化并在重启后扩散。
+	s.reconcileOwnerView()
 	seq, regions := s.router.Dump()
 	metaRaw, err := sharding.MarshalMeta(seq, regions)
 	if err != nil {
@@ -689,6 +707,9 @@ func (s *Server) applyRouteSync(req *RegionPushReq) (RegionPushResp, error) {
 			return RegionPushResp{}, cerr
 		}
 	}
+	// v1.20.1 P0-1：学习完远端视图后收敛自相矛盾的归属标记（归属他人却标本地），
+	// 保证落盘 m:regions 与内存视图一致且不自相矛盾。
+	s.reconcileOwnerView()
 	seq, regions := s.router.Dump()
 	metaRaw, err := sharding.MarshalMeta(seq, regions)
 	if err != nil {
@@ -790,6 +811,45 @@ func (s *Server) regionHoldsLocal(rg sharding.RegionInfo) (bool, error) {
 		return false, err
 	}
 	return len(kvs) > 0, nil
+}
+
+// reconcileOwnerView 收敛本机路由视图中自相矛盾的归属标记（v1.20.1 P0-1）。
+//
+// 归属事实只有一个来源：RegionInfo.Node。归属他人（Node 非空且非本机）的条目
+// 不得同时标 Local=true——否则该 region 在本机既是"他人 region"又是"本地持有"，
+// SHOW REGION ROUTES 出现自相矛盾视图，写路径按 local 判定会把它当作可本地服务，
+// 与真实 owner 形成双写（归属视图分裂的落地形态）。
+//
+// 本方法只改内存路由标记，不触碰物理数据；收敛次数累计到 ownerConflicts，
+// 由 OwnerViewConflicts 暴露给 SHOW CLUSTER STATUS 做可观测口径。
+// 返回本批次收敛的冲突条目数。
+func (s *Server) reconcileOwnerView() int {
+	if s.router == nil {
+		return 0
+	}
+	conflicts := 0
+	for _, rg := range s.router.AllRegions() {
+		if rg.Node == "" || rg.Node == s.SelfID || !rg.Local {
+			continue
+		}
+		rg.Local = false
+		if err := s.router.UpsertRegion(rg); err != nil {
+			log.Printf("cluster: %s: reconcile owner view rid=%d: %v", s.SelfID, rg.RegionID, err)
+			continue
+		}
+		conflicts++
+		log.Printf("cluster: %s: owner view conflict converged rid=%d table=%d owner=%s (local flag cleared, physical keys kept)",
+			s.SelfID, rg.RegionID, rg.TableID, rg.Node)
+	}
+	if conflicts > 0 {
+		s.ownerConflicts.Add(int64(conflicts))
+	}
+	return conflicts
+}
+
+// OwnerViewConflicts 返回本节点启动以来归属视图冲突收敛的累计次数（可观测）。
+func (s *Server) OwnerViewConflicts() int64 {
+	return s.ownerConflicts.Load()
 }
 
 // scanRange 区间扫描 [start, end)；end 为空表示无上界。
