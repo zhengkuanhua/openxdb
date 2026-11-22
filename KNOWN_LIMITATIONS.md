@@ -152,6 +152,12 @@ AIGC:
 - **影响**：开关关闭时行为与 v1.18.0 完全一致（不发新帧，可随时灰度回退）；开启后跨节点读往返次数由「区间数」降为「归属节点数」，代价是单个远端请求数据量按节点合并——仍为分块流式回传，不改变内存峰值形态。当前粒度是「每归属节点一次往返」，未做跨节点请求并行聚合的额外优化；远端区间内的排序与 `Offset`/`Limit` 截窗仍由服务端按区间执行，跨区间全局行序由归属侧稳定排序保证（与旧路径逐行等价）。
 - **建议**：跨 region 多区间读密集部署可按节点灰度开启并观察远端请求数指标（`incRemote` 按请求次数计）；单机 / 单 region 部署无收益（`clusterEnabled` 为假时直接走本地合并扫描，`beginTS` 置 0）。
 
+### 3.6 归属视图收敛与写授权口径（v1.20.1）
+
+- **限制描述**：region 归属视图由各节点自持（`m:regions`），经复制轨（`applyPush` / `applyRouteSync`）与本地 `ASSIGN REGION` 两条路径写入。v1.20.0 真机 T3 复验暴露两处视图不一致：① `selfOwnsAny()` 曾把「`Node == ""`（未指派）」无条件视为本机归属，导致分区恢复后 node-a 与 node-c 同时报 `self_owns=true`；② 本地 `ASSIGN REGION` 只改 `Node` 不改 `Local`，落盘后可能留下「归属他人却 `local=true`」的矛盾条目。v1.20.1 已收敛：`selfOwnsAny()` 收紧为「`Node == SelfID`」或「`Node == "" && Local == true`」；新增 `reconcileOwnerView()`（学习远端视图落盘前调用，只清内存 `Local` 标记、不触碰物理数据）与 `normalizeRegionOwnerView()`（`persistRegions` 落盘前按 `Node` 归一 `Local`，幂等）。
+- **影响**：归属视图现在满足不变量「任一节点视图中不存在 `Node` 非本机且 `Local=true` 的条目」；「未指派但确实持有数据」的既有语义保持不变，单节点与普通集群写入路径零回归。收敛动作不计入拒绝计数，只累计 `OwnerViewConflicts()` 只读口径并在冲突时打印 `owner view conflict converged` 日志（含 rid / table / owner）。归属视图仍非强一致视图，收敛只保证单节点视图自洽，**跨节点视图收敛仍依赖复制轨推送时序**。
+- **建议**：升级到 v1.20.1 后观察 `owner view conflict converged` 日志与 `OwnerViewConflicts()` 计数，正常应为 0 或仅在视图切换瞬间小幅增长；持续增长说明复制轨推送与本地 ASSIGN 存在并发竞争，需收集 rid / table / owner 三项信息排障。分区恢复后的双 owner 判定以 `self_owns` + P9 写授权两层为准，不以本地视图单点为唯一依据。
+
 ## 4. 文档边界
 
 - **限制描述**：docs/ 下设计文档（T1–T42、M 系列、E 系列）为中文开发记录，供实现追溯与深入阅读；产品手册提供中英文 11 章节面向用户文档。

@@ -39,6 +39,22 @@ OpenXDB 版本变更记录。
 
 > 版本线说明：历史版本以仓库 README Status 行、docs/ 设计文档头部标注与 git 提交记录为准。早期部分中间 -alpha 版本未单独打标（git 与文档均无显式版本号），按里程碑区间归纳，版本号不做臆造。
 
+## v1.20.1 (2026-11-22)
+
+**Fixed**
+- **归属视图分裂收敛（3bf395d，P0）**：`selfOwnsAny()` 由「`Node == ""` 即视为本机归属」收紧为「`Node == SelfID`」或「`Node == "" && Local == true`」，修复真机 T3 复验暴露的分区恢复后 node-a 与 node-c 同时 `self_owns=true`（双写风险）；新增 `reconcileOwnerView()` 在 `applyPush` / `applyRouteSync` 落盘 `m:regions` 前收敛「归属他人却标本地」的矛盾条目（只清内存 `Local` 标记、不触碰物理数据），并新增 `ownerConflicts` 累计计数与 `OwnerViewConflicts()` 只读口径。测试 `pkg/cluster/v1201_owner_view_split_test.go`（未指派不持有不自认 owner / 未指派但持有仍归属 / 冲突收敛且计数 +1）。
+- **归属视图落盘归一（f160387，P0）**：本地 `ASSIGN REGION` 只改 `Node` 不触碰 `Local`，复制轨推来的 route 可能残留 `local=true`，使跨 region 2PC 用例对 route `local` 标记的断言偶发失败。新增 `normalizeRegionOwnerView()` 于 `persistRegions` 落盘前按 `Node` 统一归一 `Local`（归属远端置 `false`，本机归属与未指派不变，幂等）。测试 `pkg/sql/v1201_owner_view_normalize_test.go`。
+
+**Changed**
+- **测试稳定性加固（仅测试侧，不改产品行为）**：新增 `testDir()` 替代 `tb.TempDir()`，目录清理放入独立 goroutine 限时 5s——消除 Windows `DELETE_PENDING`（`os.RemoveAll` 阻塞在 `NtSetInformationFile`）导致的整包随机挂死；新增 `safeCloseDB()`，`db.Close` 限时 30s，规避 rocksdb 后台 compaction/flush 线程 join 偶发长时间阻塞拖死全量测试。`pkg/sql` 全部 15 个测试文件已切换。
+
+**Docs**
+- `KNOWN_LIMITATIONS.md` 新增 §3.6 归属视图收敛与写授权口径（不变量、收敛口径、`OwnerViewConflicts()` 排障建议）；`DEV_PLAN_v1.20.1.md` 回填 P0-1 / P0-2 完成态与实测证据（计划文档仍为本地 untracked）。
+
+**Known**
+- `pkg/db` 全量耗时在 80s~330s 间波动（`TestM13SlowQueryPublic` 等含后台 IO 的用例串行叠加），属慢而非挂；产品侧 `DB::Close` 在 Windows 下偶发长时间阻塞的根因（后台线程 join 与 WAL checkpoint 循环竞争）未在代码层消除，随 v1.21.0 写轨生产化统一处理。
+- `NEW-1` 陈旧主写拒绝 / `NEW-2` 重启矩阵代码级已就绪，三独立 IP 真机复跑仍为欠账，与 T3 真分区 fencing 一并归入 v1.21.0 真机收口范围。
+
 ## v1.20.0 (2026-11-22)
 
 **Added**
