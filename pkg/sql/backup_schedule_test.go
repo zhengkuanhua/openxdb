@@ -23,6 +23,23 @@ func newBackupSchedTestEngine(t *testing.T) (*Executor, *BackupScheduler) {
 	return e, e.backupSched
 }
 
+// waitBackupFileCount 轮询等待 dir 下调度备份文件数达到 want（deadline 5s），返回最后一次匹配结果。
+// Windows 上 os.Remove 返回成功后目录项仍可能短暂处于 delete-pending 状态（杀软/索引持句柄），
+// 紧邻的一次性 filepath.Glob 会偶发读到"未删除"的旧列表并误判为轮转失效，故统一改为带超时轮询收敛。
+func waitBackupFileCount(t *testing.T, dir string, want int) []string {
+	t.Helper()
+	pattern := filepath.Join(dir, backupSchedFilePrefix+"*"+backupSchedFileSuffix)
+	deadline := time.Now().Add(5 * time.Second)
+	var matches []string
+	for {
+		matches, _ = filepath.Glob(pattern)
+		if len(matches) == want || !time.Now().Before(deadline) {
+			return matches
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // waitBackupCount 轮询等待调度器成功执行次数达到 n（deadline 5s）。
 func waitBackupCount(t *testing.T, bs *BackupScheduler, n int64) {
 	t.Helper()
@@ -177,7 +194,7 @@ func TestBackupScheduleRetainRotation(t *testing.T) {
 	if len(removed) != 3 {
 		t.Fatalf("keep=2 should remove 3 old files, removed=%v", removed)
 	}
-	matches, _ := filepath.Glob(filepath.Join(dir, backupSchedFilePrefix+"*"+backupSchedFileSuffix))
+	matches := waitBackupFileCount(t, dir, 2)
 	if len(matches) != 2 {
 		t.Fatalf("after keep=2 rotation, want 2 files, got %d: %v", len(matches), matches)
 	}
