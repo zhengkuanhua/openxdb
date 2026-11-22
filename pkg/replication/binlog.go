@@ -18,11 +18,22 @@ import (
 //  body = puts: nputs × [klen(4B) vlen(4B) key val]；deletes: ndeletes × [klen(4B) key]
 //  crc 覆盖 len 字段到记录结尾；统一 Big Endian。
 const (
-	binMagic      = "OPENXDBBIN"
+	binMagic = "OPENXDBBIN"
+	// binVersion binlog v1 记录格式（无 region 字段）。新文件按 binVersionRegion
+	// 落盘，读取端同时接受 v1/v2 —— 这是 C4「旧 binlog 可被新 follower 读取」
+	// 红线的实现基础（DEV_PLAN §4 红线 3）。
 	binVersion    = 1
 	binHeaderSize = len(binMagic) + 2
 	binRecHead    = 4 + 4 + 8 + 8 + 8 + 1 + 4 + 4
-	binMaxBody    = 1 << 30
+	// binVersionRegion binlog v2 记录格式：记录头尾部追加 region(8B)。
+	// 复制帧仍使用 v1 布局（从节点整批回放，region 维度无意义），
+	// 因此 v2 只在文件落盘路径启用。
+	binVersionRegion = 2
+	// binRecHeadRegion v2 记录头长度（v1 + region 8B）。
+	binRecHeadRegion = binRecHead + 8
+	// binRegionOff v2 记录头中 region 字段偏移。
+	binRegionOff = binRecHead
+	binMaxBody   = 1 << 30
 
 	// binStateCommit 记录状态（M2 只落已提交事务）。
 	binStateCommit uint8 = 2
@@ -47,6 +58,9 @@ type binlogStore struct {
 	path    string
 	nextLSN storage.LSN
 	closed  bool
+	// ver 本文件实际的记录格式版本（1 或 2），由 checkHeader 从文件头读出。
+	// v1 旧文件按 v1 解码，条目 RegionID 恒为 0（向下兼容）。
+	ver uint16
 }
 
 // PeekLastLSN 只读地读取 binlog 文件的最大位点（不创建、不写入）。
@@ -134,7 +148,7 @@ func (b *binlogStore) Append(entry *BinlogEntry) error {
 	if entry.LSN >= b.nextLSN {
 		b.nextLSN = entry.LSN + 1
 	}
-	data, err := encodeBinRecord(entry)
+	data, err := encodeBinRecordVer(entry, b.recordVer())
 	if err != nil {
 		return err
 	}
@@ -185,7 +199,9 @@ func (b *binlogStore) Close() error {
 func (b *binlogStore) writeHeader() error {
 	h := make([]byte, binHeaderSize)
 	copy(h, binMagic)
-	binary.BigEndian.PutUint16(h[len(binMagic):], binVersion)
+	// 新文件一律写 v2（携带 region 维度）；读取端同时接受 v1/v2。
+	binary.BigEndian.PutUint16(h[len(binMagic):], binVersionRegion)
+	b.ver = binVersionRegion
 	_, err := b.f.Write(h)
 	return err
 }
@@ -201,10 +217,28 @@ func (b *binlogStore) checkHeader() error {
 	if string(h[:len(binMagic)]) != binMagic {
 		return ErrCorrupt
 	}
-	if binary.BigEndian.Uint16(h[len(binMagic):]) != binVersion {
+	ver, ok := binVerSupported(binary.BigEndian.Uint16(h[len(binMagic):]))
+	if !ok {
 		return ErrCorrupt
 	}
+	b.ver = ver
 	return nil
+}
+
+// binVerSupported 校验并归一化 binlog 文件头版本：接受 v1（旧文件，无 region）
+// 与 v2（C4 起新文件，带 region），其余视为损坏。
+func binVerSupported(ver uint16) (uint16, bool) {
+	if ver == binVersion || ver == binVersionRegion {
+		return ver, true
+	}
+	return 0, false
+}
+
+func (b *binlogStore) recordVer() uint16 {
+	if b.ver == 0 {
+		return binVersionRegion
+	}
+	return b.ver
 }
 
 func (b *binlogStore) replay(apply func(*BinlogEntry) error) error {
@@ -218,8 +252,13 @@ func (b *binlogStore) replay(apply func(*BinlogEntry) error) error {
 	if string(h[:len(binMagic)]) != binMagic {
 		return ErrCorrupt
 	}
+	ver, ok := binVerSupported(binary.BigEndian.Uint16(h[len(binMagic):]))
+	if !ok {
+		return ErrCorrupt
+	}
+	b.ver = ver
 	for {
-		e, err := decodeBinRecord(b.f)
+		e, err := decodeBinRecordVerOpt(b.f, ver, false)
 		if err == io.EOF {
 			break
 		}
@@ -237,9 +276,21 @@ func (b *binlogStore) replay(apply func(*BinlogEntry) error) error {
 
 // ---- 记录编解码（文件与复制帧共用） ----
 
+// encodeBinRecord 以 v1 布局编码（复制帧与既有调用方使用，零改动）。
 func encodeBinRecord(e *BinlogEntry) ([]byte, error) {
+	return encodeBinRecordVer(e, binVersion)
+}
+
+// encodeBinRecordVer 按指定版本编码一条记录：
+//   - v1：记录头 41B（无 region），复制帧沿用；
+//   - v2：记录头 49B（尾部追加 region 8B），binlog v2 文件落盘沿用。
+func encodeBinRecordVer(e *BinlogEntry, ver uint16) ([]byte, error) {
 	if e.Batch == nil {
 		return nil, errors.New("replication: nil batch")
+	}
+	headSize := binRecHead
+	if ver == binVersionRegion {
+		headSize = binRecHeadRegion
 	}
 	var body bytes.Buffer
 	for _, p := range e.Batch.Puts {
@@ -256,7 +307,7 @@ func encodeBinRecord(e *BinlogEntry) ([]byte, error) {
 	if bodyLen > binMaxBody {
 		return nil, errors.New("replication: record too large")
 	}
-	head := make([]byte, binRecHead)
+	head := make([]byte, headSize)
 	binary.BigEndian.PutUint32(head[4:8], uint32(bodyLen))
 	binary.BigEndian.PutUint64(head[8:16], uint64(e.LSN))
 	binary.BigEndian.PutUint64(head[16:24], uint64(e.CommitLSN))
@@ -264,6 +315,9 @@ func encodeBinRecord(e *BinlogEntry) ([]byte, error) {
 	head[32] = binStateCommit
 	binary.BigEndian.PutUint32(head[33:37], uint32(len(e.Batch.Puts)))
 	binary.BigEndian.PutUint32(head[37:41], uint32(len(e.Batch.Deletes)))
+	if ver == binVersionRegion {
+		binary.BigEndian.PutUint64(head[binRegionOff:binRegionOff+8], uint64(e.RegionID))
+	}
 	payload := append(head[4:], body.Bytes()...)
 	crc := crc32.ChecksumIEEE(payload)
 	binary.BigEndian.PutUint32(head[0:4], crc)
@@ -275,10 +329,20 @@ func decodeBinRecord(r io.Reader) (*BinlogEntry, error) {
 	return decodeBinRecordOpt(r, false)
 }
 
-// decodeBinRecordOpt 解码一条记录；tolerateTail=true 时把尾部不完整记录
-// （io.ErrUnexpectedEOF，正在追加的半条）视为正常 EOF，供只读拉取器使用。
+// decodeBinRecordOpt 以 v1 布局解码一条记录（复制帧沿用，零改动）；
+// tolerateTail=true 时把尾部不完整记录（io.ErrUnexpectedEOF，正在追加的半条）
+// 视为正常 EOF，供只读拉取器使用。
 func decodeBinRecordOpt(r io.Reader, tolerateTail bool) (*BinlogEntry, error) {
-	head := make([]byte, binRecHead)
+	return decodeBinRecordVerOpt(r, binVersion, tolerateTail)
+}
+
+// decodeBinRecordVerOpt 按指定版本解码一条记录（v1 无 region / v2 带 region）。
+func decodeBinRecordVerOpt(r io.Reader, ver uint16, tolerateTail bool) (*BinlogEntry, error) {
+	headSize := binRecHead
+	if ver == binVersionRegion {
+		headSize = binRecHeadRegion
+	}
+	head := make([]byte, headSize)
 	if _, err := io.ReadFull(r, head); err != nil {
 		if err == io.EOF {
 			return nil, io.EOF
@@ -313,6 +377,9 @@ func decodeBinRecordOpt(r io.Reader, tolerateTail bool) (*BinlogEntry, error) {
 	}
 	nputs := binary.BigEndian.Uint32(head[33:37])
 	ndeletes := binary.BigEndian.Uint32(head[37:41])
+	if ver == binVersionRegion {
+		e.RegionID = storage.ID(binary.BigEndian.Uint64(head[binRegionOff : binRegionOff+8]))
+	}
 	if uint64(nputs)*8+uint64(ndeletes)*4 > uint64(bodyLen) {
 		return nil, ErrCorrupt
 	}

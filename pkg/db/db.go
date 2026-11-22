@@ -110,6 +110,15 @@ type DB struct {
 
 	// compMu 补偿批次串行化（阶段二回迁自动化）：ReceiveCompensation 逐条
 	// apply+追加 binlog，与并发写/commit hook 隔离，保证补偿批次原子性。
+	// v1.20.0 C4：持续复制 region 化（默认 off，零回归）。
+	regionSyncMu       sync.Mutex
+	regionSyncEnabled  bool
+	regionSyncStop     chan struct{}
+	regionSyncDone     chan struct{}
+	regionSyncLog      *replication.MasterReplicator
+	regionSyncSelfID   string
+	regionSyncInterval time.Duration
+	regionSyncErrs     map[storage.ID]error
 	compMu        sync.Mutex
 	epochFilePath string // EpochMetaFile 持久化路径（Open 时装配）
 
@@ -466,6 +475,9 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// 覆盖本地 m:regions 旧视图，消除"重启节点误判 local=true 形成孤立读视图"
 	// 导致 r3 不回迁、跨节点写落本地不报错（GAP A/C 根因）。异步执行不阻塞启动。
 	go d.refreshRouteViewFromPeers()
+	// v1.20.0 C4：集群装配完成后按开关状态挂接 region 增量复制
+	// （开关默认 off 时本调用为空操作：不注册日志源、不起协程）。
+	d.maybeStartRegionSync()
 	return realAddr, nil
 }
 
@@ -621,7 +633,7 @@ func (d *DB) StartReplicationTLS(addr string, tlsCfg *tls.Config) error {
 	r.SetCompensationHandler(d.ReceiveCompensation)
 	// 事务提交成功后按提交顺序同步写 binlog；错误仅记录，不改变单机提交语义。
 	d.Txn.SetCommitHook(func(lsn storage.LSN, seq uint64, batch *storage.WriteBatch) error {
-		return r.Append(&replication.BinlogEntry{CommitLSN: lsn, Batch: batch, SchemaVer: 0})
+		return d.appendBinlogEntry(lsn, batch)
 	})
 	// T33 提交后置确认钩子（锁外）：按当前复制模式等待副本 ACK。
 	// async 模式立即返回（M2 兼容零开销）；sync/semi-sync 由复制器内部处理。
@@ -808,6 +820,10 @@ func (d *DB) BinlogLSN() (uint64, error) {
 
 // Close 关闭事务管理器、存储与 WAL（顺序与 Open 相反）。
 func (d *DB) Close() error {
+	// v1.20.0 C4：先停 region 跟随协程并注销日志源，避免关闭期间写已关闭存储。
+	d.stopRegionSync()
+	d.unregisterRegionLogSource()
+	d.closeRegionLog()
 	var errs []error
 	// D4.5 Phase8（NEW-2 v2）：第一时间关闭 B1 副本补齐栅栏——此后任何异步
 	// 补齐/维护动作一律拒绝，避免在本函数释放 C 层存储句柄后仍做快照与扫描

@@ -98,11 +98,11 @@ func TestBinlogReaderToleratesPartialTail(t *testing.T) {
 		t.Fatalf("seek: %v", err)
 	}
 	// 第一条完整记录可正常解码
-	if _, err := decodeBinRecordOpt(rf, false); err != nil {
+	if _, err := decodeBinRecordVerOpt(rf, binVersionRegion, false); err != nil {
 		t.Fatalf("strict decode first record: %v", err)
 	}
 	// 半条（正在追加）在严格模式下视为损坏
-	if _, err := decodeBinRecordOpt(rf, false); err != ErrCorrupt {
+	if _, err := decodeBinRecordVerOpt(rf, binVersionRegion, false); err != ErrCorrupt {
 		t.Fatalf("strict decode tail err = %v, want ErrCorrupt", err)
 	}
 }

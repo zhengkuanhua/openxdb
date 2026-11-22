@@ -39,6 +39,11 @@ type BinlogEntry struct {
 	Batch *storage.WriteBatch
 	// SchemaVer 写入时表结构版本，Slave 回放前校验（M2 恒为 0）。
 	SchemaVer uint64
+	// RegionID 本条目所属 region（v1.20.0 C4 新增，binlog v2 落盘）。
+	// 0 表示"整批/未知 region"：整批跨 region 写入（同一批次命中多个 region），
+	// 以及 binlog v1 旧文件中的全部条目。消费方（region 增量复制）对 0 一律按
+	// 整批应用语义处理，从而兼容改造前的 binlog 文件（DEV_PLAN §4 红线 3）。
+	RegionID storage.ID
 }
 
 // Replica 复制节点描述。

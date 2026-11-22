@@ -24,6 +24,8 @@ var ErrStopFetch = errors.New("replication: stop fetch")
 type BinlogReader struct {
 	mu sync.Mutex
 	f  *os.File
+	// ver 文件头声明的记录格式版本（1=旧文件无 region，2=C4 起带 region）。
+	ver uint16
 }
 
 // OpenBinlogRead 只读打开 binlog 文件并校验头。
@@ -52,9 +54,11 @@ func (r *BinlogReader) checkHeader() error {
 	if string(h[:len(binMagic)]) != binMagic {
 		return ErrCorrupt
 	}
-	if binary.BigEndian.Uint16(h[len(binMagic):]) != binVersion {
+	ver, ok := binVerSupported(binary.BigEndian.Uint16(h[len(binMagic):]))
+	if !ok {
 		return ErrCorrupt
 	}
+	r.ver = ver
 	return nil
 }
 
@@ -73,8 +77,12 @@ func (r *BinlogReader) ScanFrom(from storage.LSN, apply func(*BinlogEntry) error
 		return 0, err
 	}
 	var last storage.LSN
+	ver := r.ver
+	if ver == 0 {
+		ver = binVersion
+	}
 	for {
-		e, err := decodeBinRecordOpt(r.f, true)
+		e, err := decodeBinRecordVerOpt(r.f, ver, true)
 		if err == io.EOF {
 			break
 		}
