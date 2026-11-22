@@ -923,6 +923,8 @@ const (
 	ErrCodeRegionNotLocal = "REGION_NOT_LOCAL"
 	// ErrCodeRegionOwnerUnreachable region 归属节点不在注册表内（owner 不可达）。
 	ErrCodeRegionOwnerUnreachable = "REGION_OWNER_UNREACHABLE"
+	// ErrCodeClusterMinority v1.20.0 C5：集群轨写因本节点处于分区少数派被拒。
+	ErrCodeClusterMinority = "CLUSTER_MINORITY"
 )
 
 // v1.20.0 C3 2PC 参与面扩展错误码（SQLError.Code）。

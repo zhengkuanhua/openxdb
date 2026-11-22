@@ -153,6 +153,12 @@ func (e *Executor) hasRemoteOps(ops []kvOp) bool {
 //   - routeRemoteOwned：进入远端组（行为不变）。
 func (e *Executor) groupOps(ops []kvOp) ([]kvOp, map[string][]kvOp, error) {
 	enforce := e.writeRouteEnforce()
+	// v1.20.0 C5：集群轨写授权统一入口——先做节点级分区授权（V-A4 分区
+	// 拒写），再做 region 级归属校验。分区判定读心跳采样快照，不在此处
+	// 逐次探活。
+	if err := e.partitionMinorityWriteAuth(); err != nil {
+		return nil, nil, err
+	}
 	var local []kvOp
 	remote := map[string][]kvOp{}
 	// 持有校验按 rid 去重：同批多次写同一 region 只扫一次键空间。

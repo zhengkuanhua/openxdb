@@ -82,6 +82,14 @@ var (
 
 // Manager 集群管理器：节点注册表 + 心跳 + 查询转发客户端。
 type Manager struct {
+	// v1.20.0 C5：分区状态快照（心跳采样缓存）。
+	// 写授权热路径只读该快照，不再逐语句真实探活（避免 P95 写延迟与远端
+	// PING RTT 强绑定、单节点抖动引发批量误拒）。采样由分区 watcher
+	// （CheckPartitionRecovery 每秒一次）与 stale-while-refresh 兜底完成。
+	snapMu   sync.Mutex
+	snap     PartitionStatus
+	snapAt   time.Time
+	snapBusy bool
 	SelfID   string
 	SelfAddr string
 

@@ -98,7 +98,8 @@ func (m *Manager) SetOnPartitionRecovered(fn func(version uint64)) {
 // 仅当上次检查为不满足多数派、本次满足时触发恢复回调并返回 true；
 // 未进入过分区 / 一直满足多数派返回 false。可由心跳循环或上层定期调用。
 func (m *Manager) CheckPartitionRecovery() bool {
-	ps := m.PartitionStatus()
+	// C5：分区 watcher 的每次检查同时刷新写授权快照（心跳采样口径）。
+	ps := m.RefreshPartitionSnapshot()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

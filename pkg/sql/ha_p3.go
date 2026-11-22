@@ -59,6 +59,13 @@ func (e *Executor) clusterFenceEnabled() bool {
 // majorityProbe 返回本节点当前是否满足多数派（带 TTL 缓存）。
 // quorumOK 已内含"仲裁器未装配/quorum 关闭 → 放行"语义，此处只做缓存包装。
 func (e *Executor) majorityProbe() bool {
+	// v1.20.0 C5：优先用集群分区快照（心跳采样口径，写路径零 IO）。
+	// 旧路径对每个远端节点逐次真实 PING，逐语句判定会把 P95 写延迟绑定到
+	// 远端 RTT，且单节点抖动即可引发批量误拒；快照不可用时（mgr 未装配 /
+	// 尚未采样）才回退仲裁器同步判定。
+	if minority, known := e.partitionMinoritySnapshot(); known {
+		return !minority
+	}
 	e.p3Mu.Lock()
 	if !e.p3At.IsZero() && time.Since(e.p3At) < p3FenceTTL {
 		ok := e.p3Majority
