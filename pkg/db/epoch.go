@@ -255,17 +255,10 @@ func (d *DB) AllowWrite() error {
 	if err := d.clusterOwnershipFenceLocked(); err != nil {
 		return err
 	}
-	// P9 修复（T3 真机分区复验）：本节点在权威视图中持有集群轨 region 归属时，
-	// 写入合法性由归属视图仲裁，复制轨的陈旧主/只读降级判定一律不适用——两条
-	// 轨道授权来源不同，集群轨授权不写 masterEpoch（见 TestP9ClusterTermGrantAndRevoke
-	// 契约）。缺陷现场：owner 节点 session 持续取 TSO 单调号推进 d.epoch，而
-	// masterEpoch 停留在复制轨旧授权或 0，d.epoch > masterEpoch 恒成立，合法 owner
-	// 被永久误判陈旧主拒写；若该 owner 曾被复制轨广播降级（readOnly），还会被
-	// "demoted stale master is read-only" 永久挡住，导致其持有的 region 整段不可写。
-	// 归属收回/待确认仍由上方 clusterOwnershipFenceLocked 拒写。
-	if d.clusterOwned {
-		return nil
-	}
+	// 本节点在权威视图中持有集群轨归属时，写入合法性由归属视图仲裁，复制轨的
+	// 陈旧主/只读降级判定一律不适用（短路收敛于 copyTrackWriteFenceLocked，
+	// 三个入口共用同一口径）。归属收回/待确认仍由上方
+	// clusterOwnershipFenceLocked 拒写。
 	return d.copyTrackWriteFenceLocked()
 }
 
@@ -278,6 +271,11 @@ func (d *DB) AllowWrite() error {
 //   - 非 owner 节点的转发型写不再被节点级归属 fence 误拦（NEW-3 主症状）；
 //   - 本机确实持有的 region 被权威视图收回后，AllowWriteRegion 仍返回
 //     ErrFenced（陈旧主 fencing 未被削弱）。
+//
+// 复制轨判定（陈旧主 / 只读降级）在本节点持有集群轨归属时由
+// copyTrackWriteFenceLocked 统一短路：真机滚动重启后 owner 节点常处于
+// readOnly=true（历史降级未复位），此前语句级入口无 clusterOwned 短路导致其
+// 写入恒报 "demoted stale master is read-only"。
 func (d *DB) AllowWriteStatement() error {
 	d.epochMu.Lock()
 	defer d.epochMu.Unlock()
@@ -293,6 +291,9 @@ func (d *DB) AllowWriteStatement() error {
 // 语义见 clusterOwnershipFenceRegion：目标 region 归属其它节点时本机不做归属
 // 一致性拦截（转发型写），目标 region 归属本机时保持 P9 契约（重启待确认
 // ErrOwnershipPending / 权威收回 ErrFenced / 授予放行）。
+//
+// 复制轨判定同样收敛于 copyTrackWriteFenceLocked：本节点持有集群轨归属时
+// 只读降级与陈旧主判定一律不适用（口径与 AllowWrite / AllowWriteStatement 一致）。
 func (d *DB) AllowWriteRegion(rid uint64) error {
 	d.epochMu.Lock()
 	defer d.epochMu.Unlock()
@@ -302,15 +303,25 @@ func (d *DB) AllowWriteRegion(rid uint64) error {
 	if err := d.clusterOwnershipFenceRegion(rid); err != nil {
 		return err
 	}
-	if d.clusterOwned {
-		return nil
-	}
 	return d.copyTrackWriteFenceLocked()
 }
 
 // copyTrackWriteFenceLocked 复制轨写 fencing（调用方须持有 epochMu）：
 // 只读降级拒写 + 陈旧主（d.epoch > masterEpoch）拒写；masterEpoch==0 放行。
+//
+// v1.21.0 NEW-3 回归修复：本节点在权威视图中持有集群轨归属（clusterOwned）时，
+// 复制轨的两类判定（只读降级 / epoch>masterEpoch）一律不适用，直接放行。两条
+// 轨道授权来源不同，集群轨授权不写 masterEpoch（见 TestP9ClusterTermGrantAndRevoke
+// 契约），而 owner 节点 session 持续取 TSO 单调号推进 d.epoch；若该 owner 曾被
+// 复制轨广播降级（readOnly=true），真机滚动重启后除最后重启节点外其余节点均被
+// "demoted stale master is read-only" 永久挡住（语句级入口 AllowWriteStatement
+// 只走复制轨判定，故短路必须收敛在本函数内，三个入口共用同一口径）。
+// 归属收回 / 重启待确认仍由 clusterOwnershipFenceLocked 与
+// clusterOwnershipFenceRegion 拒写，fencing 未被削弱。
 func (d *DB) copyTrackWriteFenceLocked() error {
+	if d.clusterOwned {
+		return nil
+	}
 	// 分区恢复合并降级（NoteEpoch 识别到复制轨更高授权）：仅在无集群轨归属时
 	// 生效，陈旧复制主不得写入。
 	if d.readOnly {
