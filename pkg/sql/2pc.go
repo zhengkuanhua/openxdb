@@ -163,6 +163,15 @@ func (e *Executor) groupOps(ops []kvOp) ([]kvOp, map[string][]kvOp, error) {
 	remote := map[string][]kvOp{}
 	// 持有校验按 rid 去重：同批多次写同一 region 只扫一次键空间。
 	holdsChecked := map[storage.ID]bool{}
+	// v1.21.0 NEW-3：region 粒度归属 fence 同样按 rid 去重（同批多写只判定一次）。
+	ownershipChecked := map[storage.ID]bool{}
+	ownershipFence := func(rid storage.ID) error {
+		if ownershipChecked[rid] {
+			return nil
+		}
+		ownershipChecked[rid] = true
+		return e.regionOwnershipFence(rid)
+	}
 	for _, op := range ops {
 		rid, _ := sharding.DecodeRegionKey(op.Key)
 		owner, kind := e.routeDecision(rid)
@@ -174,6 +183,11 @@ func (e *Executor) groupOps(ops []kvOp) ([]kvOp, map[string][]kvOp, error) {
 			}
 			// 开关关闭：走旧本地路径（含归属 epoch fencing），保证零回归。
 			if err := e.regionOwnerFence(rid); err != nil {
+				return nil, nil, err
+			}
+			// NEW-3：本地落盘前做 region 粒度集群轨归属 fence（仅本机持有该
+			// region 归属时校验；未指派 region 归属不可判定，沿用节点级判定）。
+			if err := ownershipFence(rid); err != nil {
 				return nil, nil, err
 			}
 			local = append(local, op)
@@ -191,6 +205,11 @@ func (e *Executor) groupOps(ops []kvOp) ([]kvOp, map[string][]kvOp, error) {
 			// 该 region 已被更高 regionEpoch 指派给其它 owner 而本地路由条目
 			// 仍陈旧时拒绝提交，避免恢复窗口内旧主继续写已被接管的 region。
 			if err := e.regionOwnerFence(rid); err != nil {
+				return nil, nil, err
+			}
+			// NEW-3：本地落盘前做 region 粒度集群轨归属 fence（本机为该 region
+			// owner 时保持 P9 契约：重启待确认 / 权威收回拒写）。
+			if err := ownershipFence(rid); err != nil {
 				return nil, nil, err
 			}
 			// 持有校验只对显式分区生效：隐式单 region 首次写入前本机无任何键，

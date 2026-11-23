@@ -1,6 +1,10 @@
 package sql
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/zhengkuanhua/openxdb/pkg/storage"
+)
 
 // P0 HA 脑裂防护（最小防双主）的 SQL 层装配：
 //   - WriteFence：写入 fencing 检查接口（由 db.DB.AllowWrite 实现并注入）。
@@ -19,6 +23,21 @@ import "fmt"
 // 返回 nil 放行；返回 ErrFenced 表示本节点为陈旧主（已被更高 epoch 取代）。
 type WriteFence interface {
 	AllowWrite() error
+}
+
+// statementWriteFence 可选能力（v1.21.0 NEW-3）：语句级写授权——只做复制轨
+// 判定，集群轨归属 fence 交由 region 粒度接口（regionWriteFence）。实现方为
+// db.DB.AllowWriteStatement；旧装配（仅实现 AllowWrite）自动退回节点级判定，
+// 零回归。
+type statementWriteFence interface {
+	AllowWriteStatement() error
+}
+
+// regionWriteFence 可选能力（v1.21.0 NEW-3）：region 级写授权——仅当目标
+// region 当前归属本机时才做集群轨归属一致性/纪元校验，目标 region 归属其它
+// 节点的转发型写不再被本地节点级归属 fence 拦截。实现方为 db.DB.AllowWriteRegion。
+type regionWriteFence interface {
+	AllowWriteRegion(rid uint64) error
 }
 
 // HAConfigSetter HA 开关热切换接口（由 db.DB 实现并注入 Executor）。
@@ -88,7 +107,35 @@ func (e *Executor) writeFenceCheck() error {
 	if e.writeFence == nil {
 		return nil
 	}
+	// v1.21.0 NEW-3：语句级只做复制轨判定；集群轨归属 fence 下沉 region 粒度
+	// （groupOps 组装本地写批次时经 regionOwnershipFence 调用 AllowWriteRegion），
+	// 避免非 owner 节点的转发型写被节点级归属状态误拦。旧实现（仅 AllowWrite）
+	// 保持原节点级判定，零回归。
+	if sf, ok := e.writeFence.(statementWriteFence); ok {
+		return sf.AllowWriteStatement()
+	}
 	return e.writeFence.AllowWrite()
+}
+
+// regionOwnershipFence region 级归属 fencing 入口（v1.21.0 NEW-3）：本地写
+// 批次组装阶段按目标 region 校验集群轨归属。
+//   - 未装配 writeFence 或实现方不提供 region 粒度能力 → 放行（节点级判定已在
+//     writeFenceCheck 完成，零回归）；
+//   - 目标 region 归属其它节点的转发型写：实现方直接放行（不落入本地写批次）；
+//   - 目标 region 归属本机但归属已被权威视图收回 / 重启待确认 → 返回带
+//     fencing 原因的 SQLError（保持 ErrFenced / ErrOwnershipPending 语义）。
+func (e *Executor) regionOwnershipFence(rid storage.ID) error {
+	if e.writeFence == nil {
+		return nil
+	}
+	rf, ok := e.writeFence.(regionWriteFence)
+	if !ok {
+		return nil
+	}
+	if err := rf.AllowWriteRegion(uint64(rid)); err != nil {
+		return &SQLError{Msg: fmt.Sprintf("write to region %d rejected: %v", rid, err)}
+	}
+	return nil
 }
 
 // applyHaEpochEnabled 解析并转发 ha_epoch_enabled。

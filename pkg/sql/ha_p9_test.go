@@ -5,7 +5,12 @@
 // 缺陷收口的授权侧来源。
 package sql
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/zhengkuanhua/openxdb/pkg/sharding"
+	"github.com/zhengkuanhua/openxdb/pkg/storage"
+)
 
 // TestP9LocalTakeoverNotifiesTerm 本机接管成功 → 上报 (term, selfOwns=true)。
 func TestP9LocalTakeoverNotifiesTerm(t *testing.T) {
@@ -18,8 +23,13 @@ func TestP9LocalTakeoverNotifiesTerm(t *testing.T) {
 		calls++
 		gotTerm, gotSelf, gotAuth = term, selfOwns, authoritative
 	})
+	// v1.21.0 NEW-3：接管上报需目标 region 确实归属本机（含有效 regionEpoch），
+	// 否则视为接管未落地、不上报（误授根因收口）。
+	if err := e.router.UpsertRegion(regionOwnedBy("node-a", 7, 4)); err != nil {
+		t.Fatalf("upsert region: %v", err)
+	}
 
-	e.notifyLocalTakeover(7)
+	e.notifyLocalTakeover(7, 7)
 	if calls != 1 {
 		t.Fatalf("notify calls = %d, want 1", calls)
 	}
@@ -35,10 +45,17 @@ func TestP9LocalTakeoverNotifiesTerm(t *testing.T) {
 
 	// 传 nil 撤销装配后，通知为空操作且不 panic（零回归）。
 	e.SetClusterOwnershipNotify(nil)
-	e.notifyLocalTakeover(8)
+	e.notifyLocalTakeover(7, 8)
 	if calls != 1 {
 		t.Fatalf("notify calls after detach = %d, want 1", calls)
 	}
+}
+
+// regionOwnedBy 构造显式 region 路由条目（供接管上报判定使用）。
+func regionOwnedBy(node string, rid storage.ID, regionEpoch uint64) sharding.RegionInfo {
+	rg := regionOf(rid, node, regionEpoch)
+	rg.Explicit = true
+	return rg
 }
 
 // TestP9RouteSyncCarriesClusterTerm 权威路由视图同步携带本机已知集群纪元，

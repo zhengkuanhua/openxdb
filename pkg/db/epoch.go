@@ -266,6 +266,51 @@ func (d *DB) AllowWrite() error {
 	if d.clusterOwned {
 		return nil
 	}
+	return d.copyTrackWriteFenceLocked()
+}
+
+// AllowWriteStatement 语句级写授权（v1.21.0 NEW-3）。
+//
+// 写路径入口（execInsert/execUpdate/execDelete）在尚未解析出目标 region 时
+// 只能做节点级判定，而被拦对象是否为本机 owner 需要 region 维度才能回答。
+// 因此入口只做复制轨判定（陈旧主 / 只读降级），集群轨归属 fence 下沉到
+// region 粒度（AllowWriteRegion，由 SQL 层在 groupOps 组装本地写批次时调用）：
+//   - 非 owner 节点的转发型写不再被节点级归属 fence 误拦（NEW-3 主症状）；
+//   - 本机确实持有的 region 被权威视图收回后，AllowWriteRegion 仍返回
+//     ErrFenced（陈旧主 fencing 未被削弱）。
+func (d *DB) AllowWriteStatement() error {
+	d.epochMu.Lock()
+	defer d.epochMu.Unlock()
+	if !d.epochEnabled {
+		return nil
+	}
+	return d.copyTrackWriteFenceLocked()
+}
+
+// AllowWriteRegion region 级写授权（v1.21.0 NEW-3）：复制轨判定 + region
+// 粒度的集群轨归属判定。rid 为写目标的 region ID。
+//
+// 语义见 clusterOwnershipFenceRegion：目标 region 归属其它节点时本机不做归属
+// 一致性拦截（转发型写），目标 region 归属本机时保持 P9 契约（重启待确认
+// ErrOwnershipPending / 权威收回 ErrFenced / 授予放行）。
+func (d *DB) AllowWriteRegion(rid uint64) error {
+	d.epochMu.Lock()
+	defer d.epochMu.Unlock()
+	if !d.epochEnabled {
+		return nil
+	}
+	if err := d.clusterOwnershipFenceRegion(rid); err != nil {
+		return err
+	}
+	if d.clusterOwned {
+		return nil
+	}
+	return d.copyTrackWriteFenceLocked()
+}
+
+// copyTrackWriteFenceLocked 复制轨写 fencing（调用方须持有 epochMu）：
+// 只读降级拒写 + 陈旧主（d.epoch > masterEpoch）拒写；masterEpoch==0 放行。
+func (d *DB) copyTrackWriteFenceLocked() error {
 	// 分区恢复合并降级（NoteEpoch 识别到复制轨更高授权）：仅在无集群轨归属时
 	// 生效，陈旧复制主不得写入。
 	if d.readOnly {

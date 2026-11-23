@@ -136,6 +136,14 @@ type DB struct {
 	clusterOwned        bool   // 本节点在 clusterOwnTerm 上是否仍持有归属
 	clusterPend         bool   // 重启后归属待权威视图确认（确认前拒绝写入）
 
+	// v1.21.0 NEW-3：归属 fence 下沉 region 粒度。
+	// 节点级 clusterOwned 只表示"本节点在集群里是否仍持有任一 region 归属"，
+	// 用它拦所有写会把"目标 region 归属其它节点、本机仅转发"的写一并拦死。
+	// 该回调由 db.StartCluster 装配（SQL 侧按路由视图裁决），返回本机是否为
+	// 写目标 region 的当前 owner 以及归属是否可判定。
+	regionOwnerMu    sync.RWMutex
+	localRegionOwner func(rid uint64) (owned, known bool)
+
 	// P2 HA：分区恢复合并（复制轨收敛 + 数据冲突标记）。
 	// NoteEpoch 检测到本节点为陈旧主（masterEpoch < 广播 epoch）时自动
 	// 降级只读并停止复制；写路径被 fencing 拒绝计入冲突标记。开关关闭
@@ -420,6 +428,12 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// 使 AllowWrite 的归属 fencing 在集群轨（无复制链路的部署）真正生效。
 	srv.SetOwnershipNotify(d.NoteOwnershipView)
 	d.SQL.SetClusterOwnershipNotify(d.NoteOwnershipView)
+	// v1.21.0 NEW-3（P0）：归属 fence 下沉 region 粒度——装配"本机是否为写
+	// 目标 region 当前 owner"判定（SQL 侧按路由视图裁决）。装配后
+	// AllowWriteRegion 仅在本机持有目标 region 归属时才做节点级归属/纪元
+	// 一致性校验，目标 region 归属其它节点的转发型写不再被本地节点级归属
+	// fence 误拦（真机 node-c 永久 fence 的直接成因）。
+	d.SetLocalRegionOwner(d.SQL.RegionOwnershipForWrite)
 	// P9 修复（NEW-1 重启双主）：重启节点若在本地路由视图里仍持有 region 且
 	// 集群存在其它节点，其归属进入"待权威视图确认"——确认前拒绝写入，封住
 	// "按旧视图抢先写、覆盖多数派新 owner 已确认数据"的窗口。单节点集群

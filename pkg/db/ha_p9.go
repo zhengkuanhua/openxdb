@@ -61,6 +61,48 @@ func (d *DB) clusterOwnershipFenceLocked() error {
 	return nil
 }
 
+// SetLocalRegionOwner 装配"本机是否为写目标 region 当前 owner"判定（
+// db.StartCluster 调用，装配 SQL 侧按路由视图裁决的实现）；传 nil 表示无法
+// 判定归属，归属 fence 退回节点级判定（v1.20.x 行为，零回归）。
+//
+// v1.21.0 NEW-3：归属 fence 下沉 region 粒度。节点级 clusterOwned 只回答
+// "本节点在集群里是否仍持有任一 region 归属"，非 owner 节点（历史误授后被
+// 权威视图收回，如真机 node-c）用它拦写会把"目标 region 归属其它节点、本机
+// 仅做 2PC 转发"的写一并拦死，且重启后依旧（cluster_term.meta 持久化
+// owned=0），形成永久 fence。
+func (d *DB) SetLocalRegionOwner(fn func(rid uint64) (owned, known bool)) {
+	d.regionOwnerMu.Lock()
+	defer d.regionOwnerMu.Unlock()
+	d.localRegionOwner = fn
+}
+
+// clusterOwnershipFenceRegion 集群轨归属 fencing（region 粒度，NEW-3）。
+//
+// 判定口径：
+//   - 归属可判定且目标 region 属于其它节点（known && !owned）→ 放行：该类写
+//     不在本机落盘，由 SQL 层 region 级栅栏（regionOwnerFence / 写路由强制）
+//     与分区少数派 fence（clusterFenceCheck）负责，本机节点级归属状态与之无关；
+//   - 归属可判定且目标 region 属于本机（owned）→ 按节点级归属一致性/纪元校验
+//     （clusterOwnershipFenceLocked，保持 P9 契约：授予可写、权威收回后 ErrFenced、
+//     重启待确认 ErrOwnershipPending）；
+//   - 归属不可判定（未装配判定器 / region 未指派 / owner 不在注册表 / 隐式单
+//     region）→ 沿用节点级判定，保守拒写，避免口径放宽后出现静默本地写。
+func (d *DB) clusterOwnershipFenceRegion(rid uint64) error {
+	if fn := d.localRegionOwnerFn(); fn != nil {
+		if owned, known := fn(rid); known && !owned {
+			return nil
+		}
+	}
+	return d.clusterOwnershipFenceLocked()
+}
+
+// localRegionOwnerFn 取当前装配的 region 归属判定器（未装配返回 nil）。
+func (d *DB) localRegionOwnerFn() func(rid uint64) (owned, known bool) {
+	d.regionOwnerMu.RLock()
+	defer d.regionOwnerMu.RUnlock()
+	return d.localRegionOwner
+}
+
 // loadClusterTermMeta 装载 cluster_term.meta（Open 时调用，紧接 loadEpochMeta）。
 // 文件缺失 = 从未获得集群轨归属（零回归）；内容损坏按零值处理（不阻断启动）。
 func (d *DB) loadClusterTermMeta() {

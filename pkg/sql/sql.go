@@ -192,6 +192,13 @@ func (e *Engine) SetClusterOwnershipNotify(fn func(term uint64, selfOwns, author
 // FencedWriteCount 返回集群轨写 fencing 拒绝次数（T3 观测项）。
 func (e *Engine) FencedWriteCount() uint64 { return e.ex.FencedWriteCount() }
 
+// RegionOwnershipForWrite 透传 Executor.RegionOwnershipForWrite（v1.21.0
+// NEW-3：region 粒度归属判定，db.StartCluster 装配到
+// db.DB.SetLocalRegionOwner，供归属 fence 下沉 region 粒度使用）。
+func (e *Engine) RegionOwnershipForWrite(rid uint64) (owned, known bool) {
+	return e.ex.RegionOwnershipForWrite(rid)
+}
+
 // EnsureRegionReplicas 为单副本 region 补齐影子副本（B1 数据可恢复，D4.5 §6
 // 第 1 项）：返回本次补齐的 region 数。未启用 ha_replica_enabled / 未启动集群
 // 时返回 0（零回归）。db 层 ha_replica_maintainer 周期调用，SET 开关开启与

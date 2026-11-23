@@ -392,7 +392,9 @@ func (e *Executor) tryFailoverTargetP1(rg sharding.RegionInfo, downID, target st
 		// P9：本机接管成功 → 推进集群轨归属纪元（term=本次接管使用的
 		// clusterEpoch）。此后本机写路径按该 term 获得授权；若后续收到更高
 		// 纪元的归属消息，本机归属被收回、写入随即被 fencing 拒绝。
-		e.notifyLocalTakeover(clusterEpoch)
+		// NEW-3：仅在接管真正落地且本机即该 region owner 时才上报归属
+		// （v1.20.x 无条件 selfOwns=true 是历史误授/永久 fence 的根因）。
+		e.notifyLocalTakeover(rg.RegionID, clusterEpoch)
 		return e.broadcastRegionViewEpoch([]sharding.RegionInfo{updated}, nil, clusterEpoch)
 	}
 	// 远端目标：构建权威路由视图（同 failoverRegion，补充显式化本地归属）。
