@@ -41,6 +41,11 @@ OpenXDB 版本变更记录。
 
 ## Unreleased
 
+## v2.0.0 (2026-11-23)
+
+**版本口径**
+- **发行版本号由 v1.21.0 升格为 v2.0.0（发布口径，无新增功能改动）**：本次仅调整 `pkg/version` 版本常量与发布文档口径，代码实现与此前 v1.21.0 提交 `5c98877` 等价；`MySQLServerPrefix`（`8.0.36-OpenXDB `）保持不变的兼容契约继续有效，mysql CLI / JDBC 仍识别为 MySQL 8.0.x。升格理由为集群轨（2PC / 持续复制 / 写授权 / TSO / 跨区读）能力首次以正式大版本对外交付，并按双端 Release 附带二进制与 `SHA256SUMS`。
+
 **Fixed**
 - **版本常量漂移修正，三机版本串统一为 v1.21.0（版本一致性，P1）**：`pkg/version/version.go` 的 `const Version` 仍停留在 `v1.20.1`，而实机二进制已含 v1.21.0 全部功能（8c3a4f4），导致启动横幅、`openxdb version`、握手包与 `@@version_comment` / `select version()` 四处口径统一显示旧串，运维易误判为未部署新版本。修复将常量改为 `v1.21.0` 并同步 `ServerVersion` 注释；`MySQLServerPrefix`（`8.0.36-OpenXDB `）按兼容契约**保持不变**，确保 mysql CLI / JDBC 仍识别为 MySQL 8.0.x。重新静态编译（md5 `3efe118c3eb284d8747bcde64266a63f`，链接期使用 `librocksdb.a` + `libzstd.a`，无运行时 libzstd 依赖），并按 node-a → node-b → node-c 滚动优雅重启。真机复验 PASS：三节点 `select version()` 均为 `8.0.36-OpenXDB v1.21.0`，`SHOW NODES` 三节点全 UP，只读计数跨节点一致（`v1210_t1`=103、`v120_t1`=56、`t121_t2`=1），分别由 node-a / node-c 发起的写入三节点均可读回。
 - **归属写 fencing 下沉 region 粒度并收口接管误授（40bcc19，NEW-3，P0）**：修复 owner 节点因历史误授标记被**节点级** fence 永久拦截所有写（含转发型写）、重启不恢复的 P0 缺陷。根因为三条叠加——`cluster_term.meta` 持久化了误授记录（`owned=false` 却被判为曾持有）、`notifyLocalTakeover` 恒传 `selfOwns=true`（任何走接管路径的节点都被记为曾持有目标 region）、归属 fence 做成节点级全局判定（`!clusterOwned` 即拒写，单个 region 的误授放大为本节点全部写被拦）。修复将归属 fence 下沉到 region 粒度：仅当本节点当前持有目标 region 时才做归属一致性 / epoch 校验，目标 owner 非本机的转发型写放行，归属不可判定时退回节点级保守拒写；`notifyLocalTakeover` 改为携带 region id，并加 `takeoverLandedLocally` 前置判定（路由快照该 region 的 `Node` 为本机、`regionEpoch` 非零、历史接管纪元不大于本次）后才上报归属。新增 `v1210_new3_region_fence_test.go`、`v1210_new3_region_ownership_test.go`；P9 契约测试全绿，集群轨授权不写 `masterEpoch`。真机三机复验 PASS（201 / 202 / 203 三入口各写 3 行，三端行数与行集合一致，26 → 29）。

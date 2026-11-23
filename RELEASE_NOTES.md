@@ -9,6 +9,58 @@ AIGC:
     ReservedCode2: UDm3b/NfHHOkbknWca+ttp8cSfMCckglKfbESPE7h17FKwsXlvhweB/iFshQHxuiq9o9Jk6/hIsv0Gku9XZrg2r7w9bLEXfjvZSrWIv+Lg0phzlhFgGdmu5akERzFrIeUVXhtyfq/J26k6yK9nK94KWV00B0NI8gBSiSTP5XEq+YF3qlPKs2DtT/CKM=
 ---
 
+# OpenXDB v2.0.0 Release Notes
+
+发布日期：2026-11-23
+
+## 版本亮点
+
+- **版本口径升格，无功能新增**：本版仅将 `pkg/version` 发行版本常量由 `v1.21.0` 调整为 `v2.0.0`，代码实现与此前 v1.21.0 提交 `5c98877` 等价，不含新 SQL 语法、不新增或改动默认开关、不动存储引擎与读路径。升格理由：集群轨（2PC 参与面、持续复制、写授权统一、TSO 预取、跨区读显式报错）能力首次以正式大版本对外交付。
+- **归属写 fencing 下沉 region 粒度（NEW-3，P0）**：修复 owner 节点因历史误授标记被节点级 fence 永久拦截所有写（含转发型写）、重启不恢复的缺陷；归属判定改为 region 粒度，仅当本节点当前持有目标 region 时才做归属一致性与 epoch 校验，目标 owner 非本机的转发型写放行。
+- **TSO 号段低水位预取（NEW-5）**：`HATSOClient` 与单点 `tsoClient` 由「缓存耗尽才拉批」升级为低水位异步预取 + 池内兜底，降低 PREPARE 阶段取号等待与单点抖动敏感度。
+- **跨区不可达读显式报错（NEW-6，行为变更）**：归属节点不可达且重指派后无存活持有者时，读路径不再静默回退本地副本返回部分结果，改为返回含 region 信息的显式错误；兼容开关 `allow_partial_read` 可退回旧行为。
+
+## 变更明细
+
+| 编号 | 提交 | 内容 |
+| --- | --- | --- |
+| NEW-3 | `40bcc19` / `df7ad73` | 归属 fence 下沉 region 粒度、`notifyLocalTakeover` 携带 region id、`takeoverLandedLocally` 前置判定、复制轨 fencing 增加 `clusterOwned` 短路 |
+| NEW-5 | `8c3a4f4` | TSO 号段低水位异步预取 + 池内兜底 |
+| NEW-6 | `8c3a4f4` | 跨区不可达读显式报错 + `allow_partial_read` 兼容开关（默认 off） |
+| 版本串 | `5c98877` | `pkg/version`、握手串、`openxdb version`、`select version()` 四处同源 |
+| 版本口径 | 本提交 | 发行版本常量升格 `v1.21.0` → `v2.0.0`，同步 CHANGELOG / README / RELEASE_NOTES |
+
+## 测试证据
+
+- 三轮全仓 `go test ./... -count=1`：第 2 轮、第 3 轮均 **22 包全 `ok`、0 `FAIL`**；第 1 轮在并行负载下 `cmd/openxdb`（`TestDoctorCorruptWAL` / `TestDoctorCorruptEngine`）与 `pkg/sql`（`TestBackupScheduleRetainRotation`）失败，三例定向单跑与后续两轮全仓均 `PASS`，判定为仓库既有并行资源竞争型偶发，与本次改动（仅 `pkg/version` 常量与发布文档）无关。
+- `go build ./...` 通过；`pkg/version` 无独立测试文件，版本串经 `pkg/sql`、`pkg/server`、`pkg/mysqlproto` 全量用例覆盖。
+- 版本串校验：`select version()` / 握手串 / `openxdb version` 同源输出 `8.0.36-OpenXDB v2.0.0`（`MySQLServerPrefix` 未变）。
+
+## 兼容性说明
+
+- **版本串**：`8.0.36-OpenXDB v2.0.0`；`MySQLServerPrefix`（`8.0.36-OpenXDB `）保持不变的兼容契约，mysql CLI / JDBC / go-sql-driver 仍识别为 MySQL 8.0.x。
+- **行为变更一处**：NEW-6 使「归属节点不可达 + 重指派后无存活持有者」的读由静默部分结果改为显式报错；需要旧行为的场景显式置 `allow_partial_read=on`。
+- **开关默认值不变**：`ha_2pc_participant_hook`、`ha_write_route_enforce`、`remote_range_agg` 仍默认 `off`，`ha_quorum` 仍默认关闭。
+- **元数据零迁移**：region 归属视图与 `m:regions` 结构未变更，升级后首次落盘沿用 v1.20.1 的归一逻辑。
+
+## 已知问题
+
+- **HA quorum 未启用**：`ha_quorum` 默认关闭，三独立 IP 环境级 quorum 与网络分区验收仍为欠账。
+- **TSO 单点未根治**：NEW-5 仅降低抖动敏感度，TSO 号段仍由集群内单节点统一提供服务，该节点不可达时写入仍会失败，需独立告警与监控。
+- **`pkg/db` 全量耗时波动**：单包全量测试在 80s~330s 间波动（后台 IO 用例串行叠加），属慢而非挂。
+- 其余 SQL/性能/分布式边界见 `KNOWN_LIMITATIONS.md` §1–§5。
+
+## 升级路径
+
+- 二进制替换后按 node-a → node-b → node-c 滚动优雅重启；无元数据迁移、无停机改配置。
+- 升级后校验：`select version()` 应返回 `8.0.36-OpenXDB v2.0.0`；`SHOW NODES` 三节点 UP；跨节点只读计数一致。
+- 回退：回退二进制即可，版本常量不影响落盘格式。
+
+## 文档与支持
+
+- `CHANGELOG.md`（v2.0.0 段）、`KNOWN_LIMITATIONS.md` §3.6 / §3.7、`README.md` 版本状态、`docs/` 设计文档。
+- 问题反馈：项目 Issue（Gitee / GitHub 双远端）。
+
 # OpenXDB v1.20.1 Release Notes
 
 发布日期：2026-11-23
