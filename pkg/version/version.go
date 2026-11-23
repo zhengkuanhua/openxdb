@@ -7,7 +7,7 @@
 package version
 
 // Version OpenXDB 当前发布版本号（发版唯一改动点）。
-const Version = "v1.20.0"
+const Version = "v1.20.1"
 
 // MySQLServerPrefix MySQL 兼容版本串前缀（mysql CLI 依赖该前缀识别服务端版本）。
 const MySQLServerPrefix = "8.0.36-OpenXDB "

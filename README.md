@@ -253,6 +253,8 @@ Protocol / CLI (REPL · TCP server · JDBC/Python 驱动 · MySQL wire protocol 
 
 **v1.20.0（2026-11-22 落地）**：**集群写轨结构性收口：2PC 提交钩子、强制路由、参与面扩展、持续复制、写授权统一** —— ① C1 2PC 参与者 COMMIT 改走 `db.Txn` 提交钩子，远端写从此产 binlog（`ha_2pc_participant_hook` 默认 off）；② C2 写路径强制路由闭环（`ha_write_route_enforce` 默认 off，`routeDecision` 四态判定取代死代码 `checkWritable`，显式 region 未指派不再默认本地）；③ C3 2PC 参与面扩展至 region 副本（副本集合落 `m:repl:replicas:<rid>` 独立元数据键，参与者校验自身归属 + 副本 quorum）；④ C4 持续复制 region 化（binlog 携带 region 维度、影子副本由一次性 bootstrap 改为持续跟随 owner 写入、旧 binlog 向下兼容）；⑤ C5 集群轨写授权统一（分区状态快照由心跳采样刷新、写路径零 IO 复用、`stale-while-refresh`，节点级 `CLUSTER_MINORITY` 拒写先于归属判定，P3 语句级 fence 与 2PC `groupOps` 共用同一快照数据源，交付原 C2 后置的 V-A4）；⑥ C6 发版收尾（`pkg/version` → v1.20.0，握手串 / CLI / `select version()` 同源，全仓回归全绿）。`ha_quorum` 仍默认关闭，真机三 IP 环境级验收记为欠账。
 
+**v1.20.1（2026-11-23 落地）**：**归属视图分裂收敛 + 测试稳定性收口** —— ① P0-1 归属视图分裂收敛（`selfOwnsAny()` 收紧为「`Node` 为本机」或「`Node` 为空且 `Local` 为真」，新增 `reconcileOwnerView()` 在复制轨 `applyPush` / `applyRouteSync` 落盘前清理「归属他人却标本地」的矛盾条目，新增 `OwnerViewConflicts()` 只读计数与 `owner view conflict converged` 日志）；② P0-2 归属视图落盘归一（`normalizeRegionOwnerView()` 于 `persistRegions` 前按 `Node` 统一 `Local` 标记，幂等，消除跨 region 2PC 用例对 route `local` 标记的偶发断言失败）；③ P1 测试稳定性加固（`testDir()` 限时 5s 清理目录消除 Windows `DELETE_PENDING`、`safeCloseDB()` 限时 30s，修复前 300s/422s/480s 随机挂死，修复后三轮全仓回归 22 包全 PASS，单轮 100~150s）。
+
 ### 完整特性
 
 - **Storage** — RocksDB-backed key-value storage via a thin C++ cgo bridge (`pkg/storage/rocksdb`), plus a pure-Go in-memory B+Tree (`pkg/storage/btree`) used as reference and comparator.

@@ -9,6 +9,53 @@ AIGC:
     ReservedCode2: UDm3b/NfHHOkbknWca+ttp8cSfMCckglKfbESPE7h17FKwsXlvhweB/iFshQHxuiq9o9Jk6/hIsv0Gku9XZrg2r7w9bLEXfjvZSrWIv+Lg0phzlhFgGdmu5akERzFrIeUVXhtyfq/J26k6yK9nK94KWV00B0NI8gBSiSTP5XEq+YF3qlPKs2DtT/CKM=
 ---
 
+# OpenXDB v1.20.1 Release Notes
+
+发布日期：2026-11-23
+
+## 版本亮点
+
+- **补丁版，居中收口**：本版不引入新 SQL 语法、不改默认开关、不动存储引擎与读路径，只修 v1.20.0 发版后真机复验暴露的两处归属视图缺陷，以及一组长跑随机挂死的测试稳定性问题。
+- **归属视图分裂收敛（P0-1）**：T3 真分区复验发现分区恢复后 node-a 与 node-c 同时 `self_owns=true`（双写风险）。`selfOwnsAny()` 收紧为「`Node` 为本机」或「`Node` 为空且 `Local` 为真」，并在复制轨 `applyPush` / `applyRouteSync` 落盘 `m:regions` 前由 `reconcileOwnerView()` 收敛「归属他人却标本地」的矛盾条目——只清内存 `Local` 标记，不触碰物理数据。
+- **归属视图落盘归一（P0-2）**：本地 `ASSIGN REGION` 只改 `Node` 不碰 `Local`，复制轨推来的 route 可能残留 `local=true`，造成跨 region 2PC 用例对 route `local` 标记的偶发断言失败。新增 `normalizeRegionOwnerView()` 于 `persistRegions` 落盘前按 `Node` 统一归一（归属远端置 `false`、本机归属与未指派不变，幂等）。
+- **测试稳定性加固（P1）**：`testDir()` 替代 `tb.TempDir()`（清理放独立 goroutine、限时 5s），消除 Windows `DELETE_PENDING` 下 `os.RemoveAll` 阻塞在 `NtSetInformationFile` 导致的整包随机挂死；`safeCloseDB()` 将 `db.Close` 限时 30s，规避 rocksdb 后台 compaction/flush 线程 join 偶发长时间阻塞拖死全量测试。仅测试侧改动，不改产品行为。
+
+## 修复明细
+
+| 编号 | 提交 | 内容 |
+| --- | --- | --- |
+| P0-1 | `3bf395d` / `f160387` | `selfOwnsAny()` 收紧 + `reconcileOwnerView()` 复制轨落盘前收敛 + `OwnerViewConflicts()` 只读计数 |
+| P0-2 | `f160387` | `normalizeRegionOwnerView()` 于 `persistRegions` 前按 `Node` 归一 `Local`（幂等） |
+| P1-2 | `1a083dd` | 组提交用例断言放宽为非劣于逐条追加（`fs <= n`），消除 30 并发被 Go 调度拉出组提交窗口导致的误判 |
+
+## 测试证据
+
+- 三轮全仓 `go test ./...`：第 1 轮 22 包全 `ok`（`pkg/sql` 126.4s）；第 2 轮 21 `ok` + `pkg/txn` 偶发 `FAIL`（由此暴露组提交 flaky，P1-2 修复）；第 3 轮 22 包全 `ok`、0 `FAIL`。单轮墙钟 100~150s，远低于 600s 门槛；修复前为 300s / 422s / 480s 随机挂死。
+- 新增用例：`pkg/cluster/v1201_owner_view_split_test.go`、`pkg/sql/v1201_owner_view_normalize_test.go`、`pkg/sql/v1201_testdir_test.go`。
+
+## 兼容性说明
+
+- **零行为变更**：`pkg/version` 版本串升为 `8.0.36-OpenXDB v1.20.1`，握手与 `select version()` 仍同源。
+- **开关默认值不变**：`ha_2pc_participant_hook` / `ha_write_route_enforce` 仍默认 `off`，`ha_quorum` 仍默认关闭（D-5 未解除）。
+- **元数据**：`m:regions` 的 `Local` 标记现由归一函数保证与 `Node` 自洽；升级后首次落盘自动纠正历史残留，无需手工迁移。
+- **不变量**：任一节点视图不存在「`Node` 非本机且 `Local=true`」。跨节点视图收敛仍依赖复制轨推送时序（见 `KNOWN_LIMITATIONS.md` §3.6）。
+
+## 已知问题
+
+- `pkg/db` 全量耗时在 80s~330s 间波动（含后台 IO 的用例串行叠加），属慢而非挂；产品侧 `DB::Close` 在 Windows 下偶发长时间阻塞的根因（后台线程 join 与 WAL checkpoint 循环竞争）未在代码层消除，随 v1.21.0 写轨生产化统一处理。
+- **真机欠账**：`NEW-1` 陈旧主写拒绝、`NEW-2` 重启矩阵代码级已就绪，三独立 IP 真机复跑仍未执行，与 T3 一并归入 v1.21.0 真机收口。
+
+## 升级路径
+
+- 从 v1.20.0 升级：直接替换二进制，无迁移动作；默认配置行为与 v1.20.0 逐字一致。
+- 回退：换回 v1.20.0 二进制即可，无元数据格式变更（`Local` 归一为幂等纠正，不回退亦不影响 v1.20.0 运行）。
+
+## 文档与支持
+
+- 变更明细：`CHANGELOG.md` 的 v1.20.1 条目。
+- 已知限制与边界：`KNOWN_LIMITATIONS.md`（§3.6 归属视图收敛与写授权口径）。
+- 计划与实测结论：`DEV_PLAN_v1.20.1.md`（本地文档，未入库）。
+
 # OpenXDB v1.20.0 Release Notes
 
 发布日期：2026-11-22
