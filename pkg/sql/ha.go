@@ -15,12 +15,18 @@ package sql
 import (
 	"fmt"
 	"log"
+	"net"
 	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
 	"github.com/zhengkuanhua/openxdb/pkg/storage"
 )
+
+// regionProbeTimeout 生成"远端 region 不可达"错误时的存活探测超时（NEW-6）：
+// 仅在归属节点已判 DOWN 的失败路径上使用（正常读路径不探测），
+// 短超时避免错误响应被网络探测拖慢。
+const regionProbeTimeout = 300 * time.Millisecond
 
 // FailoverDownNode 触发节点离线后的 region 自动重指派（M6 故障检测回调/手动入口）。
 // 遍历路由表，将 Node == downID 的显式 region 重指派到存活节点：
@@ -291,6 +297,59 @@ func (e *Executor) resolveRegionOwner(rid storage.ID) string {
 		return e.selfID
 	}
 	return node
+}
+
+// resolveReadOwner 读路径的 region 持有者决策（v1.21.0 NEW-6）：
+// 语义与 resolveRegionOwner 相同，但在"归属节点不可达 / 重指派后无存活持有者 /
+// 只能回退本节点本地副本"这一档上默认改为显式报错。
+//
+// 背景（v1.21.0 Phase A 真机复验 §10.4）：停掉持有 region 的节点后，读请求
+// 静默回退本地副本，SELECT COUNT(*) 由 54 变 14 而 SQL 层无任何报错，调用方
+// 无法区分"数据就这么多"与"部分区段读不到"，属于静默错误结果。
+//
+// allow_partial_read=on 时退回旧行为：回退本地副本并打 WARN，返回可能不完整的
+// 结果（供存量部署过渡，默认关闭）。
+func (e *Executor) resolveReadOwner(rid storage.ID) (string, error) {
+	origin := e.regionNode(rid)
+	// 与 resolveRegionOwner 走同一条决策链（含陈旧 failover 条目失效、幂等重指派）。
+	resolved := e.resolveRegionOwner(rid)
+	if resolved != e.selfID {
+		return resolved, nil
+	}
+	if e.mgr == nil || origin == "" || origin == e.selfID { // 本节点即归属（单机/自持有）
+		// 本节点本就是归属（或单机模式）：不存在跨区缺失。
+		return resolved, nil
+	}
+	if e.AllowPartialRead() {
+		log.Printf("sql: WARN partial read rid=%d owner=%s unreachable (%s): serving local replica only, result may be incomplete (allow_partial_read=on)",
+			rid, origin, e.nodeDownReason(origin))
+		return resolved, nil
+	}
+	return "", &SQLError{Msg: fmt.Sprintf("remote region unavailable: region %d (%s: %s) - data held by an unreachable node; set allow_partial_read=on to fall back to the local replica (possibly incomplete result)",
+		rid, origin, e.nodeDownReason(origin))}
+}
+
+// nodeDownReason 生成"对端不可达"的可读原因：优先给出存活探测结果
+// （dial tcp <addr>: connect: connection refused / i/o timeout），
+// 探测不通但连接建立成功时回落为 node down，便于运维直接定位节点与端口。
+func (e *Executor) nodeDownReason(nodeID string) string {
+	addr := ""
+	if e.mgr != nil {
+		a, err := e.mgr.NodeAddr(nodeID)
+		if err != nil {
+			return "state down, address unknown: " + err.Error()
+		}
+		addr = a
+	}
+	if addr == "" {
+		return "state down"
+	}
+	conn, err := net.DialTimeout("tcp", addr, regionProbeTimeout)
+	if err != nil {
+		return err.Error()
+	}
+	_ = conn.Close()
+	return "state down at " + addr
 }
 
 // HandleNodeUp 节点恢复 UP 后的集群轨装配入口（P3 HA，由 Manager.SetOnUp 回调）：

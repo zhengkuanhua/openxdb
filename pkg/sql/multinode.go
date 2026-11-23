@@ -166,9 +166,13 @@ func (e *Executor) getKVCluster(sess *Session, tx txn.Txn, key []byte) ([]byte, 
 		e.incLocal()
 		return e.getKVVisible(tx, key, bs)
 	}
-	// M6 读 failover：归属节点 down 时先自动重指派，再按新路由转发；
-	// 无存活目标时回退本节点本地副本，不向客户端报错。
-	node := e.resolveRegionOwner(rid)
+	// M6 读 failover：归属节点 down 时先自动重指派，再按新路由转发。
+	// NEW-6：重指派后仍无存活持有者时默认显式报错（不再静默回退本地副本），
+	// allow_partial_read=on 才退回旧的"本地副本尽力服务"行为。
+	node, oerr := e.resolveReadOwner(rid)
+	if oerr != nil {
+		return nil, oerr
+	}
 	if node == e.selfID {
 		e.incLocal()
 		return e.getKVVisible(tx, key, bs)
@@ -331,8 +335,12 @@ func (e *Executor) scanMergedCluster(sess *Session, tx txn.Txn, ranges []storage
 			e.incLocal()
 			pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 		} else {
-			// M6 读 failover：归属节点 down 时先自动重指派再转发；无存活目标回退本地
-			node := e.resolveRegionOwner(rid)
+			// M6 读 failover：归属节点 down 时先自动重指派再转发；
+			// NEW-6：无存活持有者时默认显式报错（旧行为需 allow_partial_read=on）。
+			node, oerr := e.resolveReadOwner(rid)
+			if oerr != nil {
+				return nil, oerr
+			}
 			if node == e.selfID {
 				e.incLocal()
 				pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
@@ -402,7 +410,11 @@ func (e *Executor) scanMergedClusterAgg(sess *Session, tx txn.Txn, ranges []stor
 			localRanges = append(localRanges, r)
 			continue
 		}
-		node := e.resolveRegionOwner(rid)
+		// NEW-6：归属不可达且无存活接管者时显式报错，避免聚合读静默少算一部分区段。
+		node, oerr := e.resolveReadOwner(rid)
+		if oerr != nil {
+			return nil, oerr
+		}
 		if node == e.selfID {
 			localRanges = append(localRanges, r)
 			continue

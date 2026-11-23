@@ -52,6 +52,23 @@ func (d *DB) SetQuorumEnabled(on bool) {
 	d.quorumEnabled = on
 }
 
+// SetAllowPartialRead 开/关跨区不可达读的兼容行为（v1.21.0 NEW-6）：
+// false（默认）= 归属节点不可达且重指派后无存活持有者时显式报错；
+// true = 退回 v1.21.0 旧行为（仅读本地副本 + stderr WARN，结果可能不完整）。
+func (d *DB) SetAllowPartialRead(on bool) {
+	if d.SQL != nil {
+		d.SQL.SetAllowPartialRead(on)
+	}
+}
+
+// AllowPartialRead 返回跨区不可达读的兼容开关状态（未装配 SQL 时按默认 false）。
+func (d *DB) AllowPartialRead() bool {
+	if d.SQL == nil {
+		return false
+	}
+	return d.SQL.AllowPartialRead()
+}
+
 // EpochEnabled 返回 epoch 开关状态。
 func (d *DB) EpochEnabled() bool {
 	d.epochMu.Lock()

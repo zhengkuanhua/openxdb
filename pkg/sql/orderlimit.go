@@ -109,7 +109,11 @@ func (e *Executor) execDistributedOrder(sess *Session, tx txn.Txn, meta *TableMe
 			e.incLocal()
 			pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 		} else {
-			node := e.resolveRegionOwner(rid)
+			// NEW-6：归属不可达且无存活接管者时显式报错，避免分布式排序静默缺片。
+			node, oerr := e.resolveReadOwner(rid)
+			if oerr != nil {
+				return nil, oerr
+			}
 			if node == e.selfID {
 				e.incLocal()
 				pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
@@ -174,7 +178,11 @@ func (e *Executor) scanMergedClusterTop(sess *Session, tx txn.Txn, ranges []stor
 			e.incLocal()
 			pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)
 		} else {
-			node := e.resolveRegionOwner(rid)
+			// NEW-6：归属不可达且无存活接管者时显式报错（不再静默返回部分结果）。
+			node, oerr := e.resolveReadOwner(rid)
+			if oerr != nil {
+				return nil, oerr
+			}
 			if node == e.selfID {
 				e.incLocal()
 				pairs, err = e.scanMergedVisible(tx, []storage.KeyRange{r}, bs)

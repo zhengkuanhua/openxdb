@@ -45,6 +45,12 @@ OpenXDB 版本变更记录。
 - **归属写 fencing 下沉 region 粒度并收口接管误授（40bcc19，NEW-3，P0）**：修复 owner 节点因历史误授标记被**节点级** fence 永久拦截所有写（含转发型写）、重启不恢复的 P0 缺陷。根因为三条叠加——`cluster_term.meta` 持久化了误授记录（`owned=false` 却被判为曾持有）、`notifyLocalTakeover` 恒传 `selfOwns=true`（任何走接管路径的节点都被记为曾持有目标 region）、归属 fence 做成节点级全局判定（`!clusterOwned` 即拒写，单个 region 的误授放大为本节点全部写被拦）。修复将归属 fence 下沉到 region 粒度：仅当本节点当前持有目标 region 时才做归属一致性 / epoch 校验，目标 owner 非本机的转发型写放行，归属不可判定时退回节点级保守拒写；`notifyLocalTakeover` 改为携带 region id，并加 `takeoverLandedLocally` 前置判定（路由快照该 region 的 `Node` 为本机、`regionEpoch` 非零、历史接管纪元不大于本次）后才上报归属。新增 `v1210_new3_region_fence_test.go`、`v1210_new3_region_ownership_test.go`；P9 契约测试全绿，集群轨授权不写 `masterEpoch`。真机三机复验 PASS（201 / 202 / 203 三入口各写 3 行，三端行数与行集合一致，26 → 29）。
 - **复制轨 fencing 增加 `clusterOwned` 短路，修复语句级写入口误拒回归（df7ad73，NEW-3，P0）**：真机滚动重启复验暴露 owner 节点历史降级未复位（`readOnly=true`）且 `d.epoch > masterEpoch` 时，语句级入口 `AllowWriteStatement` 只走复制轨判定、缺少 `clusterOwned` 短路，导致合法 owner 写入恒报 `demoted stale master is read-only`。修复把短路收敛在公共函数 `copyTrackWriteFenceLocked` 开头（`if d.clusterOwned { return nil }`），`AllowWrite` / `AllowWriteStatement` / `AllowWriteRegion` 三个入口共用同一口径；`clusterOwned=false` 时保留原有 `ErrFenced` 语义，归属收回 / 重启待确认仍由归属 fence 拒写。新增 `v1210_new3_copy_track_shortcircuit_test.go`（`TestNew3CopyTrackFenceSkippedWhenClusterOwned` / `TestNew3CopyTrackFenceKeptWhenNotClusterOwned`）。
 
+**Added**
+- **TSO 号段低水位预取与抖动容忍（NEW-5）**：`HATSOClient` 与单点 `tsoClient` 由「缓存耗尽才拉批」升级为「低水位异步预取 + 池内兜底」——剩余量低于 `batch/4`（最小 1）时后台补充拉取，拉取失败按短退避重试且**不使当前取号失败**，仅在池真正耗尽时返回错误；任何补充响应仍须严格大于 `maxSeen`（回退保护），否则丢弃并按拉取失败计。新增观测字段 `prefetchFails`。`tso.Source` 接口不变。测试 `pkg/cluster/v1210_new5_prefetch_test.go`（低水位触发、抖动吸收、`maxSeen` 回归保护、退避、HA 侧预取、并发取号不重复、接口不变）。
+
+**Changed**
+- **跨区不可达读默认显式报错（NEW-6，行为变更）**：归属节点不可达且重指派后无存活持有者时，读路径（`resolveReadOwner`）不再静默回退本地副本返回部分结果，改为返回含 region 与节点标识的错误（如 `remote region unavailable: region 3 (node-b: dial tcp ...)`）；分布式排序、`ORDER BY ... LIMIT` 合并等路径同步收口。存量部署可设 `--allow-partial-read` / `[server] allow_partial_read=on` / `SET allow_partial_read=on` 退回旧行为（本地副本尽力服务并打 WARN）。测试 `pkg/sql/v1210_new6_partial_read_test.go`（不可达报错、兼容开关回退、本地 owner 与单机零回归、配置键注册）。
+
 ## v1.20.1 (2026-11-22)
 
 **Fixed**

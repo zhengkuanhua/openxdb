@@ -384,6 +384,13 @@ func (e *Engine) SetRemoteRangeAgg(enabled bool) { e.ex.SetRemoteRangeAgg(enable
 // RemoteRangeAgg 返回跨 region 远端区间聚合开关当前状态。
 func (e *Engine) RemoteRangeAgg() bool { return e.ex.RemoteRangeAgg() }
 
+// SetAllowPartialRead 设置跨区不可达读的兼容开关（v1.21.0 NEW-6），透传至执行器：
+// false（默认）显式报错，true 退回旧的静默部分结果行为。
+func (e *Engine) SetAllowPartialRead(enabled bool) { e.ex.SetAllowPartialRead(enabled) }
+
+// AllowPartialRead 返回跨区不可达读的兼容开关当前状态。
+func (e *Engine) AllowPartialRead() bool { return e.ex.AllowPartialRead() }
+
 // SetSnapshotShare 设置 autocommit 只读语句共享快照开关（v1.16.0 C6），
 // 透传至执行器。开启时连续 autocommit 只读 SELECT 复用同一快照窗口
 // （延迟隐藏）；关闭回退逐语句独立快照。可经 SET snapshot_share 热切换。

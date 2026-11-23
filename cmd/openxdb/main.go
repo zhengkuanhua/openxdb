@@ -1,4 +1,4 @@
-// Command openxdb 是 OpenXDB 数据库的入口命令（M1，v2.0-FP）。
+﻿// Command openxdb 是 OpenXDB 数据库的入口命令（M1，v2.0-FP）。
 // 子命令：version / init / repl / start。
 package main
 
@@ -87,6 +87,46 @@ func flagValue(args []string, name string) (string, bool) {
 	return "", false
 }
 
+// parseOnOff 解析 on/off/true/false/1/0 形式的布尔值（[server] 配置文件口径）。
+func parseOnOff(v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "on", "true", "1", "yes":
+		return true, nil
+	case "off", "false", "0", "no":
+		return false, nil
+	}
+	return false, errors.New("not a boolean: " + v)
+}
+
+// parseOnOffStrict 同 parseOnOff，但以 ok 表达失败（用于"取值是否合法"判定）。
+func parseOnOffStrict(v string) (bool, bool) {
+	b, err := parseOnOff(v)
+	return b, err == nil
+}
+
+// triBoolFlag 解析可省略取值的布尔开关（--name / --name=on / --name off）。
+// 出现即视为开启；显式 "=值" 或后续 token 恰为布尔字面量时按其取值，
+// 避免像 flagValue 那样把下一个参数（如 --data-dir）吞成值。
+func triBoolFlag(args []string, name string) (value, present bool, err error) {
+	for i := 0; i < len(args); i++ {
+		if a := args[i]; a == name {
+			if i+1 < len(args) {
+				if v, ok := parseOnOffStrict(args[i+1]); ok {
+					return v, true, nil
+				}
+			}
+			return true, true, nil
+		} else if strings.HasPrefix(a, name+"=") {
+			v, ok := parseOnOffStrict(a[len(name)+1:])
+			if !ok {
+				return false, true, errors.New("invalid " + name + " value: " + a[len(name)+1:])
+			}
+			return v, true, nil
+		}
+	}
+	return false, false, nil
+}
+
 // loadTLSConfig 解析 --tls-cert/--tls-key 并加载服务端 TLS 配置（P0/T36）：
 //   - 两者都未提供 → 返回 (nil, nil)，保持明文监听（向后兼容）；
 //   - 仅提供一个 → 返回错误（必须成对提供）；
@@ -147,7 +187,7 @@ func needDataDir(args []string) (string, error) {
 var serverKeys = []string{
 	"data_dir", "port", "replica_port", "metrics_port", "mysql_port", "shutdown_timeout",
 	"cluster_addr", "log_level", "alert_enabled", "alert_file", "alert_webhook", "alert_keep",
-	"tso_node", "tso_ha_group", "tso_ha_batch",
+	"tso_node", "tso_ha_group", "tso_ha_batch", "allow_partial_read",
 }
 
 // loadStartConfig 加载并校验统一配置文件（--config <path>，INI 风格）。
@@ -463,6 +503,26 @@ func cmdStart(args []string) error {
 	if len(tsoHAGroup) > 0 && clusterAddr == "" {
 		return errors.New("--tso-ha-group requires --cluster-addr (TSO HA needs cluster link)")
 	}
+	// NEW-6（v1.21.0）：跨区不可达读的兼容开关。--allow-partial-read 或
+	// [server] allow_partial_read。默认 off —— 归属节点不可达且重指派后无存活
+	// 持有者时显式报错（错误含 region/节点标识）；置 on 退回 v1.21.0 旧行为
+	// （只读本节点本地副本并打 WARN，结果可能不完整）。
+	allowPartialRead := false
+	if cfgFile != nil {
+		if v, ok := cfgFile.Get("server", "allow_partial_read"); ok {
+			on, aerr := parseOnOff(v)
+			if aerr != nil {
+				return errors.New("invalid [server] allow_partial_read value: " + v + " (expected on/off/true/false/1/0)")
+			}
+			allowPartialRead = on
+		}
+	}
+	// CLI 同名参数置位即覆盖文件配置（--allow-partial-read；亦接受 =true/false 形式）。
+	if on, present, ferr := triBoolFlag(args, "--allow-partial-read"); ferr != nil {
+		return ferr
+	} else if present {
+		allowPartialRead = on
+	}
 	// 结构化日志级别与告警配置（[server] 段默认值）：db.Open 前的失败路径亦使用；
 	// [sql] 段与 CLI 覆盖在 db.Open 后装配（见下）。
 	if cfgFile != nil {
@@ -614,6 +674,14 @@ func cmdStart(args []string) error {
 			return err
 		}
 		fmt.Printf("OpenXDB %s TSO source -> node %s (batch %d)\n", version, tsoNode, 64)
+	}
+	// NEW-6（v1.21.0）：装配跨区不可达读策略。默认严格（显式报错）；
+	// allow_partial_read=on 时退回旧行为并在启动日志与 stderr 双提示，
+	// 便于确认存量部署确实在跑"可能返回部分结果"的兼容模式。
+	d.SetAllowPartialRead(allowPartialRead)
+	if allowPartialRead {
+		fmt.Printf("OpenXDB %s partial read ENABLED (allow_partial_read=on): unreachable regions fall back to local replica, result may be incomplete\n", version)
+		fmt.Fprintf(os.Stderr, "openxdb: WARN allow_partial_read=on - cross-region reads may silently return incomplete results\n")
 	}
 	addr := fmt.Sprintf(":%d", port)
 	s := server.New(d.Txn)
@@ -1032,6 +1100,10 @@ Commands:
                               优先当选主，需同时配置 --cluster-addr；配置后自动
                               接管发号，主节点宕机后跨节点写自动恢复）
           [--tso-ha-batch <n>] TSO HA 客户端单次拉批大小（默认 64）
+          [--allow-partial-read] 跨区不可达读退回旧行为（NEW-6；默认关闭，即
+                              归属节点不可达时显式报错，错误含 region/节点标识；
+                              开启后仅读本节点本地副本并打 WARN，结果可能不完整；
+                              等价于 [server] allow_partial_read=on）
           [--metrics-port <n>] Prometheus /metrics 端口（默认 7789，0 禁用）
           [--mysql-port <n>]  MySQL wire protocol 兼容监听端口（默认 0=关闭；
                               开启后 mysql CLI / go-sql-driver 等可直接连接）
@@ -1071,3 +1143,4 @@ Commands:
           [--batch <n>]       每批行数提交一次事务（默认单原子事务）
           [--ignore-errors]   坏行/建表/执行错误跳过继续`)
 }
+

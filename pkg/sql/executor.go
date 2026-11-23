@@ -212,6 +212,13 @@ type Executor struct {
 	// 零回归）。SET remote_range_agg=on|off 热切换；结果集、行序、
 	// serialRemoteReads 读集与 failover/READY 前置语义与旧路径完全一致。
 	remoteRangeAgg atomic.Bool
+	// v1.21.0（NEW-6）：跨区不可达读的兼容开关。默认 false —— 归属节点
+	// 不可达且重指派后无存活持有者时，读路径显式返回错误（错误文案含 region
+	// 与节点标识），不再静默回退本地副本返回部分结果。置 true 退回 v1.21.0
+	// 旧行为（本地副本尽力服务 + stderr WARN），供存量部署过渡。
+	// 由 [server] allow_partial_read / --allow-partial-read 或
+	// SET allow_partial_read=on 设置。
+	allowPartialRead atomic.Bool
 	// v1.16.0：WAL 自动 checkpoint 控制器（nil = 未装配，SET wal_* 返回
 	// 明确错误，DB 行为零回归）。由 db.Open 注入（sql 包不依赖 db 包）。
 	chkCtl CheckpointSetter
@@ -385,6 +392,18 @@ func (e *Executor) SetRemoteRangeAgg(enabled bool) {
 
 // RemoteRangeAgg 返回跨 region 远端区间聚合开关当前状态（扫描热路径无锁读）。
 func (e *Executor) RemoteRangeAgg() bool { return e.remoteRangeAgg.Load() }
+
+// SetAllowPartialRead 设置跨区不可达读的兼容开关（v1.21.0 NEW-6）：
+// false（默认）= 归属节点不可达且重指派后无存活持有者时显式报错；
+// true = 退回 v1.21.0 旧行为（仅读本节点本地副本，返回可能不完整的结果并打 WARN）。
+func (e *Executor) SetAllowPartialRead(enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.allowPartialRead.Store(enabled)
+}
+
+// AllowPartialRead 返回跨区不可达读的兼容开关当前状态（读热路径无锁读）。
+func (e *Executor) AllowPartialRead() bool { return e.allowPartialRead.Load() }
 
 // SetSnapshotShare 设置 autocommit 只读语句共享快照开关（v1.16.0 C6）：
 // 开启时连续 autocommit 只读 SELECT 复用同一临时只读事务（RocksDB 快照），

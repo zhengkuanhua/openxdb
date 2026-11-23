@@ -16,9 +16,21 @@ package cluster
 import (
 	"errors"
 	"fmt"
+	"log"
 	"sync"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/tso"
+)
+
+// NEW-5 号段预取参数（v1.21.0）：
+//   - 剩余号段低于 batch/4（最小 1）时后台异步补拉，池真正耗尽才走同步拉批；
+//   - 预取失败按短退避重试，避免主抖动期间形成重试风暴；
+//   - 预取响应同样受 maxSeen 单调性护栏约束（start 必须严格大于 maxSeen）。
+const (
+	tsoPrefetchRetries    = 3
+	tsoPrefetchBackoffMin = 20 * time.Millisecond
+	tsoPrefetchBackoffMax = 400 * time.Millisecond
 )
 
 // HATSOClient TSO 主备客户端（线程安全）。
@@ -36,9 +48,21 @@ type HATSOClient struct {
 	count     uint64 // 当前缓存批剩余
 	failovers int    // 因取号失败而切换主的次数（观测用）
 	elects    int    // 成功选主次数（观测用）
+
+	// NEW-5 号段预取状态：pendBase/pendCount 为已预取、尚未启用的下一批号段
+	// （接在当前池之后消费，池耗尽即无缝切换，避免抖动期请求直接报错）；
+	// prefetching 保证同一时刻最多一个后台补拉，prefetchOK/prefetchFails 为观测值。
+	pendBase      uint64
+	pendCount     uint64
+	prefetching   bool
+	prefetchOK    int
+	prefetchFails int
 	// fenceState 本节点 TSO HA 服务端状态（同进程装配时用于选主后广播降级）；
 	// nil 表示不做降级广播（纯客户端节点，旧主由其自身下一次取号收敛）。
 	fenceState *tsoHAState
+	// fetchHook 测试注入点：非 nil 时 fetch 直接走它，避免单测依赖真实网络
+	// 与节点注册表。生产路径恒为 nil，不影响行为。
+	fetchHook func(id string, want uint64) (uint64, uint64, error)
 }
 
 // NewHATSOClient 创建 TSO 主备客户端：group 为候选节点 ID 优先序，
@@ -61,6 +85,9 @@ func (c *HATSOClient) Get() (uint64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.count == 0 {
+		c.switchPendingLocked()
+	}
+	if c.count == 0 {
 		if err := c.fillLocked(1); err != nil {
 			return 0, err
 		}
@@ -68,6 +95,7 @@ func (c *HATSOClient) Get() (uint64, error) {
 	v := c.base
 	c.base++
 	c.count--
+	c.maybePrefetchLocked()
 	return v, nil
 }
 
@@ -84,6 +112,16 @@ func (c *HATSOClient) GetBatch(n uint64) (uint64, uint64) {
 		start := c.base
 		c.base += n
 		c.count -= n
+		c.maybePrefetchLocked()
+		return start, n
+	}
+	// NEW-5：池不足时先启用预取批（抖动期命中预取即可直接成功）。
+	c.switchPendingLocked()
+	if c.count >= n {
+		start := c.base
+		c.base += n
+		c.count -= n
+		c.maybePrefetchLocked()
 		return start, n
 	}
 	if err := c.fillLocked(n); err != nil {
@@ -95,6 +133,7 @@ func (c *HATSOClient) GetBatch(n uint64) (uint64, uint64) {
 	start := c.base
 	c.base += n
 	c.count -= n
+	c.maybePrefetchLocked()
 	return start, n
 }
 
@@ -103,7 +142,9 @@ func (c *HATSOClient) GetBatch(n uint64) (uint64, uint64) {
 func (c *HATSOClient) Reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// 预取批同样是"缓存号"，事务边界一并丢弃，保证新事务取到贴近权威序列的戳。
 	c.count = 0
+	c.pendCount = 0
 }
 
 // Leader 返回当前 TSO 主节点 ID（空 = 尚未选主）。
@@ -147,10 +188,152 @@ func (c *HATSOClient) acceptLocked(start, n uint64) error {
 		return fmt.Errorf("cluster: tso ha timestamp regression: start %d <= max seen %d", start, c.maxSeen)
 	}
 	c.base, c.count = start, n
+	// 新批起点高于（含）任何预取批，预取批整体作废，避免重复发放。
+	c.pendCount = 0
 	if end := start + n - 1; end > c.maxSeen {
 		c.maxSeen = end
 	}
 	return nil
+}
+
+// ---- NEW-5 号段预取（低水位异步补充 + 单调性护栏） ----
+
+// lowWatermark 低水位阈值：默认批大小的 1/4，最小 1。
+// 剩余号段（在池 + 预取批）不高于该阈值时触发后台补充。
+func (c *HATSOClient) lowWatermark() uint64 {
+	w := c.batch / 4
+	if w < 1 {
+		w = 1
+	}
+	return w
+}
+
+// switchPendingLocked 当前池耗尽时无缝切换到预取批（调用方持锁）。
+func (c *HATSOClient) switchPendingLocked() {
+	if c.count > 0 || c.pendCount == 0 {
+		return
+	}
+	c.base, c.count = c.pendBase, c.pendCount
+	c.pendBase, c.pendCount = 0, 0
+}
+
+// maybePrefetchLocked 低水位触发后台补充（调用方持锁）。
+// 剩余充足、已有补拉在飞、或尚未选主（选主必须走同步路径）时直接返回。
+func (c *HATSOClient) maybePrefetchLocked() {
+	if c.prefetching || c.leader == "" {
+		return
+	}
+	if c.count+c.pendCount > c.lowWatermark() {
+		return
+	}
+	c.prefetching = true
+	go c.prefetchAsync(c.leader, c.batch)
+}
+
+// prefetchAsync 后台补充号段：网络拉取在锁外进行（不阻塞并发 Get），
+// 失败按短退避重试，全部失败只计数并打日志，绝不使当前请求失败——
+// 池真正耗尽时由 Get/GetBatch 走同步 fillLocked 决定成功或报错。
+func (c *HATSOClient) prefetchAsync(leader string, want uint64) {
+	if want == 0 {
+		want = 1
+	}
+	if leader == "" {
+		c.finishPrefetch(false)
+		return
+	}
+	var lastErr error
+	for attempt := 0; attempt <= tsoPrefetchRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(prefetchBackoff(attempt))
+		}
+		// 每轮重读共享状态：预取期间同步路径可能已填满池或已换主。
+		c.mu.Lock()
+		if c.count+c.pendCount > c.lowWatermark() {
+			c.prefetching = false
+			c.mu.Unlock()
+			return
+		}
+		leader = c.leader
+		c.mu.Unlock()
+		if leader == "" {
+			// 主已失效：预取不重复选主（选主含纪元推进），交给同步路径。
+			break
+		}
+		start, n, err := c.fetch(leader, want)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		c.mu.Lock()
+		aerr := c.acceptPrefetchedLocked(start, n)
+		if aerr == nil {
+			c.prefetchOK++
+		} else {
+			c.prefetchFails++
+		}
+		c.prefetching = false
+		c.mu.Unlock()
+		if aerr == nil {
+			return
+		}
+		// 回退保护命中：说明已有更高号段下发（该响应不可用），重试无意义。
+		log.Printf("cluster: tso ha prefetch dropped: %v", aerr)
+		return
+	}
+	c.finishPrefetch(true)
+	if lastErr != nil {
+		log.Printf("cluster: tso ha prefetch failed (leader %s, retries %d): %v", leader, tsoPrefetchRetries, lastErr)
+	}
+}
+
+// finishPrefetch 结束一次预取（失败计数 + 释放标志）。
+func (c *HATSOClient) finishPrefetch(failed bool) {
+	c.mu.Lock()
+	if failed {
+		c.prefetchFails++
+	}
+	c.prefetching = false
+	c.mu.Unlock()
+}
+
+// acceptPrefetchedLocked 验收预取批：空批丢弃、起点必须严格大于 maxSeen
+// （沿用回退保护语义）、不得与在手的预取批重叠；通过则挂到 pend 等待消费。
+func (c *HATSOClient) acceptPrefetchedLocked(start, n uint64) error {
+	if n == 0 || start == 0 {
+		return errors.New("cluster: tso ha prefetch empty batch")
+	}
+	if c.maxSeen != 0 && start <= c.maxSeen {
+		return fmt.Errorf("cluster: tso ha prefetch regression: start %d <= max seen %d", start, c.maxSeen)
+	}
+	if c.pendCount > 0 && start <= c.pendBase+c.pendCount-1 {
+		return fmt.Errorf("cluster: tso ha prefetch overlap: start %d <= pending end %d", start, c.pendBase+c.pendCount-1)
+	}
+	c.pendBase, c.pendCount = start, n
+	if end := start + n - 1; end > c.maxSeen {
+		// 预取批视为"已下发"：后续任何拉批（同步/预取）起点都必须越过它，
+		// 从而杜绝时间戳回退。
+		c.maxSeen = end
+	}
+	return nil
+}
+
+// PrefetchStats 返回号段预取观测值：成功次数、失败（含回退丢弃）次数。
+func (c *HATSOClient) PrefetchStats() (ok, fails int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.prefetchOK, c.prefetchFails
+}
+
+// prefetchBackoff 第 attempt 轮预取前的退避时长（指数增长，封顶上限）。
+func prefetchBackoff(attempt int) time.Duration {
+	d := tsoPrefetchBackoffMin
+	for i := 1; i < attempt && d < tsoPrefetchBackoffMax; i++ {
+		d *= 2
+	}
+	if d > tsoPrefetchBackoffMax {
+		d = tsoPrefetchBackoffMax
+	}
+	return d
 }
 
 // electLocked 选主：按组优先序探测候选节点，授予者成为新主并立即拉批。
@@ -247,6 +430,9 @@ func (c *HATSOClient) quorumReachableLocked() bool {
 
 // fetch 向指定节点请求一批号（至少 want 个），返回 [start, start+count)。
 func (c *HATSOClient) fetch(id string, want uint64) (uint64, uint64, error) {
+	if c.fetchHook != nil {
+		return c.fetchHook(id, want)
+	}
 	batch := c.batch
 	if want > batch {
 		batch = want
@@ -304,6 +490,9 @@ func (c *HATSOClient) electNode(id string, reqEpoch, observed uint64) (TsoElectR
 	// 候选命中自身：本地状态机直接授予/拒绝（不经网络，避免自连）。
 	if c.fenceState != nil && id != "" && id == c.selfID {
 		return c.fenceState.elect(reqEpoch, observed), nil
+	}
+	if c.mgr == nil {
+		return resp, errors.New("cluster: tso ha manager not initialized")
 	}
 	addr, err := c.mgr.NodeAddr(id)
 	if err != nil {

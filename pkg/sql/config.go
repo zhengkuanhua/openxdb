@@ -11,6 +11,7 @@ package sql
 //   - write_pipeline        autocommit 写 pipeline 开关（v1.17.0 D1.2，server.go REPLSession）
 //   - session_lock_split    全局会话锁拆分开关（v1.18.0 D2，executor.go）
 //   - remote_range_agg      跨 region 远端区间聚合开关（v1.19.0，multinode.go）
+//   - allow_partial_read    跨区不可达读兼容开关（v1.21.0 NEW-6，ha.go）
 //   - recursive_cte_max_depth 递归 CTE 最大迭代深度（v1.19.0 D5，cte_recursive.go）
 //   - group_commit_active_window WAL 组提交主动定时窗口开关（v1.17.0 D1.3，wal_impl.go）
 //   - group_commit_window_ms WAL 组提交定时刷盘窗口毫秒（v1.14.0 P1，wal_impl.go）
@@ -232,6 +233,25 @@ var configSpecs = []*configSpec{
 			return nil
 		},
 		read: func(e *Executor) string { return boolValStr(e.RemoteRangeAgg()) },
+	},
+	{
+		key:  "allow_partial_read",
+		desc: "跨区不可达读的兼容开关（v1.21.0 NEW-6）：on/off/1/0。off（默认）时归属节点不可达且重指派后无存活持有者，读请求显式返回含 region/节点标识的错误（不再静默返回本地副本的部分结果）；on 退回旧行为，仅读本节点本地副本并打 WARN，结果可能不完整",
+		def:  "off",
+		apply: func(e *Executor, v string) error {
+			on := false
+			switch v {
+			case "on", "true", "1":
+				on = true
+			case "off", "false", "0":
+				on = false
+			default:
+				return &SQLError{Msg: "invalid value for allow_partial_read: " + v + " (expected on/off/1/0)"}
+			}
+			e.SetAllowPartialRead(on)
+			return nil
+		},
+		read: func(e *Executor) string { return boolValStr(e.AllowPartialRead()) },
 	},
 	{
 		key:  "recursive_cte_max_depth",
