@@ -370,4 +370,66 @@ D4.4 三项 GAP 在 `af727fc` 二进制下**全部 PASS**，D4.4 复测判定可
 - **v1.0 修复链提交**：`396b4bb`（B1 自动副本补齐 + pending 重试）、`a4b33bf`（Phase5：`ha_*` 配置加载顺序 + TSO HA 生产接线）、`0303c13`（Phase6：NEW-1 epoch 字典序比较 + 双写熔断）、`3d8373d`（Phase8：NEW-2 启动崩溃 + B1 存储就绪栅栏）、`59b1c05`（Phase9：NEW-1/T3 同源收口，cluster term）
 - **v1.0 用例索引**：Phase8 — `pkg/db/d4_5_phase8_*_test.go`；Phase9 — `pkg/db/d4_5_phase9_cluster_term_test.go`、`pkg/db/d4_5_phase9_restart_e2e_test.go`、`pkg/sql/ha_p9_test.go`、`pkg/cluster/p9_internal_test.go`
 
+## 10. v1.21.0 Phase A 三机真机复验（2026-11-23）
+
+### 10.1 复验环境
+
+| 项 | 值 |
+|---|---|
+| 操作系统 | CentOS 7 × 3，三机**独立 IP**（非同宿主别名，可真实双向隔离） |
+| 节点拓扑 | `192.168.100.201` = node-a / `192.168.100.202` = node-b / `192.168.100.203` = node-c |
+| 版本基线 | v1.20.1（真机部署基础） |
+| 复验二进制 | v1.21.0 Phase A（含 `40bcc19`、`df7ad73`），md5 `0b0fc8f346c229dc6c46c8448a475d29` |
+| region 布局 | Region 1 / Region 4 归属 node-a，Region 3 归属 node-b |
+| 取证方式 | 三入口分别执行写入与查询，逐端核对行数与行集合 |
+
+- **与 §8.2 的关系**：本节完成 §8.2 中「T3 真分区复验」「NEW-1 陈旧主写拒绝真机复验」两项环境级取证，并新增一项真机暴露缺陷 NEW-3 的修复复验；「NEW-2 进程级重启矩阵」本轮未复跑，仍按 §8.2 记为欠账。
+
+### 10.2 T3 分区 fencing：PASS
+
+- **构造**：以 iptables 对 7791 端口做双向阻断，制造少数派分区。
+- **结果**：minority 侧写 region 3 被拒，报错 `cluster track write fenced: minority partition, write requires majority (N/2+1) authorization`；清除 iptables 规则后分区恢复，写入收敛并可正常写。
+- **判定**：T3「少数派侧写被拒 + 恢复后收敛」首次在**真实双向隔离**下取得环境级证据，§8.2 该项转 PASS。
+
+### 10.3 NEW-3 归属写 fencing 缺陷：已修复，真机复验 PASS
+
+- **缺陷现象**：owner 节点因历史误授标记被节点级 fence 永久拦截所有写（含转发型写），重启不恢复。
+- **根因（三条叠加）**：
+  1. `cluster_term.meta` 持久化了误授记录（`owned=false` 却被判为曾持有）；
+  2. `notifyLocalTakeover` 恒传 `selfOwns=true`，任何走接管路径的节点都会被记为曾持有目标 region；
+  3. 归属 fence 做成**节点级**全局判定（`!clusterOwned` 即拒写），把单个 region 的误授放大为本节点全部写被拦。
+- **修复链**：
+  - `40bcc19`（P0，归属写 fencing 下沉 region 粒度并收口接管误授）：新增 region 粒度判定，仅当本节点当前持有目标 region 时才做归属一致性 / epoch 校验；目标 owner 非本机的转发型写放行；归属不可判定时退回节点级保守拒写。`notifyLocalTakeover` 改为携带 region id，并在上报前加 `takeoverLandedLocally` 前置判定（路由快照中该 region 的 `Node` 必须是本机、`regionEpoch` 非零、历史接管纪元不大于本次纪元，三者皆满足才上报归属）。
+  - `df7ad73`（P0，复制轨 fencing 增加 `clusterOwned` 短路）：真机**滚动重启**复验暴露语句级写入口误拒回归——owner 节点历史降级未复位（`readOnly=true`）且 `d.epoch > masterEpoch`，而 `AllowWriteStatement` 只走复制轨判定、缺 `clusterOwned` 短路，合法 owner 写入恒报 `demoted stale master is read-only`。修复把短路收敛到公共函数 `copyTrackWriteFenceLocked` 开头（`if d.clusterOwned { return nil }`），`AllowWrite` / `AllowWriteStatement` / `AllowWriteRegion` 三个入口共用同一口径；`clusterOwned=false` 时保留原有 `ErrFenced` 语义，归属收回 / 重启待确认仍由归属 fence 拒写。
+- **单测**：新增 `v1210_new3_region_fence_test.go`、`v1210_new3_region_ownership_test.go`、`v1210_new3_copy_track_shortcircuit_test.go`；P9 契约测试（`TestP9ClusterTermGrantAndRevoke`、`TestP9RestartPendingUntilAuthoritative` 等）全绿，集群轨授权不写 `masterEpoch`。
+- **真机结果**：201 / 202 / 203 三入口各写 3 行，三端行数与行集合**完全一致**（26 → 29），无 fence 误拒、无写入丢失。
+- **判定**：PASS。
+
+### 10.4 NEW-1 陈旧主写 fence：PASS
+
+- **构造**：停 node-b / node-c，隔离后单独重启 node-a。
+- **结果**：连续 25 次写入全部被 minority partition fence 拒绝，**零静默写入**。
+- **判定**：PASS，§8.2 该项转 PASS。
+
+### 10.5 TSO 单点降级：FAIL（未修复）
+
+- **构造**：停 node-a（TSO 号段源）。
+- **写侧**：node-b / node-c 入口写入全部失败，报 `TXN_PREPARE_FAILED: tso unavailable: dial tcp 192.168.100.201:7791`，b 侧 14-17ms、c 侧 9-11ms 快速失败。
+- **读侧（高危）**：同一时段 b / c 的 `SELECT COUNT(*)` 由 54 **静默降为 14**，无任何报错——远端 region 不可达时返回的是部分结果而不标记不完整。
+- **恢复**：拉起 node-a 后三端 54 → 写 2 行 → 三端 56 一致，数据无丢失。
+- **判定**：FAIL。写路径硬单点与读侧静默降级均属高危语义，前者归入 NEW-5（TSO 号段预取 + 租约兜底），后者归入 NEW-6（远端不可达显式报错）。
+
+### 10.6 复验结论汇总
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| T3 分区 fencing | PASS | §10.2：iptables 双向阻断下少数派写被拒，清规则后收敛 |
+| NEW-3 归属写 fencing | PASS（已修复） | §10.3：三入口各写 3 行，三端 26 → 29 一致 |
+| NEW-1 陈旧主 fence | PASS | §10.4：隔离重启后 25 次写全被拒，零静默写 |
+| TSO 单点降级 | FAIL（未修复） | §10.5：写全失败，`COUNT(*)` 54 → 14 静默降级 |
+
+- 本节判定优先级高于 §3 结论矩阵与 §8.2 中同名的旧状态描述：T3 与 NEW-1 由「代码已修待真机复验」转 PASS；NEW-3 为本轮真机新暴露并已修复项。
+- **本节 PASS 不改变默认值结论**：`ha.quorumEnabled` 仍维持默认 `off`。理由不变——副本间仍无持续复制 / 无共识提交（§6-4），且 TSO 单点为本轮新暴露的结构性缺口（NEW-5 / NEW-6），quorum 仲裁无法覆盖。
+- 剩余欠账：NEW-2 进程级重启矩阵真机复跑、NEW-5 TSO 号段预取、NEW-6 部分读显式报错。
+
 *（内容由AI生成，仅供参考）*

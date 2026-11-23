@@ -39,6 +39,12 @@ OpenXDB 版本变更记录。
 
 > 版本线说明：历史版本以仓库 README Status 行、docs/ 设计文档头部标注与 git 提交记录为准。早期部分中间 -alpha 版本未单独打标（git 与文档均无显式版本号），按里程碑区间归纳，版本号不做臆造。
 
+## Unreleased
+
+**Fixed**
+- **归属写 fencing 下沉 region 粒度并收口接管误授（40bcc19，NEW-3，P0）**：修复 owner 节点因历史误授标记被**节点级** fence 永久拦截所有写（含转发型写）、重启不恢复的 P0 缺陷。根因为三条叠加——`cluster_term.meta` 持久化了误授记录（`owned=false` 却被判为曾持有）、`notifyLocalTakeover` 恒传 `selfOwns=true`（任何走接管路径的节点都被记为曾持有目标 region）、归属 fence 做成节点级全局判定（`!clusterOwned` 即拒写，单个 region 的误授放大为本节点全部写被拦）。修复将归属 fence 下沉到 region 粒度：仅当本节点当前持有目标 region 时才做归属一致性 / epoch 校验，目标 owner 非本机的转发型写放行，归属不可判定时退回节点级保守拒写；`notifyLocalTakeover` 改为携带 region id，并加 `takeoverLandedLocally` 前置判定（路由快照该 region 的 `Node` 为本机、`regionEpoch` 非零、历史接管纪元不大于本次）后才上报归属。新增 `v1210_new3_region_fence_test.go`、`v1210_new3_region_ownership_test.go`；P9 契约测试全绿，集群轨授权不写 `masterEpoch`。真机三机复验 PASS（201 / 202 / 203 三入口各写 3 行，三端行数与行集合一致，26 → 29）。
+- **复制轨 fencing 增加 `clusterOwned` 短路，修复语句级写入口误拒回归（df7ad73，NEW-3，P0）**：真机滚动重启复验暴露 owner 节点历史降级未复位（`readOnly=true`）且 `d.epoch > masterEpoch` 时，语句级入口 `AllowWriteStatement` 只走复制轨判定、缺少 `clusterOwned` 短路，导致合法 owner 写入恒报 `demoted stale master is read-only`。修复把短路收敛在公共函数 `copyTrackWriteFenceLocked` 开头（`if d.clusterOwned { return nil }`），`AllowWrite` / `AllowWriteStatement` / `AllowWriteRegion` 三个入口共用同一口径；`clusterOwned=false` 时保留原有 `ErrFenced` 语义，归属收回 / 重启待确认仍由归属 fence 拒写。新增 `v1210_new3_copy_track_shortcircuit_test.go`（`TestNew3CopyTrackFenceSkippedWhenClusterOwned` / `TestNew3CopyTrackFenceKeptWhenNotClusterOwned`）。
+
 ## v1.20.1 (2026-11-22)
 
 **Fixed**
