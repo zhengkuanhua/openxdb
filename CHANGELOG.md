@@ -13,6 +13,9 @@ OpenXDB 版本变更记录。
   - **不破坏既有预取**：NEW-5 低水位预取、`maxSeen` 单调护栏、`acceptLocked` 回退拒绝全部保持原样，租约只接管"选主等待策略"，不改号段消费路径。
   - 改动文件：`pkg/cluster/tso_lease.go`、`pkg/cluster/tso_lease_client.go`（新增）、`pkg/cluster/tso_ha.go`、`pkg/cluster/tso_ha_client.go`、`pkg/cluster/server.go`、`pkg/db/tso_ha.go`、`cmd/openxdb/main.go`、`pkg/configfile/configfile.go`；单测 `pkg/cluster/tso_lease_test.go`、`cmd/openxdb/main_tso_lease_test.go`。
 
+**Fixed**（计划 v2.0.2 补丁发布）：纯转发节点被复制轨只读降级永久 fence，转发型写无法进入 2PC（P0）：v2.0.1 三机真机复验暴露，直连不持有任何 region 的 node-c 写入恒报 `write fenced by newer cluster epoch: demoted stale master is read-only`，而同批写入经 node-a / node-b（均 `self_owns=true`）正常。根因是语句级入口 `AllowWriteStatement` 只做复制轨判定，`copyTrackWriteFenceLocked` 的短路条件仅为 `clusterOwned`，而 node-c 的 `clusterOwned=false`（历史误授被权威视图收回）且 `readOnly=true`（历史降级未复位）→ 落入"降级陈旧主"分支，整节点所有写被拒，与 v1.21.0 NEW-3「归属 fence 下沉 region 粒度」口径冲突。修复：新增运行期标记 `clusterNonOwner`（权威全量视图确认本机不持有任何 region 时置位、`selfOwns=true` 时清除，不持久化），`copyTrackWriteFenceLocked` 在 `clusterOwned` 之外追加豁免，**豁免成立须同时满足 `clusterOwnTerm>0 && !clusterOwned`**（集群轨曾授予归属后被收回）；仅凭"视图显示本机无 region"不放行——复制轨脑裂演练中的陈旧主同样收到 `selfOwns=false` 权威视图，若一并放行会与多数派新主分叉。fencing 未削弱：本机落盘路径仍由 `clusterOwnershipFenceRegion` 按 region 粒度裁决（陈旧主写自己的 region 照旧 `ErrFenced` / `cluster ownership revoked`），`AllowWrite` 节点级契约与 `clusterPend` 重启待确认拒写不变。
+  - 改动文件：`pkg/db/db.go`、`pkg/db/ha_p9.go`、`pkg/db/epoch.go`；新增 `pkg/db/v2020_nonowner_forward_test.go`（转发型写放行 / 陈旧主写本机 region 仍 fence / 无权威视图零回归 / 复制轨陈旧主零回归 / 重新授予后清除，5 组用例）。
+
 ## v2.0.1 (2026-11-24)
 
 **版本口径**
