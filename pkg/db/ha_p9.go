@@ -203,12 +203,19 @@ func (d *DB) NoteOwnershipView(term uint64, selfOwns, authoritative bool) {
 		}
 		d.clusterOwnTerm = grant
 		d.clusterOwned = true
+		d.clusterNonOwner = false
 		if grant > d.epoch {
 			d.persistEpochLocked(grant)
 		}
-	} else if authoritative && d.clusterOwned {
-		d.clusterOwned = false
-		revoked = true
+	} else if authoritative {
+		if d.clusterOwned {
+			d.clusterOwned = false
+			revoked = true
+		}
+		// v2.0.2：权威视图确认本机不持有任何 region（含"从未持有"的纯转发节点，
+		// 如真机 node-c）。复制轨只读降级/陈旧主判定此后不再适用（见
+		// copyTrackWriteFenceLocked）；本机落盘仍受 region 粒度归属 fence 约束。
+		d.clusterNonOwner = true
 	}
 	d.persistClusterTermLocked()
 	ownTerm, known := d.clusterOwnTerm, d.clusterTerm

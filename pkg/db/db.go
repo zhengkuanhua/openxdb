@@ -119,8 +119,8 @@ type DB struct {
 	regionSyncSelfID   string
 	regionSyncInterval time.Duration
 	regionSyncErrs     map[storage.ID]error
-	compMu        sync.Mutex
-	epochFilePath string // EpochMetaFile 持久化路径（Open 时装配）
+	compMu             sync.Mutex
+	epochFilePath      string // EpochMetaFile 持久化路径（Open 时装配）
 
 	// P9 集群轨归属纪元（cluster term）：NEW-1 / T3 同源收口。
 	// 复制轨靠 masterEpoch 判定陈旧主，纯集群轨（无复制链路）没有升主动作，
@@ -135,6 +135,10 @@ type DB struct {
 	clusterOwnTerm      uint64 // 本节点最近一次获授权持有归属的纪元（0 = 从未授权）
 	clusterOwned        bool   // 本节点在 clusterOwnTerm 上是否仍持有归属
 	clusterPend         bool   // 重启后归属待权威视图确认（确认前拒绝写入）
+	// v2.0.2：权威全量视图确认"本机不持有任何 region 归属"（纯转发节点）。
+	// 只在收到 authoritative 视图且 selfOwns=false 时置位、selfOwns=true 时清除；
+	// 不持久化（重启后由首帧权威视图复位），语义上是运行期事实而非授权上限。
+	clusterNonOwner bool
 
 	// v1.21.0 NEW-3：归属 fence 下沉 region 粒度。
 	// 节点级 clusterOwned 只表示"本节点在集群里是否仍持有任一 region 归属"，
@@ -544,7 +548,7 @@ func (d *DB) stopPartitionWatch() {
 }
 
 // refreshRouteViewFromPeers 重启后主动向各远端节点拉取权威 region 归属视图
-//（D4.4 修复 A 簇）。重启瞬间本节点注册表通常为空（对端尚未握手/广播），
+// （D4.4 修复 A 簇）。重启瞬间本节点注册表通常为空（对端尚未握手/广播），
 // 因此按短周期轮询等待对端出现后再拉取：任一对端同步成功即认为视图已收敛
 // 并置数据面就绪；等待窗口内始终无对端（单机部署）则直接置就绪；
 // 有对端但全部不可达时保持未就绪，由对端 HandleNodeUp 全量对齐兜底。

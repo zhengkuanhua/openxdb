@@ -339,6 +339,22 @@ func (d *DB) copyTrackWriteFenceLocked() error {
 	if d.clusterOwned {
 		return nil
 	}
+	// v2.0.2 回归修复：权威视图已确认本机不持有任何 region（纯转发节点，如真机
+	// node-c）。此类节点的写全部经 2PC 转发给 region owner，本机不落盘，复制轨
+	// 的"只读降级 / 陈旧主"判定对本机无意义——历史降级（readOnly=true）会把它
+	// 永久挡在 "demoted stale master is read-only"，即使目标 region 归属其它
+	// 节点、本机只是转发。
+	//
+	// 豁免成立须同时满足"集群轨曾授予归属后被收回"（clusterOwnTerm>0 且
+	// !clusterOwned，即 P9 的陈旧主形态）。仅凭"视图显示本机无 region"不够：
+	// 复制轨脑裂演练里的陈旧主（masterMepoch>0、从未参与集群轨授权）同样会收到
+	// selfOwns=false 的权威视图，若一并放行，其本地写入会与多数派新主分叉。
+	// fencing 未被削弱：本机落盘路径仍由 region 粒度归属 fence
+	// （clusterOwnershipFenceRegion）裁决，陈旧主写自己的 region 照旧 ErrFenced；
+	// 重启待确认（clusterPend）由 P9 契约在 clusterOwnershipFenceLocked 拒写。
+	if d.clusterNonOwner && d.clusterOwnTerm > 0 && !d.clusterOwned {
+		return nil
+	}
 	// 分区恢复合并降级（NoteEpoch 识别到复制轨更高授权）：仅在无集群轨归属时
 	// 生效，陈旧复制主不得写入。
 	if d.readOnly {
