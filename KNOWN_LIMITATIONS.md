@@ -1,41 +1,8 @@
----
-AIGC:
-    Label: "1"
-    ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_fff9e8edd40011f180d5525400248c00
-    ReservedCode1: nRLYRIDP/1GeKXFMzy+MkIeUkaOQy4C2TM8wea/j3bgFbddNNJt5q2nbcNbUtzqSASvzNtcPcWXJ4ZzrkqkvWQDHtJFRP7Kh+QVrKtP1qN6vu/M0NVhvssZ6dBppNPAFMQT6A/vK0Nmvm8iIe6AUMGdwV4tTxq2+yaZJif9rSk17Rxbo+6FYYH4hzxU=
-    ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_fff9e8edd40011f180d5525400248c00
-    ReservedCode2: nRLYRIDP/1GeKXFMzy+MkIeUkaOQy4C2TM8wea/j3bgFbddNNJt5q2nbcNbUtzqSASvzNtcPcWXJ4ZzrkqkvWQDHtJFRP7Kh+QVrKtP1qN6vu/M0NVhvssZ6dBppNPAFMQT6A/vK0Nmvm8iIe6AUMGdwV4tTxq2+yaZJif9rSk17Rxbo+6FYYH4hzxU=
----
-
----
-AIGC:
-    Label: "1"
-    ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_4a29eb5dcdd111f1b307525400393706
-    ReservedCode1: YtWrJY5X9ga7JOaUVWHvfrtfOs6/DmVKYPZqRM7TZBswg+vqfvgKAQs+bWEhiopH81vKtcBqQ57DUYMz1eThDRPUTeI2yo/d6EvqsEpz6ClNMNoRWRohmub6O4nTXhn/Nd+75LfhDIA1kKzyCPyGEKIj/3BEp51ofE10DcjBXlKsfk7uOxETjyzcNYU=
-    ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_4a29eb5dcdd111f1b307525400393706
-    ReservedCode2: YtWrJY5X9ga7JOaUVWHvfrtfOs6/DmVKYPZqRM7TZBswg+vqfvgKAQs+bWEhiopH81vKtcBqQ57DUYMz1eThDRPUTeI2yo/d6EvqsEpz6ClNMNoRWRohmub6O4nTXhn/Nd+75LfhDIA1kKzyCPyGEKIj/3BEp51ofE10DcjBXlKsfk7uOxETjyzcNYU=
----
-
----
-AIGC:
-    Label: "1"
-    ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 60bbebc6db5a512fc5d10abafd5f3b57_7e7b432cc91211f196f9525400248c00
-    ReservedCode1: WhCXMgXbRb2HXDCj2bcNX2HOXocawQTWgIJKMrlGyVTEGQlHZiqnGXR5CqWo9lsxfNyvmLAan4sBjGWpRFGU21li/NsYOjAWLe/ahPQ7/ke6iG7/wORZSuFIYkFtRYQACl0R6NKX89zDYe35sAdwxT9ujKvixLBO/2Z+w6pexlriOw8NcMDc0cJtHLA=
-    ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 60bbebc6db5a512fc5d10abafd5f3b57_7e7b432cc91211f196f9525400248c00
-    ReservedCode2: WhCXMgXbRb2HXDCj2bcNX2HOXocawQTWgIJKMrlGyVTEGQlHZiqnGXR5CqWo9lsxfNyvmLAan4sBjGWpRFGU21li/NsYOjAWLe/ahPQ7/ke6iG7/wORZSuFIYkFtRYQACl0R6NKX89zDYe35sAdwxT9ujKvixLBO/2Z+w6pexlriOw8NcMDc0cJtHLA=
----
-
 # OpenXDB Known Limitations
 
-版本：v1.20.1（2026-11-23）
+版本：v2.0.0（2026-11-23）
 
-本文档列出 OpenXDB v1.20.1 的已知限制与边界。每条目给出限制描述、影响与建议，帮助用户在选型、部署与使用时做出合理判断。详细功能范围请以 [docs/product_manual_zh.md](docs/product_manual_zh.md)（第 4 章 SQL 参考）与设计文档 docs/ 为准。
+本文档列出 OpenXDB v2.0.0 的已知限制与边界。每条目给出限制描述、影响与建议，帮助用户在选型、部署与使用时做出合理判断。详细功能范围请以 [docs/product_manual_zh.md](docs/product_manual_zh.md)（第 4 章 SQL 参考）与设计文档 docs/ 为准。
 
 ---
 
@@ -160,9 +127,9 @@ AIGC:
 
 ### 3.7 TSO 号段单点与部分读静默返回（NEW-5 / NEW-6）
 
-- **限制描述**：事务号（TSO）号段仅由集群内单个节点统一提供服务，写事务在 PREPARE 阶段必须成功取号；当前**无本地号段预取、无租约兜底、无失效切换**，该节点一旦不可达，集群内所有写入立即失败。读侧同样缺少跨区不可达的显式报错：持有目标 region 的节点不可达时，聚合读（如 `SELECT COUNT(*)`）只返回可达分片的局部结果，不报错、不标记结果不完整（部分读静默返回，记为 NEW-6）。v1.21.0 Phase A 三机真机复验实测：停 node-a（TSO 源）后，node-b / node-c 入口写入全部失败，报 `TXN_PREPARE_FAILED: tso unavailable: dial tcp 192.168.100.201:7791`（b 侧 14-17ms、c 侧 9-11ms 快速失败）；同一时段 b / c 的 `SELECT COUNT(*)` 由 54 静默降为 14 且无任何报错。恢复 node-a 后三端 54 → 写 2 行 → 三端 56 一致，数据无丢失。证据见 [D4.5 HA quorum 灰度报告](docs/D4_5_ha_quorum_gray_report.md) §10.5。
+- **限制描述**：事务号（TSO）号段仅由集群内单个节点统一提供服务，写事务在 PREPARE 阶段必须成功取号；v1.21.0 已落地**号段低水位预取**（剩余号段低于批大小 1/4 时后台补拉，带重试与退避，见 `tso.go` 的 `lowWatermark` / `maybePrefetchLocked` / `prefetchAsync`），但**无租约兜底、无失效切换**，该节点一旦不可达，集群内所有写入立即失败。读侧同样缺少跨区不可达的显式报错：持有目标 region 的节点不可达时，聚合读（如 `SELECT COUNT(*)`）只返回可达分片的局部结果，不报错、不标记结果不完整（部分读静默返回，记为 NEW-6）。v1.21.0 Phase A 三机真机复验实测：停 node-a（TSO 源）后，node-b / node-c 入口写入全部失败，报 `TXN_PREPARE_FAILED: tso unavailable: dial tcp 192.168.100.201:7791`（b 侧 14-17ms、c 侧 9-11ms 快速失败）；同一时段 b / c 的 `SELECT COUNT(*)` 由 54 静默降为 14 且无任何报错。恢复 node-a 后三端 54 → 写 2 行 → 三端 56 一致，数据无丢失。证据见 [D4.5 HA quorum 灰度报告](docs/D4_5_ha_quorum_gray_report.md) §10.5。
 - **影响**：TSO 节点是写路径的**硬单点**——其不可达即集群写能力整体归零，客户端只在 PREPARE 阶段拿到错误，已建立的连接与已读数据不受影响，现场易表现为"偶发写失败"而非"集群不可写"。读侧的静默降级更危险：部分结果被当作正常结果返回，业务侧无法据返回值判断完整性，聚合、对账、报表类查询会出现无告警的数值塌陷（54 → 14）。该风险与本限制的开关状态无关，`ha_quorum` 默认关闭时同样存在，也不在 quorum 仲裁覆盖范围内。
-- **建议**：生产部署把 TSO 节点与业务查询入口分离监控，对 `tso unavailable` 错误与 TSO 节点存活做独立告警；聚合值明显低于预期时逐节点直连比对 `SELECT COUNT(*)` 做人工校验，不要直接采信单条聚合结果；涉及账务、库存等不可静默丢数的场景，在应用侧增加"总量交叉校验"兜底。**根治方案已排入后续版本**：NEW-5 以「号段预取 + 租约兜底」消除写路径硬单点，NEW-6 以「远端不可达显式报错（拒绝返回部分结果）」消除读侧静默降级，二者计划在 v1.20.2 或 v1.21.0 后续版本落地；在此之前保留本条限制。
+- **建议**：生产部署把 TSO 节点与业务查询入口分离监控，对 `tso unavailable` 错误与 TSO 节点存活做独立告警；聚合值明显低于预期时逐节点直连比对 `SELECT COUNT(*)` 做人工校验，不要直接采信单条聚合结果；涉及账务、库存等不可静默丢数的场景，在应用侧增加"总量交叉校验"兜底。**根治方案已排入 v2.1.0 上线门槛**：NEW-5 以「租约兜底 + 失效切换」消除写路径硬单点（号段预取已于 v1.21.0 落地），NEW-6 以「远端不可达显式报错（拒绝返回部分结果）」消除读侧静默降级，排期与验收基准见 `docs/DEV_PLAN_v2.1.0.md`；在此之前保留本条限制。
 
 ## 4. 文档边界
 
