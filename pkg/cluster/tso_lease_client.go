@@ -86,6 +86,7 @@ func (c *HATSOClient) electLeaseLocked(want uint64) error {
 	budget := c.leaseWaitBudgetLocked()
 	deadline := time.Now().Add(budget)
 	var lastErr error
+	quick := 0 // 无等待时长时的快速重试次数（纪元碰撞自愈用）
 	for {
 		wait, err := c.electOnceLocked(want)
 		if err == nil {
@@ -93,7 +94,25 @@ func (c *HATSOClient) electLeaseLocked(want uint64) error {
 		}
 		lastErr = err
 		if wait <= 0 {
-			return lastErr
+			// 没有"他主持有租约"需要等待，但失败可能是可自愈的同纪元碰撞：
+			// 每轮重试都会把纪元抬高（见 electOnceLocked 的 maxObs 推进），
+			// 因此在预算内按短退避重试几次，让一次取号调用就能完成接任，
+			// 而不是把"选不出来"直接抛给写路径。超过上限仍失败则立即返回，
+			// 保证真正无多数派时不空转。
+			quick++
+			if quick > tsoLeaseQuickRetryMax {
+				return lastErr
+			}
+			remain := time.Until(deadline)
+			if remain <= 0 {
+				return lastErr
+			}
+			if tsoLeaseQuickRetryGap < remain {
+				time.Sleep(tsoLeaseQuickRetryGap)
+			} else {
+				time.Sleep(remain)
+			}
+			continue
 		}
 		remain := time.Until(deadline)
 		if remain <= 0 {

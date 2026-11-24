@@ -58,6 +58,12 @@ const (
 	tsoLeaseWaitMax = 30 * time.Second
 	// tsoLeaseRetryStep 客户端在租约未到期期间的重试步长。
 	tsoLeaseRetryStep = 200 * time.Millisecond
+	// tsoLeaseQuickRetryMax 无"租约等待时长"时的快速重试次数上限：
+	// 用于同纪元碰撞这类可在毫秒级自愈的场景（每次重试都会推进纪元），
+	// 上限保证真正无多数派时写路径仍能快速失败，不做无意义空转。
+	tsoLeaseQuickRetryMax = 5
+	// tsoLeaseQuickRetryGap 快速重试的退避步长。
+	tsoLeaseQuickRetryGap = 20 * time.Millisecond
 )
 
 // errTSOLeaseDisabled 未启用租约时对租约帧的回应。
@@ -221,6 +227,13 @@ func (st *tsoHAState) runElect(reqEpoch, observed uint64) TsoElectResp {
 	st.leader = false
 	st.leaseUntil = time.Time{}
 	ne := st.epoch + 1
+	// 新纪元还必须越过本地"已投票纪元"：一次失败的竞选会在本地留下
+	// votedEpoch=ne / votedFor=self，若下一轮复用同一 ne，组内其它候选
+	// 会被 vote() 判为"同纪元已投票"而永远拿不到这关键一票（真机 3 节点
+	// 组 1 节点不可达时 grants 恒为 1/2 的死锁）。
+	if st.votedEpoch >= ne {
+		ne = st.votedEpoch + 1
+	}
 	if reqEpoch > ne {
 		ne = reqEpoch
 	}
@@ -258,11 +271,23 @@ func (st *tsoHAState) runElect(reqEpoch, observed uint64) TsoElectResp {
 		}
 	}
 	if grants < need {
-		// 拉票失败：撤销自投的本地租约标记，避免自己把自己锁在"无权接任"。
+		// 拉票失败必须完整回滚本地投票态并推进本地纪元，否则本节点会把
+		// "在 ne 纪元投过票"永久记住：同纪元其它候选被 vote() 拒票，自己
+		// 下一轮又复用同一 ne 反复失败，多数派永远差这一票（死锁）。
+		//   - 回滚 votedEpoch/votedFor 与"自身持有租约"估计；
+		//   - st.epoch 推进到 ne，使下一次竞选换用更高纪元绕开同纪元互斥。
+		// 未当选即推进纪元不产生双主窗口：纪元本身不授予发号权，发号权
+		// 只来自多数派授予且未到期的租约窗口（leaseUntil 由授予方各自估计）。
 		st.mu.Lock()
 		if st.votedEpoch == ne && st.votedFor == self {
+			st.votedEpoch, st.votedFor = 0, ""
 			st.seenLeader, st.seenUntil = "", time.Time{}
 		}
+		if st.epoch < ne {
+			st.epoch = ne
+		}
+		st.leader = false
+		st.leaseUntil = time.Time{}
 		respEpoch, respLast := st.epoch, st.last
 		st.mu.Unlock()
 		return TsoElectResp{
@@ -341,11 +366,18 @@ func (st *tsoHAState) vote(epoch, observed uint64, candidate string) TsoElectRes
 		}
 	}
 	if epoch == st.votedEpoch && st.votedFor != "" && st.votedFor != candidate {
+		// 同纪元已投给别的候选：拒绝，但并不存在任何他主持有租约，让候选
+		// 干等一个 TTL 没有意义（旧实现在此回 TTL，叠加"失败不回滚自投"
+		// 后使同一纪元被永久复用 → 永久 1/2）。回执带回本节点已承认的
+		// 纪元，候选据此把下一轮抬到更高纪元即可自行打开僵局。
+		seen := st.epoch
+		if epoch > seen {
+			seen = epoch
+		}
 		return TsoElectResp{
-			Epoch:        st.epoch,
-			Last:         st.last,
-			Err:          "lease vote: epoch already voted",
-			RetryAfterMs: st.leaseTTL.Milliseconds(),
+			Epoch: seen,
+			Last:  st.last,
+			Err:   "lease vote: epoch already voted",
 		}
 	}
 	if epoch < st.epoch {
@@ -353,6 +385,11 @@ func (st *tsoHAState) vote(epoch, observed uint64, candidate string) TsoElectRes
 	}
 	// 授予：记录投票 + 本地租约估计。授予时刻不早于候选的发起时刻，
 	// 因此这里的 seenUntil(=授予+TTL) 必然覆盖候选的实际持有窗口。
+	// 授予同时承认该纪元（与 elect 的 epoch 语义一致）：落后节点借此追平
+	// 集群纪元，"stale epoch" 判定才有意义，也不会被旧纪元请求反复拖回。
+	if epoch > st.epoch {
+		st.epoch = epoch
+	}
 	st.votedEpoch, st.votedFor = epoch, candidate
 	st.seenLeader, st.seenUntil = candidate, now.Add(st.leaseTTL)
 	if observed > st.last {

@@ -70,6 +70,11 @@ type HATSOClient struct {
 	// fetchHook 测试注入点：非 nil 时 fetch 直接走它，避免单测依赖真实网络
 	// 与节点注册表。生产路径恒为 nil，不影响行为。
 	fetchHook func(id string, want uint64) (uint64, uint64, error)
+	// electHook 测试注入点：非 nil 时 electNode 走它（同上，仅测试使用）。
+	// 选举活性用例需要"组内某节点不可达"这一时序，无法用真实网络稳定复现。
+	electHook func(id string, reqEpoch, observed uint64) (TsoElectResp, error)
+	// probeHook 测试注入点：非 nil 时多数派探测走它（同上，仅测试使用）。
+	probeHook func(id string) bool
 }
 
 // NewHATSOClient 创建 TSO 主备客户端：group 为候选节点 ID 优先序，
@@ -414,6 +419,12 @@ func (c *HATSOClient) electOnceLocked(want uint64) (time.Duration, error) {
 			return 0, nil
 		}
 	}
+	// 两轮都没选出主：把本地纪元推进到组内观测到的最大纪元，下一轮重试
+	// 才会换用更高的 req（否则每次重试都复用同一纪元，撞上组内"同纪元
+	// 已投票"的互斥态 → 重试永远无效，真机表现为 60s 零写入）。
+	if maxObs > c.epoch {
+		c.epoch = maxObs
+	}
 	return retryAfter, fmt.Errorf("cluster: tso ha unavailable: %w", lastErr)
 }
 
@@ -438,6 +449,12 @@ func (c *HATSOClient) quorumReachableLocked() bool {
 	alive := 1 // 本节点自身必然可达
 	for _, id := range c.group {
 		if id == "" || id == c.selfID {
+			continue
+		}
+		if c.probeHook != nil {
+			if c.probeHook(id) {
+				alive++
+			}
 			continue
 		}
 		if c.mgr != nil && c.mgr.Probe(id) {
@@ -506,6 +523,9 @@ func (c *HATSOClient) fetch(id string, want uint64) (uint64, uint64, error) {
 // electNode 向单个候选节点请求接任 TSO 主。
 func (c *HATSOClient) electNode(id string, reqEpoch, observed uint64) (TsoElectResp, error) {
 	var resp TsoElectResp
+	if c.electHook != nil {
+		return c.electHook(id, reqEpoch, observed)
+	}
 	// 候选命中自身：本地状态机直接授予/拒绝（不经网络，避免自连）。
 	// v2.1.0 H1（NEW-5）：统一走 runElect——未启用租约时语义与 elect 一致；
 	// 启用租约时由它就地拉票并自授租约，避免客户端绕过租约自封主。
