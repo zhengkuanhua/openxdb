@@ -57,6 +57,13 @@ type HATSOClient struct {
 	prefetching   bool
 	prefetchOK    int
 	prefetchFails int
+
+	// v2.1.0 H1（NEW-5）：租约模式（默认关闭）。客户端只调整"抢主等待策略"——
+	// 组内回执他主租约未到期时，按 retry_after_ms 等到期再拉票，而不是反复
+	// 自封主后被拒；号段消费、预取与单调性护栏（maxSeen）完全不变。
+	leaseMode  bool
+	leaseTTL   time.Duration
+	leaseWaits int // 因等待他主租约到期而重试的次数（观测用）
 	// fenceState 本节点 TSO HA 服务端状态（同进程装配时用于选主后广播降级）；
 	// nil 表示不做降级广播（纯客户端节点，旧主由其自身下一次取号收敛）。
 	fenceState *tsoHAState
@@ -175,7 +182,11 @@ func (c *HATSOClient) fillLocked(want uint64) error {
 		c.failovers++
 		c.leader = ""
 	}
-	return c.electLocked(want)
+	if c.leaseMode {
+		return c.electLeaseLocked(want)
+	}
+	_, err := c.electOnceLocked(want)
+	return err
 }
 
 // acceptLocked 验收一批号：拒绝空批、回退（start <= maxSeen）与重复区间。
@@ -336,21 +347,26 @@ func prefetchBackoff(attempt int) time.Duration {
 	return d
 }
 
-// electLocked 选主：按组优先序探测候选节点，授予者成为新主并立即拉批。
+// electOnceLocked 单轮选主：按组优先序探测候选节点，授予者成为新主并立即拉批。
 // 两轮探测：第一轮以 c.epoch+1 请求；若组内已有更高 epoch 的主（follower
 // 回执真实 epoch），第二轮以观测到的最大 epoch+1 请求，避免无谓失败。
-func (c *HATSOClient) electLocked(want uint64) error {
+//
+// v2.1.0 H1（NEW-5）：返回值新增"建议等待时长"——组内回执了他主租约仍在
+// 有效期内时，回传其剩余时长，由调用方（租约模式）等到期后再重新拉票，
+// 避免在租约窗口内反复无效抢主。非租约模式该值恒为 0，行为与 v1.21.0 一致。
+func (c *HATSOClient) electOnceLocked(want uint64) (time.Duration, error) {
 	if len(c.group) == 0 {
-		return errors.New("cluster: tso ha group is empty")
+		return 0, errors.New("cluster: tso ha group is empty")
 	}
 	// 双主防护：组内多数派不可达时不允许自封主（否则双向分区两侧各选一主，
 	// 各自发号 → 时间戳重复）。副本数 ≤2 时不设门槛：此时"多数派=全部"，
 	// 设门槛会让单节点故障直接不可恢复，与 B2 目标相悖。
 	if !c.quorumReachableLocked() {
-		return errors.New("cluster: tso ha quorum not reachable")
+		return 0, errors.New("cluster: tso ha quorum not reachable")
 	}
 	maxObs := c.epoch
 	lastErr := error(errors.New("cluster: tso ha no reachable candidate"))
+	var retryAfter time.Duration // 组内最长的他主租约剩余时长（NEW-5）
 	for round := 0; round < 2; round++ {
 		req := c.epoch + 1
 		if round == 1 {
@@ -367,6 +383,9 @@ func (c *HATSOClient) electLocked(want uint64) error {
 			}
 			if !resp.Granted {
 				lastErr = fmt.Errorf("cluster: tso elect %s rejected: %s (epoch=%d)", id, resp.Err, resp.Epoch)
+				if d := leaseRetryAfter(resp); d > retryAfter {
+					retryAfter = d
+				}
 				continue
 			}
 			if resp.Epoch > c.epoch {
@@ -392,10 +411,10 @@ func (c *HATSOClient) electLocked(want uint64) error {
 					st.broadcastFence(newLeader, e, seen)
 				}
 			}()
-			return nil
+			return 0, nil
 		}
 	}
-	return fmt.Errorf("cluster: tso ha unavailable: %w", lastErr)
+	return retryAfter, fmt.Errorf("cluster: tso ha unavailable: %w", lastErr)
 }
 
 // fenceHook 由服务端装配的降级广播入口（客户端与服务端同进程时复用）。
@@ -488,8 +507,10 @@ func (c *HATSOClient) fetch(id string, want uint64) (uint64, uint64, error) {
 func (c *HATSOClient) electNode(id string, reqEpoch, observed uint64) (TsoElectResp, error) {
 	var resp TsoElectResp
 	// 候选命中自身：本地状态机直接授予/拒绝（不经网络，避免自连）。
+	// v2.1.0 H1（NEW-5）：统一走 runElect——未启用租约时语义与 elect 一致；
+	// 启用租约时由它就地拉票并自授租约，避免客户端绕过租约自封主。
 	if c.fenceState != nil && id != "" && id == c.selfID {
-		return c.fenceState.elect(reqEpoch, observed), nil
+		return c.fenceState.runElect(reqEpoch, observed), nil
 	}
 	if c.mgr == nil {
 		return resp, errors.New("cluster: tso ha manager not initialized")
@@ -503,7 +524,7 @@ func (c *HATSOClient) electNode(id string, reqEpoch, observed uint64) (TsoElectR
 		return resp, err
 	}
 	defer conn.Close()
-	payload, err := marshalJSON(TsoElectReq{Epoch: reqEpoch, Observed: observed})
+	payload, err := marshalJSON(TsoElectReq{Epoch: reqEpoch, Observed: observed, Candidate: c.selfID})
 	if err != nil {
 		return resp, err
 	}

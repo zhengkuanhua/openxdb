@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/tso"
 )
@@ -51,6 +52,9 @@ const tsoHAWindow uint64 = 4096
 type TsoElectReq struct {
 	Epoch    uint64 `json:"epoch,omitempty"`
 	Observed uint64 `json:"observed,omitempty"`
+	// Candidate 竞逐者节点 ID（v2.1.0 NEW-5 租约拉票必填）：
+	// 投票方据此判断"该不该把票/租约投给它"，也是同纪元去重的依据。
+	Candidate string `json:"candidate,omitempty"`
 }
 
 // TsoElectResp 选主响应载荷。
@@ -59,6 +63,11 @@ type TsoElectResp struct {
 	Epoch   uint64 `json:"epoch,omitempty"`
 	Last    uint64 `json:"last,omitempty"`
 	Err     string `json:"err,omitempty"`
+	// LeaseMs 授予方给出的租约时长（v2.1.0 NEW-5 租约模式；0 表示未启用租约）。
+	LeaseMs int64 `json:"lease_ms,omitempty"`
+	// RetryAfterMs 拒绝时建议的等待时长（他主租约剩余有效期），
+	// 客户端据此在租约到期后再来拉票，避免无效轮询。
+	RetryAfterMs int64 `json:"retry_after_ms,omitempty"`
 }
 
 // TsoFenceReq 陈旧主降级通知载荷。
@@ -69,6 +78,9 @@ type TsoFenceReq struct {
 	Epoch     uint64 `json:"epoch,omitempty"`
 	Last      uint64 `json:"last,omitempty"`
 	Candidate string `json:"candidate,omitempty"`
+	// LeaseMs 新主自报的租约时长（v2.1.0 NEW-5；0 表示未启用租约）。
+	// 收到方据此记录"新主持有到 now+LeaseMs"的本地估计。
+	LeaseMs int64 `json:"lease_ms,omitempty"`
 }
 
 // tsoHAState TSO 副本状态机：epoch 单调 + last 单调 + 窗口预留落盘。
@@ -83,6 +95,22 @@ type tsoHAState struct {
 	last     uint64 // 本节点已下发最大时间戳（单调不减）
 	reserved uint64 // 已落盘的未来可达上界
 	save     func(epoch, last uint64)
+
+	// ---- v2.1.0 H1（NEW-5）：租约兜底与失效切换 ----
+	// 下面这组字段只在 leaseOn 为真时参与判定；关闭时全部逻辑走原路径。
+	leaseOn    bool          // 租约模式开关（默认关闭，真机验收前不启用）
+	leaseTTL   time.Duration // 租约有效期（本地单调时长，不比较跨节点绝对时间）
+	leaseRenew time.Duration // 续约间隔
+	leaseUntil time.Time     // 本节点当前租约到期时刻（零值=无租约）
+	seenLeader string        // 最近观测到的租约持有者 ID
+	seenUntil  time.Time     // 该持有者租约按本地时钟的到期估计
+	votedEpoch uint64        // 已投票的纪元（同纪元只投一个候选）
+	votedFor   string        // 该纪元投向的候选 ID
+	now        func() time.Time                                      // 时钟注入点（单测假时钟；nil=time.Now）
+	voteHook   func(id string, req TsoElectReq) (TsoElectResp, error) // 拉票传输注入点（单测免网络）
+	renewHook  func(id string, req TsoLeaseRenewReq) (TsoLeaseRenewResp, error)
+	renewStop  chan struct{} // 续约协程退出信号
+	renewing   bool          // 续约协程是否在跑（同一时刻最多一个）
 }
 
 // EnableTSOHA 在节点服务端启用 TSO HA（B2）。
@@ -98,6 +126,9 @@ func (s *Server) EnableTSOHA(group []string, load func() (uint64, uint64), save 
 		mgr:    s.mgr,
 		group:  append([]string(nil), group...),
 		save:   save,
+		// v2.1.0 H1（NEW-5）：续约协程退出信号预先建好；租约默认关闭，
+		// 只有 EnableTSOLease 打开 leaseOn 后才会真正启动与参与判定。
+		renewStop: make(chan struct{}),
 	}
 	if load != nil {
 		epoch, reserved := load()
@@ -156,6 +187,16 @@ func (st *tsoHAState) extendWindowLocked() {
 func (st *tsoHAState) serve(n uint64) (start, count uint64, ok bool, epoch uint64) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	// v2.1.0 H1（NEW-5）：租约模式下发号权由租约背书。租约到期即自行
+	// 降级并拒绝发号——旧主失联后无需他人 fence，靠租约自然过期即可
+	// 让新主安全接续（不依赖任何单点时钟）。未启用租约时本节不生效。
+	if st.leaseOn && !st.leaseValidLocked(st.nowLocked()) {
+		if st.leader {
+			st.leader = false
+			st.leaseUntil = time.Time{}
+		}
+		return 0, 0, false, st.epoch
+	}
 	if !st.leader {
 		return 0, 0, false, st.epoch
 	}
@@ -237,7 +278,7 @@ func (st *tsoHAState) broadcastFence(self string, epoch, last uint64) {
 	if st.mgr == nil || epoch == 0 {
 		return
 	}
-	payload, err := marshalJSON(TsoFenceReq{Epoch: epoch, Last: last, Candidate: self})
+	payload, err := marshalJSON(TsoFenceReq{Epoch: epoch, Last: last, Candidate: self, LeaseMs: st.leaseMillis()})
 	if err != nil {
 		return
 	}
@@ -275,7 +316,7 @@ func (s *Server) handleTsoElect(conn net.Conn, payload []byte) {
 		writeFrame(conn, msgTsoElect, mustJSON(TsoElectResp{Err: "tso ha not enabled"}))
 		return
 	}
-	resp := st.elect(req.Epoch, req.Observed)
+	resp := st.runElect(req.Epoch, req.Observed)
 	writeFrame(conn, msgTsoElect, mustJSON(resp))
 	// 授予成功后尽力让旧主降级（异步，不拖慢选主响应）。
 	if resp.Granted {
@@ -293,7 +334,13 @@ func (s *Server) handleTsoFence(conn net.Conn, payload []byte) {
 	st := s.tsoHA
 	s.mu2pc.Unlock()
 	if st != nil {
-		st.fence(req.Epoch, req.Last, req.Candidate)
+		// v2.1.0 H1（NEW-5）：租约模式下 fence 还要记录新主的租约期限，
+		// 使本节点在期限内的拉票请求一律被拒（双主互斥的第二道闸）。
+		if st.leaseEnabled() {
+			st.commitLease(req.Epoch, req.Last, req.Candidate, req.LeaseMs)
+		} else {
+			st.fence(req.Epoch, req.Last, req.Candidate)
+		}
 	}
 	// 回执一帧，便于对端 readFrame 收敛。
 	_ = writeFrame(conn, msgTsoFence, mustJSON(TsoFenceReq{}))

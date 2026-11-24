@@ -333,6 +333,12 @@ func (s *Server) handleConn(conn net.Conn) {
 		case msgTsoFence:
 			// B2 TSO HA：降级广播（新主通告 epoch，陈旧主自降）
 			s.handleTsoFence(conn, payload)
+		case msgTsoLeaseVote:
+			// v2.1.0 H1（NEW-5）：租约拉票（多数派授予候选接任 TSO 主的租约）
+			s.handleTsoLeaseVote(conn, payload)
+		case msgTsoLeaseRenew:
+			// v2.1.0 H1（NEW-5）：租约续约（现主向多数派延长租约）
+			s.handleTsoLeaseRenew(conn, payload)
 		case msgDDLPush:
 			s.handleDDLPush(conn, payload)
 		case msgBackupPrepare:

@@ -174,7 +174,8 @@ func ValidateServerValues(f *File) []string {
 	optionalPortKeys := map[string]bool{"replica_port": true, "metrics_port": true}
 	nonNegKeys := map[string]bool{"shutdown_timeout": true, "backup_interval": true, "backup_keep": true, "alert_keep": true}
 	urlKeys := map[string]bool{"backup_remote_url": true, "alert_webhook": true}
-	boolKeys := map[string]bool{"alert_enabled": true}
+	// tso_lease：v2.1.0 H1（NEW-5）TSO 租约开关，仅接受布尔文本（默认关闭）。
+	boolKeys := map[string]bool{"alert_enabled": true, "tso_lease": true}
 	levelKeys := map[string]bool{"log_level": true}
 	for _, k := range sec.Order {
 		v := sec.Vals[k]

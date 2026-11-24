@@ -188,6 +188,8 @@ var serverKeys = []string{
 	"data_dir", "port", "replica_port", "metrics_port", "mysql_port", "shutdown_timeout",
 	"cluster_addr", "log_level", "alert_enabled", "alert_file", "alert_webhook", "alert_keep",
 	"tso_node", "tso_ha_group", "tso_ha_batch", "allow_partial_read",
+	// v2.1.0 H1（NEW-5）：TSO 租约兜底与失效切换（默认关闭）。
+	"tso_lease", "tso_lease_ttl",
 }
 
 // loadStartConfig 加载并校验统一配置文件（--config <path>，INI 风格）。
@@ -311,6 +313,46 @@ func parseTSOHAGroup(spec string) []string {
 		out = append(out, id)
 	}
 	return out
+}
+
+// parseTSOLeaseOptions 解析 TSO 租约开关与有效期（v2.1.0 H1/NEW-5）。
+//
+// 取值来源优先级：命令行 > 配置文件 > 默认值。**默认关闭**——未真机验收前
+// 不开启，关闭时发号权完全由 epoch 选主决定，与 v1.21.0 行为一致。
+//   - --tso-lease / [server] tso_lease：on/off（裸 --tso-lease 视为 on）；
+//   - --tso-lease-ttl / [server] tso_lease_ttl：Go duration（默认 10s，
+//     续约间隔由服务端取 TTL/3，容忍两次续约失败）。
+func parseTSOLeaseOptions(args []string, cfgFile *configfile.File) (on bool, ttl time.Duration, err error) {
+	ttl = 10 * time.Second
+	if cfgFile != nil {
+		if v, ok := cfgFile.Get("server", "tso_lease"); ok {
+			b, berr := parseOnOff(v)
+			if berr != nil {
+				return false, 0, errors.New("invalid [server] tso_lease value: " + v + " (expected on/off)")
+			}
+			on = b
+		}
+		if v, ok := cfgFile.Get("server", "tso_lease_ttl"); ok {
+			d, derr := time.ParseDuration(v)
+			if derr != nil || d <= 0 {
+				return false, 0, errors.New("invalid [server] tso_lease_ttl value: " + v + " (expected duration, e.g. 10s)")
+			}
+			ttl = d
+		}
+	}
+	if v, present, ferr := triBoolFlag(args, "--tso-lease"); ferr != nil {
+		return false, 0, ferr
+	} else if present {
+		on = v
+	}
+	if p, ok := flagValue(args, "--tso-lease-ttl"); ok {
+		d, derr := time.ParseDuration(p)
+		if derr != nil || d <= 0 {
+			return false, 0, errors.New("invalid --tso-lease-ttl value: " + p + " (expected duration, e.g. 10s)")
+		}
+		ttl = d
+	}
+	return on, ttl, nil
 }
 
 // setupTSOHA 生产装配 TSO HA（B2）：把本节点 TSO 从单点/本地发号切换为
@@ -498,6 +540,14 @@ func cmdStart(args []string) error {
 		}
 		tsoHABatch = n
 	}
+	// v2.1.0 H1（NEW-5）TSO 租约兜底与失效切换，默认关闭。
+	tsoLease, tsoLeaseTTL, lerr := parseTSOLeaseOptions(args, cfgFile)
+	if lerr != nil {
+		return lerr
+	}
+	if tsoLease && len(tsoHAGroup) == 0 {
+		return errors.New("--tso-lease requires --tso-ha-group (TSO lease needs a replica group)")
+	}
 	// TSO HA 依赖集群链路（选主走集群帧协议 + 节点注册表），无集群地址直接拒绝，
 	// 避免"配了 HA 但发号仍单点"的静默降级。
 	if len(tsoHAGroup) > 0 && clusterAddr == "" {
@@ -666,6 +716,14 @@ func cmdStart(args []string) error {
 		}
 		if err := setupTSOHA(d, tsoHAGroup, tsoHABatch); err != nil {
 			return err
+		}
+		// v2.1.0 H1（NEW-5）：租约必须在 HA 装配之后打开（租约是选主的上层）。
+		if tsoLease {
+			if err := d.EnableTSOLease(tsoLeaseTTL, 0); err != nil {
+				return fmt.Errorf("TSO lease: %w", err)
+			}
+			fmt.Printf("OpenXDB %s TSO lease ENABLED (ttl %s, renew %s)\n",
+				version, tsoLeaseTTL, tsoLeaseTTL/3)
 		}
 		fmt.Printf("OpenXDB %s TSO HA enabled (group %s, batch %d, leader %s)\n",
 			version, strings.Join(tsoHAGroup, ","), tsoHABatch, tsoHALeaderLabel(d.TSOHALeader()))
@@ -1100,6 +1158,10 @@ Commands:
                               优先当选主，需同时配置 --cluster-addr；配置后自动
                               接管发号，主节点宕机后跨节点写自动恢复）
           [--tso-ha-batch <n>] TSO HA 客户端单次拉批大小（默认 64）
+          [--tso-lease]        TSO 租约兜底与失效切换（v2.1.0 H1/NEW-5；默认关闭）
+                               （多数派授予租约后才可发号，租约到期自动降级；
+                               需配合 --tso-ha-group；未真机验收前请勿在生产开启）
+          [--tso-lease-ttl <d>] 租约有效期（默认 10s，续约间隔取 1/3）
           [--allow-partial-read] 跨区不可达读退回旧行为（NEW-6；默认关闭，即
                               归属节点不可达时显式报错，错误含 region/节点标识；
                               开启后仅读本节点本地副本并打 WARN，结果可能不完整；

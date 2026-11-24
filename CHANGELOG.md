@@ -6,6 +6,13 @@ OpenXDB 版本变更记录。
 
 ## Unreleased
 
+**Added**
+- **TSO 租约兜底与失效切换（v2.1.0 H1 / NEW-5，P0，默认关闭）**：v1.21.0 三机真机复验 §10.4 确认 TSO 仍是写路径硬单点——停掉发号节点后全集群写失败（`tso unavailable`），恢复需人工改 `--tso-node`。本次在既有 epoch 选主之上补齐"何时可以安全换人"的判定：发号权由组内**多数派授予的租约**决定（`TSO_LEASE_VOTE` / `TSO_LEASE_RENEW` 两帧），主失联或续约未获多数派即自行降级、到期拒绝发号，由客户端按回执 `retry_after_ms` 等待旧租约到期后重新拉票，选出新主接续发号，无需人工介入。
+  - **安全不变量**（均配单测）：①号段单调不减——接任方以"调用方已观测最大戳 ∪ 投票回执中各副本 `last`"为水位抬升号段窗口，首批号严格越过旧主已发序列（即使接任客户端刚启动、`maxSeen=0`）；②跨节点不重号——同纪元一票制 + 租约窗口取"拉票发起时刻+TTL"（⊂ 各副本授予窗口），双主窗口为零；③租约判断只用本地时长（`now` 可注入，`time.Now()` 自带单调读数），不比较跨节点绝对时间，不依赖单点时钟；④分区少数派拿不到多数派即无法接任。
+  - **开关与兼容**：`--tso-lease` / `[server] tso_lease`（默认 **off**，未真机验收前不启用）+ `--tso-lease-ttl` / `[server] tso_lease_ttl`（默认 10s，续约 TTL/3）；需配合 `--tso-ha-group`，未配置组时启动报错。关闭状态下发号权仍由 v1.21.0 epoch 选主单独决定，行为与 v1.21.0 完全一致；`--tso-node` 单点部署不受影响。
+  - **不破坏既有预取**：NEW-5 低水位预取、`maxSeen` 单调护栏、`acceptLocked` 回退拒绝全部保持原样，租约只接管"选主等待策略"，不改号段消费路径。
+  - 改动文件：`pkg/cluster/tso_lease.go`、`pkg/cluster/tso_lease_client.go`（新增）、`pkg/cluster/tso_ha.go`、`pkg/cluster/tso_ha_client.go`、`pkg/cluster/server.go`、`pkg/db/tso_ha.go`、`cmd/openxdb/main.go`、`pkg/configfile/configfile.go`；单测 `pkg/cluster/tso_lease_test.go`、`cmd/openxdb/main_tso_lease_test.go`。
+
 ## v2.0.0 (2026-11-23)
 
 **版本口径**

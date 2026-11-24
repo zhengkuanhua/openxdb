@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
 	"github.com/zhengkuanhua/openxdb/pkg/tso"
@@ -61,6 +62,44 @@ func (d *DB) EnableTSOHA(group []string, batch uint64) error {
 	d.TSO = c
 	d.SQL.SetTSO(c)
 	return nil
+}
+
+// EnableTSOLease 启用 TSO 租约兜底与失效切换（v2.1.0 H1 / NEW-5）。
+//
+// 前置条件：已调用 EnableTSOHA（租约是其上层：epoch 选主决定"接谁的班"，
+// 多数派租约决定"什么时候可以安全接班"）。
+//
+// 默认关闭：未调用本方法时全部行为与 v1.21.0 一致（无租约校验、无续约）。
+//   - ttl：租约有效期（<=0 用 DefaultTSOLeaseTTL），决定旧主失联后
+//     最迟多久可被新主接管；
+//   - renew：续约间隔（<=0 用 ttl/3）。
+//
+// 旧部署影响：--tso-node 单点部署不经过 TSO HA 装配，本开关对其无影响。
+func (d *DB) EnableTSOLease(ttl, renew time.Duration) error {
+	if d.Cluster == nil {
+		return errors.New("db: cluster manager not initialized")
+	}
+	if d.ClusterSrv == nil {
+		return errors.New("db: cluster not started (call StartCluster first)")
+	}
+	if err := d.ClusterSrv.EnableTSOLease(ttl, renew); err != nil {
+		return err
+	}
+	c := d.TSOHAClient()
+	if c == nil {
+		return errors.New("db: tso ha client not initialized (call EnableTSOHA first)")
+	}
+	c.SetLeaseMode(ttl)
+	return nil
+}
+
+// TSOLeaseEnabled 返回本节点是否启用了 TSO 租约兜底（观测/测试用）。
+func (d *DB) TSOLeaseEnabled() bool {
+	if d.ClusterSrv == nil {
+		return false
+	}
+	on, _, _, _, _ := d.ClusterSrv.TSOLeaseSnapshot()
+	return on
 }
 
 // TSOHALeader 返回本节点当前认定的 TSO 主节点 ID（空 = 尚未选主）。
