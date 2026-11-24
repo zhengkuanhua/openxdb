@@ -258,6 +258,8 @@ Protocol / CLI (REPL · TCP server · JDBC/Python 驱动 · MySQL wire protocol 
 
 **v2.0.0（2026-11-23 发布）**：**发行版本号升格，集群轨能力首个正式大版本** —— 仅调整版本常量与发布口径，代码与 v1.21.0（`5c98877`）等价，功能项见上条；`MySQLServerPrefix` 兼容契约不变；交付物为双端 Release 二进制 + `SHA256SUMS`。
 
+**v2.0.1（2026-11-24 发布）**：**补丁发布，根治 H1 租约同纪元选举死锁** —— `runElect` 竞选失败未回滚 `votedEpoch` / `votedFor` 且不推进纪元，导致同纪元各候选自投互斥、租约拿不到多数派（`lease quorum not reached`）。修复后失败即完整回滚并推进纪元到 `max(seen, voted)+1`，`vote()` 同纪元拒票带回观测纪元不再自旋，选主入口加毫秒级短退避重试；新增 4 组活性单测。`--tso-lease` 仍默认 off，行为与 v2.0.0 一致。
+
 ### 完整特性
 
 - **Storage** — RocksDB-backed key-value storage via a thin C++ cgo bridge (`pkg/storage/rocksdb`), plus a pure-Go in-memory B+Tree (`pkg/storage/btree`) used as reference and comparator.

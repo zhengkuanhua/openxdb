@@ -1,3 +1,46 @@
+# OpenXDB v2.0.1 Release Notes
+
+发布日期：2026-11-24
+
+## 版本亮点
+
+- **补丁发布，只修一处 P0**：本版相对 v2.0.0 仅含 TSO 租约失效切换的同纪元选举死锁修复（提交 `2459d64`）与配套活性单测，不含新 SQL 语法、不新增或改动默认开关、不动存储引擎与读路径；`MySQLServerPrefix`（`8.0.36-OpenXDB `）兼容契约继续有效。
+- **H1 租约死锁根治**：v2.0.0 引入的租约选主在「同纪元多候选各自投票」场景下会永久卡死，实机报 `lease quorum not reached (1/2) (epoch=4)`，主节点停摆后集群无法自动换人。根因是 `runElect` 竞选失败时只回滚 `seenLeader` / `seenUntil`，未回滚 `votedEpoch` / `votedFor` 且不推进纪元，各副本在同一纪元内互相拒票，多数派永远凑不齐。
+
+## 变更明细
+
+| 编号 | 提交 | 内容 |
+| --- | --- | --- |
+| H1 死锁 | `2459d64` | `runElect` 失败完整回滚 `voted*` 并推进纪元到 `max(seen, voted)+1`；`vote()` 同纪元拒票带回观测纪元、不再自旋；`electOnceLocked` / `electLeaseLocked` 失败推进纪元 + 毫秒级短退避重试（上限 5 次） |
+| 活性单测 | `2459d64` | 新增 `pkg/cluster/tso_lease_liveness_test.go`：同纪元碰撞 / 并发竞选 / 串行重试 / 租约过期重拉票 4 组用例、18 项断言 |
+| 版本口径 | 本提交 | `pkg/version` → `v2.0.1`，同步 CHANGELOG / README / RELEASE_NOTES |
+
+## 测试证据
+
+- 活性单测：`pkg/cluster/tso_lease_liveness_test.go` 4 组用例、18 项断言全 PASS，覆盖同纪元碰撞不退化为自旋、并发竞选只有一方获多数派、串行失败重试最终收敛、租约过期后重新拉票。
+- 全仓 `go test ./... -count=1` 四轮：第 2 / 3 / 4 轮 **22 包全 `ok`、0 `FAIL`**，单轮墙钟 111s / 133s / 111s；第 1 轮（107s）在并行负载下 `pkg/cluster TestNew5ConcurrentGetNoDup`（`tso timestamp regression: start 601 <= max seen 708`）与 `pkg/sql TestD3SlowSummary`（慢日志 summary top 3 仅收到 2 条）失败，两例定向 `-count=3` 单跑均 PASS，判定为仓库既有并行时序型偶发，与本次改动（仅 `pkg/version` 常量与发布文档）无关。
+- `go build ./...` 通过（57s）；版本串经 `pkg/sql` / `pkg/server` / `pkg/mysqlproto` 全量用例覆盖，`select version()` / 握手串 / `openxdb version` 同源输出 `8.0.36-OpenXDB v2.0.1`。
+- 真机复验：三机 v2.0.0 二进制 + `tso_lease=on`，静态编译分发（md5 `9b384e6c` 系列），双向终止 leader 各一轮，累计写入 220 条全部成功、零 `lease quorum` 错误，由停机侧发起的新主在租约到期后自动接管发号。
+
+## 兼容性说明
+
+- **版本串**：`8.0.36-OpenXDB v2.0.1`；`MySQLServerPrefix` 不变，mysql CLI / JDBC / go-sql-driver 仍识别为 MySQL 8.0.x。
+- **行为零变更**：`--tso-lease` / `[server] tso_lease` 仍默认 off；开启后的变化仅为「能选出新主」，不改变发号语义。号段单调不减、跨节点不重号、纯本地时长判定、少数派不可接任四条安全不变量均不变。
+- **元数据零迁移**：无新增元数据键、无 region 视图结构变更，升级后无需任何数据操作。
+
+## 已知问题
+
+- **HA quorum 未启用**：`ha_quorum` 默认关闭，三独立 IP 环境级 quorum 与网络分区验收仍为欠账。
+- **`--tso-lease` 仍默认 off**：本版修的是租约自身的活性缺陷，启用前请在自有环境做一轮双向 leader 终止演练。
+- 其余 SQL / 性能 / 分布式边界见 `KNOWN_LIMITATIONS.md` §1–§5。
+
+## 升级路径
+
+- 二进制替换后按 node-a → node-b → node-c 滚动优雅重启；无元数据迁移、无停机改配置。
+- 升级后校验：`select version()` 返回 `8.0.36-OpenXDB v2.0.1`；`SHOW NODES` 三节点 UP；跨节点只读计数一致。
+
+---
+
 # OpenXDB v2.0.0 Release Notes
 
 发布日期：2026-11-23

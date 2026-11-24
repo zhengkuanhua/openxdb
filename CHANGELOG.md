@@ -13,6 +13,17 @@ OpenXDB 版本变更记录。
   - **不破坏既有预取**：NEW-5 低水位预取、`maxSeen` 单调护栏、`acceptLocked` 回退拒绝全部保持原样，租约只接管"选主等待策略"，不改号段消费路径。
   - 改动文件：`pkg/cluster/tso_lease.go`、`pkg/cluster/tso_lease_client.go`（新增）、`pkg/cluster/tso_ha.go`、`pkg/cluster/tso_ha_client.go`、`pkg/cluster/server.go`、`pkg/db/tso_ha.go`、`cmd/openxdb/main.go`、`pkg/configfile/configfile.go`；单测 `pkg/cluster/tso_lease_test.go`、`cmd/openxdb/main_tso_lease_test.go`。
 
+## v2.0.1 (2026-11-24)
+
+**版本口径**
+- **发行版本号由 v2.0.0 调整为 v2.0.1（补丁发布）**：本版交付 H1 TSO 租约失效切换的同纪元选举死锁修复（提交 `2459d64`），相对 v2.0.0 仅含该缺陷修复与配套活性单测，不含新 SQL 语法、不新增或改动默认开关、不动存储引擎与读路径；`MySQLServerPrefix`（`8.0.36-OpenXDB `）兼容契约不变，mysql CLI / JDBC 仍识别为 MySQL 8.0.x。
+
+**Fixed**
+- **H1 租约失效切换同纪元选举死锁（P0）**：`runElect` 竞选失败只回滚 `seenLeader` / `seenUntil`，未回滚 `votedEpoch` / `votedFor` 且不推进纪元，导致同纪元内各候选自投互斥、租约永远拿不到多数派（实测报错 `lease quorum not reached (1/2) (epoch=4)`），主节点停摆后集群无法自动换人。修复：① `runElect` 失败完整回滚 `voted*`，并将纪元推进到 `max(seen, voted)+1`；② `vote()` 同纪元拒票改为带回观测纪元，不再自旋；③ `electOnceLocked` / `electLeaseLocked` 失败推进纪元并做毫秒级短退避重试（上限 5 次）。
+  - 改动文件：`pkg/cluster/tso_lease.go`、`pkg/cluster/tso_ha_client.go`、`pkg/cluster/tso_lease_client.go`；新增 `pkg/cluster/tso_lease_liveness_test.go`（同纪元碰撞、并发竞选、串行重试、租约过期重拉票 4 组活性用例，18 项断言）。
+  - 真机复验：三机 v2.0.0 + `tso_lease=on`，双向终止 leader 各一轮，累计写入 220 条全部成功，零 `lease quorum` 错误。
+  - 开关状态不变：`--tso-lease` / `[server] tso_lease` 仍默认 **off**，关闭时行为与 v2.0.0 完全一致。
+
 ## v2.0.0 (2026-11-23)
 
 **版本口径**
