@@ -147,3 +147,42 @@ func TestM7BalanceSkipsDownNode(t *testing.T) {
 	// M6 failover 已把原 B region 重指派回 A（或其余存活节点），数据完整
 	wantIDs(t, dA, "SELECT id FROM users ORDER BY id", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
 }
+
+// TestM7BalanceSkipsRemoteImplicitRegion BALANCE 的本地负载统计不得把已归属远端的
+// 隐式单 region 计入：该 region 路由登记为远端后仍会被 localRegionLoad 的隐式段
+// 遍历到，旧实现无归属过滤，迁移时以 "region not local" 使整轮 BALANCE 失败
+// （v2.0.6 真机回归暴露的既有缺陷）。
+func TestM7BalanceSkipsRemoteImplicitRegion(t *testing.T) {
+	dA, dB, _ := m7ThreePlusOneTopology(t)
+	// 未分片表 -> 隐式单 region，12 行高于任一显式 region（3 行），
+	// 旧实现下必然被选为迁移首选。
+	mustSQL(t, dA, "CREATE TABLE audit_log (id INT, msg TEXT, PRIMARY KEY (id))")
+	for i := 1; i <= 12; i++ {
+		mustSQL(t, dA, fmt.Sprintf("INSERT INTO audit_log (id, msg) VALUES (%d, 'm%d')", i, i))
+	}
+	regions, err := dA.SQL.ListRegions("audit_log")
+	if err != nil || len(regions) != 1 || regions[0].Explicit {
+		t.Fatalf("ListRegions(audit_log): want 1 implicit region, got %+v err=%v", regions, err)
+	}
+	implicitID := regions[0].RegionID
+	// 隐式 region 指派给 B：路由归属远端，但表元数据仍未显式分片
+	mustSQL(t, dA, fmt.Sprintf("ASSIGN REGION %d TO NODE '%s'", implicitID, dB.Cluster.SelfID))
+	wantIDs(t, dA, "SELECT id FROM audit_log ORDER BY id", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+
+	// 旧实现此处返回 region not local；修复后正常完成（本地显式 region 不再被隐式段污染）
+	if res := mustSQL(t, dA, "BALANCE"); res == nil {
+		t.Fatalf("BALANCE: nil result")
+	}
+	// 隐式 region 归属保持 B，A 侧读转发一致
+	routes := mustSQL(t, dA, "SHOW REGION ROUTES")
+	owner := ""
+	for _, row := range routes.Rows {
+		if row[0].I == int64(implicitID) {
+			owner = row[5].S
+		}
+	}
+	if owner != dB.Cluster.SelfID {
+		t.Fatalf("implicit region owner: want %s, got %q", dB.Cluster.SelfID, owner)
+	}
+	wantIDs(t, dA, "SELECT id FROM audit_log ORDER BY id", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+}

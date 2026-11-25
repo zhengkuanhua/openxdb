@@ -448,6 +448,12 @@ func (e *Executor) localRegionLoad() ([]regionLoad, error) {
 		rs := e.regionsOf(tb)
 		if len(rs) == 1 && !rs[0].Explicit {
 			rid := storage.ID(uint64(tb.ID) | (uint64(1) << 63))
+			// 隐式 region 迁至远端后其路由仍登记在本节点路由表（Node 为远端节点），
+			// 需与显式段一致按归属过滤；否则会被当作本地负载参与迁移选主，
+			// 迁移时触发 "region not local" 并使整轮 BALANCE 失败。
+			if !e.regionLocal(rid) {
+				continue
+			}
 			rg, ok := e.implicitRegion(rid)
 			if !ok {
 				continue
