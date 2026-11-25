@@ -264,6 +264,8 @@ Protocol / CLI (REPL · TCP server · JDBC/Python 驱动 · MySQL wire protocol 
 
 **v2.0.3（2026-11-25 发布）**：**补丁发布，修显式 region 视图缺失被误判为本机归属** —— v2.0.2 三机替换后复验暴露：纯转发节点重启后本地路由视图缺新表 region，旧逻辑把「视图里查不到」当作「表未切分的隐式单 region」，写请求落本地后被节点级归属 fence 拒为 `ownership revoked`，归因错向且重新授权解不开。修复以 `ImplicitRegionBit` 按 ID 位区分隐式/显式，新增 `ErrRegionViewMissing` 与写路径 `decideWriteRoute`，缺视图时异步拉权威视图自愈，无法补则明确报 `REGION_NOT_ASSIGNED`。合并 v2.0.2 未发布内容一并发布；`--tso-lease`、`ha_quorum` 等开关默认值不变。
 
+**v2.0.4（2026-11-25 发布）**：**补丁发布，根治未切分表（隐式整表 region）归属从未广播** —— 隐式 region 归属此前只存在于 owner 本机内存、从不落盘也不广播，导致集群内每个节点都认为整表归自己，纯转发节点写未切分表恒报 `region N missing from local route view (forward-only node)` 且无任何通道自愈。本版把归属改为**可派生 + 随权威视图下发**：按节点 ID 字典序最小者确定性派生（候选含本机，多节点结论一致），经 `REGION_PUSH` 独立字段 `implicit_routes` 同步，接收端只写内存映射并走 2PC 转发；学到归属前一律报 `REGION_NOT_ASSIGNED` 并异步补视图，绝不静默落本地。同时修掉写路径在 `epochMu` 上重入自死锁（`ForwardOnlyNode` 改原子镜像 + `TryLock`）。无配置变更、无数据迁移。
+
 ### 完整特性
 
 - **Storage** — RocksDB-backed key-value storage via a thin C++ cgo bridge (`pkg/storage/rocksdb`), plus a pure-Go in-memory B+Tree (`pkg/storage/btree`) used as reference and comparator.

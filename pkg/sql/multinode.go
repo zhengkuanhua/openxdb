@@ -99,6 +99,15 @@ func (e *Executor) routeDecision(rid storage.ID) (string, routeKind) {
 			//      纯转发节点直接判 routeUnassigned（绝不本地写）；
 			//      普通节点保持旧行为，避免宽口径回归。
 			if sharding.IsImplicitRegionID(rid) {
+				// v2.0.4 根治：纯转发节点从未切分表学到归属前绝不本地写
+				// （v2.0.3 及以前判 routeLocalOwned，写下去立刻被节点级归属
+				// fence 以 "region missing from local route view / forward-only
+				// node" 拒绝，用户观感是"未切分表永久不可写"）。判
+				// routeUnassigned 后由 decideWriteRoute 触发权威视图同步，
+				// 学到归属即走 2PC 直连真实 owner。
+				if e.forwardOnlyNode() {
+					return "", routeUnassigned
+				}
 				return e.selfID, routeLocalOwned
 			}
 			if _, ok := e.router.FindRegion(rid); ok {
@@ -144,11 +153,20 @@ func (e *Executor) forwardOnlyNode() bool {
 	return false
 }
 
-// routeViewMissing 目标 region 是否为"显式 region 但本机路由视图完全无该条目"。
-// 隐式单 region（表未切分，路由不落盘）不属此列。
+// routeViewMissing 目标 region 是否"归属未在本机路由视图内"。
+//   ① 显式 region：本地完全无该条目；
+//   ② 隐式整表 region（表未切分）+ 纯转发节点且尚未从权威视图学到归属：
+//      同样是"视图缺失"，而非"无归属"。
 func (e *Executor) routeViewMissing(rid storage.ID) bool {
-	if e.router == nil || sharding.IsImplicitRegionID(rid) {
+	if e.router == nil {
 		return false
+	}
+	if sharding.IsImplicitRegionID(rid) {
+		if !e.forwardOnlyNode() {
+			return false
+		}
+		_, learned := e.router.ImplicitRegionOwner(storage.ID(uint64(rid) &^ sharding.ImplicitRegionBit))
+		return !learned
 	}
 	_, ok := e.router.FindRegion(rid)
 	return !ok

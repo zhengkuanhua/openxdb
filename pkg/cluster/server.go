@@ -86,6 +86,11 @@ type Server struct {
 	// 签名：dest=路由视图接收方 NodeID（重启节点自身）。
 	// D4.4 修复：重启节点主动拉取权威 region 归属视图，不依赖对端 UP 事件检测。
 	routeSyncFn func(dest string) error
+	// implicitLearnFn 节点侧隐式整表 region 归属学习回调（v2.0.4，db.StartCluster
+	// 装配 sql.Executor.LearnImplicitRoutesFromPeers）；nil = 未装配（旧节点零回归，
+	// 仅内存登记不落盘）。
+	// 签名：routes=权威视图携带的隐式整表 region 条目（RegionID 带 1<<63 高位）。
+	implicitLearnFn func(routes []sharding.RegionInfo) error
 	// ownershipNotify 节点侧集群轨归属纪元通知回调（P9，db.StartCluster 装配
 	// db.DB.NoteOwnershipView）；nil = 未装配（旧节点零回归）。
 	// 签名：term=消息携带的集群纪元（0=源端无纪元信息），selfOwns=本次应用后
@@ -184,6 +189,14 @@ func (s *Server) SetFullAlignHandler(fn func(dest string) error) { s.fullAlignFn
 // sql.Executor.PushRouteViewToNode）；传 nil 恢复未装配（FULLALIGN_REQ{RoutesOnly} 回执 Err）。
 // D4.4 修复：重启节点经此路径主动从集群权威源刷新 region 归属视图。
 func (s *Server) SetRouteSyncHandler(fn func(dest string) error) { s.routeSyncFn = fn }
+
+// SetImplicitRouteLearnHandler 注入隐式整表 region 归属学习回调（v2.0.4，
+// db.StartCluster 装配 sql.Executor.LearnImplicitRoutesFromPeers）。
+// 隐式归属的持久化（m:region:implicit）归 sql 包单一所有：cluster 侧只负责把
+// 权威视图里携带的隐式条目转交，避免两处各写一套序列化格式。
+func (s *Server) SetImplicitRouteLearnHandler(fn func(routes []sharding.RegionInfo) error) {
+	s.implicitLearnFn = fn
+}
 
 // SetOwnershipNotify 注入集群轨归属纪元通知回调（P9，db.StartCluster 装配
 // db.DB.NoteOwnershipView）；传 nil 恢复未装配（不推进归属纪元，零回归）。
@@ -667,12 +680,38 @@ func (s *Server) applyRouteSync(req *RegionPushReq) (RegionPushResp, error) {
 	if s.router == nil {
 		return RegionPushResp{}, errors.New("cluster: router not injected")
 	}
+	// v2.0.4：隐式整表 region 归属单独学习（不进 regions 集合）。
+	// 归属信息随权威视图下发，使重启后的纯转发节点也能拿到"未切分表归谁"，
+	// 不必再靠各节点自行推断（此前各节点都当整表归自己，纯转发节点永久不可写）。
+	if len(req.ImplicitRoutes) > 0 {
+		if s.implicitLearnFn != nil {
+			if err := s.implicitLearnFn(req.ImplicitRoutes); err != nil {
+				return RegionPushResp{}, err
+			}
+		} else {
+			// 未装配回调（旧路径/单测直连）：仅内存登记，不落盘。
+			for _, rg := range req.ImplicitRoutes {
+				if rg.TableID == 0 || rg.Node == "" || rg.Explicit || !sharding.IsImplicitRegionID(rg.RegionID) {
+					continue
+				}
+				if s.router.HasStoredRegions(rg.TableID) {
+					continue
+				}
+				s.router.SetImplicitRegionOwner(rg.TableID, rg.Node)
+			}
+		}
+	}
 	for _, rid := range req.DeleteIDs {
 		if err := s.router.DeleteRegion(rid); err != nil {
 			return RegionPushResp{}, err
 		}
 	}
 	for _, route := range req.Routes {
+		// 防御：隐式整表 region 条目绝不能进 regions 集合（会污染显式分片视图）。
+		// 正常路径下发送端已把隐式归属放进 ImplicitRoutes 独立字段。
+		if sharding.IsImplicitRegionID(route.RegionID) {
+			continue
+		}
 		// P1 epoch 校验：陈旧条目跳过（不覆盖本地路由）并记日志；其余条目继续，
 		// 路由广播为尽力而为，单条陈旧不阻断整体同步（防旧分区广播覆盖新视图）。
 		if err := s.checkPushEpoch(req.ClusterEpoch, route.RegionEpoch, route.RegionID); err != nil {

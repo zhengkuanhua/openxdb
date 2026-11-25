@@ -689,7 +689,9 @@ func (e *Executor) PushRouteViewToNode(target string) error {
 			}
 		}
 	}
-	return e.mgr.SyncRouteViewToEpoch(target, routes, e.selfID, e.clusterTermForRouteSync())
+	// v2.0.4：权威视图里一并下发隐式整表 region 归属，使重启后的纯转发节点
+	// 也能学到"未切分表归谁"（此前它只会按"整表归本机"推断，从而永久拒绝写入）。
+	return e.mgr.SyncRouteViewToEpochWithImplicit(target, routes, e.implicitRoutesForViewSync(), e.selfID, e.clusterTermForRouteSync())
 }
 
 // clusterTermForRouteSync 权威路由视图同步携带的集群纪元（P9）：取本机已知

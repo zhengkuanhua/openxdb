@@ -84,7 +84,16 @@ func (e *Executor) ApplyRemoteDDL(req cluster.DDLPushReq) error {
 	if err := tx.Put(metaKey, raw); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// v2.0.4：删表后清理该表全部路由条目（含隐式归属）。
+	// 建表/改表不在 DDL 路径登记隐式归属：整表归属由权威路由视图同步通道派生下发
+	// （见 implicit_route.go），DDL 路径新增写事务实测会改变建表/切分/副本维护时序。
+	if req.Op == cluster.DDLOpDrop {
+		e.forgetTableRoutes(req.TableID)
+	}
+	return nil
 }
 
 // broadcastDDL 协调者侧：DDL 本地提交成功后把目录变更广播到在线节点。

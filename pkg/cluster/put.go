@@ -34,6 +34,10 @@ type RegionPushReq struct {
 	Region    sharding.RegionInfo   `json:"region"`
 	Rows      []QueryRow            `json:"rows"`
 	Routes    []sharding.RegionInfo `json:"routes,omitempty"`
+	// ImplicitRoutes v2.0.4：未切分表的隐式整表 region 归属。独立字段承载，
+	// 接收端只写隐式归属映射，严禁当作显式分片条目 UpsertRegion（会污染
+	// AllRegions / SHOW REGION ROUTES / 副本维护与跨节点一致性判定）。
+	ImplicitRoutes []sharding.RegionInfo `json:"implicit_routes,omitempty"`
 	SyncOnly  bool                  `json:"sync_only,omitempty"` // true=纯路由同步：不写数据、不把 Region 落本地
 	// ClaimOwner 本次接收 region 的归属声明（D4.4 修复）：
 	// true = 目标节点成为该 region owner（ASSIGN/迁移/回迁装载，Region.Node 通常即目标）；
@@ -164,7 +168,7 @@ func (m *Manager) broadcastRegionsEpoch(routes []sharding.RegionInfo, deleteIDs 
 		if n.ID == m.SelfID {
 			continue
 		}
-		if err := m.clientFor(n.ID).syncRegionRoutes(routes, deleteIDs, srcID, clusterEpoch, false); err != nil {
+		if err := m.clientFor(n.ID).syncRegionRoutes(routes, nil, deleteIDs, srcID, clusterEpoch, false); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -185,11 +189,19 @@ func (m *Manager) SyncRouteViewTo(target string, routes []sharding.RegionInfo, s
 // 推进本机集群轨归属纪元（cluster term）——term=0 表示源节点无纪元信息
 // （旧节点/单机），接收端按"仅学习归属、不推进纪元"处理。
 func (m *Manager) SyncRouteViewToEpoch(target string, routes []sharding.RegionInfo, srcID string, clusterEpoch uint64) error {
+	return m.SyncRouteViewToEpochWithImplicit(target, routes, nil, srcID, clusterEpoch)
+}
+
+// SyncRouteViewToEpochWithImplicit 在权威路由视图同步中一并下发隐式整表 region
+// 归属（v2.0.4）。隐式归属单独走独立字段：它不是显式分片条目，若混进 Routes 会
+// 被接收端 UpsertRegion 收进 regions，污染 AllRegions / SHOW REGION ROUTES /
+// 副本维护与跨节点一致性判定。
+func (m *Manager) SyncRouteViewToEpochWithImplicit(target string, routes, implicit []sharding.RegionInfo, srcID string, clusterEpoch uint64) error {
 	n, err := m.ensureRemote(target)
 	if err != nil {
 		return err
 	}
-	return m.clientFor(n.ID).syncRegionRoutes(routes, nil, srcID, clusterEpoch, true)
+	return m.clientFor(n.ID).syncRegionRoutes(routes, implicit, nil, srcID, clusterEpoch, true)
 }
 
 // syncRegionRoutes 短连接发送 REGION_PUSH(SyncOnly=true) 并读取 REGION_PUSH_OK。
@@ -197,7 +209,7 @@ func (m *Manager) SyncRouteViewToEpoch(target string, routes []sharding.RegionIn
 // 不携带数据、不把 req.Region 落本地，接收端仅更新路由表并落盘 m:regions。
 // authoritative=true 表示 routes 是源节点全量权威视图（重启刷新路径），接收端
 // 学完后需清理被现役 region 取代的本地历史 region；增量广播必须传 false。
-func (c *Client) syncRegionRoutes(routes []sharding.RegionInfo, deleteIDs []storage.ID, srcID string, clusterEpoch uint64, authoritative bool) error {
+func (c *Client) syncRegionRoutes(routes, implicit []sharding.RegionInfo, deleteIDs []storage.ID, srcID string, clusterEpoch uint64, authoritative bool) error {
 	addr, err := c.mgr.NodeAddr(c.nodeID)
 	if err != nil {
 		return err
@@ -207,7 +219,7 @@ func (c *Client) syncRegionRoutes(routes []sharding.RegionInfo, deleteIDs []stor
 		return err
 	}
 	defer conn.Close()
-	payload, err := marshalJSON(RegionPushReq{SrcID: srcID, SyncOnly: true, DeleteIDs: deleteIDs, Routes: routes, ClusterEpoch: clusterEpoch, Authoritative: authoritative})
+	payload, err := marshalJSON(RegionPushReq{SrcID: srcID, SyncOnly: true, DeleteIDs: deleteIDs, Routes: routes, ImplicitRoutes: implicit, ClusterEpoch: clusterEpoch, Authoritative: authoritative})
 	if err != nil {
 		return err
 	}

@@ -1,4 +1,4 @@
-// Package db 提供 OpenXDB 数据目录与数据库句柄（M1 T5，开发手册 §3.7）。
+﻿// Package db 提供 OpenXDB 数据目录与数据库句柄（M1 T5，开发手册 §3.7）。
 // 数据目录布局：
 //
 //	<data-dir>/
@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
@@ -135,6 +136,10 @@ type DB struct {
 	clusterOwnTerm      uint64 // 本节点最近一次获授权持有归属的纪元（0 = 从未授权）
 	clusterOwned        bool   // 本节点在 clusterOwnTerm 上是否仍持有归属
 	clusterPend         bool   // 重启后归属待权威视图确认（确认前拒绝写入）
+	// v2.0.4：纯转发节点判定的无锁镜像。写路径（SQL routeDecision → regionOwnershipFence
+	// → AllowWriteRegion）会在 epochMu 已持有的情况下重入 ForwardOnlyNode，直接取锁将自死锁；
+	// 因此判定结果按 epochMu 内的最新值镜像到原子变量，锁被占用时读镜像。
+	forwardOnlyMirror atomic.Bool
 	// v2.0.2：权威全量视图确认"本机不持有任何 region 归属"（纯转发节点）。
 	// 只在收到 authoritative 视图且 selfOwns=false 时置位、selfOwns=true 时清除；
 	// 不持久化（重启后由首帧权威视图复位），语义上是运行期事实而非授权上限。
@@ -418,6 +423,9 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// D4.4 修复：装配权威路由视图同步回调（FULLALIGN_REQ{RoutesOnly} 接收端）：
 	// 重启节点主动请求本节点下发权威 region 归属视图，用于修正陈旧 owner。
 	srv.SetRouteSyncHandler(d.SQL.PushRouteViewToNode)
+	// v2.0.4：装配隐式整表 region 归属学习回调——权威路由视图里携带的隐式条目
+	// 由 SQL 侧统一登记并落盘 m:region:implicit（cluster 只转交，不各写一套格式）。
+	srv.SetImplicitRouteLearnHandler(d.SQL.LearnImplicitRoutesFromPeers)
 	// v1.20.0 C1：装配参与者提交落库回调——参与者 2PC COMMIT 经事务提交链路
 	// 落库（Txn.Begin/Put/Delete/Commit），产生 WAL 与 binlog，使参与者侧数据
 	// 可被从端复制（此前参与者提交绕过 db.Txn 钩子、不产 binlog）。
@@ -493,6 +501,10 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// 覆盖本地 m:regions 旧视图，消除"重启节点误判 local=true 形成孤立读视图"
 	// 导致 r3 不回迁、跨节点写落本地不报错（GAP A/C 根因）。异步执行不阻塞启动。
 	go d.refreshRouteViewFromPeers()
+	// v2.0.4：隐式整表 region 归属随权威路由视图下发/学习，不需要启动期自愈协程。
+	// 未切分表的隐式 region 此前从不进路由视图，各节点都当整表归自己，纯转发节点
+	// 因此永久不可写（region missing from local route view）。启动期主动批量广播
+	// （会改写对端表目录）风险面远大于收益，改由视图同步通道携带隐式条目补齐。
 	// v1.20.0 C4：集群装配完成后按开关状态挂接 region 增量复制
 	// （开关默认 off 时本调用为空操作：不注册日志源、不起协程）。
 	d.maybeStartRegionSync()

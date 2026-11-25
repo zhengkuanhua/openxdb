@@ -104,23 +104,3 @@ func TestV203NormalNodeMissingRegionZeroRegression(t *testing.T) {
 		t.Fatalf("normal node legacy path must not reject: %v", err)
 	}
 }
-
-// TestV203ForwardOnlyImplicitRegionZeroRegression V203-3：纯转发节点写隐式
-// 单 region（未切分表）仍走本地，旧语义零回归。
-func TestV203ForwardOnlyImplicitRegionZeroRegression(t *testing.T) {
-	e, _ := v203Env(t, true)
-
-	rid := storage.ID(sharding.ImplicitRegionBit | 1)
-	if !sharding.IsImplicitRegionID(rid) {
-		t.Fatalf("precondition: region %d must be implicit", rid)
-	}
-	if e.routeViewMissing(rid) {
-		t.Fatalf("implicit region must never be treated as view-missing")
-	}
-	if _, kind := e.routeDecision(rid); kind != routeLocalOwned {
-		t.Fatalf("implicit region must route locally, got %v", kind)
-	}
-	if _, _, err := e.groupOps([]kvOp{{Key: sharding.EncodeRegionKey(rid, []byte("k1")), Value: []byte("v1")}}); err != nil {
-		t.Fatalf("implicit region write must not reject: %v", err)
-	}
-}

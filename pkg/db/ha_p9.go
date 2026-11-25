@@ -126,7 +126,10 @@ func (d *DB) clusterOwnershipFenceRegion(rid uint64) error {
 // 并且不处于重启待确认窗口（clusterPend）。这类节点（真机 node-c）不持有任何
 // region，写请求全部靠转发给真实 owner 完成。
 func (d *DB) forwardOnlyLocked() bool {
-	return d.clusterNonOwner && d.clusterOwnTerm > 0 && !d.clusterOwned && !d.clusterPend
+	v := d.clusterNonOwner && d.clusterOwnTerm > 0 && !d.clusterOwned && !d.clusterPend
+	// v2.0.4：同步无锁镜像，供 ForwardOnlyNode 在 epochMu 被本 goroutine 复用时读取。
+	d.forwardOnlyMirror.Store(v)
+	return v
 }
 
 // ForwardOnlyNode 对外暴露"本机是否为纯转发节点"判定（实现方为 db.DB）。
@@ -134,10 +137,17 @@ func (d *DB) forwardOnlyLocked() bool {
 // v2.0.3：SQL 写路由需要据此区分"显式 region 但本地视图缺条目"——普通节点
 // 缺条目按旧行为保守处理（零回归），纯转发节点缺条目则必须判定为归属未知
 // （不可本地写），并触发一次权威路由视图补齐后按远端归属转发。
+// v2.0.4：本方法会在写路径内部被重入调用（SQL routeDecision 判隐式 region 归属时，
+// 上层 regionOwnershipFence → AllowWriteRegion 已持有 epochMu），此时直接 Lock 会自死锁。
+// 因此改为：能取到锁则以最新状态计算并刷新镜像；取不到锁说明状态正由当前调用链持有，
+// 直接返回最近一次镜像值（宁可退回保守判定，也不阻塞写路径）。
 func (d *DB) ForwardOnlyNode() bool {
-	d.epochMu.Lock()
-	defer d.epochMu.Unlock()
-	return d.forwardOnlyLocked()
+	if !d.epochMu.TryLock() {
+		return d.forwardOnlyMirror.Load()
+	}
+	v := d.forwardOnlyLocked()
+	d.epochMu.Unlock()
+	return v
 }
 
 // localRegionOwnerFn 取当前装配的 region 归属判定器（未装配返回 nil）。
@@ -199,6 +209,9 @@ func (d *DB) loadClusterTermMeta() {
 	if own > d.epoch {
 		d.persistEpochLocked(own) // 归属纪元与已知最大 epoch 同源单调，取并集
 	}
+	// v2.0.4：启动装载直接改字段（不经过 forwardOnlyLocked），此处补刷无锁镜像，
+	// 保证重启后首帧权威视图到达前，SQL 侧读到的纯转发判定即为最新值。
+	d.forwardOnlyMirror.Store(d.clusterNonOwner && d.clusterOwnTerm > 0 && !d.clusterOwned && !d.clusterPend)
 }
 
 // persistClusterTermLocked 落盘集群轨归属纪元状态（尽力而为；调用方须持有

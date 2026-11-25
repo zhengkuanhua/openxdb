@@ -74,6 +74,11 @@ const RegionKeyPrefixLen = 9
 // implicitRegionID 隐式单 region 的 ID：tableID 高位置 1，与显式 region ID（低位自增）隔离。
 func implicitRegionID(tableID storage.ID) storage.ID { return tableID | (1 << 63) }
 
+// ImplicitRegionID 导出隐式单 region ID 的构造口径（v2.0.4 隐式 region 路由广播）：
+// 建表侧据此把"未切分表的整表 region"归属随表目录一起下发，避免各节点自行
+// 把隐式 region 当作本机归属（此前纯转发节点因此永久不可写）。
+func ImplicitRegionID(tableID storage.ID) storage.ID { return implicitRegionID(tableID) }
+
 // ImplicitRegionBit 隐式单 region ID 的标识位。
 const ImplicitRegionBit = uint64(1) << 63
 
@@ -131,6 +136,12 @@ type Router struct {
 	mu      sync.RWMutex
 	regions []RegionInfo
 	seq     uint64
+	// implicit 未切分表的隐式整表 region 归属（tableID -> node，v2.0.4）。
+	//
+	// 刻意与 regions 分开放：隐式 region 不是显式分片条目，若混入 regions 会污染
+	// AllRegions/SHOW REGION ROUTES、副本维护与跨节点一致性判定（它们只认显式
+	// 分片），而写路径又确实需要知道"整表归谁"。独立映射让两类语义各归其位。
+	implicit map[storage.ID]string
 }
 
 // NewRouter 创建空路由表。
@@ -238,7 +249,87 @@ func (r *Router) RegionNode(regionID storage.ID) string {
 			return r.regions[i].Node
 		}
 	}
+	// v2.0.4：未切分表的隐式整表 region 归属单独存放，此处兜底查询。缺这一步，
+	// 空串语义（"本节点"）会让集群内每个节点都认为整表归自己：普通节点各自本地
+	// 写、纯转发节点写路径被判 routeUnassigned 后永久不可写。
+	if IsImplicitRegionID(regionID) {
+		if node, ok := r.implicit[implicitTableOf(regionID)]; ok {
+			return node
+		}
+	}
 	return ""
+}
+
+// implicitTableOf 从隐式 region ID 还原表 ID（剥离 1<<63 高位标记）。
+func implicitTableOf(regionID storage.ID) storage.ID {
+	return storage.ID(uint64(regionID) &^ ImplicitRegionBit)
+}
+
+// SetImplicitRegionOwner 登记/更新未切分表隐式整表 region 的归属节点。
+// 返回 true 表示归属确有变化（调用方据此决定是否需要向其他节点广播）。
+func (r *Router) SetImplicitRegionOwner(tableID storage.ID, node string) bool {
+	if tableID == 0 || node == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.implicit == nil {
+		r.implicit = make(map[storage.ID]string)
+	}
+	if cur, ok := r.implicit[tableID]; ok && cur == node {
+		return false
+	}
+	r.implicit[tableID] = node
+	return true
+}
+
+// ImplicitRegionOwner 查询未切分表隐式整表 region 的归属节点。
+func (r *Router) ImplicitRegionOwner(tableID storage.ID) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	node, ok := r.implicit[tableID]
+	return node, ok
+}
+
+// ForgetImplicitRegion 清除未切分表的隐式 region 归属（DROP TABLE / 表已切分时调用）。
+// 返回 true 表示确实删除了条目。
+func (r *Router) ForgetImplicitRegion(tableID storage.ID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.implicit[tableID]; !ok {
+		return false
+	}
+	delete(r.implicit, tableID)
+	return true
+}
+
+// ImplicitRegions 返回全部隐式 region 归属的副本（供落盘/自检）。
+func (r *Router) ImplicitRegions() map[storage.ID]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[storage.ID]string, len(r.implicit))
+	for k, v := range r.implicit {
+		out[k] = v
+	}
+	return out
+}
+
+// LoadImplicitRegions 整体替换隐式 region 归属表（启动加载落盘元数据时调用）。
+func (r *Router) LoadImplicitRegions(m map[storage.ID]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(m) == 0 {
+		r.implicit = nil
+		return
+	}
+	cp := make(map[storage.ID]string, len(m))
+	for k, v := range m {
+		if k == 0 || v == "" {
+			continue
+		}
+		cp[k] = v
+	}
+	r.implicit = cp
 }
 
 // SetRegionNode 指派 region 归属节点（ASSIGN REGION 管理入口）。
@@ -357,12 +448,28 @@ func (r *Router) UpsertRegion(rg RegionInfo) error {
 			return nil
 		}
 	}
-	if uint64(rg.RegionID) > r.seq {
+	if uint64(rg.RegionID) > r.seq && !IsImplicitRegionID(rg.RegionID) {
+		// v2.0.4：隐式 region ID 带 1<<63 高位，若据此推进 ID 水位会把显式
+		// region ID 分配推到 9e18 量级，故隐式条目只入表不推水位。
 		r.seq = uint64(rg.RegionID)
 	}
 	r.regions = append(r.regions, rg)
 	r.sortLocked()
 	return nil
+}
+
+// HasStoredRegions 表是否已有落盘/已登记的 region 条目（含隐式单 region 条目）。
+// 与 RegionsOf 的区别：RegionsOf 对"未登记任何条目"的表也会合成一个隐式 region，
+// 无法区分"真的登记过"与"按默认规则合成"；本方法只反映本地 r.regions 的实际内容。
+func (r *Router) HasStoredRegions(tableID storage.ID) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for i := range r.regions {
+		if r.regions[i].TableID == tableID {
+			return true
+		}
+	}
+	return false
 }
 
 // AllRegions 返回全部显式 region 元信息（按 TableID + StartKey 升序）。

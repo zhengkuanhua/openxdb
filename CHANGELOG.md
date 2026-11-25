@@ -13,6 +13,20 @@ OpenXDB 版本变更记录。
   - **不破坏既有预取**：NEW-5 低水位预取、`maxSeen` 单调护栏、`acceptLocked` 回退拒绝全部保持原样，租约只接管"选主等待策略"，不改号段消费路径。
   - 改动文件：`pkg/cluster/tso_lease.go`、`pkg/cluster/tso_lease_client.go`（新增）、`pkg/cluster/tso_ha.go`、`pkg/cluster/tso_ha_client.go`、`pkg/cluster/server.go`、`pkg/db/tso_ha.go`、`cmd/openxdb/main.go`、`pkg/configfile/configfile.go`；单测 `pkg/cluster/tso_lease_test.go`、`cmd/openxdb/main_tso_lease_test.go`。
 
+## v2.0.4 (2026-11-25)
+
+**版本口径**：承接 v2.0.3，根治「隐式整表 region（表未切分）归属从未广播」——v2.0.3 只修显式 region 视图缺失，未切分表在纯转发节点上仍永久不可写。
+
+**Fixed**：纯转发节点直连写入未切分表恒报 `region N missing from local route view (forward-only node)`，且无任何通信通道能让它学到该表归属（P0）：根因是隐式 region 归属只存在于 owner 本机内存（`implicitRegion()` 构造，`Node` 字段为空、`TableMeta` 无归属字段、路由条目不落盘），建表/DDL 路径从不广播，而 v2.0.3 又把纯转发节点的隐式 ID 一律判 `routeLocalOwned` → 写落本地 → 被 fence 拒。修复走「归属派生 + 视图同步」：
+  - **归属确定性派生**（`pkg/sql/implicit_route.go` 新增）：未切分表的隐式 region 归属不再依赖落盘状态，按确定性规则从表目录派生（与该表显式 region 的既有归属一致），owner 与任何节点算出同一结果；`implicitRoutesForViewSync` 遍历表目录，为每个未切分表生成 `RegionInfo{Implicit:true, Explicit:false, Node:<owner>}` 视图条目。
+  - **随权威路由视图下发**：`pkg/cluster` 的 `REGION_PUSH` 载荷新增独立字段 `implicit_routes`（`RegionPushReq.ImplicitRoutes`，旧节点忽略该字段，兼容零回归），`SyncRouteViewToEpochWithImplicit` 在拉取/下发权威视图时一并携带；接收端 `serveRegionPush` 调 `implicitLearnFn` 学习。
+  - **接收端只学不审**：`LearnImplicitRoutesFromPeers` 仅写 `Router.implicit` 内存映射，nil 载荷等价于清空（避免重启残留过期归属），不触碰 `m:regions` 落盘，因此不改变显式路由的持久化语义。
+  - **写路径三态收敛**：`routeViewMissing` 对「隐式 region + 纯转发节点 + 尚未学到归属」返回 true，`routeDecision` 对同一情形返回 `routeUnassigned`（而非 `routeLocalOwned`），由 `decideWriteRoute` 触发 `requestRouteViewSync` 异步补齐后重判 → 学到归属即 `routeRemoteOwned` 转发真实 owner，绝不静默落本地。
+  - **消除 epochMu 重入死锁**（真机前发现的回归）：写路径 `regionOwnershipFence → AllowWriteRegion → routeDecision → forwardOnlyNode → db.ForwardOnlyNode` 在已持有 `epochMu` 的调用链内再次加锁会自死锁（`TestD45P9RestartOwnerConfirmedByPeersE2E` 从 3s 变 4min 超时）。改为 `db.forwardOnlyMirror`（`atomic.Bool` 无锁镜像）：`ForwardOnlyNode` 用 `TryLock`，能取到锁则以最新状态计算并刷新镜像，取不到锁直接返回最近镜像值；`forwardOnlyLocked` 与 `loadClusterTermMeta` 启动装载处同步刷新镜像。
+  - 改动文件：`pkg/sql/implicit_route.go`（新增）、`pkg/sql/multinode.go`、`pkg/sql/balance.go`、`pkg/sql/sql.go`、`pkg/sql/ddl_broadcast.go`、`pkg/sharding/sharding.go`、`pkg/cluster/put.go`、`pkg/cluster/server.go`、`pkg/db/db.go`、`pkg/db/ha_p9.go`、`pkg/version/version.go`；单测 `pkg/sql/v204_implicit_route_test.go`（新增），并移除 v2.0.3 中与新语义冲突的 `TestV203ForwardOnlyImplicitRegionZeroRegression`。
+
+**Known**：跨节点读取未切分表仍可能取不到数据（读侧聚合视图重启后未重建），与本次写路径修复无关，登记为后续 NEW 项。
+
 ## v2.0.3 (2026-11-25)
 
 **版本口径**：v2.0.2 未单独打 tag（仅本地提交、未对外发布），本版合并两批改动一并发布——① v2.0.2 的纯转发节点复制轨 fence 豁免（见下一条 `## v2.0.2` 章节）；② 本轮视图缺失写路径修复。跳号说明：v2.0.2 无 tag、无 Release、无二进制外发，对外可见版本为 v2.0.1 → v2.0.3。

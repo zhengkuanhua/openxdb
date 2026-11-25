@@ -29,6 +29,14 @@ func (e *Engine) LoadSharding(seq uint64, regions []sharding.RegionInfo) {
 	r := sharding.NewRouter()
 	r.SetRegions(seq, regions)
 	e.ex.SetRouter(r)
+	// v2.0.4：隐式整表 region 归属不落盘、不在加载期注入，统一由权威路由视图同步
+	// 通道学习（LearnImplicitRoutesFromPeers），避免重启后残留过期归属。
+}
+
+// LearnImplicitRoutesFromPeers 学习权威路由视图携带的隐式整表 region 归属
+// （v2.0.4，db.StartCluster 装配到 cluster 服务端回调）。
+func (e *Engine) LearnImplicitRoutesFromPeers(routes []sharding.RegionInfo) error {
+	return e.ex.LearnImplicitRoutesFromPeers(routes)
 }
 
 // SplitTable 按主键边界将表拆分为多个显式 region（M3 分片管理入口）。
