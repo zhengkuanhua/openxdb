@@ -21,6 +21,7 @@ package db_test
 //     no live data copy，数据整体不可用）。
 
 import (
+	"sort"
 	"testing"
 	"time"
 
@@ -93,16 +94,32 @@ func b1StatsOf(d *db.DB) [3]int {
 // TestD45B1SingleCopyRecoverableE2E 验证单副本 region 被主动补齐后，
 // owner 节点损毁不再导致整体不可用。
 func TestD45B1SingleCopyRecoverableE2E(t *testing.T) {
-	dA, addrA, _ := openNodeWithDir(t, "node-a")
+	type nodeRef struct {
+		d    *db.DB
+		addr string
+	}
+	opened := make([]nodeRef, 0, 3)
+	for _, name := range []string{"node-a", "node-b", "node-c"} {
+		d, addr, _ := openNodeWithDir(t, name)
+		opened = append(opened, nodeRef{d, addr})
+	}
+	// 角色按节点 ID 重排：隐式整表 region 的归属规则是"在线节点中 ID 字典序最小者"
+	// （与 v2.0.4 派生口径一致）。本用例要求"单副本数据只落 owner(A) 一侧"，故先
+	// 固定 A = ID 最小者；否则建表归属随机落 B/C，切分后 owner(A) 本地扫不到行，
+	// B1 直接判 lost=3（该用例历史偶发失败、v2.0.5 后高频复现的根因）。
+	sort.Slice(opened, func(i, j int) bool {
+		return opened[i].d.Cluster.SelfID < opened[j].d.Cluster.SelfID
+	})
+	dA, addrA := opened[0].d, opened[0].addr
+	dB, addrB := opened[1].d, opened[1].addr
+	dC, addrC := opened[2].d, opened[2].addr
 	closedA := false
 	t.Cleanup(func() {
 		if !closedA {
 			_ = dA.Close()
 		}
 	})
-	dB, addrB, _ := openNodeWithDir(t, "node-b")
 	t.Cleanup(func() { _ = dB.Close() })
-	dC, addrC, _ := openNodeWithDir(t, "node-c")
 	t.Cleanup(func() { _ = dC.Close() })
 
 	aID, bID, cID := dA.Cluster.SelfID, dB.Cluster.SelfID, dC.Cluster.SelfID

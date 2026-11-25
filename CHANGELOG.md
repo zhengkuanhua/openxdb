@@ -6,6 +6,12 @@ OpenXDB 版本变更记录。
 
 ## Unreleased
 
+- **v2.0.5 (2026-11-25)**：版本口径：承接 v2.0.4，把 v2.0.4 的"写完失败再拉视图自愈"升级为"建表即归属可见"，消除新建未切分表在纯转发节点上的首写失败窗口。
+  - **Added**：建表后主动补隐式整表 region 归属（`pkg/sql/implicit_push.go` 新增）——`execCreateTable` / `execCreateTableAsSelect` 在 `broadcastDDL` 与 `commitTx` 返回、DDL 锁释放之后调用 `notifyImplicitRouteView(tableID)`；异步 goroutine 内先登记本机归属认知（`learnImplicitRouteLocal`：纯内存映射、不开事务、不遍历表目录、不落盘，已切分表不登记），再向在线对端推一次权威路由视图（复用 `REGION_PUSH` 的 `implicit_routes` 通道）；带 200ms 冷却去抖，批量建表只推一轮；`Executor` 新增 `implicitPushMu/Last/Busy/Hook` 字段与 `implicitPushHook` 测试注入点。效果：新建未切分表不再依赖"首写失败→拉视图→重试"链路，owner 侧写入直达本地，纯转发节点在推送到达后即知归属。
+  - **约束**：建表返回路径零副作用（仅一次轻量状态判断 + goroutine 派生），严格遵守 v2.0.4 记录的"DDL 路径新增任何事务都会打乱其后副本维护时序"纪律；单机部署不派生任何行为。
+  - **Fixed（用例确定性，非产品语义变更）**：`pkg/db` 的 `TestD45B1SingleCopyRecoverableE2E` 与 `TestV1200C4RegionSyncReconnectCatchUp` 偶发 `lost=3`（region has no live copy）。根因：播种用例"建表 → 灌 10 行 → `SplitTable`"的顺序依赖隐式归属，而隐式整表 region 归"在线节点中 ID 字典序最小者"；播种节点不是该 owner 时 10 行经 2PC 转发到 owner 落盘，随后 `SplitTable` 把 3 个显式 region 归给播种节点，owner 本地扫不到行，B1 判 lost（该 flaky 在 v2.0.4 基线即存在）。修法：`seedThreeRegions` 改为"建表 → 切 3 region → 写入 10 行"（按显式 region 路由，与隐式归属无关）；B1 用例再按 `SelfID` 排定三节点角色、固定 A = 最小 ID。复验：D45B1 8/8、C4 6/6 全过。
+  - 改动文件：`pkg/sql/implicit_push.go`（新增）、`pkg/sql/executor.go`、`pkg/sql/v205_implicit_push_test.go`（新增，5 组）、`pkg/db/d4_4_route_view_test.go`、`pkg/db/d4_5_b1_replica_test.go`、`pkg/version/version.go`。
+
 **Added**
 - **TSO 租约兜底与失效切换（v2.1.0 H1 / NEW-5，P0，默认关闭）**：v1.21.0 三机真机复验 §10.4 确认 TSO 仍是写路径硬单点——停掉发号节点后全集群写失败（`tso unavailable`），恢复需人工改 `--tso-node`。本次在既有 epoch 选主之上补齐"何时可以安全换人"的判定：发号权由组内**多数派授予的租约**决定（`TSO_LEASE_VOTE` / `TSO_LEASE_RENEW` 两帧），主失联或续约未获多数派即自行降级、到期拒绝发号，由客户端按回执 `retry_after_ms` 等待旧租约到期后重新拉票，选出新主接续发号，无需人工介入。
   - **安全不变量**（均配单测）：①号段单调不减——接任方以"调用方已观测最大戳 ∪ 投票回执中各副本 `last`"为水位抬升号段窗口，首批号严格越过旧主已发序列（即使接任客户端刚启动、`maxSeen=0`）；②跨节点不重号——同纪元一票制 + 租约窗口取"拉票发起时刻+TTL"（⊂ 各副本授予窗口），双主窗口为零；③租约判断只用本地时长（`now` 可注入，`time.Now()` 自带单调读数），不比较跨节点绝对时间，不依赖单点时钟；④分区少数派拿不到多数派即无法接任。

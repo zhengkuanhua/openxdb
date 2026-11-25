@@ -1,39 +1,39 @@
-# OpenXDB v2.0.4 Release Notes
+# OpenXDB v2.0.5 Release Notes
 
 发布日期：2026-11-25
 
 ## 版本亮点
 
-- **根治「未切分表没有 region 归属」（P0）**：v2.0.3 只解决显式 region 在本机视图缺失，未切分表（隐式整表 region）的归属此前**从未广播**——它只存在于 owner 本机内存，`Node` 字段为空、`TableMeta` 无归属字段、路由条目不落盘。后果是集群里每个节点都认为整表归自己（普通节点各自本地写、数据互不可见），纯转发节点则永久报 `region N missing from local route view (forward-only node)` 不可写。
-- **归属改为可派生 + 随权威视图下发**：未切分表的整表归属按确定性规则派生（注册表内节点 ID 字典序最小者，候选含本机，三节点结论一致），随 `REGION_PUSH` 的独立字段 `implicit_routes` 下发；接收端只写内存映射并据此走 `routeRemoteOwned` 正常 2PC 转发，**不落盘、不改 `m:regions`**，显式路由的持久化与一致性判定完全不受影响。
-- **绝不静默落本地**：纯转发节点在学到归属前，写路径判 `REGION_NOT_ASSIGNED`（`region ... missing from local route view ... retry shortly`）并异步请求视图同步，学到后即转发真实 owner。
-- **顺带修掉一个自死锁**：写路径 `regionOwnershipFence → AllowWriteRegion → routeDecision → forwardOnlyNode → db.ForwardOnlyNode` 在持有 `epochMu` 的调用链内重入加锁会自死锁（`TestD45P9RestartOwnerConfirmedByPeersE2E` 由 3s 变 4min 超时）。改为原子镜像 + `TryLock`：能取锁则刷新镜像，取不到锁读最近镜像值，写路径不再二次进锁。
+- **根治「新建未切分表首写失败窗口」（P0 收敛）**：v2.0.4 解决了未切分表归属"从来不广播"，但纯转发节点的首写仍要走一遍"失败 → 拉视图 → 重试"的自愈链路。本版把归属登记提前到建表动作本身：`CREATE TABLE` / `CREATE TABLE AS SELECT` 提交并释放 DDL 锁后，异步补一次隐式整表 region 归属——本机先登记认知，再向在线对端推一档权威路由视图。新建表在 owner 侧写入直达本地，纯转发节点在推送到达后即知归属，不再依赖首写失败触发。
+- **建表返回路径零副作用**：v2.0.4 已记录"DDL 路径上新增任何事务都会打乱其后副本维护时序"（B1 单副本用例 32s 超时即由此复现）。本版严格约束：建表返回路径只做一次轻量状态判断 + goroutine 派生，不开事务、不遍历表目录、不落盘；归属学习与视图推送全部在异步 goroutine 内完成。单机部署不派生任何行为，语义零变化。
+- **推送去抖**：对端推送带 200ms 冷却窗口，批量建表（含脚本灌表）只推一轮，避免把管理面打成广播风暴；错过的表由下一次建表 / 视图刷新自愈覆盖。
+- **用例确定性修复（非产品语义变更）**：`TestD45B1SingleCopyRecoverableE2E` 与 `TestV1200C4RegionSyncReconnectCatchUp` 的偶发 `lost=3` 定位为播种顺序与隐式归属规则耦合——隐式整表 region 归"在线节点中 ID 字典序最小者"，播种节点非 owner 时切分前的 10 行被转发到 owner，切分后 owner 本地无行。播种用例改为"建表 → 切 3 region → 写入"，并按 `SelfID` 固定节点角色。该 flaky 在 v2.0.4 基线即存在，非本版回归。
 
 ## 变更明细
 
-| 编号 | 内容 |
+| 项目 | 内容 |
 | --- | --- |
-| 归属派生 | `pkg/sql/implicit_route.go`（新增）`implicitRouteOwner()` / `implicitRegionRouteFor()` / `implicitRoutesForViewSync()` |
-| 视图下发 | `pkg/cluster` `RegionPushReq.ImplicitRoutes` 独立字段（旧节点忽略）；`SyncRouteViewToEpochWithImplicit` 携带；`serveRegionPush` 学习 |
-| 接收学习 | `LearnImplicitRoutesFromPeers` 仅写 `Router.implicit`，nil 载荷等价清空；`RegionNode` 对隐式 ID 兜底查该映射 |
-| 写路径 | `routeViewMissing` 覆盖「隐式 + 纯转发 + 未学到归属」；`routeDecision` 对该情形返回 `routeUnassigned`，由 `decideWriteRoute` 同步后重判 |
-| 删表清理 | `ApplyRemoteDDL` 在 `DDL_OP_DROP` 后 `forgetTableRoutes`（清显式条目与隐式归属） |
-| 死锁修复 | `pkg/db` 新增 `forwardOnlyMirror atomic.Bool`；`ForwardOnlyNode` 改 `TryLock` + 镜像，`forwardOnlyLocked` 与启动装载同步刷新 |
-| 版本口径 | `pkg/version` → `v2.0.4`，同步 CHANGELOG / RELEASE_NOTES（v2.0.3 说明归档 `docs/RELEASE_NOTES_v2.0.3.md`） |
+| 新增 | `pkg/sql/implicit_push.go`：`notifyImplicitRouteView()` / `learnImplicitRouteLocal()` / `implicitPushCooldown` |
+| 接线 | `pkg/sql/executor.go`：`execCreateTable`、`execCreateTableAsSelect` 在 `broadcastDDL`/`commitTx` 之后调用；`Executor` 新增 `implicitPushMu/Last/Busy/Hook` |
+| 测试 | `pkg/sql/v205_implicit_push_test.go`（5 组：建表学归属、owner 本地、对端推送钩子、单机零回归、切分表不被覆盖） |
+| 用例 | `pkg/db/d4_4_route_view_test.go`（`seedThreeRegions` 改为先切分后写入）、`pkg/db/d4_5_b1_replica_test.go`（三节点按 ID 排定角色） |
+| 版本 | `pkg/version/version.go` → `v2.0.5`（握手串 `8.0.36-OpenXDB v2.0.5`） |
 
-## 测试证据
+## 验证
 
-- 新增 `pkg/sql/v204_implicit_route_test.go`（8 组）：派生归属三节点一致、单机返回 nil 零回归、发送/学习闭环、纯转发节点学归属前拒写（`REGION_NOT_ASSIGNED` + `missing from local route view`）且零落盘、学到后判 `routeRemoteOwned`、nil 载荷清空、删表清理。
-- 移除 v2.0.3 中与新语义冲突的 `TestV203ForwardOnlyImplicitRegionZeroRegression`（其断言"隐式 region 恒本地"正是本版要推翻的行为）。
-- 全仓 `go test ./... -p 1 -count=1` 连续三轮通过（零 FAIL，`pkg/db` ~65s、`pkg/sql` ~70s，单轮墙钟约 200s）。
-- 回归对照：修复前 `pkg/db` 全包 602.8s 超时失败（`epoch.go` / `ha_p9.go` 锁冲突），修复后 62.8s 通过。
+| 用例 | 结果 |
+| --- | --- |
+| `TestV205*`（5 组） | 全 PASS |
+| `TestD45B1SingleCopyRecoverableE2E` × 8 | 8/8 PASS |
+| `TestV1200C4RegionSyncReconnectCatchUp` × 6 | 6/6 PASS |
+| `pkg/sql` + `pkg/db` 全量（`-p 1`） | PASS（99.165s / 58.850s） |
 
-## 已知限制
+## 全量回归
 
-- 跨节点读取未切分表仍可能取不到数据：读侧聚合的跨节点读视图在重启后未重建，与本次写路径修复无关，登记为后续 NEW 项单独立项。
-- 纯转发节点首次写入某张新建未切分表时，若尚未收到权威视图，会先返回 `REGION_NOT_ASSIGNED ... retry shortly`，同步完成后重试即成功——这是刻意的保守语义，不做静默本地落盘。
+`go test ./pkg/sql ./pkg/db -count=1 -p 1`：`ok pkg/sql 99.165s`、`ok pkg/db 58.850s`。
+`go test ./... -count=1 -p 1`：全部 22 个包 `ok`（`pkg/db` 57.151s、`pkg/sql` 58.589s），无 FAIL。
 
-## 升级说明
+## 已知事项
 
-- 三机滚动替换二进制即可，无配置变更、无数据迁移、无 DDL 要求。
-- 混跑注意：纯转发节点升到 v2.0.4 而 owner 仍是 v2.0.3 时，旧节点不发送 `implicit_routes`，纯转发节点仍无法写未切分表（与升级前一致，不会变差）；三机统一到 v2.0.4 后生效。
+- 跨节点读取未切分表仍可能取不到数据（读侧聚合视图重启后未重建），沿用 v2.0.4 登记的后续 NEW 项，本版未涉及。
+- v2.1.0 的 TSO 租约兜底（`--tso-lease`，默认关闭）仍在 Unreleased 开发线，本版不含。

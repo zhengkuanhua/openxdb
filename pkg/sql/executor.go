@@ -120,6 +120,13 @@ type Executor struct {
 	routeSyncMu   sync.Mutex
 	routeSyncAt   time.Time // 上次发起视图补齐的时间
 	routeSyncBusy bool      // 视图补齐进行中（异步，不阻塞写路径）
+	// v2.0.5：建表成功后补隐式整表 region 归属（见 implicit_push.go）——
+	// 本机同步自学习 + 对端异步推送（冷却去抖），使新表首写零失败。
+	implicitPushMu   sync.Mutex
+	implicitPushAt   time.Time // 上次发起对端推送的时间
+	implicitPushBusy bool      // 对端推送进行中（异步，不阻塞建表）
+	// implicitPushHook 测试注入：非 nil 时替代真实对端推送（不发网络 RPC）。
+	implicitPushHook func()
 	// 全局会话（旧单会话 API 使用：Engine.Execute/ExecuteAs、CLI、既有测试）。
 	// 服务端多连接场景使用 NewSession 创建独立会话，显式事务状态互不干扰。
 	globalSess *Session
@@ -1795,6 +1802,9 @@ func (e *Executor) execCreateTable(sess *Session, s *CreateTableStmt) (*Result, 
 			return nil, err
 		}
 		e.broadcastDDL(cluster.DDLOpCreate, meta, 0, "")
+		// v2.0.5：建表提交并广播成功后补隐式整表 region 归属（本机自学 + 对端
+		// 异步推送），使新表首写即命中归属、不再"首写失败、重试成功"。
+		e.notifyImplicitRouteView(meta.ID)
 	}
 	return &Result{AffectedRows: 0}, nil
 }
@@ -1861,6 +1871,9 @@ func (e *Executor) execCreateTableAsSelect(sess *Session, s *CreateTableStmt, ta
 		if err := e.commitTx(sess); err != nil {
 			return nil, err
 		}
+		// v2.0.5：CTAS 建表提交后同样补隐式整表 region 归属（与 CREATE TABLE
+		// 口径一致），使新表首写零失败。
+		e.notifyImplicitRouteView(meta.ID)
 	}
 	return &Result{AffectedRows: int(n)}, nil
 }

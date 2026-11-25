@@ -61,15 +61,22 @@ func nodeMatches(got, want string, wantLocal bool) bool {
 	return got == want
 }
 
-// seedThreeRegions A 侧建表写入 10 行并切分为 3 个 region。
+// seedThreeRegions A 侧建表、切分为 3 个 region 后写入 10 行。
+//
+// 顺序说明（v2.0.5）：必须"先切分、后写入"。未切分表的写入走隐式整表 region，
+// 其归属由"在线节点中 ID 字典序最小者"决定（v2.0.4 派生口径 / v2.0.5 建表后
+// 主动登记）；若播种节点不是该 owner，10 行会被转发到 owner 落盘，而随后
+// SplitTable 把 3 个 region 归到播种节点 —— owner 本地扫不到行，B1 直接
+// lost=3（单副本缺口用例因此随节点 ID 随机而偶发失败）。先切分后写入使每行
+// 按显式 region 路由到 region owner，与隐式归属无关，测试确定。
 func seedThreeRegions(t *testing.T, dA *db.DB) []sharding.RegionInfo {
 	t.Helper()
 	mustSQL(t, dA, "CREATE TABLE users (id INT, name TEXT, age INT, PRIMARY KEY (id))")
-	for i := 1; i <= 10; i++ {
-		mustSQL(t, dA, fmt.Sprintf("INSERT INTO users (id, name, age) VALUES (%d, 'u%d', %d)", i, i, 20+i))
-	}
 	if err := dA.SQL.SplitTable("users", [][]byte{splitBoundary(4), splitBoundary(8)}); err != nil {
 		t.Fatalf("SplitTable: %v", err)
+	}
+	for i := 1; i <= 10; i++ {
+		mustSQL(t, dA, fmt.Sprintf("INSERT INTO users (id, name, age) VALUES (%d, 'u%d', %d)", i, i, 20+i))
 	}
 	regions, err := dA.SQL.ListRegions("users")
 	if err != nil || len(regions) != 3 {
