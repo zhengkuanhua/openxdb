@@ -173,6 +173,11 @@ BALANCE;
 - 自动均衡：`Engine.SetAutoBalance(enabled, interval)`（Go API，周期触发；是否暴露 SQL/CLI 以仓库实际为准）。
 - 在线迁移：迁移期间源路由不变、读写不中断；扫描源 region 物理行 → `REGION_PUSH` 装载目标节点 → 切换本节点路由并落盘；其余存活节点经下一次心跳路由同步。
 
+> **region ID 空间约束（v2.0.6 起）**：集群内 regionID 全局唯一是硬约束——物理键前缀形如 `r{regionID}`，不含表 ID，一旦两个 region 拿到同一 ID，跨表数据就会串台。
+> - 显式 region（`SPLIT REGION` / `BALANCE` / 自动分裂产生）的 ID 严格落在 `[0, 1<<63)`；未切分的整表隐式 region 使用负 ID 编码，两者互不相交（`pkg/sharding` 的 `ExplicitRegionIDLimit` / `IsImplicitRegionID`）。
+> - 分配水位在启动加载路由表与每次分裂前都会经 `SanitizeRegionSeq` 收敛：界内落后于现存最大值则抬升，越过 `1<<63`（历史污染水位）则回退到现存显式最大值，避免越界后反复复写同一批 ID。
+> - 分裂或均衡时代理返回 ID 空间耗尽的错误，说明显式 ID 水位已达上界，应重建表重置水位；**禁止**手工把 regionID 改为负数或 ≥ `1<<63`，也不要在路由表里手工写入未分配的 ID。
+
 > 上述 SQL 语句（ADD NODE / SPLIT REGION / ASSIGN REGION / BALANCE 等）仅 root 可执行（`pkg/sql/authz.go`）。
 
 ---
