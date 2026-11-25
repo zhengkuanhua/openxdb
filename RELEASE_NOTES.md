@@ -1,331 +1,52 @@
-# OpenXDB v2.0.1 Release Notes
+# OpenXDB v2.0.3 Release Notes
 
-发布日期：2026-11-24
+发布日期：2026-11-25
 
 ## 版本亮点
 
-- **补丁发布，只修一处 P0**：本版相对 v2.0.0 仅含 TSO 租约失效切换的同纪元选举死锁修复（提交 `2459d64`）与配套活性单测，不含新 SQL 语法、不新增或改动默认开关、不动存储引擎与读路径；`MySQLServerPrefix`（`8.0.36-OpenXDB `）兼容契约继续有效。
-- **H1 租约死锁根治**：v2.0.0 引入的租约选主在「同纪元多候选各自投票」场景下会永久卡死，实机报 `lease quorum not reached (1/2) (epoch=4)`，主节点停摆后集群无法自动换人。根因是 `runElect` 竞选失败时只回滚 `seenLeader` / `seenUntil`，未回滚 `votedEpoch` / `votedFor` 且不推进纪元，各副本在同一纪元内互相拒票，多数派永远凑不齐。
+- **合并 v2.0.2 未发布内容**：v2.0.2 仅本地提交、未打 tag、未外发二进制，本版一次性发布两批 P0 修复——「纯转发节点被复制轨只读降级永久 fence」与「显式 region 在本机路由视图缺失被误判为本机归属」。对外可见版本线：v2.0.1 → v2.0.3。
+- **纯转发节点写能力恢复（v2.0.2 内容）**：不持有任何 region 的节点（node-c）直连写入不再恒报 `demoted stale master is read-only`。豁免须同时满足 `clusterNonOwner && clusterOwnTerm>0 && !clusterOwned`——即「集群轨曾授予归属、随后被权威视图收回」；复制轨脑裂演练中的陈旧主（`clusterOwnTerm==0`）不进豁免。
+- **视图缺失不再被伪装成「归属被收回」（本版核心）**：node-c 重启后本地路由视图缺新表 region（5816/5817），旧逻辑把它当作「表未切分的隐式单 region」，写请求落本地后被节点级归属 fence 拒为 `cluster ownership revoked`——归因指向错误方向，重新授权也解不开。本版把「隐式 region ID」「有条目未切分」「显式 region 缺条目」三种情形彻底分开，缺条目时要么异步拉权威视图自愈、要么明确报 `REGION_NOT_ASSIGNED`（`region missing from local route view`），**绝不静默落本地**。
+- **fencing 强度未削弱**：复制轨陈旧主仍拒写自己持有的 region，`clusterPend` 重启待确认拒写与节点级 `AllowWrite` 契约不变。
 
 ## 变更明细
 
-| 编号 | 提交 | 内容 |
-| --- | --- | --- |
-| H1 死锁 | `2459d64` | `runElect` 失败完整回滚 `voted*` 并推进纪元到 `max(seen, voted)+1`；`vote()` 同纪元拒票带回观测纪元、不再自旋；`electOnceLocked` / `electLeaseLocked` 失败推进纪元 + 毫秒级短退避重试（上限 5 次） |
-| 活性单测 | `2459d64` | 新增 `pkg/cluster/tso_lease_liveness_test.go`：同纪元碰撞 / 并发竞选 / 串行重试 / 租约过期重拉票 4 组用例、18 项断言 |
-| 版本口径 | 本提交 | `pkg/version` → `v2.0.1`，同步 CHANGELOG / README / RELEASE_NOTES |
+| 编号 | 内容 |
+| --- | --- |
+| 隐式/显式判别 | `pkg/sharding` 新增 `ImplicitRegionBit` / `IsImplicitRegionID`；`routeDecision` 改为「隐式 ID → 本机」「有条目未标 Explicit → 本机」「显式 ID 无条目 → 归属未知」，仅纯转发节点把第三种判 `routeUnassigned` |
+| 错误语义 | `pkg/db` 新增 `ErrRegionViewMissing`；`clusterOwnershipFenceRegion` 在纯转发节点视图缺失时短路返回它，不再落回 `ErrFenced` |
+| 视图自愈 | `pkg/sql` 新增 `forwardOnlyNode()` / `routeViewMissing()` / `requestRouteViewSync()`（异步拉权威 region 视图，冷却 + 互斥限频）/ `decideWriteRoute()`（拉取后重判） |
+| 重启识别 | `loadClusterTermMeta` 在 `!clusterOwned && clusterOwnTerm>0` 时启动即置 `clusterNonOwner=true` |
+| 运维文案 | `groupOps` 视图缺失时报 `region missing from local route view on this node ... route view resync requested, retry shortly`，不再引导执行 `ASSIGN REGION` |
+| 版本口径 | `pkg/version` → `v2.0.3`，同步 CHANGELOG / README / RELEASE_NOTES |
 
 ## 测试证据
 
-- 活性单测：`pkg/cluster/tso_lease_liveness_test.go` 4 组用例、18 项断言全 PASS，覆盖同纪元碰撞不退化为自旋、并发竞选只有一方获多数派、串行失败重试最终收敛、租约过期后重新拉票。
-- 全仓 `go test ./... -count=1` 四轮：第 2 / 3 / 4 轮 **22 包全 `ok`、0 `FAIL`**，单轮墙钟 111s / 133s / 111s；第 1 轮（107s）在并行负载下 `pkg/cluster TestNew5ConcurrentGetNoDup`（`tso timestamp regression: start 601 <= max seen 708`）与 `pkg/sql TestD3SlowSummary`（慢日志 summary top 3 仅收到 2 条）失败，两例定向 `-count=3` 单跑均 PASS，判定为仓库既有并行时序型偶发，与本次改动（仅 `pkg/version` 常量与发布文档）无关。
-- `go build ./...` 通过（57s）；版本串经 `pkg/sql` / `pkg/server` / `pkg/mysqlproto` 全量用例覆盖，`select version()` / 握手串 / `openxdb version` 同源输出 `8.0.36-OpenXDB v2.0.1`。
-- 真机复验：三机 v2.0.0 二进制 + `tso_lease=on`，静态编译分发（md5 `9b384e6c` 系列），双向终止 leader 各一轮，累计写入 220 条全部成功、零 `lease quorum` 错误，由停机侧发起的新主在租约到期后自动接管发号。
+- 新增 `pkg/sql/v203_route_fix_test.go`（3 组）：转发节点缺视图拒写且零落盘、错误文案不含 `ownership revoked`、普通节点零回归、隐式 region 零回归。
+- 新增 `pkg/db/v203_forward_view_test.go`（4 组）：启动识别纯转发、owned 节点不识别、视图缺失返回 `ErrRegionViewMissing`、非转发节点保持 `ErrFenced`。
+- 调整 `pkg/db/v1210_new3_region_fence_test.go` 旧断言口径（不可判定 region 由 `ErrFenced` fallback 改为 `ErrRegionViewMissing`）。
+- 定向回归：`pkg/sql TestV203` ok；`pkg/db TestV203|TestV2020|TestNew3` ok；回归子集 `Fence|Ownership|BrainSplit|Forward|Cluster|New3|Region` 两包均 ok；`go build ./...` / `go vet` 通过。
+- 全仓 `-p 1` 串行回归单轮墙钟超过 600s（工具执行上限截断，历史 pkg/db 全量本就 >500s），未取得完整三轮结论，需在发版流水线上补跑。
 
 ## 兼容性说明
 
-- **版本串**：`8.0.36-OpenXDB v2.0.1`；`MySQLServerPrefix` 不变，mysql CLI / JDBC / go-sql-driver 仍识别为 MySQL 8.0.x。
-- **行为零变更**：`--tso-lease` / `[server] tso_lease` 仍默认 off；开启后的变化仅为「能选出新主」，不改变发号语义。号段单调不减、跨节点不重号、纯本地时长判定、少数派不可接任四条安全不变量均不变。
-- **元数据零迁移**：无新增元数据键、无 region 视图结构变更，升级后无需任何数据操作。
+- **版本串**：`8.0.36-OpenXDB v2.0.3`；`MySQLServerPrefix`（`8.0.36-OpenXDB `）兼容契约不变，mysql CLI / JDBC / go-sql-driver 仍识别为 MySQL 8.0.x。
+- **行为变更两处**：① 纯转发节点（不持有任何 region、且集群轨历史授予已被收回）的复制轨写不再被节点级 fence 拦截；② 显式 region 在本机视图缺失时，写不再"静默落本地后被 fence 拒"，改为明确 `REGION_NOT_ASSIGNED` + 后台自动补视图（补齐后重试即可成功）。
+- **开关默认值不变**：`--tso-lease`、`ha_2pc_participant_hook`、`ha_write_route_enforce`、`remote_range_agg`、`ha_quorum` 默认值均不变。
+- **元数据零迁移**：`clusterNonOwner` 为纯运行期标记不落盘，升级后无需任何数据操作。
 
 ## 已知问题
 
+- **跨节点新表读不可见**：读侧聚合在节点重启后未重建为跨节点视图，属独立问题（读侧 NEW 项），本版写路径修复不覆盖。
 - **HA quorum 未启用**：`ha_quorum` 默认关闭，三独立 IP 环境级 quorum 与网络分区验收仍为欠账。
-- **`--tso-lease` 仍默认 off**：本版修的是租约自身的活性缺陷，启用前请在自有环境做一轮双向 leader 终止演练。
+- **`--tso-lease` 仍默认 off**：启用前请在自有环境做一轮双向 leader 终止演练。
 - 其余 SQL / 性能 / 分布式边界见 `KNOWN_LIMITATIONS.md` §1–§5。
 
 ## 升级路径
 
 - 二进制替换后按 node-a → node-b → node-c 滚动优雅重启；无元数据迁移、无停机改配置。
-- 升级后校验：`select version()` 返回 `8.0.36-OpenXDB v2.0.1`；`SHOW NODES` 三节点 UP；跨节点只读计数一致。
+- 纯转发节点（node-c）替换后首次写新表 region 可能先返回一次 `REGION_NOT_ASSIGNED (route view missing)`，后台视图同步完成后重试即成功；若持续返回该错误，检查 peer 在线状态与 `SHOW REGION ROUTES`。
 
----
+## 上一版本摘要（v2.0.2，未发布）
 
-# OpenXDB v2.0.0 Release Notes
-
-发布日期：2026-11-23
-
-## 版本亮点
-
-- **版本口径升格，无功能新增**：本版仅将 `pkg/version` 发行版本常量由 `v1.21.0` 调整为 `v2.0.0`，代码实现与此前 v1.21.0 提交 `5c98877` 等价，不含新 SQL 语法、不新增或改动默认开关、不动存储引擎与读路径。升格理由：集群轨（2PC 参与面、持续复制、写授权统一、TSO 预取、跨区读显式报错）能力首次以正式大版本对外交付。
-- **归属写 fencing 下沉 region 粒度（NEW-3，P0）**：修复 owner 节点因历史误授标记被节点级 fence 永久拦截所有写（含转发型写）、重启不恢复的缺陷；归属判定改为 region 粒度，仅当本节点当前持有目标 region 时才做归属一致性与 epoch 校验，目标 owner 非本机的转发型写放行。
-- **TSO 号段低水位预取（NEW-5）**：`HATSOClient` 与单点 `tsoClient` 由「缓存耗尽才拉批」升级为低水位异步预取 + 池内兜底，降低 PREPARE 阶段取号等待与单点抖动敏感度。
-- **跨区不可达读显式报错（NEW-6，行为变更）**：归属节点不可达且重指派后无存活持有者时，读路径不再静默回退本地副本返回部分结果，改为返回含 region 信息的显式错误；兼容开关 `allow_partial_read` 可退回旧行为。
-
-## 变更明细
-
-| 编号 | 提交 | 内容 |
-| --- | --- | --- |
-| NEW-3 | `40bcc19` / `df7ad73` | 归属 fence 下沉 region 粒度、`notifyLocalTakeover` 携带 region id、`takeoverLandedLocally` 前置判定、复制轨 fencing 增加 `clusterOwned` 短路 |
-| NEW-5 | `8c3a4f4` | TSO 号段低水位异步预取 + 池内兜底 |
-| NEW-6 | `8c3a4f4` | 跨区不可达读显式报错 + `allow_partial_read` 兼容开关（默认 off） |
-| 版本串 | `5c98877` | `pkg/version`、握手串、`openxdb version`、`select version()` 四处同源 |
-| 版本口径 | 本提交 | 发行版本常量升格 `v1.21.0` → `v2.0.0`，同步 CHANGELOG / README / RELEASE_NOTES |
-
-## 测试证据
-
-- 三轮全仓 `go test ./... -count=1`：第 2 轮、第 3 轮均 **22 包全 `ok`、0 `FAIL`**；第 1 轮在并行负载下 `cmd/openxdb`（`TestDoctorCorruptWAL` / `TestDoctorCorruptEngine`）与 `pkg/sql`（`TestBackupScheduleRetainRotation`）失败，三例定向单跑与后续两轮全仓均 `PASS`，判定为仓库既有并行资源竞争型偶发，与本次改动（仅 `pkg/version` 常量与发布文档）无关。
-- `go build ./...` 通过；`pkg/version` 无独立测试文件，版本串经 `pkg/sql`、`pkg/server`、`pkg/mysqlproto` 全量用例覆盖。
-- 版本串校验：`select version()` / 握手串 / `openxdb version` 同源输出 `8.0.36-OpenXDB v2.0.0`（`MySQLServerPrefix` 未变）。
-
-## 兼容性说明
-
-- **版本串**：`8.0.36-OpenXDB v2.0.0`；`MySQLServerPrefix`（`8.0.36-OpenXDB `）保持不变的兼容契约，mysql CLI / JDBC / go-sql-driver 仍识别为 MySQL 8.0.x。
-- **行为变更一处**：NEW-6 使「归属节点不可达 + 重指派后无存活持有者」的读由静默部分结果改为显式报错；需要旧行为的场景显式置 `allow_partial_read=on`。
-- **开关默认值不变**：`ha_2pc_participant_hook`、`ha_write_route_enforce`、`remote_range_agg` 仍默认 `off`，`ha_quorum` 仍默认关闭。
-- **元数据零迁移**：region 归属视图与 `m:regions` 结构未变更，升级后首次落盘沿用 v1.20.1 的归一逻辑。
-
-## 已知问题
-
-- **HA quorum 未启用**：`ha_quorum` 默认关闭，三独立 IP 环境级 quorum 与网络分区验收仍为欠账。
-- **TSO 单点未根治**：NEW-5 仅降低抖动敏感度，TSO 号段仍由集群内单节点统一提供服务，该节点不可达时写入仍会失败，需独立告警与监控。
-- **`pkg/db` 全量耗时波动**：单包全量测试在 80s~330s 间波动（后台 IO 用例串行叠加），属慢而非挂。
-- 其余 SQL/性能/分布式边界见 `KNOWN_LIMITATIONS.md` §1–§5。
-
-## 升级路径
-
-- 二进制替换后按 node-a → node-b → node-c 滚动优雅重启；无元数据迁移、无停机改配置。
-- 升级后校验：`select version()` 应返回 `8.0.36-OpenXDB v2.0.0`；`SHOW NODES` 三节点 UP；跨节点只读计数一致。
-- 回退：回退二进制即可，版本常量不影响落盘格式。
-
-## 文档与支持
-
-- `CHANGELOG.md`（v2.0.0 段）、`KNOWN_LIMITATIONS.md` §3.6 / §3.7、`README.md` 版本状态、`docs/` 设计文档。
-- 问题反馈：项目 Issue（Gitee / GitHub 双远端）。
-
-# OpenXDB v1.20.1 Release Notes
-
-发布日期：2026-11-23
-
-## 版本亮点
-
-- **补丁版，居中收口**：本版不引入新 SQL 语法、不改默认开关、不动存储引擎与读路径，只修 v1.20.0 发版后真机复验暴露的两处归属视图缺陷，以及一组长跑随机挂死的测试稳定性问题。
-- **归属视图分裂收敛（P0-1）**：T3 真分区复验发现分区恢复后 node-a 与 node-c 同时 `self_owns=true`（双写风险）。`selfOwnsAny()` 收紧为「`Node` 为本机」或「`Node` 为空且 `Local` 为真」，并在复制轨 `applyPush` / `applyRouteSync` 落盘 `m:regions` 前由 `reconcileOwnerView()` 收敛「归属他人却标本地」的矛盾条目——只清内存 `Local` 标记，不触碰物理数据。
-- **归属视图落盘归一（P0-2）**：本地 `ASSIGN REGION` 只改 `Node` 不碰 `Local`，复制轨推来的 route 可能残留 `local=true`，造成跨 region 2PC 用例对 route `local` 标记的偶发断言失败。新增 `normalizeRegionOwnerView()` 于 `persistRegions` 落盘前按 `Node` 统一归一（归属远端置 `false`、本机归属与未指派不变，幂等）。
-- **测试稳定性加固（P1）**：`testDir()` 替代 `tb.TempDir()`（清理放独立 goroutine、限时 5s），消除 Windows `DELETE_PENDING` 下 `os.RemoveAll` 阻塞在 `NtSetInformationFile` 导致的整包随机挂死；`safeCloseDB()` 将 `db.Close` 限时 30s，规避 rocksdb 后台 compaction/flush 线程 join 偶发长时间阻塞拖死全量测试。仅测试侧改动，不改产品行为。
-
-## 修复明细
-
-| 编号 | 提交 | 内容 |
-| --- | --- | --- |
-| P0-1 | `3bf395d` / `f160387` | `selfOwnsAny()` 收紧 + `reconcileOwnerView()` 复制轨落盘前收敛 + `OwnerViewConflicts()` 只读计数 |
-| P0-2 | `f160387` | `normalizeRegionOwnerView()` 于 `persistRegions` 前按 `Node` 归一 `Local`（幂等） |
-| P1-2 | `1a083dd` | 组提交用例断言放宽为非劣于逐条追加（`fs <= n`），消除 30 并发被 Go 调度拉出组提交窗口导致的误判 |
-
-## 测试证据
-
-- 三轮全仓 `go test ./...`：第 1 轮 22 包全 `ok`（`pkg/sql` 126.4s）；第 2 轮 21 `ok` + `pkg/txn` 偶发 `FAIL`（由此暴露组提交 flaky，P1-2 修复）；第 3 轮 22 包全 `ok`、0 `FAIL`。单轮墙钟 100~150s，远低于 600s 门槛；修复前为 300s / 422s / 480s 随机挂死。
-- 新增用例：`pkg/cluster/v1201_owner_view_split_test.go`、`pkg/sql/v1201_owner_view_normalize_test.go`、`pkg/sql/v1201_testdir_test.go`。
-
-## 兼容性说明
-
-- **零行为变更**：`pkg/version` 版本串升为 `8.0.36-OpenXDB v1.20.1`，握手与 `select version()` 仍同源。
-- **开关默认值不变**：`ha_2pc_participant_hook` / `ha_write_route_enforce` 仍默认 `off`，`ha_quorum` 仍默认关闭（D-5 未解除）。
-- **元数据**：`m:regions` 的 `Local` 标记现由归一函数保证与 `Node` 自洽；升级后首次落盘自动纠正历史残留，无需手工迁移。
-- **不变量**：任一节点视图不存在「`Node` 非本机且 `Local=true`」。跨节点视图收敛仍依赖复制轨推送时序（见 `KNOWN_LIMITATIONS.md` §3.6）。
-
-## 已知问题
-
-- `pkg/db` 全量耗时在 80s~330s 间波动（含后台 IO 的用例串行叠加），属慢而非挂；产品侧 `DB::Close` 在 Windows 下偶发长时间阻塞的根因（后台线程 join 与 WAL checkpoint 循环竞争）未在代码层消除，随 v1.21.0 写轨生产化统一处理。
-- **真机欠账**：`NEW-1` 陈旧主写拒绝、`NEW-2` 重启矩阵代码级已就绪，三独立 IP 真机复跑仍未执行，与 T3 一并归入 v1.21.0 真机收口。
-
-## 升级路径
-
-- 从 v1.20.0 升级：直接替换二进制，无迁移动作；默认配置行为与 v1.20.0 逐字一致。
-- 回退：换回 v1.20.0 二进制即可，无元数据格式变更（`Local` 归一为幂等纠正，不回退亦不影响 v1.20.0 运行）。
-
-## 文档与支持
-
-- 变更明细：`CHANGELOG.md` 的 v1.20.1 条目。
-- 已知限制与边界：`KNOWN_LIMITATIONS.md`（§3.6 归属视图收敛与写授权口径）。
-- 计划与实测结论：`DEV_PLAN_v1.20.1.md`（本地文档，未入库）。
-
-# OpenXDB v1.20.0 Release Notes
-
-发布日期：2026-11-22
-
-## 版本亮点
-
-- **集群写轨结构性收口（C1~C5 全闭环）**：本版不解新 SQL 语法，而是把「2PC 远端写不产 binlog」「未指派 region 默认本地」「副本不参与提交与复制」「分区判定逐语句真实探活」四个结构性缺口按顺序堵上，使 `ha_quorum` 的一系列前置条件第一次真正具备可实施性。
-- **2PC 参与者提交纳入提交钩子（C1，P0）**：参与者侧 COMMIT 改走 `db.Txn` 钩子，2PC 远端提交从此同样产 binlog——这是 C4 持续复制能真正跟随提交流的前提。
-- **写路径强制路由（C2，P1）**：集群模式下显式 region 的未指派场景不再「静默落到本地」，孤立视图被显式拒绝（错误码可分辨）。
-- **2PC 参与面扩展至副本（C3，P2）**：副本进入参与者集合，参与 PREPARE 归属校验与副本 quorum 判定。
-- **持续复制 region 化（C4，P3）**：影子副本从一次性 bootstrap 改为持续跟随 owner 写入，binlog 携带 region 维度，旧 binlog 向下兼容。
-- **集群轨写授权统一（C5，P4）**：新增分区状态快照（心跳采样 + `stale-while-refresh`），把「分区拒写」从逐语句真实探活改造为写路径零 IO 的快照读取；P3 语句级 fence 与 2PC `groupOps` 统一到同一数据源，节点级分区授权（`CLUSTER_MINORITY`）先于 region 归属判定。
-
-## 新增能力（相对 v1.19.0）
-
-- **C1 提交钩子接入**：新增开关 `ha_2pc_participant_hook`（默认 `off`）；关闭时参与者直写路径与 v1.19.0 逐字一致。
-- **C2 强制路由**：新增开关 `ha_write_route_enforce`（默认 `off`）；`routeDecision` 四态判定取代原 `checkWritable` 死代码。
-- **C3 参与面扩展**：副本集合落独立元数据键 `m:repl:replicas:<rid>`（不动 `sharding.RegionInfo` 结构）；参与者自身 region 归属校验 + 副本 quorum。
-- **C4 持续复制**：新增 `pkg/db/ha_region_sync.go`（持续跟随同步）、`pkg/replication/binlog_region.go`（binlog region 维度编解码）。
-- **C5 分区快照与授权统一**：新增 `pkg/cluster/partition_snapshot.go`（`RefreshPartitionSnapshot` / `PartitionSnapshot` / `PartitionMinority` / `PartitionSnapshotAge`，TTL 2s、`stale-while-refresh`）与 `pkg/sql/ha_c5.go`；新增错误码 `CLUSTER_MINORITY`；`majorityProbe` 优先读快照、快照不可用时回退仲裁器同步判定。
-
-## 性能
-
-本版改动集中在集群写轨授权与复制路径，**未改动存储引擎、WAL、单机事务提交与读路径主路**，因此不重跑 E5 标准基准；单机 OLTP 性能基线沿用 v1.18.0 / v1.19.0 口径（Windows、1 连接、每轮 prepare 重置、3 轮取中位数）：OLTP read / write / read-write **14.15 / 13.40 / 12.60 TPS**（QPS 198.10 / 53.60 / 226.80），TPC-C 5 仓 tpmC **774.50**。
-
-写路径延迟的关键改善是结构性的：C5 之前分区判定经 `MajorityOK()` 对每个远端节点逐次真实 PING（无缓存、无失败短路），挂在逐语句热路径会把 P95 与远端 RTT 绑定；C5 后写路径只读快照（最多一个调用者触发采样，其余立即复用旧值），远端探活移出请求路径。
-
-## 兼容性说明
-
-- **开关全部默认 `off`**：`ha_2pc_participant_hook`、`ha_write_route_enforce` 新增且默认关闭；`mgr == nil`（单机模式）不分组、不落 `m:2pc:*`、不启维护协程、不产 binlog（零回归红线）。
-- **元数据向下兼容**：副本集合使用独立元数据键，不改 `sharding.RegionInfo`；`BinlogEntry` 变更仅追加 region 字段，旧 binlog 可读。
-- **版本串**：`8.0.36-OpenXDB v1.20.0`，握手与 `select version()` 同源。
-- **行为差异（仅在显式开启时）**：开启 `ha_write_route_enforce` 或 `ha_quorum_enabled` 后，未指派 region 的集群轨写会被拒绝（`REGION_NOT_ASSIGNED` / `CLUSTER_MINORITY`），这正是本版要交付的语义；单机与默认配置不受影响。
-
-## 已知问题
-
-- `ha_quorum` 仍默认关闭（决策点 D-5 未在本簇解除）；D-3「C5 完成后再议默认 on」本轮不执行。
-- **环境级验收记为欠账**：T3 真分区 fencing、NEW-1 陈旧主写拒绝、NEW-2 重启矩阵需三独立 IP 真机复跑，本版未执行，不阻塞发版（代码级验收 C1~C5 全部用例已全绿）。
-- 既有 flaky：`pkg/db` 的 `TestV1200C4TwoPCWriteEntersRegionRepl` 偶发失败（单跑与二轮全量均 PASS）；`pkg/sql` 全量随机 hang 经 HEAD 基线对照确认与本次改动无关。
-
-## 升级路径
-
-- 从 v1.19.0 升级：无迁移动作，默认配置行为与 v1.19.0 一致；如需集群写轨保护，先开 `ha_write_route_enforce` 观察，再评估 `ha_quorum`。
-- 回退：任意新增开关置 `off` 即退回 v1.19.0 行为（提交直写、无分区 fence、参与者集合仅 owner）。
-
-## 文档与支持
-
-- 计划与实测结论：`DEV_PLAN_v1.20.0.md`（本地文档，含 C1~C5 完成态与 §8 实测记录）。
-- 已知限制与边界：`KNOWN_LIMITATIONS.md`。
-- 变更明细：`CHANGELOG.md` 的 v1.20.0 条目。
-- 设计文档：`docs/` 下 HA / 2PC / 复制相关章节。
-
-# OpenXDB v1.19.0 Release Notes
-
-发布日期：2026-11-20
-
-## 版本亮点
-
-- **存储过程能力补齐（D2，P0）**：异常处理与动态 SQL 同时落地——`DECLARE {CONTINUE|EXIT} HANDLER FOR <cond>`（`SQLSTATE` / 数字错误码 / `SQLEXCEPTION` / `SQLWARNING` / `NOT FOUND`，按"最近声明优先"匹配、随块退出自动出栈）、`SIGNAL` / `RESIGNAL`（含 `SET MESSAGE_TEXT|MYSQL_ERRNO|SQLSTATE`）、`PREPARE <stmt> FROM '<文本>'|@var` / `EXECUTE <stmt> [USING ...]` / `DEALLOCATE PREPARE`（`?` 按序绑定、过程体白名单校验、不跨 CALL 泄漏）；同时支持嵌套 `BEGIN…END` 独立作用域、`DECLARE <name> CONDITION FOR ...` 命名条件与 `GET [CURRENT] DIAGNOSTICS`（`ROW_COUNT` / `CONDITION <n>` 的 `RETURNED_SQLSTATE` / `MYSQL_ERRNO` / `MESSAGE_TEXT`）。
-- **触发器体升级为复合块（D3，P0）**：`CREATE TRIGGER ... FOR EACH ROW BEGIN <stmt>; ... END` 复用存储过程解析与执行器，自动获得块级 `DECLARE`、`IF` / `LOOP` / `WHILE` / `REPEAT` / `CASE` 与 `HANDLER`；`BEFORE INSERT/UPDATE` 支持行级 `SET NEW.<col> = <expr>` 回写（该行全部 BEFORE 触发器执行完毕后按表结构统一写回，`OLD.<col>` 只读）；`FOLLOWS` / `PRECEDES` 同表同事件命中集做稳定拓扑排序，无依赖保持创建顺序、成环按创建顺序兜底。
-- **事务保存点（D4，P1）**：`SAVEPOINT <name>` / `ROLLBACK [WORK] TO [SAVEPOINT] <name>` / `RELEASE SAVEPOINT <name>` 全语义落地，ORM 嵌套事务可直接依赖。
-- **递归 CTE（D5，P1）**：`WITH RECURSIVE <name> [(<col>, ...)] AS (<anchor> UNION [ALL] <recursive>) [, ...] <SELECT>`，支持与非递归 CTE 混用、作 `FROM` / `JOIN` 右端；深度上限由配置项 `recursive_cte_max_depth`（默认 1000，对齐 MySQL `cte_max_recursion_depth`）控制，超限报错不静默截断。附带修正 `JOIN ... ON <cond>` 紧跟外层 `)` 时被吞括号的解析缺陷。
-- **SQL JSON 函数族（D6，P1）**：新增 `JSON_VALID` / `JSON_EXTRACT` / `JSON_UNQUOTE` / `JSON_TYPE` / `JSON_LENGTH` / `JSON_OBJECT` / `JSON_ARRAY` / `JSON_SET` 共 8 个函数，自带保序文档模型（键序不被打乱、数字按 `UseNumber` 保真），输出对齐 MySQL 紧凑风格；可在投影列、`WHERE`、`UPDATE SET`、`CALL` 参数等任意表达式位置使用。
-- **远端区间聚合 + 远端 Scan 流式协议（D1，P1，`remote_range_agg` 默认 off）**：跨 region 多区间读由"逐区间独立 `QUERY_REQ` 往返"合并为"按归属节点聚合的单次 `QUERY_MULTI` 往返"，服务端按区间复用既有扫描路径后以 512 行 / 4MB 预算分块流式回传；结果与逐区间路径逐行等价，开关关闭时完全走 v1.18.0 旧路径、不发新帧。
-- **可更新视图与 `CHECK OPTION`（A1 / A2）**：单表裸列视图的 `INSERT` / `UPDATE` / `DELETE` 由视图列映射重写到基表并下沉至 `execStmt`，存储过程体、动态 SQL 与触发器体内的视图写与顶层同口径；`WITH [CASCADED|LOCAL] CHECK OPTION` 对新行求值，越界报 `CHECK OPTION failed '<view>'` 并整条语句回滚。
-- **发版口径收口（D7）**：版本常量单点化到零依赖包 `pkg/version`，`cmd/openxdb` 版本输出、MySQL 握手版本串与 `select version()` 三者同源；握手串此前停留在 `v1.17.0` 的历史漂移一并修正为 `8.0.36-OpenXDB v1.19.0`。
-
-## 新增能力（相对 v1.18.0）
-
-- **D1 远端区间聚合**：新增帧 `msgQueryMultiReq` / `msgQueryMultiResp`（编号 66/67，避开既有 REGION_PUSH 20-21、2PC 22-27、TSO 28-29、DDL 30-31、注册表 32-33、备份恢复 40-45、epoch 50、全量对齐 60-61、TSO HA 70-71）；客户端新增 `Client.ScanMulti` 与 `Manager.ScanMultiRemote`；`pkg/sql` 的 `scanMergedCluster` 在开关开启时分流至 `scanMergedClusterAgg`（按 `sharding.DecodeRegionKey` 分类，本地区间一次合并扫描、同归属节点远端区间分组单次取回，结果按内层键全局稳定排序），保留 M6 读 failover、P3 READY 前置与 P2-13 Serializable 远端读集登记语义；`remote_range_agg` 四级透传（配置默认 off → Engine → Executor 原子读写 → 执行器分流），关闭零回归可灰度回退。
-- **D2 存储过程异常处理**：条件匹配覆盖 `SQLSTATE '<值>'`、数字错误码、`SQLEXCEPTION`（非 01/02 类）、`SQLWARNING`（01 类）、`NOT FOUND`（02 类）；游标取尽（`02000`）纳入 `NOT FOUND`；无 SQLSTATE 的过程错误统一归入 `HY000`；处理器执行期间禁止 `RESIGNAL` 自捕获，`RESIGNAL` 无参即重抛当前错误。
-- **D2 存储过程动态 SQL**：`?` 占位符按出现顺序以实参字面量绑定（个数不符报 `argument count mismatch`），绑定结果走标准 `Parse` + `execStmt`，语句类型受过程体白名单校验（防止经动态 SQL 绕过过程体限制）；预处理语句表为单次 CALL 调用级。
-- **D2 嵌套块与诊断**：嵌套 `BEGIN…END` 独立作用域（块级快照整体出栈，同名变量/游标/处理器不跨块泄漏）；`GET [CURRENT] DIAGNOSTICS` 可取 `ROW_COUNT` 与 `CONDITION <n>` 的 `RETURNED_SQLSTATE` / `MYSQL_ERRNO` / `MESSAGE_TEXT`；`HANDLER` 体支持复合块，变量代入普通 SQL 时单引号按 SQL 标准转义。
-- **D3 触发器体复合块与执行顺序**：`BEGIN…END` 触发器体复用 `parseProcedureBody` + `procRunner`；`BEFORE INSERT/UPDATE` 的 `SET NEW.<col>` 行上下文累积后统一回写；`FOLLOWS` / `PRECEDES` 创建期校验互斥声明、自引用与依赖存在性。
-- **D4 事务保存点**：`pkg/txn` 新增 `SavepointTxn` 接口与 `ErrSavepointNotFound`；保存点回滚按 2PC 写集前缀截断，跨 region 保存点回滚边界见 `KNOWN_LIMITATIONS` §1.5。
-- **D5 递归 CTE**：anchor + 递归项、`UNION` / `UNION ALL`、列名列表、与非递归 CTE 混用；深度超限即报错，不静默截断。
-- **D6 JSON 函数族**：仅使用既有 `Value` 的 TEXT / INT / NULL 类型，不引入新 Kind、协议层零改动；错误口径明确（非法文本统一报 `invalid JSON text`）。
-- **A1 可更新视图**：`ViewMeta` 新增 `Updatable` / `NotUpdatableReason` / `BaseTable` / `ColumnMap` / `ColumnOrder`（均 `omitempty`，旧视图目录反序列化后按不可更新处理）；`INSERT` 无列清单时按视图列顺序映射、视图未暴露基表列走类型默认值，`UPDATE` 的 `SET` 列必须落在视图列集合内，`WHERE` 与 `ON DUPLICATE KEY UPDATE` 中的视图列引用一并重写，未暴露列报 `view <name> has no column: <col>`；写目标改为基表后权限按基表判定。
-- **A2 `WITH CHECK OPTION`**：建视图时把定义 `WHERE` 规范化为"基表裸列名"条件副本随视图目录持久化，`INSERT` / `UPDATE` 对新行求值、失败整条语句回滚；`DELETE` 不受限；`ON DUPLICATE KEY UPDATE` 更新分支与 `REPLACE` 冲突替换分支不施加校验；本版本 `LOCAL` 与 `CASCADED` 语义等价（可更新性判定要求基表为真实表，不存在下层视图级联）。
-- **D7 发版收尾**：新增零依赖包 `pkg/version`（`Version` / `MySQLServerPrefix` / `ServerVersion`），`cmd/openxdb/main.go` 版本常量、`pkg/mysqlproto` 握手版本串与 `pkg/sql` 的 `select version()` 全部取自同一常量（消除两处独立常量、修正握手串停留 `v1.17.0` 的漂移）；`RELEASE_NOTES` / `README` / `KNOWN_LIMITATIONS` / `docs/index.md` 文档口径同步；`go build ./...`、`go vet ./...`、`gofmt -l`、`go test ./...` 全绿。
-
-## 性能
-
-本版本以 SQL 兼容能力补齐为主，未改动存储引擎、WAL、事务提交与复制主路径，未重新执行 E5 标准基准复测；性能基线沿用 v1.18.0 口径（Windows 平台、8 连接、每轮 prepare 重置、3 轮取中位数）：OLTP read / write / read-write **14.15 / 13.40 / 12.60 TPS**（QPS 198.10 / 53.60 / 226.80），TPC-C 5 仓 tpmC **774.50** / tpm_total 1746.50，errs=0 / reconnects=0。Linux（RHEL 9.7 / 2 vCPU）同口径结果为 8.17 / 8.13 / 8.10 TPS、tpmC 749.50，仅作功能与稳定性验证、不作跨平台性能对标（详见 [docs/experiments/D5_linux_e5_controlled_retest.md](docs/experiments/D5_linux_e5_controlled_retest.md)）。
-
-D1 远端区间聚合的收益为往返次数下降（同归属节点多区间由"区间数"次 `QUERY_REQ` 降为"节点数"次 `QUERY_MULTI`），该项默认关闭、未纳入标准基准口径。
-
-## 兼容性说明
-
-- **数据目录兼容**：v1.19.0 保持既有数据文件格式版本（`pkg/db.DataFormatVersion`），已初始化的 v1.0.0 至 v1.18.0 数据目录可直接打开，无需迁移重建。
-- **协议兼容**：自研二进制协议（pkg/server，非 MySQL wire protocol；`--mysql-port` 启用兼容监听）。新增帧 66/67 仅在 `remote_range_agg` 开启时使用，关闭时与 v1.18.0 完全一致；握手版本串随版本常量升级为 `8.0.36-OpenXDB v1.19.0`，`select version()` 同源联动。
-- **配置兼容**：新增配置项 `recursive_cte_max_depth`（默认 1000）与 `remote_range_agg`（默认 off），均为新增项、不改变既有默认值；`ha.quorumEnabled` / `ha.epochEnabled` 默认值不变（quorum off、epoch on）；既有命令行参数与 SET PERSIST 配置项保持向后兼容。
-- **SQL 语义增量**：新增过程 `HANDLER` / `SIGNAL` / 动态 SQL / 嵌套块 / `GET DIAGNOSTICS`、触发器体复合块与 `SET NEW`、`FOLLOWS` / `PRECEDES`、`SAVEPOINT` 系列、`WITH RECURSIVE`、8 个 JSON 函数、可更新视图与 `CHECK OPTION`，均为新语法/新能力，不改变既有语句语义。
-- **无破坏性变更**：本次发布未引入数据文件格式变更或协议破坏性变更。
-
-## 已知问题
-
-详见 [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)。主要关注：
-
-- **HA quorum 仍维持默认关闭**：集群轨尚无一致性协议（无 raft 式日志复制与选举），写提交为归属节点本地提交 + 副本异步推送补齐，存在"单副本可写窗口"与 RPO>0；解除默认关闭的前置为写路径强制路由 + 2PC 参与 + 副本间持续复制/共识提交，已列入下一轮候选。
-- **HA 灰度报告未闭环项**：`docs/D4_5_ha_quorum_gray_report.md` §8.2 三项真机欠账的状态与结论以该报告原文为准，本次发布不改写其表述。
-- **跨 region 远端区间聚合默认关闭**：`remote_range_agg` 为灰度开关，开启前须通过逐行等价验证；关闭即走 v1.18.0 逐区间路径。
-- **视图能力边界**：可更新视图仅支持单表裸列定义（聚合、`JOIN`、子查询、视图套视图等定义不可更新，报错带具体条款）；列映射在建视图期固化，基表 `ALTER TABLE` 后需重建视图；`LOCAL` 与 `CASCADED` 本版本语义等价。
-- **通用边界**：SQL 为子集（暂无完整 MySQL 语法覆盖，自研二进制协议 + 可选 MySQL wire 兼容监听）；性能为单机端侧基准（8 连接），非生产级吞吐承诺。
-
-## 升级路径
-
-1. 备份：`openxdb backup` 或脚本备份数据目录（参考 scripts/rolling_upgrade.ps1）。
-2. 预检：`openxdb preflight --data-dir <dir>` 确认版本与数据格式匹配。
-3. 优雅停机：`openxdb shutdown --graceful` 或 SIGTERM。
-4. 替换二进制为 v1.19.0 并启动（数据目录不变）。
-5. 验证：`openxdb doctor`、`openxdb stats`、`openxdb version` 确认 v1.19.0；集群拓扑下抽查 `SHOW REGION ROUTES`、跨节点点查与聚合，以及业务读写与备份恢复。
-
-## 文档与支持
-
-- 产品手册（中文）：docs/product_manual_zh.md
-- 产品手册（英文）：docs/product_manual_en.md
-- 变更记录：CHANGELOG.md
-- 已知限制：KNOWN_LIMITATIONS.md
-- HA quorum 灰度报告：docs/D4_5_ha_quorum_gray_report.md
-- Linux E5 复测报告：docs/experiments/D5_linux_e5_controlled_retest.md
-- 设计文档：docs/（T1–T42、M 系列、E 系列）
-- 基准实验：docs/experiments/（E1–E5）
----
-
-# OpenXDB v1.0.0 Release Notes
-
-发布日期：2026-10-16
-
-## 开发中增量（v1.5.0-dev，2026-10-23）
-
-v1.5.0「协议与吞吐」第 1 项「客户端 pipeline 协议」已先行启动并落地（详见 CHANGELOG）：
-
-- Python 驱动新增 `Cursor.pipeline()` / `Connection.pipeline()` 流水线批量执行（底层 `OpenXDBProtocol.pipeline` 一次发送多行、按序读取响应）；
-- JDBC 驱动 `addBatch` / `executeBatch` / `executeLargeBatch` 升级为真实流水线批量执行；
-- 服务端无需改动（`REPLSession` 逐行按序处理），新增 `TestREPLSessionConsecutiveLinesInOrder` 回归测试；
-- 双驱动补正确性测试（混合语句交错）与吞吐基准（批量 vs 逐条约 1.2–1.3 倍提升）。
-
-OpenXDB 是从零自研的单机/分布式关系型数据库内核（Go + RocksDB），历经 M1–M21、T1–T42、E1–E5 全部里程碑，本版本为 v1.0.0 正式发布版。
-
-## 版本亮点
-
-- **自研单机 → 分布式内核完整能力**：从 RocksDB 存储、WAL、快照隔离事务起步，完整交付复制（M2）、分片（M3）、多节点集群（M4）、分布式 2PC 写（M5）、HA 故障转移（M6）、region 自动分裂与负载均衡（M7）、分布式事务（TSO + 分布式快照隔离 + 2PC 恢复加固，M8）等分布式能力，单机部署零触发、零回归。
-- **SQL 兼容簇**：M9–M19 依次补齐在线 DDL/查询缓存/批量导入/外键/视图、CTE/窗口函数/upsert、认证权限、分布式 SQL（join/ORDER BY/子查询）、可观测（慢查询/指标/状态）、生态接入（mysqldump 导入/binlog CDC）、M18 MySQL 兼容（prepared statement + information_schema）、M19 生态导出（JSON/Parquet）；T40–T42 收尾 MAX/MIN 聚合、算术表达式、SELECT DISTINCT、IF NOT EXISTS、CREATE TABLE AS SELECT、INSERT INTO SELECT。
-- **商业加固**：M17 审计日志与细粒度 RBAC，M21 三步加固——TLS 加密传输（T36）、监控告警（T37）、真实用户验证（T38）。
-- **可验证的性能基准**：E1–E5 基准实验全链路可复现；E5 采用标准 sysbench OLTP / TPC-C 小仓基准对齐（因自研二进制协议非 MySQL wire，以 Python PEP 249 驱动等价实测）：OLTP read 1.73 TPS（QPS 24.27）/ write 0.93 TPS（QPS 3.73）/ read-write 1.32 TPS（QPS 23.70），TPC-C 5 仓 tpmC 13.50（TPM 32.50），8 线程 × 60s/120s，0 错误。
-- **产品文档体系**：新增中英文产品手册（docs/product_manual_zh.md / docs/product_manual_en.md，11 章节对应结构）、CHANGELOG、RELEASE_NOTES、KNOWN_LIMITATIONS 与 MkDocs 站点骨架。
-
-## 新增能力（相对 v0.30.0-alpha）
-
-- **中英文产品手册**：11 章节完整产品文档，覆盖架构、SQL、复制/分片/集群、运维、性能基准、已知限制与 FAQ。
-- **T41 DDL 兼容簇（v0.29.0-alpha 起，本版本纳入发布线）**：CREATE 系列 IF NOT EXISTS（TABLE/VIEW/MATERIALIZED VIEW/INDEX/USER/ROLE/TRIGGER/PROCEDURE）+ CREATE TABLE AS SELECT。
-- **T42 INSERT INTO SELECT（v0.30.0-alpha 起）**：INSERT/REPLACE INTO ... SELECT 全闭环。
-- **发布收尾配套**：CHANGELOG.md / RELEASE_NOTES.md / KNOWN_LIMITATIONS.md 新增，README 版本定稿 v1.0.0，`openxdb version` 输出 v1.0.0，MkDocs 站点骨架（mkdocs.yml + docs/index.md）。
-
-## 兼容性说明
-
-- **数据目录兼容**：v1.0.0 保持既有数据文件格式版本（`pkg/db.DataFormatVersion`），已初始化的 v0.1.0-alpha 至 v0.30.0-alpha 数据目录可直接由 v1.0.0 打开，无需迁移重建。数据格式版本号以 `openxdb version` 输出为准。
-- **协议兼容**：自研二进制协议（pkg/server，非 MySQL wire protocol）。历史客户端（JDBC/Python 驱动）按既有帧格式可继续工作；驱动与服务器版本匹配即可。
-- **配置兼容**：命令行参数与 SET PERSIST 配置项保持向后兼容；TLS 默认仅加密监听，如需明文/TLS 共存可配置 `--tls-allow-legacy` / `SET PERSIST tls_allow_legacy=on`。
-- **升级路径**：从既有 -alpha 版本升级为 v1.0.0 时：先执行 `openxdb preflight` 检查，备份数据目录，用新版本二进制启动（数据目录不变），再执行 `openxdb doctor` 与 `openxdb stats` 验证健康；单机与集群拓扑均支持。建议先在小数据量副本上演练再切生产。
-- **无破坏性变更声明（需谨慎核实）**：本次发布未引入数据文件格式变更或协议破坏性变更，但正式发布前请在目标环境完成一次 BACKUP + RESTORE 演练与全量回归，确认无误后再替换生产二进制。
-
-## 已知问题
-
-详见 [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)。主要关注：
-
-- SQL 为子集：暂无 HAVING、部分 DDL 类型、无 MySQL wire protocol 兼容（自研二进制协议）。
-- 性能边界：全局会话锁串行 + 逐语句往返，E5 实测为单机端侧基准，非生产级吞吐。
-- 单机 → 分布式边界：分布式写需 2PC，远程写有前置条件限制。
-- 文档边界：docs/ 设计文档为中文开发记录。
-
-## 升级路径
-
-1. 备份：`openxdb backup` 或脚本备份数据目录（参考 scripts/rolling_upgrade.ps1）。
-2. 预检：`openxdb preflight --data-dir <dir>` 确认版本与数据格式匹配。
-3. 优雅停机：`openxdb shutdown --graceful` 或 SIGTERM。
-4. 替换二进制为 v1.0.0 并启动（数据目录不变）。
-5. 验证：`openxdb doctor`、`openxdb stats`、`openxdb version` 确认 v1.0.0；抽查业务读写与备份恢复。
-
-## 文档与支持
-
-- 产品手册（中文）：docs/product_manual_zh.md
-- 产品手册（英文）：docs/product_manual_en.md
-- 变更记录：CHANGELOG.md
-- 已知限制：KNOWN_LIMITATIONS.md
-- 设计文档：docs/（T1–T42、M 系列、E 系列）
-- 基准实验：docs/experiments/（E1–E5）
-*（内容由AI生成，仅供参考）*
+纯转发节点复制轨 fence 豁免：新增运行期标记 `clusterNonOwner`（权威全量视图确认本机不持有任何 region 时置位、`selfOwns=true` 时清除，不持久化）；`copyTrackWriteFenceLocked` 在 `clusterOwned` 之外追加带 `clusterOwnTerm>0 && !clusterOwned` 约束的豁免；配套 5 组单测 `pkg/db/v2020_nonowner_forward_test.go`。

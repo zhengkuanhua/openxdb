@@ -260,6 +260,10 @@ Protocol / CLI (REPL · TCP server · JDBC/Python 驱动 · MySQL wire protocol 
 
 **v2.0.1（2026-11-24 发布）**：**补丁发布，根治 H1 租约同纪元选举死锁** —— `runElect` 竞选失败未回滚 `votedEpoch` / `votedFor` 且不推进纪元，导致同纪元各候选自投互斥、租约拿不到多数派（`lease quorum not reached`）。修复后失败即完整回滚并推进纪元到 `max(seen, voted)+1`，`vote()` 同纪元拒票带回观测纪元不再自旋，选主入口加毫秒级短退避重试；新增 4 组活性单测。`--tso-lease` 仍默认 off，行为与 v2.0.0 一致。
 
+**v2.0.2（2026-11-24 发布）**：**补丁发布，修复纯转发节点被复制轨只读降级永久 fence** —— 不持有任何 region 的纯转发节点（`clusterOwned=false` 且 `readOnly=true`）此前落入「降级陈旧主」分支，整节点所有写恒报 `demoted stale master is read-only`。修复新增运行期标记 `clusterNonOwner`，`copyTrackWriteFenceLocked` 在 `clusterOwned` 之外追加豁免，且豁免须同时满足 `clusterOwnTerm>0 && !clusterOwned`（集群轨曾授予后被收回），fencing 强度未削弱。`--tso-lease` 等开关默认值不变。
+
+**v2.0.3（2026-11-25 发布）**：**补丁发布，修显式 region 视图缺失被误判为本机归属** —— v2.0.2 三机替换后复验暴露：纯转发节点重启后本地路由视图缺新表 region，旧逻辑把「视图里查不到」当作「表未切分的隐式单 region」，写请求落本地后被节点级归属 fence 拒为 `ownership revoked`，归因错向且重新授权解不开。修复以 `ImplicitRegionBit` 按 ID 位区分隐式/显式，新增 `ErrRegionViewMissing` 与写路径 `decideWriteRoute`，缺视图时异步拉权威视图自愈，无法补则明确报 `REGION_NOT_ASSIGNED`。合并 v2.0.2 未发布内容一并发布；`--tso-lease`、`ha_quorum` 等开关默认值不变。
+
 ### 完整特性
 
 - **Storage** — RocksDB-backed key-value storage via a thin C++ cgo bridge (`pkg/storage/rocksdb`), plus a pure-Go in-memory B+Tree (`pkg/storage/btree`) used as reference and comparator.
