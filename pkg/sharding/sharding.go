@@ -74,6 +74,16 @@ const RegionKeyPrefixLen = 9
 // implicitRegionID 隐式单 region 的 ID：tableID 高位置 1，与显式 region ID（低位自增）隔离。
 func implicitRegionID(tableID storage.ID) storage.ID { return tableID | (1 << 63) }
 
+// ImplicitRegionBit 隐式单 region ID 的标识位。
+const ImplicitRegionBit = uint64(1) << 63
+
+// IsImplicitRegionID 判定 rid 是否为隐式单 region ID（表未显式切分）。
+//
+// v2.0.3 写路径缺陷修复：此前 routeDecision 用"路由视图里查不到该 region"
+// 统一判为隐式单 region，导致显式 region 只是本地视图缺条目时被误判为本地
+// 单 region 写入。隐式/显式必须由 ID 位区分，视图缺失必须单独识别。
+func IsImplicitRegionID(rid storage.ID) bool { return uint64(rid)&ImplicitRegionBit != 0 }
+
 // EncodeRegionKey 物理键编码：'r' + regionID(8B 大端) + innerKey。
 // 同一 region 内键序与 innerKey 序一致；跨 region 以 regionID 前缀隔离。
 func EncodeRegionKey(regionID storage.ID, key []byte) []byte {

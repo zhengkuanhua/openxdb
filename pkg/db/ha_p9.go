@@ -39,6 +39,17 @@ import (
 // 确认"，用于封住 NEW-1 的"重启后按旧视图抢先写"窗口。
 var ErrOwnershipPending = fmt.Errorf("%w: region ownership unconfirmed after restart", ErrFenced)
 
+// ErrRegionViewMissing v2.0.3：目标 region 在本机路由视图中缺失（本机无法
+// 判定其归属）。语义独立于 ErrFenced：这里既不是"归属被更高纪元收回"，也
+// 不是"重启待确认"，而是"本机视图不全，需要先补齐路由视图再转发"。
+//
+// 缺陷背景（v2.0.2 真机复验）：node-c 的 cluster_term.meta 持久化为旧纪元
+// owned=0（clusterNonOwner && clusterOwnTerm>0），本地路由视图又缺新建表的
+// region 条目，写路径一路退到节点级 clusterOwnershipFenceLocked，把"视图缺失"
+// 误报成 "cluster ownership revoked"——错误归因指向归属，实际是视图同步问题，
+// 且该错误不可通过重新授权修复。
+var ErrRegionViewMissing = fmt.Errorf("db: target region missing from local route view")
+
 // clusterOwnershipFenceLocked 集群轨归属 fencing（调用方须持有 epochMu）。
 //   - 重启后归属待权威视图确认（clusterPend）：拒绝，避免按旧视图抢先写——
 //     该分支不要求 clusterOwnTerm>0，因为"从未经过 failover 授权、但本地视图
@@ -89,11 +100,44 @@ func (d *DB) SetLocalRegionOwner(fn func(rid uint64) (owned, known bool)) {
 //     region）→ 沿用节点级判定，保守拒写，避免口径放宽后出现静默本地写。
 func (d *DB) clusterOwnershipFenceRegion(rid uint64) error {
 	if fn := d.localRegionOwnerFn(); fn != nil {
-		if owned, known := fn(rid); known && !owned {
+		owned, known := fn(rid)
+		if known && !owned {
 			return nil
+		}
+		// v2.0.3 转发短路：本机为纯转发节点（集群轨曾授予归属后被权威视图收回，
+		// 持久化 owned=0）且本机路由视图缺该 region 条目时，归属不可判定。
+		// 该节点不可能是该 region 的陈旧主（它从未在本机持有该 region 数据），
+		// 因此不能落回节点级 revoked 判定——那会把"视图缺失"误报成
+		// "cluster ownership revoked"，误导排障且无法靠重新授权解除。
+		// 这里返回独立的 ErrRegionViewMissing（仍拒本地写，绝不静默落盘），
+		// 由 SQL 层据此触发路由视图补齐后转发给真实 owner。
+		if !known && d.forwardOnlyLocked() {
+			return fmt.Errorf("%w: region %d unknown on this forward-only node (cluster term %d, known term %d)",
+				ErrRegionViewMissing, rid, d.clusterOwnTerm, d.clusterTerm)
 		}
 	}
 	return d.clusterOwnershipFenceLocked()
+}
+
+// forwardOnlyLocked 本机是否为"纯转发节点"（调用方须持有 epochMu）。
+//
+// 定义与 v2.0.2 写 fence 豁免条件严格一致：集群轨曾授予过归属（clusterOwnTerm>0）、
+// 当前已被权威视图收回（!clusterOwned）、且运行期标记 clusterNonOwner 已置位，
+// 并且不处于重启待确认窗口（clusterPend）。这类节点（真机 node-c）不持有任何
+// region，写请求全部靠转发给真实 owner 完成。
+func (d *DB) forwardOnlyLocked() bool {
+	return d.clusterNonOwner && d.clusterOwnTerm > 0 && !d.clusterOwned && !d.clusterPend
+}
+
+// ForwardOnlyNode 对外暴露"本机是否为纯转发节点"判定（实现方为 db.DB）。
+//
+// v2.0.3：SQL 写路由需要据此区分"显式 region 但本地视图缺条目"——普通节点
+// 缺条目按旧行为保守处理（零回归），纯转发节点缺条目则必须判定为归属未知
+// （不可本地写），并触发一次权威路由视图补齐后按远端归属转发。
+func (d *DB) ForwardOnlyNode() bool {
+	d.epochMu.Lock()
+	defer d.epochMu.Unlock()
+	return d.forwardOnlyLocked()
 }
 
 // localRegionOwnerFn 取当前装配的 region 归属判定器（未装配返回 nil）。
@@ -143,6 +187,15 @@ func (d *DB) loadClusterTermMeta() {
 	// 重启前仍持有归属：先按"待确认"处理，等权威路由视图确认（NEW-1 关键）。
 	// 上一次运行已确认收回的（owned=0 且 own>0）保持收回，重启后仍拒绝写入。
 	d.clusterPend = d.clusterOwned || pending == 1
+	// v2.0.3 启动即识别纯转发节点：落盘的 owned=0 且 own>0 就是"集群轨曾授予
+	// 归属、后被权威视图收回"的持久化结果，语义与 NoteOwnershipView 收到
+	// authoritative && !selfOwns 完全一致。此前只能等权威视图帧到达才置位
+	// clusterNonOwner——真机 node-c 重启后权威视图未到达（本地也无该 region
+	// 路由），标记一直为 false，节点级 revoked 判定把"视图缺失"误报成
+	// "cluster ownership revoked"，且永远无法靠重新授权解除。
+	if !d.clusterOwned && d.clusterOwnTerm > 0 {
+		d.clusterNonOwner = true
+	}
 	if own > d.epoch {
 		d.persistEpochLocked(own) // 归属纪元与已知最大 epoch 同源单调，取并集
 	}

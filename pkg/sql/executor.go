@@ -113,6 +113,13 @@ type Executor struct {
 	// 通知 db 层推进集群轨 term（见 ha_p9.go）；nil = 未装配（空操作零回归）。
 	p9Mu              sync.Mutex
 	p9OwnershipNotify func(term uint64, selfOwns, authoritative bool)
+	// v2.0.3：显式 region 在本机路由视图缺失时的自愈限频（见 multinode.go
+	// decideWriteRoute）。写路径发现"显式 region 无本地条目"时，按冷却窗口
+	// 向任一在线 peer 拉一次权威路由视图，成功后按对端归属转发；冷却与并发
+	// 互斥避免热点写把管理面打成广播风暴。
+	routeSyncMu   sync.Mutex
+	routeSyncAt   time.Time // 上次发起视图补齐的时间
+	routeSyncBusy bool      // 视图补齐进行中（异步，不阻塞写路径）
 	// 全局会话（旧单会话 API 使用：Engine.Execute/ExecuteAs、CLI、既有测试）。
 	// 服务端多连接场景使用 NewSession 创建独立会话，显式事务状态互不干扰。
 	globalSess *Session

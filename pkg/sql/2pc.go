@@ -174,10 +174,18 @@ func (e *Executor) groupOps(ops []kvOp) ([]kvOp, map[string][]kvOp, error) {
 	}
 	for _, op := range ops {
 		rid, _ := sharding.DecodeRegionKey(op.Key)
-		owner, kind := e.routeDecision(rid)
+		owner, kind := e.decideWriteRoute(rid)
 		switch kind {
 		case routeUnassigned:
 			if enforce && e.mgr != nil && e.mgr.HasRemoteNodes() {
+				// v2.0.3：区分"region 无归属"与"显式 region 在本机视图缺失"
+				// （纯转发节点重启后权威视图未到位）。后者不说清会误导运维
+				// 反复执行 ASSIGN REGION 去"修"一个根本不缺归属的 region。
+				if e.routeViewMissing(rid) {
+					return nil, nil, &SQLError{Code: ErrCodeRegionNotAssigned, Msg: fmt.Sprintf(
+						"write to region %d rejected: region missing from local route view on this node (%s); route view resync requested, retry shortly",
+						rid, e.selfID)}
+				}
 				return nil, nil, &SQLError{Code: ErrCodeRegionNotAssigned, Msg: fmt.Sprintf(
 					"write to region %d rejected: region has no assigned owner in cluster view (run ASSIGN REGION to repair route view)", rid)}
 			}

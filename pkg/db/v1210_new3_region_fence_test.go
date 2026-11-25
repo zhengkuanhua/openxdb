@@ -62,9 +62,16 @@ func TestNew3ForwardWriteNotFencedByRegionOwnership(t *testing.T) {
 		t.Fatalf("write to locally-owned (revoked) region = %v, want ErrFenced", err)
 	}
 
-	// 归属不可判定（未指派 / owner 未注册）→ 退回节点级判定，保守拒写。
-	if err := d.AllowWriteRegion(3); !errors.Is(err, ErrFenced) {
-		t.Fatalf("undecidable region ownership = %v, want node-level ErrFenced fallback", err)
+	// 归属不可判定（未指派 / owner 未注册）：v2.0.3 起，纯转发节点返回
+	// ErrRegionViewMissing（本机路由视图缺该 region），不再是节点级 revoked
+	// ——后者会把"视图缺失"误报成"归属被收回"，掩盖真实原因（真机 node-c 症状）。
+	if err := d.AllowWriteRegion(3); !errors.Is(err, ErrRegionViewMissing) {
+		t.Fatalf("undecidable region ownership on forward node = %v, want ErrRegionViewMissing", err)
+	}
+	// 非纯转发节点（复制轨陈旧主等）仍退回节点级判定，保守拒写（见
+	// TestV203NonForwardOnlyUnknownRegionKeepsRevoked）。
+	if err := d.AllowWriteRegion(3); errors.Is(err, ErrFenced) {
+		t.Fatalf("ErrRegionViewMissing must not be reported as ErrFenced: %v", err)
 	}
 
 	// 语句级入口只做复制轨判定：节点级归属 fence 不再拦入口（NEW-3 主症状）。

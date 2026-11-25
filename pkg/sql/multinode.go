@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
 	"github.com/zhengkuanhua/openxdb/pkg/sharding"
@@ -86,6 +87,26 @@ func (e *Executor) routeDecision(rid storage.ID) (string, routeKind) {
 		// 等同于"显式分区丢归属"：否则强制路由会把未切分表的首写判为
 		// REGION_NOT_ASSIGNED（D4.5 的孤立视图专指显式 region 的归属缺失）。
 		if !e.regionIsExplicit(rid) {
+			// v2.0.3 缺陷修复：regionIsExplicit 对"本地视图完全没有该 region
+			// 条目"同样返回 false，与"隐式单 region（表未切分）"混为一谈，
+			// 于是显式 region 在本机视图缺失时被误判为本机归属，写路径一路
+			// 落到本地（紧接被节点级归属 fence 以 "ownership revoked" 拒绝，
+			// 归因指错方向，且无法靠重新授权解除）。
+			// 这里把三种情形拆开：
+			//   ① 隐式 region ID（高位标记）→ 本机，旧语义零回归；
+			//   ② 有条目但未标 Explicit（历史未切分表条目）→ 本机，旧语义；
+			//   ③ 显式 region ID 且本地无条目 → 归属未知，按缺失处理：
+			//      纯转发节点直接判 routeUnassigned（绝不本地写）；
+			//      普通节点保持旧行为，避免宽口径回归。
+			if sharding.IsImplicitRegionID(rid) {
+				return e.selfID, routeLocalOwned
+			}
+			if _, ok := e.router.FindRegion(rid); ok {
+				return e.selfID, routeLocalOwned
+			}
+			if e.forwardOnlyNode() {
+				return "", routeUnassigned
+			}
 			return e.selfID, routeLocalOwned
 		}
 		return "", routeUnassigned
@@ -100,6 +121,90 @@ func (e *Executor) routeDecision(rid storage.ID) (string, routeKind) {
 		return node, routeUnknownOwner
 	}
 	return node, routeRemoteOwned
+}
+
+// forwardOnlyWriteFence 可选能力（v2.0.3）：实现方暴露"本机是否为纯转发
+// 节点"（不持有任何 region 归属、写请求全部靠转发完成）。由 db.DB 实现，
+// 判定口径与 copyTrackWriteFenceLocked 的豁免条件保持一致。
+type forwardOnlyWriteFence interface {
+	ForwardOnlyNode() bool
+}
+
+// forwardOnlyNode 本机是否为纯转发节点（未装配或实现方不提供该能力 → false）。
+func (e *Executor) forwardOnlyNode() bool {
+	e.mu.Lock()
+	wf := e.writeFence
+	e.mu.Unlock()
+	if wf == nil {
+		return false
+	}
+	if f, ok := wf.(forwardOnlyWriteFence); ok {
+		return f.ForwardOnlyNode()
+	}
+	return false
+}
+
+// routeViewMissing 目标 region 是否为"显式 region 但本机路由视图完全无该条目"。
+// 隐式单 region（表未切分，路由不落盘）不属此列。
+func (e *Executor) routeViewMissing(rid storage.ID) bool {
+	if e.router == nil || sharding.IsImplicitRegionID(rid) {
+		return false
+	}
+	_, ok := e.router.FindRegion(rid)
+	return !ok
+}
+
+// routeSyncCooldown 路由视图补齐的冷却窗口：写路径触发补齐后，窗口内不再
+// 重复向对端拉取（热点写不会把管理面打成广播风暴）。
+const routeSyncCooldown = 2 * time.Second
+
+// requestRouteViewSync 异步向任一在线 peer 拉取一次权威 region 路由视图
+// （v2.0.3 自愈）。纯转发节点本地不落任何 region，重启后若权威视图未推送
+// 到位，本地视图会长期缺新建表的 region 条目；写路径发现缺失时经此补齐。
+// 异步执行，不阻塞写语句；冷却窗口 + 并发互斥限制频率。
+func (e *Executor) requestRouteViewSync() {
+	if e.mgr == nil || !e.mgr.HasRemoteNodes() {
+		return
+	}
+	e.routeSyncMu.Lock()
+	if e.routeSyncBusy || (!e.routeSyncAt.IsZero() && time.Since(e.routeSyncAt) < routeSyncCooldown) {
+		e.routeSyncMu.Unlock()
+		return
+	}
+	e.routeSyncAt = time.Now()
+	e.routeSyncBusy = true
+	e.routeSyncMu.Unlock()
+	selfID := e.selfID
+	mgr := e.mgr
+	go func() {
+		defer func() {
+			e.routeSyncMu.Lock()
+			e.routeSyncBusy = false
+			e.routeSyncMu.Unlock()
+		}()
+		for _, n := range mgr.ListNodes() {
+			if n.ID == selfID {
+				continue
+			}
+			if err := mgr.RequestRouteSync(n.ID, selfID); err == nil {
+				return
+			}
+		}
+	}()
+}
+
+// decideWriteRoute 写路径路由判定（v2.0.3）：在 routeDecision 之上补齐
+// "显式 region 本机视图缺失"的自愈。仅在判定为 routeUnassigned 且确实因为
+// 视图缺条目时触发一次权威视图拉取，然后重判——视图补齐后本次判定即可
+// 得到真实 owner 并走 2PC 转发；补齐尚未完成时返回 routeUnassigned，
+// 由调用方以 REGION_NOT_ASSIGNED 拒写（绝不静默落本地）。
+func (e *Executor) decideWriteRoute(rid storage.ID) (string, routeKind) {
+	owner, kind := e.routeDecision(rid)
+	if kind != routeUnassigned || !e.routeViewMissing(rid) {
+		return owner, kind
+	}
+	e.requestRouteViewSync()
+	return e.routeDecision(rid)
 }
 
 // regionHoldsLocalByID 判定本节点是否物理持有该 region 的键空间数据
