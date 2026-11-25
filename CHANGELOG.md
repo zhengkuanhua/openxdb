@@ -10,7 +10,7 @@ OpenXDB 版本变更记录。
   - **Added**：`pkg/sharding` 新增显式 ID 空间常量与水位收敛函数。`ExplicitRegionIDLimit = uint64(1)<<63` 明确显式 region ID 的取值上界（不含），`IsImplicitRegionID` 判定边界，两者共同保证显式与非隐式 ID 空间不相交；`SanitizeRegionSeq(seq, regions)` 统一纠正分配水位，四类分支：水位在界内且不小于现存显式 ID 最大值 → 原样返回；界内但落后于最大值 → 抬到最大值；越过上界（历史污染水位）→ 回退到现存显式 ID 最大值；无现存显式 region 且水位越界 → 归零重来。
   - **Fixed**：`pkg/sharding/sharding.go` 的加载路径（启动时按物理目录重建路由表）与分裂路径（`SPLIT REGION` 生成新 ID）在取 `seq` 后统一过一遍 `SanitizeRegionSeq`，历史污染水位在启动即被收敛，不再延续越界分配；`pkg/sql/sharding.go` 与 `pkg/sql/balance.go`（`BALANCE` 拆分）在分配批量 ID 前追加区间护栏——一旦 `seq + 待分配个数 >= ExplicitRegionIDLimit` 立即报错拒绝，宁可分裂失败也不产生撞号 ID。
   - **验证**：三机真机滚动替换至 v2.0.6 后清污重建表，连续分裂 16 次（region ID 5~20）全部严格小于 `1<<63`，无撞号、水位正常推进，三节点路由表与各 region 行数一致。
-  - **已知残留**：修复前产生的负 ID 隐式 region 记录（旧表 `tid` 3~7 共 5 条）仍留在路由表中，与显式 ID 空间无交叠、无撞号风险，随表重建自然消失，不做额外清理动作。
+  - **已知残留**：修复前产生的负 ID 隐式 region 记录（旧表 `tid` 3~7 共 5 条）仍留在路由表中，与显式 ID 空间无交叠、无撞号风险，随表重建自然消失，不做额外清理动作。另：本轮真机回归发现 `BALANCE` 在节点视图含跨节点隐式 region 时会整体报 `region not local`（`localRegionLoad` 隐式段缺归属过滤，v2.0.4 起既有缺陷、非本版引入），已在 `KNOWN_LIMITATIONS.md` §3.8 登记并排入后续版本线，本版不做改动。
   - 改动文件：`pkg/sharding/sharding.go`、`pkg/sql/sharding.go`、`pkg/sql/balance.go`、`pkg/sharding/d206_region_id_space_test.go`（新增）、`pkg/sql/d206_split_id_test.go`（新增）、`pkg/version/version.go`。
 
 - **v2.0.5 (2026-11-25)**：版本口径：承接 v2.0.4，把 v2.0.4 的"写完失败再拉视图自愈"升级为"建表即归属可见"，消除新建未切分表在纯转发节点上的首写失败窗口。
