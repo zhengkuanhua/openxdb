@@ -253,7 +253,13 @@ func (e *Executor) SplitTable(name string, boundaries [][]byte) error {
 		}
 	}
 	// 构造新 region 列表（显式 ID 从 seq 水位继续分配）
-	seq, _ := e.router.Dump()
+	seq, allRs := e.router.Dump()
+	// 与 splitRegion 同源防护：水位被历史隐式 ID 污染（≥1<<63）时先收敛回显式区间，
+	// 否则这里分配的显式 ID 会与 implicitRegionID(tableID) 撞号、两表共用物理键前缀。
+	seq = sharding.SanitizeRegionSeq(seq, allRs)
+	if seq+uint64(len(boundaries)+1) >= sharding.ExplicitRegionIDLimit {
+		return &SQLError{Msg: "explicit region id space exhausted"}
+	}
 	rs := make([]sharding.RegionInfo, 0, len(boundaries)+1)
 	var prev []byte // 上一 region 的 EndKey；nil 表示从表起始开始
 	for _, b := range boundaries {

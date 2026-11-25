@@ -148,6 +148,14 @@ func (e *Executor) splitRegion(meta *TableMeta, rg sharding.RegionInfo) error {
 	boundary := innerKeys[len(innerKeys)/2]
 	// 构造表级新 region 列表（显式 ID 从 seq 水位继续分配）
 	seq, all := e.router.Dump()
+	// 水位可能被历史隐式 ID 污染（≥1<<63）：分配前先收敛回显式 ID 区间，否则下面
+	// 造出的"显式" region ID 恰好等于某张表 tableID|1<<63 的隐式 ID，两张表共用
+	// 同一物理键前缀 'r'+regionID，重路由后读路径按区间扫描立即串台；同时该 ID 会
+	// 被 IsImplicitRegionID 误判为隐式，水位不再推进，每次分裂复用同一批撞号 ID。
+	seq = sharding.SanitizeRegionSeq(seq, all)
+	if seq+2 >= sharding.ExplicitRegionIDLimit {
+		return &SQLError{Msg: "explicit region id space exhausted"}
+	}
 	var newRs []sharding.RegionInfo
 	replaced := false
 	for _, r := range all {

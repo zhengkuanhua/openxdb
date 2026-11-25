@@ -89,6 +89,48 @@ const ImplicitRegionBit = uint64(1) << 63
 // 单 region 写入。隐式/显式必须由 ID 位区分，视图缺失必须单独识别。
 func IsImplicitRegionID(rid storage.ID) bool { return uint64(rid)&ImplicitRegionBit != 0 }
 
+// ExplicitRegionIDLimit 显式 region ID 的取值上界（不含）。
+//
+// 隐式 region ID 以 1<<63 位作标识（implicitRegionID(tableID) = tableID|1<<63），
+// 因此显式 ID 必须严格落在 [0, ExplicitRegionIDLimit) 区间；一旦显式 ID 越过该
+// 边界，就会与某张表 tableID 的隐式 region ID 撞号，两张表共用同一物理键前缀
+// 'r'+regionID，读路径按 region 区间扫描即串台（v2.0.5 实测事故根因）。
+const ExplicitRegionIDLimit = uint64(1) << 63
+
+// SanitizeRegionSeq 纠正显式 region ID 分配水位。
+//
+// 水位语义为"已分配的最大显式 region ID"，下次分配取 seq+1。历史版本曾把隐式
+// ID 当作显式推进水位，落盘出 ≥1<<63 的污染水位，导致 SPLIT 分配出带高位的
+// "显式" ID（随即被 IsImplicitRegionID 误判为隐式，水位再也不推进，每次分裂
+// 复用同一批撞号 ID）。本函数把水位收敛回合法区间：
+//   - 水位落在 [0, ExplicitRegionIDLimit) 且不小于现存显式 ID 最大值 → 原样返回；
+//   - 水位落在 [0, ExplicitRegionIDLimit) 但落后于现存显式 ID 最大值 → 抬到最大值；
+//   - 水位越过 ExplicitRegionIDLimit（历史污染） → 回退到现存显式 ID 最大值，
+//     无显式 region 时回退到 0。
+func SanitizeRegionSeq(seq uint64, regions []RegionInfo) uint64 {
+	var maxID uint64
+	hasExplicit := false
+	for _, rg := range regions {
+		if IsImplicitRegionID(rg.RegionID) {
+			continue
+		}
+		if !hasExplicit || uint64(rg.RegionID) > maxID {
+			maxID = uint64(rg.RegionID)
+			hasExplicit = true
+		}
+	}
+	if seq >= ExplicitRegionIDLimit {
+		if hasExplicit {
+			return maxID
+		}
+		return 0
+	}
+	if hasExplicit && seq < maxID {
+		return maxID
+	}
+	return seq
+}
+
 // EncodeRegionKey 物理键编码：'r' + regionID(8B 大端) + innerKey。
 // 同一 region 内键序与 innerKey 序一致；跨 region 以 regionID 前缀隔离。
 func EncodeRegionKey(regionID storage.ID, key []byte) []byte {
@@ -148,10 +190,12 @@ type Router struct {
 func NewRouter() *Router { return &Router{} }
 
 // SetRegions 整体替换路由表（DB.Open 加载落盘元数据时调用）。
+// 水位在此处统一过一遍 SanitizeRegionSeq：历史遗留的污染水位（≥1<<63）在启动
+// 加载时即被收敛，避免进程带着撞号风险继续分配显式 region ID。
 func (r *Router) SetRegions(seq uint64, regions []RegionInfo) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.seq = seq
+	r.seq = SanitizeRegionSeq(seq, regions)
 	r.regions = append([]RegionInfo(nil), regions...)
 	r.sortLocked()
 }
@@ -220,6 +264,8 @@ func (r *Router) Locate(tableID storage.ID, key []byte) (storage.ID, error) {
 }
 
 // ReplaceRegions 替换某表的显式 regions（SplitTable 后调用），并推进 ID 水位。
+// 水位推进前先 sanitize：调用方可能把污染水位（≥1<<63）透传进来，直接比较会让
+// 水位永久卡在隐式区间，后续每次分裂都分配同一批撞号 ID。
 func (r *Router) ReplaceRegions(tableID storage.ID, regions []RegionInfo, seq uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -230,8 +276,12 @@ func (r *Router) ReplaceRegions(tableID storage.ID, regions []RegionInfo, seq ui
 		}
 	}
 	kept = append(kept, regions...)
+	seq = SanitizeRegionSeq(seq, kept)
 	if seq > r.seq {
-		r.seq = seq
+		r.seq = SanitizeRegionSeq(r.seq, kept)
+		if seq > r.seq {
+			r.seq = seq
+		}
 	}
 	r.regions = kept
 	r.sortLocked()
