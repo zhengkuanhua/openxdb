@@ -226,7 +226,10 @@ func (e *Executor) EnsureRegionReplicas() (int, error) {
 		if len(holders) == 0 {
 			// 集群内已无任何副本：标记 lost，交由上层/运维介入（不伪造副本）。
 			e.markB1Lost(rg.RegionID)
-			log.Printf("sql: B1 region %d has no live copy in cluster (cannot recover from cluster)", rg.RegionID)
+			// v2.0.8 Q3：孤儿 region 每轮都会走到这里，改用按 region 限频的
+			// 日志出口（首次全量、窗口内只计数、窗口到期输出汇总），避免 3s
+			// 一条把真实信号淹没。
+			e.logNoLiveCopyB1(rg.RegionID)
 			if firstErr == nil {
 				firstErr = &SQLError{Msg: fmt.Sprintf("region %d has no live copy", rg.RegionID)}
 			}
@@ -356,8 +359,10 @@ func (e *Executor) recordB1Pending(rid storage.ID, downID string) {
 // clearB1Pending 清除 pending 标记（副本补齐/重指派成功后调用）。
 func (e *Executor) clearB1Pending(rid storage.ID) {
 	e.b1Mu.Lock()
-	defer e.b1Mu.Unlock()
 	delete(e.b1Pending, rid)
+	e.b1Mu.Unlock()
+	// v2.0.8 Q3：region 恢复后重置日志限频状态，下次异常重新全量输出。
+	e.clearNoLiveCopyLog(rid)
 }
 
 // b1RetryAllowed 判定 down 节点是否已过重试冷却窗口（窗口内直接返回，

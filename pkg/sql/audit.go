@@ -270,6 +270,8 @@ func auditEventOf(stmt Stmt) (event, object string, ok bool) {
 		return AuditDDL, "region:" + u64toa(s.RegionID), true
 	case *AssignRegionStmt:
 		return AuditDDL, "region:" + u64toa(s.RegionID) + "->node:" + s.NodeID, true
+	case *DropRegionStmt:
+		return AuditDDL, "region:" + u64toa(s.RegionID) + ":drop", true
 	case *BalanceStmt:
 		return AuditDDL, "cluster", true
 	// PRIVILEGE：用户 / 角色 / 授权变更

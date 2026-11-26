@@ -6,7 +6,27 @@ OpenXDB 版本变更记录。
 
 ## Unreleased
 
-- **v2.0.7 (未发布)**：版本口径：承接 v2.0.6，根治 v2.0.6 真机回归暴露的 `BALANCE` 跨节点隐式 region 归属缺陷（原 `KNOWN_LIMITATIONS.md` §3.8，v2.0.4 起既有、非 v2.0.6 引入）。
+- **v2.0.8 (2026-11-26，已打 tag v2.0.8)**：版本口径：承接 v2.0.7，只收敛 v2.0.7 三节点（201/202/203）真机分片复测暴露的 4 项遗留缺陷，不引入新特性；除 Q2 纠正错误返回值语义外，不改既有语句行为。
+  - **Fixed（Q1，P0，多行 INSERT/UPSERT 误报 `duplicate primary key`）**：写入路径的"主键是否已存在"判定此前复用读路径 `getKVCluster`，在 `allow_partial_read=on` 且归属节点不可达时会回退本地副本，本地残留/缺失副本足以让判定失真；同时 `upsertConflicts` 把"任一唯一索引冲突"一律当主键冲突，唯一索引扫描溢出到相邻索引值时会把一个并不存在的主键判成 `duplicate primary key`（真机现象：202 入口多行 INSERT 报主键重复，实际数据已全部写入）。
+    - 新增 `getKVClusterStrict` 与 `resolveOwnerForRead(rid, allowPartial)`：写路径唯一性判定恒以 strict 模式走决策链（保留自动重指派，不做部分读回退），读路径 `resolveReadOwner` 仍按 `allow_partial_read` 的既有语义。
+    - `upsertConflicts` 改为返回 `(conflicts, pkConflict, err)`，只有"磁盘已存在同主键"或"同语句 pending 行已占用同主键"才 `pkConflict=true`，其余索引命中按 `duplicate unique key` 报错。
+    - 两处抛错点（`insertRowUpsertOpsHook` 逐行 UPSERT 路径、普通 INSERT 路径）在抛错前调用新增的 `logDupConflictDiag`（`pkg/sql/dup_diag.go`），输出 region / 主键 hex / 路由视图归属 / 本节点归属，正常路径零开销。
+  - **Fixed（Q2，P0，空 region `SPLIT` 返回 `AffectedRows=1` 但未分裂）**：`splitRegion` 在内部键不足两个时此前静默 `return nil`，`execSplitRegion` 据此返回成功。现在区分"已分裂/未分裂"，空表、单行表、被清空的显式 region 执行 `SPLIT` 一律返回 `AffectedRows=0` 并回显未分裂原因，region 数量不变。
+  - **Added（Q3，P1，no live copy 日志限频）**：孤儿 region 此前每 3s 刷一条 failover 日志，长时间无人工介入会把日志打满。新增 `pkg/sql/ha_lograte.go` 按 region 维度的限频器：首次输出全量日志，窗口内仅累计计数，窗口到期汇总一条"抑制 N 条"，各 region 状态互相独立；`clearB1Pending`（region 恢复）与 `DROP REGION` 清除该 region 的限频状态，异常复现时重新全量输出。`noLiveCopyLogWindow` 由常量改为变量，便于单测缩短窗口。
+  - **Added（Q3，P1，`DROP REGION` 回收孤儿 region 路由）**：新增 `DROP REGION <regionID> [FORCE] [EXECUTE]`，清理孤儿 region 的路由/归属元数据（此前只能等 failover 反复重试，无任何语句可清）。
+    - 安全分层：默认 **dry-run**，只回显 `region_id/table_id/implicit/live_rows/force/action` 且 `AffectedRows=0`，不改任何状态；追加 `EXECUTE` 才真正执行；该 region 在本节点仍有行数据且未加 `FORCE` 时拒绝执行（`FORCE` 仅解除路由，物理数据同样保留）。
+    - 执行路径：清 no-live-copy 限频与 B1 pending → 隐式 region 走 `ForgetImplicitRegion`、显式 region 走 `DeleteRegion` → `persistRegions` 落盘 → `broadcastRegionView` 全网摘视图；仅 root 可执行（authz 登记），并入 `AuditDDL` 审计。
+    - 解析支持 `FORCE`/`EXECUTE` 任意顺序（两者均未登记为关键字，按文本匹配，与列级 `NOT` 同类处理）。
+  - **Added（Q4，P2，`BALANCE` 收敛度打点）**：`balanceOnce` 每轮输出各节点 region 数、spread、是否收敛、本轮动作，仅日志不改均衡行为；真机 4 轮 `BALANCE` 后 node-a 仍滞留 13 region 的收敛问题按排期留到 v2.0.9。
+  - **回归用例**（4 个新增用例文件，随 `go test ./pkg/sql -run TestV208` 运行）：`dup_conflict_v208_test.go`（TEXT 唯一索引前缀不误报、真主键冲突报 primary、语句内 pending 同主键报 primary、不同主键同唯一值报 unique、多行合法插入全落库）、`balance_split_semantics_v208_test.go`（空表/单行/有数据/清空后 `SPLIT` 的 `AffectedRows` 与 region 数断言）、`ha_lograte_v208_test.go`（首次全量/窗口内抑制/窗口外汇总/region 独立/clear 后重置）、`balance_drop_region_v208_test.go`（语法组合、默认 dry-run 不改状态、空 region 回收、有数据未 FORCE 拒绝且路由不变、`FORCE EXECUTE` 后路由消失）。
+  - **真机复验（201/202/203 三机滚动替换至含本次修复的二进制后）**：
+    - Q1：三入口各以全新表名执行多行 `INSERT`（3 行）均成功落库，唯一键冲突正确报 `duplicate unique key`、主键冲突正确报 `duplicate primary key`，续插 3 行后 `COUNT=6`，三入口结果一致，误报 `duplicate primary key` 现象不再复现。
+    - Q2：对仅有 1 行数据的显式 region（5/7/8）执行 `SPLIT REGION` 均返回 `Query OK, 0 rows affected`，路由表 region 数保持 26 不变（v2.0.7 下同一操作返回 1 却未分裂）。注：隐式整表 region 的 ID 为 `tableID|1<<63` 的负数编码，而 `SPLIT`/`DROP REGION` 的解析器按 `ParseUint` 取 ID，真机无法用 SQL 指定隐式 region，空表/清空后场景由 `balance_split_semantics_v208_test.go` 单测覆盖。
+    - Q3 限频：替换后连续观察 90s，三机 `journalctl` 中 `no live copy` 日志 0 条（此前每 3s 一条）。
+    - Q3 回收：对孤儿 region `9223372036854775825`（table_id=17、live_rows=0）先 `DROP REGION ...` dry-run 确认三机视图一致，再 `DROP REGION ... EXECUTE`，三机路由表由 26 条收敛为 25 条且一致，`m27_imp` 三机 12 行 / `SUM(id)=78` 保持一致，无限频日志复现。
+  - **测试结论**：`go build ./...`、`go vet ./pkg/sql` 全绿；全仓测试连跑 3 轮，`pkg/sql` 全量 73s 通过。两处偶发失败（`cmd/openxdb` 的 `TestSetupTSOHAFailoverE2E`、`pkg/server` 的 `TestM13ServerSlowQueryDisable`）已在干净 HEAD 上复现，属存量时序型 flaky，与本次改动无关。
+  - 改动文件：`pkg/sql/ast.go`、`pkg/sql/parser.go`、`pkg/sql/executor.go`、`pkg/sql/balance.go`、`pkg/sql/ha.go`、`pkg/sql/ha_b1.go`、`pkg/sql/multinode.go`、`pkg/sql/authz.go`、`pkg/sql/audit.go`、`pkg/sql/dup_diag.go`（新增）、`pkg/sql/ha_lograte.go`（新增）；用例 `dup_conflict_v208_test.go`、`balance_split_semantics_v208_test.go`、`ha_lograte_v208_test.go`、`balance_drop_region_v208_test.go`（新增）；文档 `KNOWN_LIMITATIONS.md`、`docs/DEV_PLAN_v2.0.8.md`。
+- **v2.0.7 (2026-11-26，已打 tag v2.0.7)**：版本口径：承接 v2.0.6，根治 v2.0.6 真机回归暴露的 `BALANCE` 跨节点隐式 region 归属缺陷（原 `KNOWN_LIMITATIONS.md` §3.8，v2.0.4 起既有、非 v2.0.6 引入）。
   - **Fixed**：`pkg/sql/balance.go` 的 `localRegionLoad` 隐式段补 `regionLocal(rid)` 归属过滤，与显式段对齐。隐式整表 region（未显式分片、`tableID|1<<63`）一旦归属登记到远端节点，其路由仍留在本节点路由表；旧实现无归属过滤，把它计入本地候选，按行数排序后往往优先入选 `local[0]`，`migrateRegion` 的归属校验立即失败，整轮 `BALANCE` 以 `ERROR 1045 (HY000): SQL error: region not local` 结束、零迁移（自动均衡循环走同一路径，按周期反复失败）。修复后本地负载只统计真正持有的 region，跨节点隐式 region 不再污染候选集，无需人工 `SPLIT REGION` / `ASSIGN REGION` 收拢。
   - **回归用例**：`pkg/db/db_m7_test.go` 新增 `TestM7BalanceSkipsRemoteImplicitRegion`——A 建未切分表灌 12 行（行数高于任一显式 region，确保旧实现下必被选为迁移首选）→ `ASSIGN REGION <隐式 ID> TO NODE 'B'` → `BALANCE` 应正常完成且隐式 region 归属保持 B、A 侧读转发一致。已双向验证：回退修复即 FAIL（`region not local`），应用修复 PASS；`TestM7*` 全 5 例通过。
   - 改动文件：`pkg/sql/balance.go`、`pkg/db/db_m7_test.go`、`KNOWN_LIMITATIONS.md`。

@@ -13,8 +13,45 @@ package db
 
 import (
 	"log"
+	"strings"
+	"sync"
 	"time"
 )
+
+// v2.0.8 Q3：副本维护轮次的 "no live copy" 错误日志限频（只降噪，不改行为）。
+//
+// 孤儿 region（集群内已无任何存活副本）会让 EnsureRegionReplicas 每轮（3s）
+// 返回同类错误，原先每轮无条件打印一条，一天数万行。策略与 pkg/sql 侧一致：
+// 首次全量输出、窗口内只计数、窗口到期输出一条汇总（含被抑制条数）。
+var (
+	replicaNoLiveMu       sync.Mutex
+	replicaNoLiveLast     time.Time
+	replicaNoLiveSuppress int
+)
+
+// replicaNoLiveWindow 抑制窗口；声明为变量仅为测试可缩短。
+var replicaNoLiveWindow = 5 * time.Minute
+
+// logReplicaNoLiveThrottled 按窗口限频输出 "no live copy" 类维护失败日志。
+func logReplicaNoLiveThrottled(err error) {
+	now := time.Now()
+	replicaNoLiveMu.Lock()
+	if replicaNoLiveLast.IsZero() || now.Sub(replicaNoLiveLast) >= replicaNoLiveWindow {
+		suppressed := replicaNoLiveSuppress
+		replicaNoLiveLast = now
+		replicaNoLiveSuppress = 0
+		replicaNoLiveMu.Unlock()
+		if suppressed > 0 {
+			log.Printf("db: B1 replica maintain: %v (%d similar entries suppressed in last %s)",
+				err, suppressed, replicaNoLiveWindow)
+			return
+		}
+		log.Printf("db: B1 replica maintain: %v", err)
+		return
+	}
+	replicaNoLiveSuppress++
+	replicaNoLiveMu.Unlock()
+}
 
 // defaultReplicaMaintainInterval 副本维护周期：兼顾"单副本裸奔窗口足够短"
 // 与"扫描/推送开销可控"（每次仅对未达标 region 推送）。
@@ -111,6 +148,11 @@ func (d *DB) replicaMaintainOnce() {
 	}
 	n, err := d.SQL.EnsureRegionReplicas()
 	if err != nil {
+		// v2.0.8 Q3：孤儿 region 属常态化失败，走限频出口；其它错误保持原样全量输出。
+		if strings.Contains(err.Error(), "no live copy") {
+			logReplicaNoLiveThrottled(err)
+			return
+		}
 		log.Printf("db: B1 replica maintain: %v", err)
 		return
 	}

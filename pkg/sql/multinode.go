@@ -154,9 +154,10 @@ func (e *Executor) forwardOnlyNode() bool {
 }
 
 // routeViewMissing 目标 region 是否"归属未在本机路由视图内"。
-//   ① 显式 region：本地完全无该条目；
-//   ② 隐式整表 region（表未切分）+ 纯转发节点且尚未从权威视图学到归属：
-//      同样是"视图缺失"，而非"无归属"。
+//
+//	① 显式 region：本地完全无该条目；
+//	② 隐式整表 region（表未切分）+ 纯转发节点且尚未从权威视图学到归属：
+//	   同样是"视图缺失"，而非"无归属"。
 func (e *Executor) routeViewMissing(rid storage.ID) bool {
 	if e.router == nil {
 		return false
@@ -276,6 +277,21 @@ func (e *Executor) checkRemoteReady(nodeID string) error {
 // 与 tx.Get 相同的错误语义（未命中返回 storage.ErrNotFound）。
 // M8 快照隔离：读路径携带 begin_ts，本地/远端均按版本过滤。
 func (e *Executor) getKVCluster(sess *Session, tx txn.Txn, key []byte) ([]byte, error) {
+	return e.getKVClusterMode(sess, tx, key, false)
+}
+
+// getKVClusterStrict 与 getKVCluster 相同，但禁止"归属不可达时回退本地副本"：
+// 用于写路径的主键唯一性判定（v2.0.8 Q1）。写前检查必须看到权威数据，
+// 若沿用 allow_partial_read 的部分读语义，本地残留副本会让 INSERT 误判为
+// duplicate primary key，而真实写入仍成功——即"返回值与真实状态不一致"。
+func (e *Executor) getKVClusterStrict(sess *Session, tx txn.Txn, key []byte) ([]byte, error) {
+	return e.getKVClusterMode(sess, tx, key, true)
+}
+
+// getKVClusterMode 集群感知点查的实体实现。
+// 与 tx.Get 相同的错误语义（未命中返回 storage.ErrNotFound）。
+// M8 快照隔离：读路径携带 begin_ts，本地/远端均按版本过滤。
+func (e *Executor) getKVClusterMode(sess *Session, tx txn.Txn, key []byte, strict bool) ([]byte, error) {
 	bs := e.snapshotTS(sess)
 	if !e.clusterEnabled() {
 		bs = 0
@@ -292,7 +308,14 @@ func (e *Executor) getKVCluster(sess *Session, tx txn.Txn, key []byte) ([]byte, 
 	// M6 读 failover：归属节点 down 时先自动重指派，再按新路由转发。
 	// NEW-6：重指派后仍无存活持有者时默认显式报错（不再静默回退本地副本），
 	// allow_partial_read=on 才退回旧的"本地副本尽力服务"行为。
-	node, oerr := e.resolveReadOwner(rid)
+	// v2.0.8 Q1：strict 模式（写路径唯一性判定）恒不走部分读回退。
+	var node string
+	var oerr error
+	if strict {
+		node, oerr = e.resolveOwnerForRead(rid, false)
+	} else {
+		node, oerr = e.resolveReadOwner(rid)
+	}
 	if oerr != nil {
 		return nil, oerr
 	}

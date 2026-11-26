@@ -95,6 +95,14 @@ type Executor struct {
 	// 挂起并由就绪事件补发，杜绝"句柄未就绪/已释放仍做快照"导致的原生崩溃
 	//（见 ha_b1_gate.go）。
 	b1Gate *b1StorageGate
+	// v2.0.8 Q3：孤儿 region "no live copy" 日志限频状态（见 ha_lograte.go）。
+	// 同一 region 首次全量输出原因，噪声窗口内只累计次数，窗口到期输出一条
+	// 汇总；region 重指派成功或像素恢复时清空状态，重新从全量输出开始。
+	noLiveMu  sync.Mutex
+	noLiveLog map[storage.ID]*noLiveLogStat
+	// v2.0.8 Q3 第二层：B1 副本维护循环（ha_b1.go）的同类日志独立限频，
+	// 与 failover 重试日志分开计数，互不干扰。
+	noLiveB1Log map[storage.ID]*noLiveLogStat
 	// P2 HA：陈旧路由消息冲突计数（分区恢复合并冲突标记，见 ha_p2.go）。
 	p2Mu           sync.Mutex
 	regionConflict uint64
@@ -1043,6 +1051,8 @@ func (e *Executor) execStmt(sess *Session, stmt Stmt) (*Result, error) {
 		return e.execAssignRegion(sess, s)
 	case *SplitRegionStmt:
 		return e.execSplitRegion(sess, s)
+	case *DropRegionStmt:
+		return e.execDropRegion(sess, s)
 	case *BalanceStmt:
 		return e.execBalance(sess, s)
 	case *BackupStmt:
@@ -2941,10 +2951,13 @@ func (e *Executor) insertRowOps(sess *Session, tx txn.Txn, tabs []*TableMeta, me
 		return nil, false, err
 	}
 	key := e.rowKeyAt(meta, rid, pk)
-	if _, err := e.getKVCluster(sess, tx, key); err == nil {
+	// v2.0.8 Q1：主键唯一性判定走严格读，不允许部分读回退到本地副本。
+	if _, err := e.getKVClusterStrict(sess, tx, key); err == nil {
 		if dupSkip {
 			return nil, false, nil
 		}
+		// v2.0.8 Q1：记录冲突判定现场，便于真机定位"幽灵行"误报来源。
+		e.logDupConflictDiag(dupDiagInsertRow, meta, rid, key)
 		return nil, false, &SQLError{Msg: "duplicate primary key: " + meta.Name}
 	} else if err != storage.ErrNotFound {
 		return nil, false, err
@@ -3006,13 +3019,16 @@ func (e *Executor) insertRowUpsertOpsHook(sess *Session, tx txn.Txn, tabs []*Tab
 	}
 	key := e.rowKeyAt(meta, rid, pk)
 	diskExists := false
-	if _, err := e.getKVCluster(sess, tx, key); err == nil {
+	// v2.0.8 Q1：写路径的主键唯一性判定走严格读，不允许 allow_partial_read 的
+	// 本地副本回退，否则本地残留副本会把不存在的键读成"已存在"，误报
+	// duplicate primary key 而实际写入成功。
+	if _, err := e.getKVClusterStrict(sess, tx, key); err == nil {
 		diskExists = true
 	} else if err != storage.ErrNotFound {
 		return nil, 0, err
 	}
 	// 收集全部冲突行（主键 + 唯一索引，磁盘 + pending，去重）
-	conflicts, err := e.upsertConflicts(sess, tx, meta, vals, pk, diskExists, *pending)
+	conflicts, pkConflict, err := e.upsertConflicts(sess, tx, meta, vals, pk, diskExists, *pending)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -3052,7 +3068,14 @@ func (e *Executor) insertRowUpsertOpsHook(sess *Session, tx txn.Txn, tabs []*Tab
 		return e.replaceRowOps(sess, tx, tabs, meta, vals, pk, rid, conflicts, diskExists, pending)
 	}
 	// 普通 INSERT：报冲突错误
-	if diskExists || bytes.Equal(conflicts[0], pk) {
+	// v2.0.8 Q1：错误码以"主键是否真的存在"为准。旧实现用 conflicts[0]==pk 判定
+	// 主键冲突，而 conflicts 里混有从唯一索引项反解出来的 pk，索引键解析一旦错位
+	// 或范围扫描溢出到相邻索引值，就会把一个并未存在的主键判成 duplicate primary
+	// key，造成"报错但实际能写"的误报。现在只有 diskExists / pending 命中同主键
+	// 才算主键冲突，其余一律按唯一索引冲突报错。
+	if pkConflict {
+		// v2.0.8 Q1：记录冲突判定现场，便于真机定位"幽灵行"误报来源。
+		e.logDupConflictDiag(dupDiagUpsertHook, meta, rid, key)
 		return nil, 0, &SQLError{Msg: "duplicate primary key: " + meta.Name}
 	}
 	return nil, 0, &SQLError{Msg: "duplicate unique key on " + meta.Name}
@@ -3060,8 +3083,9 @@ func (e *Executor) insertRowUpsertOpsHook(sess *Session, tx txn.Txn, tabs []*Tab
 
 // upsertConflicts 收集与待插入行冲突的所有既有行 pk（去重）：
 // 磁盘主键冲突、磁盘各唯一索引冲突、pending 主键/唯一冲突。
-// 返回按发现顺序；普通 INSERT 报错时主键冲突优先。
-func (e *Executor) upsertConflicts(sess *Session, tx txn.Txn, meta *TableMeta, vals []Value, pk []byte, diskExists bool, pending [][]Value) ([][]byte, error) {
+// 返回按发现顺序；pkConflict 表示"主键本身已存在"（磁盘或 pending 命中同主键），
+// 调用方据此区分 duplicate primary key 与 duplicate unique key（v2.0.8 Q1）。
+func (e *Executor) upsertConflicts(sess *Session, tx txn.Txn, meta *TableMeta, vals []Value, pk []byte, diskExists bool, pending [][]Value) ([][]byte, bool, error) {
 	seen := map[string]bool{}
 	var out [][]byte
 	add := func(cpk []byte) {
@@ -3075,10 +3099,14 @@ func (e *Executor) upsertConflicts(sess *Session, tx txn.Txn, meta *TableMeta, v
 		seen[k] = true
 		out = append(out, cpk)
 	}
+	pkConflict := diskExists
 	if diskExists {
 		add(pk)
 	}
-	// 磁盘唯一索引冲突
+	// 磁盘唯一索引冲突：范围按 [val, val+0xff] 扫描，TEXT 等变长索引值存在前缀关系
+	// 时会溢出到相邻索引值，因此必须用完整索引键前缀（含 'p' 分隔符）做精确匹配；
+	// pk 后缀边界也由该前缀确定，避免变长值 / 主键含 0x70('p') 字节时的解析错位
+	// （v2.0.8 Q1：错位解析会把无关行反解成本行主键，误报 duplicate primary key）。
 	for i := range meta.Indexes {
 		idx := &meta.Indexes[i]
 		if !idx.Unique {
@@ -3086,28 +3114,35 @@ func (e *Executor) upsertConflicts(sess *Session, tx txn.Txn, meta *TableMeta, v
 		}
 		val, err := indexColValue(meta, idx, vals)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		start := EncodeIndexKey2(meta.ID, idx.ID, val, nil)
+		prefix := EncodeIndexKey2(meta.ID, idx.ID, val, nil)
+		start := prefix
 		end := EncodeIndexKey2(meta.ID, idx.ID, append(append([]byte{}, val...), 0xff), nil)
 		pairs, err := e.scanMergedCluster(sess, tx, e.indexRanges(meta, idx.ID, start, end))
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		for _, kv := range pairs {
-			epk := indexPKSuffixLen(innerOf(kv.Key), len(val))
-			if !bytes.Equal(epk, pk) {
-				add(epk)
+			inner := innerOf(kv.Key)
+			if !bytes.HasPrefix(inner, prefix) {
+				continue // 溢出扫到的相邻索引值项，与本次唯一性判定无关
 			}
+			epk := inner[len(prefix):]
+			if len(epk) == 0 || bytes.Equal(epk, pk) {
+				continue
+			}
+			add(epk)
 		}
 	}
 	// pending 主键冲突
 	for _, prow := range pending {
 		ppk, err := e.pkOf(meta, prow)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if bytes.Equal(ppk, pk) {
+			pkConflict = true
 			add(ppk)
 			break
 		}
@@ -3120,26 +3155,26 @@ func (e *Executor) upsertConflicts(sess *Session, tx txn.Txn, meta *TableMeta, v
 		}
 		val, err := indexColValue(meta, idx, vals)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		for _, prow := range pending {
 			ppk, err := e.pkOf(meta, prow)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			if bytes.Equal(ppk, pk) {
 				continue
 			}
 			pv, err := indexColValue(meta, idx, prow)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			if bytes.Equal(val, pv) {
 				add(ppk)
 			}
 		}
 	}
-	return out, nil
+	return out, pkConflict, nil
 }
 
 // onDupUpdateOps ON DUPLICATE KEY UPDATE：更新冲突行（不改变其主键身份）。

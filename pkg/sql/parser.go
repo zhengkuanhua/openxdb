@@ -934,6 +934,37 @@ func (p *parser) parseSplitRegion() (Stmt, error) {
 	return &SplitRegionStmt{RegionID: rid}, nil
 }
 
+// parseDropRegion DROP REGION <regionID> [FORCE]：回收孤儿 region 的路由/归属。
+// v2.0.8 Q3：FORCE 允许在本节点仍有行数据时清除路由（数据保留不删）。
+func (p *parser) parseDropRegion() (Stmt, error) {
+	if err := p.expectKeyword("REGION"); err != nil {
+		return nil, err
+	}
+	ridTok, err := p.expect(tokNumber, "region id")
+	if err != nil {
+		return nil, err
+	}
+	rid, err := strconv.ParseUint(ridTok.text, 10, 64)
+	if err != nil {
+		return nil, errf("invalid region id %q", ridTok.text)
+	}
+	s := &DropRegionStmt{RegionID: rid}
+	// FORCE / EXECUTE 未登记为关键字，按文本匹配即可（与列级 NOT 等同类处理）；
+	// 两者均允许，顺序不限，便于运维按 FORCE EXECUTE / EXECUTE FORCE 两种写法书写。
+	for {
+		switch {
+		case strings.EqualFold(p.cur().text, "FORCE"):
+			p.next()
+			s.Force = true
+		case strings.EqualFold(p.cur().text, "EXECUTE"):
+			p.next()
+			s.Execute = true
+		default:
+			return s, nil
+		}
+	}
+}
+
 // parseIfNotExists 解析 CREATE 系列可选的 IF NOT EXISTS（T41）。
 // 与 DROP 系列的 IF EXISTS 模式一致，仅中间多一个 NOT（NOT 未登记为关键字，
 // 与列级 NOT NULL 同按文本匹配）。
@@ -1751,9 +1782,12 @@ func (p *parser) parseDrop() (Stmt, error) {
 	case "ROLE":
 		// M17：DROP ROLE [IF EXISTS] '<role>'
 		return p.parseDropRole()
+	case "REGION":
+		// v2.0.8 Q3：DROP REGION <regionID> [FORCE]
+		return p.parseDropRegion()
 	case "TABLE":
 	default:
-		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW, USER, TRIGGER, PROCEDURE or ROLE at %d, got %q", p.cur().pos, p.cur().text)
+		return nil, errf("expected TABLE, INDEX, VIEW, MATERIALIZED VIEW, USER, TRIGGER, PROCEDURE, ROLE or REGION at %d, got %q", p.cur().pos, p.cur().text)
 	}
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err

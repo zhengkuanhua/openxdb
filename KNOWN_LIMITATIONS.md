@@ -138,6 +138,19 @@
 - **建议**：需要均衡时逐节点执行 `BALANCE` 并观察返回，遇 `region not local` 先 `SHOW REGION ROUTES` 确认该节点视图中的隐式 region（负 region_id）归属，把非本机归属的表先 `SPLIT REGION` 显式化或 `ASSIGN REGION` 收拢到本机后再均衡。**根治方案**：在 `localRegionLoad` 的隐式段补 `regionLocal` 过滤（与显式段对齐），或让 `balanceOnce` 跳过迁移失败候选继续尝试下一个，已排入后续版本线，本条保留至修复发布。
 - **修复状态（v2.0.7，未发布）**：已按根治方案第一条落地——`pkg/sql/balance.go` 的 `localRegionLoad` 隐式段在构造隐式 region ID 后补 `regionLocal(rid)` 过滤，与显式段对齐；本机候选集只保留真正持有的 region。回归用例 `pkg/db/db_m7_test.go::TestM7BalanceSkipsRemoteImplicitRegion`（未切分表 12 行 → `ASSIGN REGION` 给对端 → `BALANCE`）双向验证：回退修复即复现 `region not local` 失败，应用修复通过。升级 v2.0.7 后本节前两句的人工规避（逐节点 `BALANCE` + 手工 `SPLIT REGION` / `ASSIGN REGION` 收拢）不再必要，历史跨节点隐式 region 可原样保留；`balanceOnce` 遇单个 region 迁移失败仍整轮返回错误（仅暴露真实迁移故障，不再是误判）。
 
+### 3.9 手动 `BALANCE` 不保证收敛（v2.0.7 三机复测发现，v2.0.8 仅补收敛度打点）
+
+- **限制描述**：`balanceOnce` 的迁移判据是"本节点 region 数 > 最闲节点 region 数 + 1"，只按 region 计数做差，不看行数分布与历史迁移记录。三机复测（201/202/203）连续 4 轮 `BALANCE` 后，node-a 仍滞留 13 个 region 未向空闲节点摊开；个别轮次返回的迁移条数与 `SHOW REGION ROUTES` 的实际变化也不完全对应。
+- **影响**：分片布局可能长期偏斜，热点节点读放大与内存占用高于预期；`BALANCE` 返回成功不等于布局已均衡，运维若只看返回码会误判。
+- **建议**：以多轮 `BALANCE` + `SHOW REGION ROUTES` 实际核对为准，不要依赖单轮返回；需要精确布局时用 `SPLIT REGION` / `ASSIGN REGION` 手工收拢。数据一致性不受影响（迁移经 2PC 与路由切换，跨节点迁移数据无损）。
+- **修复状态（v2.0.8）**：本版只落地可观测性——`balanceOnce` 每轮输出各节点 region 数、spread、converged、本轮 action，行为不变；收敛判据本身（含行数加权、多轮单调性）排入 v2.0.9 修复，本条保留至修复发布。
+
+### 3.10 `DROP REGION` 只回收路由、不删数据（v2.0.8 新增语句的边界）
+
+- **限制描述**：`DROP REGION <regionID> [FORCE] [EXECUTE]` 用于清理无存活副本的孤儿 region，作用范围仅限路由条目与隐式归属映射，**物理键空间数据一律保留**。语句默认 dry-run（`AffectedRows=0`，只回显 `region_id/table_id/implicit/live_rows/force/action`），须显式追加 `EXECUTE` 才真正执行；该 region 在本节点仍有行数据且未加 `FORCE` 时拒绝执行，`FORCE` 只解除路由、同样不删数据。
+- **影响**：不能把 `DROP REGION` 当作"删除表数据"或"腾出磁盘"的手段——被摘掉路由的 region 数据仍占空间；隐式整表 region（`tableID|1<<63`）被 DROP 后，该表下次被访问时会按隐式归属规则重新派生路由，等同"清掉一次性认知"而非永久删除。`FORCE` 会把仍在用的 region 从集群视图中摘除，之后写入该 region 的数据将不可见（数据仍在盘上），属高危操作。
+- **建议**：只对确认无存活副本的孤儿 region（例如 `no live copy` 日志中反复出现的 `92233720368547758xx`）使用；先跑不带 `EXECUTE` 的 dry-run 核对 `live_rows` 与 `action`，再决定是否 `FORCE EXECUTE`。需要真正释放数据请走 `DROP TABLE` 或对应表级清理流程。
+
 ## 4. 文档边界
 
 - **限制描述**：docs/ 下设计文档（T1–T42、M 系列、E 系列）为中文开发记录，供实现追溯与深入阅读；产品手册提供中英文 11 章节面向用户文档。

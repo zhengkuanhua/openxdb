@@ -874,6 +874,23 @@ type SplitRegionStmt struct {
 
 func (SplitRegionStmt) stmt() {}
 
+// DropRegionStmt DROP REGION <regionID> [FORCE] [EXECUTE]：
+// 回收孤儿 region 的路由/归属元数据。
+// v2.0.8 Q3：孤儿 region（无任何存活副本）此前只能等 failover 反复重试，且无任何
+// 语句可清理其路由条目。本语句只清路由与归属记录，**永不删除物理数据**。
+//
+// 安全分层（高危管理命令，默认不改任何状态）：
+//  1. 默认 dry-run：只回显该 region 的表/归属/本地存活行数/将执行的动作，AffectedRows=0；
+//  2. 真正执行须显式追加 EXECUTE（二次确认语义），未加 EXECUTE 不会摘任何路由；
+//  3. 未经 FORCE 且该 region 在本节点仍有行数据时拒绝执行，避免把在用数据摘掉路由。
+type DropRegionStmt struct {
+	RegionID uint64 // 显式 region ID 或隐式单 region ID（tableID|1<<63）
+	Force    bool   // 本地仍有行数据时也允许清除路由（数据保留，仅解除归属）
+	Execute  bool   // 显式 EXECUTE 才真正执行；缺省为 dry-run 预览
+}
+
+func (DropRegionStmt) stmt() {}
+
 // BalanceStmt BALANCE：手动触发一次负载均衡（迁移过载本地 region 到最闲存活节点）。
 type BalanceStmt struct{}
 

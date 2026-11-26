@@ -19,7 +19,10 @@ package sql
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
@@ -77,7 +80,9 @@ func (e *Executor) checkAutoSplit(meta *TableMeta) error {
 			return err
 		}
 		if n >= e.splitCfg.rowThreshold {
-			return e.splitRegion(meta, rg)
+			// v2.0.8 Q2：splitRegion 返回是否真正分裂；自动分裂路径忽略该标记。
+			_, serr := e.splitRegion(meta, rg)
+			return serr
 		}
 	}
 	return nil
@@ -116,13 +121,17 @@ func (e *Executor) countRegionRows(meta *TableMeta, rg sharding.RegionInfo) (int
 // 边界 = 行键排序中点（EncodeRegionKey 边界语义：r1.EndKey=boundary 排他，
 // r2.StartKey=boundary 包含），数据、索引键在同一事务内重路由到两个子 region，
 // 路由表替换与 m:regions 落盘同事务原子完成；副本（Node/Local）继承原 region。
-func (e *Executor) splitRegion(meta *TableMeta, rg sharding.RegionInfo) error {
+//
+// v2.0.8 Q2：返回 (split, err)。split=false 表示 region 内有效行不足两行、
+// 无法求中点因而未产生任何新 region（元数据与路由均未改动，属"未分裂"而非
+// "分裂成功"）；调用方据此构造 AffectedRows，避免把空 region 的 SPLIT 误报成功。
+func (e *Executor) splitRegion(meta *TableMeta, rg sharding.RegionInfo) (bool, error) {
 	if !e.regionLocal(rg.RegionID) {
-		return &SQLError{Msg: fmt.Sprintf("region %d not local", rg.RegionID)}
+		return false, &SQLError{Msg: fmt.Sprintf("region %d not local", rg.RegionID)}
 	}
 	tx, err := e.tm.Begin()
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
 	start := sharding.EncodeRegionKey(rg.RegionID, rg.StartKey)
@@ -132,7 +141,7 @@ func (e *Executor) splitRegion(meta *TableMeta, rg sharding.RegionInfo) error {
 	}
 	pairs, err := e.scanMerged(tx, []storage.KeyRange{{Start: start, End: end}})
 	if err != nil {
-		return err
+		return false, err
 	}
 	var innerKeys [][]byte
 	for _, kv := range pairs {
@@ -142,7 +151,8 @@ func (e *Executor) splitRegion(meta *TableMeta, rg sharding.RegionInfo) error {
 		}
 	}
 	if len(innerKeys) < 2 {
-		return nil // 不足两行不分裂（保持单 region）
+		// 不足两行不分裂（保持单 region）：v2.0.8 Q2 语义化为"未分裂"。
+		return false, nil
 	}
 	sort.Slice(innerKeys, func(i, j int) bool { return bytes.Compare(innerKeys[i], innerKeys[j]) < 0 })
 	boundary := innerKeys[len(innerKeys)/2]
@@ -154,7 +164,7 @@ func (e *Executor) splitRegion(meta *TableMeta, rg sharding.RegionInfo) error {
 	// 被 IsImplicitRegionID 误判为隐式，水位不再推进，每次分裂复用同一批撞号 ID。
 	seq = sharding.SanitizeRegionSeq(seq, all)
 	if seq+2 >= sharding.ExplicitRegionIDLimit {
-		return &SQLError{Msg: "explicit region id space exhausted"}
+		return false, &SQLError{Msg: "explicit region id space exhausted"}
 	}
 	var newRs []sharding.RegionInfo
 	replaced := false
@@ -199,18 +209,18 @@ func (e *Executor) splitRegion(meta *TableMeta, rg sharding.RegionInfo) error {
 	}
 	// 存量数据重路由 + 更新路由表 + 落盘（与 SplitTable 同事务语义）
 	if err := e.remapTable(tx, meta, newRs); err != nil {
-		return err
+		return false, err
 	}
 	e.router.ReplaceRegions(storage.ID(meta.ID), newRs, seq)
 	raw, err := saveRegionMeta(e)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := tx.Put(metaRegionsKey, raw); err != nil {
-		return err
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return err
+		return false, err
 	}
 	// 路由变更全网广播：SPLIT 产生的新 region 划分向所有已注册节点增量同步，
 	// 并删除旧 region 路由，避免各节点视图不一致导致路由错乱；
@@ -223,7 +233,10 @@ func (e *Executor) splitRegion(meta *TableMeta, rg sharding.RegionInfo) error {
 			changed = append(changed, r)
 		}
 	}
-	return e.broadcastRegionView(changed, []storage.ID{rg.RegionID})
+	if err := e.broadcastRegionView(changed, []storage.ID{rg.RegionID}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // execSplitRegion SPLIT REGION <regionID>：手动分裂入口（沿数据中点）。
@@ -243,9 +256,91 @@ func (e *Executor) execSplitRegion(sess *Session, s *SplitRegionStmt) (*Result, 
 	if meta == nil {
 		return nil, &SQLError{Msg: "table not found"}
 	}
-	if err := e.splitRegion(meta, rg); err != nil {
+	split, err := e.splitRegion(meta, rg)
+	if err != nil {
 		return nil, err
 	}
+	// v2.0.8 Q2：空 region / 有效行不足两行时分裂不成立，返回 AffectedRows=0
+	//（"未分裂"），不再无条件返回 1 掩盖静默失败。
+	if !split {
+		return &Result{AffectedRows: 0}, nil
+	}
+	return &Result{AffectedRows: 1}, nil
+}
+
+// execDropRegion DROP REGION <regionID> [FORCE]：回收孤儿 region 的路由与归属记录。
+//
+// v2.0.8 Q3：孤儿 region（如 9223372036854775825 这类隐式 ID 表已无存活副本）此前
+// 既无法通过 SPLIT/BALANCE/ASSIGN 收敛，也没有任何语句能清掉它的路由或归属，
+// failover 冷却窗口到期后反复重试、日志持续刷屏。本语句提供显式回收入口。
+//
+// 安全边界（只摘元数据，绝不删数据）：
+//  1. 只删除路由条目 / 隐式归属映射，并广播到全网，物理键空间原样保留；
+//  2. 未经 FORCE 时，若本节点该 region 键空间仍有行数据则拒绝执行，防止把在用
+//     region 的路由摘掉导致数据"看不见"；
+//  3. 仅 root 可执行（authz 与本语句同一登记表），幂等：region 不存在时报错而非静默。
+func (e *Executor) execDropRegion(sess *Session, s *DropRegionStmt) (*Result, error) {
+	rid := storage.ID(s.RegionID)
+	rg, ok := e.router.FindRegion(rid)
+	implicit := false
+	if !ok {
+		irg, iok := e.implicitRegion(rid)
+		if !iok {
+			return nil, &SQLError{Msg: fmt.Sprintf("region not found: %d", s.RegionID)}
+		}
+		rg, implicit = irg, true
+	}
+	// 在用数据保护：本节点仍有行时不轻易摘路由（隐式 region 同理）。
+	rows, err := e.countRegionRows(e.tableMetaByID(rg.TableID), rg)
+	if err != nil {
+		return nil, err
+	}
+	// 默认 dry-run（高危命令的第一道闸）：只回显将影响的对象与动作，不改任何状态。
+	// 运维确认无误后再以 DROP REGION <id> EXECUTE [FORCE] 二次提交。
+	if !s.Execute {
+		action := "would drop routing (data kept)"
+		if rows > 0 && !s.Force {
+			action = "refused: region still holds local rows, add FORCE to drop routing anyway"
+		}
+		log.Printf("sql: DROP REGION dry-run region=%d (table=%d implicit=%v rows=%d force=%v) action=%s",
+			s.RegionID, rg.TableID, implicit, rows, s.Force, action)
+		return &Result{
+			Columns: []string{"dry_run", "region_id", "table_id", "implicit", "live_rows", "force", "action"},
+			Rows: [][]Value{{
+				StrVal("1"),
+				StrVal(strconv.FormatUint(s.RegionID, 10)),
+				StrVal(strconv.FormatInt(int64(rg.TableID), 10)),
+				StrVal(boolValStr(implicit)),
+				StrVal(strconv.FormatInt(rows, 10)),
+				StrVal(boolValStr(s.Force)),
+				StrVal(action),
+			}},
+		}, nil
+	}
+	if rows > 0 && !s.Force {
+		return nil, &SQLError{Msg: fmt.Sprintf(
+			"region %d still holds %d rows locally; use DROP REGION %d FORCE EXECUTE to drop routing only (data is kept)",
+			s.RegionID, rows, s.RegionID)}
+	}
+	// 清除该 region 的 no-live-copy 限频状态，避免回收后残留抑制计数。
+	e.clearNoLiveCopyLog(rid)
+	e.clearB1Pending(rid)
+	if implicit {
+		e.router.ForgetImplicitRegion(rg.TableID)
+	} else {
+		if err := e.router.DeleteRegion(rid); err != nil {
+			return nil, err
+		}
+	}
+	if err := e.persistRegions(); err != nil {
+		return nil, err
+	}
+	// 全网广播删除：各节点同步摘掉该 region 视图，避免残留视图继续参与路由决策。
+	if err := e.broadcastRegionView(nil, []storage.ID{rid}); err != nil {
+		return nil, err
+	}
+	log.Printf("sql: dropped region %d routing (table=%d implicit=%v rows=%d force=%v, data kept)",
+		s.RegionID, rg.TableID, implicit, rows, s.Force)
 	return &Result{AffectedRows: 1}, nil
 }
 
@@ -266,7 +361,8 @@ func (e *Executor) splitRegionByID(regionID uint64) error {
 	if meta == nil {
 		return &SQLError{Msg: "table not found"}
 	}
-	return e.splitRegion(meta, rg)
+	_, err := e.splitRegion(meta, rg)
+	return err
 }
 
 // tableMetaByID 按表 ID 查表元数据。
@@ -387,23 +483,53 @@ func (e *Executor) balanceOnce() (int, error) {
 	// 目标 = 持有 region 数最少的存活节点（第一簇不做跨节点行数查询，用 region 数近似负载）
 	target := candidates[0]
 	minRegions := int(^uint(0) >> 1)
+	counts := map[string]int{e.selfID: len(local)}
 	for _, c := range candidates {
 		cnt := e.regionCountOnNode(c)
+		counts[c] = cnt
 		if cnt < minRegions {
 			minRegions = cnt
 			target = c
 		}
 	}
-	// 均衡判据：本节点 region 数 > 目标节点 region 数 + 1 才迁移（避免乒乓迁移）
+	// v2.0.8 Q4：每轮打点收敛度（各节点 region 数 + 极差 + 是否已收敛 + 本轮动作），
+	// 供"BALANCE 多轮后仍不收敛"定位到底是判据未触发还是迁移失败，不改均衡行为。
 	if len(local) <= minRegions+1 {
+		e.logBalanceRound(counts, len(local), minRegions, "skip-no-spread")
 		return 0, nil
 	}
 	// 迁移行数最大的本地 region
 	sort.Slice(local, func(i, j int) bool { return local[i].rows > local[j].rows })
 	if err := e.migrateRegion(local[0].rg, target); err != nil {
+		e.logBalanceRound(counts, len(local), minRegions, "migrate-error:"+err.Error())
 		return 0, err
 	}
+	e.logBalanceRound(counts, len(local), minRegions,
+		fmt.Sprintf("migrate-region:%d->%s", local[0].rg.RegionID, target))
 	return 1, nil
+}
+
+// logBalanceRound v2.0.8 Q4 打点：输出一轮均衡的收敛度快照。
+//
+// 字段含义：self=本节点 region 数；各节点 region 数；spread=本轮参与比较的极差
+// （本节点 - 最闲节点）；converged=极差是否已在不迁移阈值内（<=1）；action=本轮动作。
+// 打点只读路由视图，不改变均衡判定与迁移行为。
+func (e *Executor) logBalanceRound(counts map[string]int, localCount, minRegions int, action string) {
+	// 节点按名字排序，保证同一拓扑下日志可比对。
+	names := make([]string, 0, len(counts))
+	for n := range counts {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for i, n := range names {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, "%s=%d", n, counts[n])
+	}
+	log.Printf("sql: balance round: local=%d nodes={%s} spread=%d converged=%v action=%s",
+		localCount, b.String(), localCount-minRegions, localCount-minRegions <= 1, action)
 }
 
 // regionCountOnNode 路由视图中归属 nodeID 的 region 数。

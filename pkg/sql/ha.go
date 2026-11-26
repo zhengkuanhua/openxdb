@@ -82,7 +82,8 @@ func (e *Executor) FailoverDownNode(downID string) (int, error) {
 			// 待副本补齐（EnsureRegionReplicas）或原节点恢复后再次尝试。
 			e.recordB1Pending(rg.RegionID, downID)
 			pendingB1 = true
-			log.Printf("sql: failover region %d deferred (no live copy, will retry): %v", rg.RegionID, err)
+			// v2.0.8 Q3：按 region 限频，首次全量输出，窗口期内降为计数汇总。
+			e.logNoLiveCopyDeferred(rg.RegionID, err)
 		}
 		if firstErr == nil {
 			firstErr = err
@@ -310,6 +311,12 @@ func (e *Executor) resolveRegionOwner(rid storage.ID) string {
 // allow_partial_read=on 时退回旧行为：回退本地副本并打 WARN，返回可能不完整的
 // 结果（供存量部署过渡，默认关闭）。
 func (e *Executor) resolveReadOwner(rid storage.ID) (string, error) {
+	return e.resolveOwnerForRead(rid, e.AllowPartialRead())
+}
+
+// resolveOwnerForRead 读路径持有者决策的实体实现：allowPartial 为 false 时
+// 不做"本地副本尽力服务"回退（写路径的唯一性判定必须走此模式，见 v2.0.8 Q1）。
+func (e *Executor) resolveOwnerForRead(rid storage.ID, allowPartial bool) (string, error) {
 	origin := e.regionNode(rid)
 	// 与 resolveRegionOwner 走同一条决策链（含陈旧 failover 条目失效、幂等重指派）。
 	resolved := e.resolveRegionOwner(rid)
@@ -320,7 +327,7 @@ func (e *Executor) resolveReadOwner(rid storage.ID) (string, error) {
 		// 本节点本就是归属（或单机模式）：不存在跨区缺失。
 		return resolved, nil
 	}
-	if e.AllowPartialRead() {
+	if allowPartial {
 		log.Printf("sql: WARN partial read rid=%d owner=%s unreachable (%s): serving local replica only, result may be incomplete (allow_partial_read=on)",
 			rid, origin, e.nodeDownReason(origin))
 		return resolved, nil

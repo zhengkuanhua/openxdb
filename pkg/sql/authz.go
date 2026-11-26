@@ -78,7 +78,7 @@ func isAdminStmt(stmt Stmt) bool {
 		*ShowAuditLogStmt,
 		*GrantStmt, *RevokeStmt,
 		*ImportStmt, *ExportStmt, *BackupStmt, *RestoreStmt,
-		*AddNodeStmt, *SplitRegionStmt, *AssignRegionStmt, *BalanceStmt:
+		*AddNodeStmt, *SplitRegionStmt, *AssignRegionStmt, *BalanceStmt, *DropRegionStmt:
 		return true
 	}
 	return false
