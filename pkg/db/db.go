@@ -508,6 +508,12 @@ func (d *DB) StartCluster(addr string) (string, error) {
 	// v1.20.0 C4：集群装配完成后按开关状态挂接 region 增量复制
 	// （开关默认 off 时本调用为空操作：不注册日志源、不起协程）。
 	d.maybeStartRegionSync()
+	// v2.0.9 B2（P2a）自动均衡生产装配：此前生产仅 StopAutoBalance 而无开启点，
+	// balanceLoop 在真机上从未启动，导致"重启后重指派收归一侧不自动均衡"。
+	// 默认开启（周期 3s）；运维可用 SET auto_balance=off（或 SET PERSIST 落盘）
+	// 关闭，关闭后仅剩手动 BALANCE，行为与 v2.0.8 完全一致。已被显式配置过的
+	// 节点（persisted.json / SET）尊重其设置，不被默认值覆盖。
+	d.SQL.EnableDefaultAutoBalance(sql.DefaultAutoBalanceInterval)
 	return realAddr, nil
 }
 

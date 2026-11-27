@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/zhengkuanhua/openxdb/pkg/cluster"
@@ -428,7 +429,9 @@ func (e *Executor) execBalance(sess *Session, s *BalanceStmt) (*Result, error) {
 	if e.mgr == nil || !e.mgr.HasRemoteNodes() {
 		return nil, &SQLError{Msg: "cluster not enabled"}
 	}
-	n, err := e.balanceOnce()
+	// v2.0.9 B2（P2b）：人工 BALANCE 属显式运维指令，不受迁移冷却限制，
+	// 保证"人工可强制收敛"的既有语义不回归。
+	n, err := e.balanceRun(true)
 	if err != nil {
 		// 中途失败：Result 仍携带已完成的迁移条数（AffectedRows），同时返回错误让
 		// 客户端明确本轮未收敛；收敛打点已在 balanceOnce 内汇总（reason=migrate-error）。
@@ -437,24 +440,126 @@ func (e *Executor) execBalance(sess *Session, s *BalanceStmt) (*Result, error) {
 	return &Result{AffectedRows: n}, nil
 }
 
+// v2.0.9 B2（P2a）自动均衡装配默认值与循环控制参数。
+const (
+	// DefaultAutoBalanceInterval 集群模式自动均衡的默认周期（3s）。
+	// v2.0.9 B2 结论：默认开启，运维可用 SET auto_balance=off 一键回到
+	// v2.0.8 的"仅手动 BALANCE"行为。
+	DefaultAutoBalanceInterval = 3 * time.Second
+	// balanceLoopMaxBackoff 单轮失败指数退避的上限（避免目标长期不可达时刷屏）。
+	balanceLoopMaxBackoff = 60 * time.Second
+	// balanceEventDebounce 事件触发到实际执行均衡的延迟：等 HandleNodeUp /
+	// FailoverDownNode 尾部的路由广播落定后再判负载，避免刚搬完就判偏斜。
+	balanceEventDebounce = 300 * time.Millisecond
+	// balanceEventThrottle 事件触发节流窗口：窗口内的多次事件（如批量回迁、
+	// 多节点同时回 UP）合并成一轮均衡。
+	balanceEventThrottle = 3 * time.Second
+)
+
 // setAutoBalance 配置自动均衡：enabled 开启后按 interval 周期执行 balanceOnce。
 // 重复开启幂等；关闭时停止循环等待退出。
+//
+// v2.0.9 B2：关闭时同时把期望状态记为 off（原子位），事件触发路径据此短路，
+// 关闭后行为与本版本之前（仅手动 BALANCE）完全一致；等待循环退出前先释放
+// balanceMu，避免与正在执行的 balanceOnce（持同一把锁）的循环互等。
 func (e *Executor) setAutoBalance(enabled bool, interval time.Duration) {
+	if enabled && interval <= 0 {
+		interval = DefaultAutoBalanceInterval
+	}
 	e.balanceMu.Lock()
-	defer e.balanceMu.Unlock()
+	atomic.StoreInt32(&e.balanceEnabled, boolToInt32(enabled))
+	// 周期始终记录（含关闭状态下的 SET auto_balance_interval），
+	// 保证"先调周期、后开开关"也能按新周期生效。
+	if interval > 0 {
+		e.balanceInterval = interval
+	}
 	if enabled && e.balanceStop == nil {
-		if interval <= 0 {
-			interval = 3 * time.Second
-		}
-		e.balanceStop = make(chan struct{})
-		e.balanceDone = make(chan struct{})
-		go e.balanceLoop(interval)
-	} else if !enabled && e.balanceStop != nil {
-		close(e.balanceStop)
-		<-e.balanceDone
+		stop := make(chan struct{})
+		done := make(chan struct{})
+		e.balanceStop = stop
+		e.balanceDone = done
+		e.balanceFailures = 0
+		e.balanceMu.Unlock()
+		go e.balanceLoop(interval, stop, done)
+		return
+	}
+	stop, done := e.balanceStop, e.balanceDone
+	if !enabled {
 		e.balanceStop = nil
 		e.balanceDone = nil
 	}
+	e.balanceMu.Unlock()
+	if !enabled && stop != nil {
+		close(stop)
+		<-done
+	}
+}
+
+// boolToInt32 布尔转原子标志位取值。
+func boolToInt32(b bool) int32 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// configureAutoBalance 应用一次显式自动均衡配置（SET auto_balance /
+// SET auto_balance_interval / Engine.SetAutoBalance 共用）。
+//
+// explicit 为 true 时标记"已被显式配置"，此后生产默认装配（enableDefaultAutoBalance）
+// 不再覆盖该节点上的设置——包括显式 off（真机上想彻底关掉自动均衡的运维诉求）。
+func (e *Executor) configureAutoBalance(enabled bool, interval time.Duration, explicit bool) {
+	if interval <= 0 {
+		interval = DefaultAutoBalanceInterval
+	}
+	if explicit {
+		e.balanceMu.Lock()
+		e.balanceCfgExplicit = true
+		e.balanceMu.Unlock()
+	}
+	e.setAutoBalance(enabled, interval)
+}
+
+// enableDefaultAutoBalance 生产装配默认开启（v2.0.9 B2 P2a，db.StartCluster 调用）。
+//
+// 仅对"未被显式配置过、且循环尚未运行"的节点生效：persisted.json / SET 显式写过
+// auto_balance 的节点尊重其配置，不会被默认值覆盖。单机模式不装配（无 mgr 时空转）。
+func (e *Executor) enableDefaultAutoBalance(interval time.Duration) {
+	if interval <= 0 {
+		interval = DefaultAutoBalanceInterval
+	}
+	e.balanceMu.Lock()
+	skip := e.balanceCfgExplicit || e.balanceStop != nil
+	e.balanceMu.Unlock()
+	if skip {
+		return
+	}
+	e.setAutoBalance(true, interval)
+	log.Printf("sql: auto balance assembled by default (interval=%s), disable with SET auto_balance=off",
+		interval)
+}
+
+// autoBalanceEnabled 返回自动均衡是否处于开启状态（含生产默认装配结果）。
+// 原子读，不阻塞事件触发路径（无需与长耗时均衡轮次排队）。
+func (e *Executor) autoBalanceEnabled() bool {
+	return atomic.LoadInt32(&e.balanceEnabled) == 1
+}
+
+// autoBalanceInterval 返回自动均衡当前生效的周期（未开启时返回默认周期）。
+func (e *Executor) autoBalanceInterval() time.Duration {
+	e.balanceMu.Lock()
+	defer e.balanceMu.Unlock()
+	if e.balanceInterval <= 0 {
+		return DefaultAutoBalanceInterval
+	}
+	return e.balanceInterval
+}
+
+// AutoBalanceStatus 返回自动均衡当前状态（是否开启 + 生效周期），供 db 层装配校验、
+// 运维自检与回归用例断言使用（v2.0.9 B2）。开启状态为原子读，周期取锁读，均不阻塞
+// 长耗时的均衡轮次。
+func (e *Executor) AutoBalanceStatus() (bool, time.Duration) {
+	return e.autoBalanceEnabled(), e.autoBalanceInterval()
 }
 
 // stopAutoBalance 停止自动均衡循环（db.Close 装配）。
@@ -463,24 +568,127 @@ func (e *Executor) stopAutoBalance() {
 }
 
 // balanceLoop 自动均衡周期循环。
-func (e *Executor) balanceLoop(interval time.Duration) {
-	defer close(e.balanceDone)
-	t := time.NewTicker(interval)
-	defer t.Stop()
+//
+// v2.0.9 B2：单轮失败不再静默 continue——打 WARN（含连续失败轮数、已迁移条数、
+// 下一次重试间隔与错误链），并按指数退避（上限 balanceLoopMaxBackoff）重试，
+// 成功后回到基准周期并打一条恢复日志；失败不影响循环存活。
+func (e *Executor) balanceLoop(interval time.Duration, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	if interval <= 0 {
+		interval = DefaultAutoBalanceInterval
+	}
+	wait := interval
+	failures := 0
 	for {
+		t := time.NewTimer(wait)
 		select {
 		case <-t.C:
-			if e.mgr == nil {
-				continue
-			}
-			if _, err := e.balanceOnce(); err != nil {
-				// 单轮失败不中断循环（如目标节点瞬时不可达），下轮重试
-				continue
-			}
-		case <-e.balanceStop:
+		case <-stop:
+			t.Stop()
 			return
 		}
+		if e.mgr == nil {
+			wait = interval
+			continue
+		}
+		migrated, err := e.balanceOnce()
+		if err != nil {
+			failures++
+			wait = balanceLoopBackoff(interval, failures)
+			e.noteBalanceFailures(failures)
+			log.Printf("sql: WARN balance loop round failed (failures=%d migrated=%d retry_in=%s): %v",
+				failures, migrated, wait, err)
+			continue
+		}
+		if failures > 0 {
+			log.Printf("sql: balance loop recovered after %d failed round(s), interval=%s",
+				failures, interval)
+			failures = 0
+			e.noteBalanceFailures(0)
+		}
+		wait = interval
 	}
+}
+
+// balanceLoopBackoff 计算第 failures 次连续失败后的重试间隔：基准周期起按 2 倍
+// 递增，封顶 balanceLoopMaxBackoff。failures<=1 时返回基准周期。
+func balanceLoopBackoff(base time.Duration, failures int) time.Duration {
+	if base <= 0 {
+		base = DefaultAutoBalanceInterval
+	}
+	if failures <= 1 {
+		return base
+	}
+	d := base
+	for i := 1; i < failures; i++ {
+		d *= 2
+		if d >= balanceLoopMaxBackoff {
+			return balanceLoopMaxBackoff
+		}
+	}
+	return d
+}
+
+// noteBalanceFailures 记录连续失败轮数（0 表示恢复；测试观测用）。
+func (e *Executor) noteBalanceFailures(n int) {
+	e.balanceMu.Lock()
+	e.balanceFailures = n
+	e.balanceMu.Unlock()
+}
+
+// balanceFailuresCount 返回当前连续失败轮数（测试观测用）。
+func (e *Executor) balanceFailuresCount() int {
+	e.balanceMu.Lock()
+	defer e.balanceMu.Unlock()
+	return e.balanceFailures
+}
+
+// autoBalanceTrigs 返回事件触发均衡的累计次数（测试观测用）。
+func (e *Executor) autoBalanceTrigs() int64 {
+	return atomic.LoadInt64(&e.balanceTrigs)
+}
+
+// triggerAutoBalance 事件驱动触发一次均衡（v2.0.9 B2 P2a）。
+//
+// 背景：FailoverDownNode 的重指派与 HandleNodeUp 的回迁都会把 region 整批搬到
+// 一侧，而 balanceOnce 是"推式"的（只从本节点视角迁出超额），因此在补齐触发点
+// 之前布局只能靠人工 BALANCE 自愈。
+//
+// 语义：
+//  1. 未装配集群（mgr==nil）或自动均衡未开启时直接返回——显式关闭后与本版本之前
+//     的行为完全一致（不触发任何迁移）；
+//  2. 异步执行，不阻塞 HandleNodeUp / FailoverDownNode 调用方（两者持 failoverMu，
+//     且已在各自的收尾路径上）；
+//  3. 去抖 balanceEventDebounce（等路由落定）+ 节流 balanceEventThrottle（窗口内
+//     多次事件合并为一轮），避免回迁刚结束就开搬形成来回搬。
+func (e *Executor) triggerAutoBalance(reason string) {
+	if e.mgr == nil || !e.autoBalanceEnabled() {
+		return
+	}
+	now := time.Now()
+	e.balanceTrigMu.Lock()
+	if !e.balanceTrigAt.IsZero() && now.Sub(e.balanceTrigAt) < balanceEventThrottle {
+		e.balanceTrigMu.Unlock()
+		return
+	}
+	e.balanceTrigAt = now
+	e.balanceTrigMu.Unlock()
+
+	atomic.AddInt64(&e.balanceTrigs, 1)
+
+	go func() {
+		time.Sleep(balanceEventDebounce)
+		if e.mgr == nil || !e.autoBalanceEnabled() {
+			return
+		}
+		migrated, err := e.balanceOnce()
+		if err != nil {
+			log.Printf("sql: WARN balance triggered by %s failed (migrated=%d): %v",
+				reason, migrated, err)
+			return
+		}
+		log.Printf("sql: balance triggered by %s done: migrated=%d", reason, migrated)
+	}()
 }
 
 // balanceOnce 执行一轮均衡：把本节点多出的 region 逐个迁往最闲存活节点，直到
@@ -495,9 +703,24 @@ func (e *Executor) balanceLoop(interval time.Duration) {
 //     regionCountOnNode（只数显式路由），两侧口径不一致，判据恒偏向「本节点更多」，
 //     出现「每轮都在迁移但极差不见收敛／迁移条数与实际变化不一致」；
 //  3. 迁移中途失败立即中止，返回已完成的迁移条数（不吞错、不继续尝试其余 region）。
+//
+// v2.0.9 B2（P2b）：自动路径（tick / 事件触发）额外受迁移冷却约束，见 balanceRun。
 func (e *Executor) balanceOnce() (int, error) {
+	return e.balanceRun(false)
+}
+
+// balanceRun 执行一轮均衡。
+//
+// manual=true 表示人工 BALANCE（显式运维指令）：不做迁移冷却过滤，人工可强制收敛；
+// manual=false 为自动路径（tick / 节点回 UP / 宕机重指派触发）：同一 region 在
+// balanceMigrationCooldownWindow 内最多被迁移 balanceMigrationCooldownLimit 次，
+// 超出后本轮不再选它，用于抑制"回迁→均衡→再回迁"的来回搬抖动。
+func (e *Executor) balanceRun(manual bool) (int, error) {
 	e.balanceMu.Lock()
 	defer e.balanceMu.Unlock()
+	// 已执行均衡轮数（测试观测用）：自动循环与手动 BALANCE 都计入，
+	// 用于断言"自动均衡是否真的在跑 / 关闭后是否完全停跑"。
+	atomic.AddInt64(&e.balanceOnceN, 1)
 	if e.mgr == nil {
 		return 0, nil
 	}
@@ -523,6 +746,25 @@ func (e *Executor) balanceOnce() (int, error) {
 	}
 	// 迁移顺序固定为行数降序：先削最重的 region；删除已迁条目后剩余顺序不变。
 	sort.Slice(local, func(i, j int) bool { return local[i].rows > local[j].rows })
+	// v2.0.9 B2（P2b）：迁移冷却过滤。同一 region 在冷却窗口内已迁移达到上限时
+	// 本轮跳过（自动路径生效），否则「回迁 → 均衡搬走 → 再回迁」会形成无限来回搬。
+	skipped := 0
+	if !manual {
+		now := time.Now()
+		ready := local[:0]
+		for _, it := range local {
+			if e.regionMigrationAllowedLocked(it.rg.RegionID, now) {
+				ready = append(ready, it)
+				continue
+			}
+			skipped++
+		}
+		local = ready
+		if skipped > 0 {
+			log.Printf("sql: balance skip %d region(s) in migration cooldown (window=%s limit=%d)",
+				skipped, balanceMigrationCooldownWindow, balanceMigrationCooldownLimit)
+		}
+	}
 	counts := e.balanceRegionCounts()
 	migrated := 0
 	for migrated < balanceMaxMigrationsPerRun {
@@ -536,10 +778,15 @@ func (e *Executor) balanceOnce() (int, error) {
 			return migrated, nil
 		}
 		if len(local) == 0 {
-			// 计数口径判定仍有偏斜，但本地已无可迁条目（归属/元数据刚被外部改写）：
-			// 不空转，打点退出，剩余偏斜交下一条 BALANCE 或下一 tick 处理。
-			e.logBalanceRound(counts, localCount, minRegions, "skip-no-local-candidate")
-			e.logBalanceSummary(migrated, counts, "no-local-candidate")
+			// 计数口径判定仍有偏斜，但本地已无可迁条目（归属/元数据刚被外部改写，
+			// 或剩余条目全部处于迁移冷却窗口）：不空转，打点退出，剩余偏斜交下一条
+			// BALANCE 或下一 tick 处理。
+			action, reason := "skip-no-local-candidate", "no-local-candidate"
+			if skipped > 0 {
+				action, reason = "skip-migration-cooldown", "migration-cooldown"
+			}
+			e.logBalanceRound(counts, localCount, minRegions, action)
+			e.logBalanceSummary(migrated, counts, reason)
 			return migrated, nil
 		}
 		cur := local[0]
@@ -552,6 +799,8 @@ func (e *Executor) balanceOnce() (int, error) {
 				migrated++
 				counts[e.selfID]--
 				counts[target]++
+				// v2.0.9 B2（P2b）：已落定的迁移同样计入冷却历史。
+				e.noteRegionMigrationLocked(cur.rg.RegionID, time.Now())
 			}
 			e.logBalanceSummary(migrated, counts, "migrate-error")
 			return migrated, err
@@ -559,11 +808,66 @@ func (e *Executor) balanceOnce() (int, error) {
 		migrated++
 		counts[e.selfID]--
 		counts[target]++
+		// v2.0.9 B2（P2b）：登记迁移历史（冷却窗口判据）。
+		e.noteRegionMigrationLocked(cur.rg.RegionID, time.Now())
 		local = local[1:]
 	}
 	// 达到单轮迁移上限：剩余偏斜由下一条 BALANCE / 下一 tick 继续（单调递减，不回摆）。
 	e.logBalanceSummary(migrated, counts, "max-migrations")
 	return migrated, nil
+}
+
+// v2.0.9 B2（P2b）迁移冷却参数：同一 region 在 window 内最多被自动均衡迁移 limit 次。
+//
+// 取值依据（真机验收 R2）：重启回迁会把 region 搬回原主，均衡若立刻再搬走，会出现
+// 「回迁 → 均衡 → 再回迁」无限抖动。5 分钟内允许 2 次（1 次纠偏 + 1 次容错），第 3
+// 次起在窗口内直接跳过，窗口过后（迁移历史自然过期）恢复可迁。
+const (
+	balanceMigrationCooldownWindow = 5 * time.Minute
+	balanceMigrationCooldownLimit  = 2
+)
+
+// noteRegionMigrationLocked 登记一次 region 迁移（调用方需持有 balanceMu）。
+func (e *Executor) noteRegionMigrationLocked(rid storage.ID, at time.Time) {
+	if e.balanceHist == nil {
+		e.balanceHist = make(map[storage.ID][]time.Time)
+	}
+	e.balanceHist[rid] = append(e.balanceHist[rid], at)
+}
+
+// recentMigrationsLocked 返回 region 在冷却窗口内的迁移时间点（顺带裁剪过期记录，
+// 避免历史无限增长）。调用方需持有 balanceMu。
+func (e *Executor) recentMigrationsLocked(rid storage.ID, now time.Time) []time.Time {
+	h := e.balanceHist[rid]
+	if len(h) == 0 {
+		return nil
+	}
+	cut := now.Add(-balanceMigrationCooldownWindow)
+	keep := make([]time.Time, 0, len(h))
+	for _, t := range h {
+		if t.After(cut) {
+			keep = append(keep, t)
+		}
+	}
+	if len(keep) == 0 {
+		delete(e.balanceHist, rid)
+		return nil
+	}
+	e.balanceHist[rid] = keep
+	return keep
+}
+
+// regionMigrationAllowedLocked 判断 region 是否仍可作为自动均衡的迁移候选：
+// 冷却窗口内已迁移次数 < balanceMigrationCooldownLimit 才允许。调用方需持有 balanceMu。
+func (e *Executor) regionMigrationAllowedLocked(rid storage.ID, now time.Time) bool {
+	return len(e.recentMigrationsLocked(rid, now)) < balanceMigrationCooldownLimit
+}
+
+// regionMigrationCount 返回 region 在冷却窗口内的迁移次数（测试观测用）。
+func (e *Executor) regionMigrationCount(rid storage.ID) int {
+	e.balanceMu.Lock()
+	defer e.balanceMu.Unlock()
+	return len(e.recentMigrationsLocked(rid, time.Now()))
 }
 
 // logBalanceRound v2.0.8 Q4 打点：输出一轮均衡的收敛度快照。

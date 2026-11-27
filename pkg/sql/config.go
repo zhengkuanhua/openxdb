@@ -18,6 +18,8 @@ package sql
 //   - slow_query_threshold  慢查询阈值毫秒（M13，executor.go slowThreshold）
 //   - slow_query_log        慢查询落盘开关（M13，slowlog.go）
 //   - shutdown_timeout      优雅停机超时秒（M16-2，executor.go shutdownTimeoutSec）
+//   - auto_balance          集群自动均衡开关（v2.0.9 B2，balance.go setAutoBalance）
+//   - auto_balance_interval 集群自动均衡周期毫秒（v2.0.9 B2，balance.go balanceLoop）
 //
 // 持久化文件：数据目录下 persisted.json（db.Open 装配路径后由 Engine
 // LoadPersistedConfig 加载合并）。优先级：内存（SET / SET PERSIST 立即生效）
@@ -320,6 +322,42 @@ var configSpecs = []*configSpec{
 			return nil
 		},
 		read: func(e *Executor) string { return strconv.FormatInt(e.ShutdownTimeoutSec(), 10) },
+	},
+	// v2.0.9 B2（P2a）自动均衡开关与周期：真机复验 R2 暴露"重启后重指派收归一侧
+	// 不自动均衡"，原因是生产装配从未启动 balanceLoop。两项配置均属显式配置
+	// （SET 立即生效 + SET PERSIST 落盘重启生效），显式 off 后行为与 v2.0.8 一致。
+	{
+		key:  "auto_balance",
+		desc: "集群自动均衡开关（v2.0.9 B2）：on/off/1/0，on 按 auto_balance_interval 周期自动均衡；off 仅保留手动 BALANCE（等价 v2.0.8 行为），默认 on",
+		def:  "on",
+		apply: func(e *Executor, v string) error {
+			on := false
+			switch v {
+			case "on", "true", "1":
+				on = true
+			case "off", "false", "0":
+				on = false
+			default:
+				return &SQLError{Msg: "invalid value for auto_balance: " + v + " (expected on/off/1/0)"}
+			}
+			e.configureAutoBalance(on, e.autoBalanceInterval(), true)
+			return nil
+		},
+		read: func(e *Executor) string { return boolValStr(e.autoBalanceEnabled()) },
+	},
+	{
+		key:  "auto_balance_interval",
+		desc: "集群自动均衡周期毫秒（v2.0.9 B2）：正整数毫秒，默认 3000；依附 auto_balance 开关生效",
+		def:  "3000",
+		apply: func(e *Executor, v string) error {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 1 {
+				return &SQLError{Msg: "invalid value for auto_balance_interval: " + v + " (expected positive integer milliseconds)"}
+			}
+			e.configureAutoBalance(e.autoBalanceEnabled(), time.Duration(n)*time.Millisecond, true)
+			return nil
+		},
+		read: func(e *Executor) string { return strconv.FormatInt(e.autoBalanceInterval().Milliseconds(), 10) },
 	},
 	// BR 方向②扩展：备份调度（周期自动 BACKUP + 保留份数 + 状态接口）与远程备份。
 	// backup_interval 正整数开启周期备份，0 关闭；backup_keep 保留份数（0=不清理）；

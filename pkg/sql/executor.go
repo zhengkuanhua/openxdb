@@ -169,6 +169,25 @@ type Executor struct {
 	balanceStop  chan struct{}
 	balanceDone  chan struct{}
 	balanceOnceN int64 // 已执行均衡轮数（测试观测用）
+	// v2.0.9 B2（P2a/P2b）：自动均衡的装配状态、事件触发与迁移历史。
+	//   - balanceEnabled/balanceInterval：对外可见的期望配置（SET auto_balance、
+	//     生产默认装配、SetAutoBalance 都落到这两个字段）；balanceEnabled 走原子读，
+	//     供事件触发路径（HandleNodeUp / FailoverDownNode 收尾）无锁快判，避免与
+	//     正在执行的长耗时均衡轮次（持 balanceMu）互等；
+	//   - balanceCfgExplicit：是否被显式配置过。显式配置（含显式 off）优先于生产
+	//     默认装配，保证"关闭后行为与 v2.0.8 完全一致（仅手动 BALANCE）"；
+	//   - balanceFailures：连续失败轮数（退避与 WARN 打点用，成功一轮清零）；
+	//   - balanceTrigs：事件触发（节点回 UP / 宕机重指派）累计次数（测试观测用）；
+	//   - balanceTrigAt：事件触发节流窗口起点（balanceTrigMu 保护）；
+	//   - balanceHist：region 迁移历史（P2b 冷却判据），由 balanceMu 保护。
+	balanceEnabled     int32 // atomic：1 开启 / 0 关闭
+	balanceInterval    time.Duration
+	balanceCfgExplicit bool
+	balanceFailures    int
+	balanceTrigs       int64
+	balanceTrigMu      sync.Mutex
+	balanceTrigAt      time.Time
+	balanceHist        map[storage.ID][]time.Time
 	// P2/M13：慢查询配置与记录（内存 + 落盘）。
 	// slowThreshold 毫秒阈值；<=0 表示不记录（默认 100ms）。
 	// slowQueries 内存环形记录（保留最近 slowQueryMax 条，可 SHOW 查询）；

@@ -239,9 +239,31 @@ func (e *Engine) SetAutoSplit(enabled bool, rowThreshold int64) {
 
 // SetAutoBalance 配置 M7 自动均衡：enabled 开启后按 interval 周期执行均衡调度
 // （interval<=0 使用默认 3s）；关闭时停止循环。
+//
+// v2.0.9 B2：本入口属显式配置，会置位"已显式配置"标记，此后生产默认装配
+// （EnableDefaultAutoBalance）不再覆盖；显式关闭（enabled=false）后自动均衡与
+// 事件触发路径全部短路，行为回到 v2.0.8 的"仅手动 BALANCE"。
 func (e *Engine) SetAutoBalance(enabled bool, interval time.Duration) {
-	e.ex.setAutoBalance(enabled, interval)
+	e.ex.configureAutoBalance(enabled, interval, true)
 }
+
+// EnableDefaultAutoBalance 生产装配默认开启自动均衡（v2.0.9 B2 P2a）：
+// 仅对未被显式配置过、且循环未运行的节点生效（interval<=0 使用默认 3s）。
+func (e *Engine) EnableDefaultAutoBalance(interval time.Duration) {
+	e.ex.enableDefaultAutoBalance(interval)
+}
+
+// AutoBalanceEnabled 返回自动均衡是否开启（含生产默认装配结果）。
+func (e *Engine) AutoBalanceEnabled() bool { return e.ex.autoBalanceEnabled() }
+
+// AutoBalanceStatus 返回自动均衡开关状态与生效周期（v2.0.9 B2），供运维自检与回归
+// 用例断言默认装配结果、显式开关与周期切换是否生效。
+func (e *Engine) AutoBalanceStatus() (bool, time.Duration) {
+	return e.ex.AutoBalanceStatus()
+}
+
+// AutoBalanceInterval 返回自动均衡当前周期（未开启时返回默认周期 3s）。
+func (e *Engine) AutoBalanceInterval() time.Duration { return e.ex.autoBalanceInterval() }
 
 // StopAutoBalance 停止自动均衡循环（db.Close 装配，避免 Close 竞态）。
 func (e *Engine) StopAutoBalance() { e.ex.stopAutoBalance() }

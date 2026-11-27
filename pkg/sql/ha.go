@@ -94,10 +94,20 @@ func (e *Executor) FailoverDownNode(downID string) (int, error) {
 		// 该 region 长期裸奔（B1 主动冗余触发点）。
 		e.setB1RetryAt(downID)
 		e.b1EnsureAsync()
+		// v2.0.9 B2（P2a）：重指派已完成部分搬动，异步触发一次均衡做布局自愈
+		// （自动均衡关闭时为空操作，行为与 v2.0.8 一致）。
+		if moved > 0 {
+			e.triggerAutoBalance("failover-down-node:" + downID)
+		}
 		return moved, firstErr
 	}
 	e.failoverDone[downID] = true
 	e.clearB1RetryAt(downID)
+	// v2.0.9 B2（P2a）：重指派把 down 节点的 region 整批收归到"首个存活远端"，
+	// 天然造成一侧多一侧少；此处异步触发一次均衡，使布局自愈不依赖人工 BALANCE。
+	if moved > 0 {
+		e.triggerAutoBalance("failover-down-node:" + downID)
+	}
 	return moved, firstErr
 }
 
@@ -398,6 +408,12 @@ func (e *Executor) HandleNodeUp(nodeID string) (int, error) {
 		// B1（D4.5 §6 第 1 项）：节点回 UP 且回迁完成后补齐副本——该节点磁盘
 		// 可能被清空/重建，此时按现存副本重新冗余，避免 region 长期单副本裸奔。
 		e.b1EnsureAsync()
+		// v2.0.9 B2（P2a）：回迁把 region 成批搬回原主，本机 region 数骤降、原主
+		// 骤增；此处异步触发一次均衡让布局自愈，不再依赖人工 BALANCE
+		// （自动均衡关闭时 triggerAutoBalance 直接返回，行为与 v2.0.8 一致）。
+		if migrated > 0 {
+			e.triggerAutoBalance("node-up:" + nodeID)
+		}
 		return migrated, nil
 	}
 	return 0, lastErr
