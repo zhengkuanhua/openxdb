@@ -175,6 +175,34 @@ func v209Spread(counts map[string]int, nodes ...string) int {
 	return maxC - minC
 }
 
+// TestV209SpreadHelperSemantics 守卫用例：锁定 v209Spread 的极差口径本身。
+//
+// 背景（v2.0.9 P4 复核）：本文件多处 `v209Spread(...) > balanceConvergedSpread`
+// 断言依赖该辅助函数真实反映 max-min。若将来有人把它写成只累加 minC、漏更 maxC，
+// 函数会恒返回非正值，那些断言会静默空转（永远判 PASS），收敛回归就会漏网。
+// 本用例用已知分布的固定期望值把口径钉死：{5,0}->5、{1,3,7}->6、{5,5,4}->1、
+// 未出现在 counts 里的节点按 0 补齐。
+func TestV209SpreadHelperSemantics(t *testing.T) {
+	cases := []struct {
+		name   string
+		counts map[string]int
+		nodes  []string
+		want   int
+	}{
+		{"单节点独占", map[string]int{"node-a": 5}, []string{"node-b"}, 5},
+		{"三节点偏斜", map[string]int{"node-a": 1, "node-b": 3, "node-c": 7}, nil, 6},
+		{"三节点已收敛", map[string]int{"node-a": 5, "node-b": 5, "node-c": 4}, nil, 1},
+		{"缺省节点补零", map[string]int{"node-a": 3}, []string{"node-a", "node-b", "node-c"}, 3},
+		{"全零", map[string]int{}, []string{"node-a", "node-b"}, 0},
+	}
+	for _, c := range cases {
+		if got := v209Spread(c.counts, c.nodes...); got != c.want {
+			t.Fatalf("%s: v209Spread(%v, %v) = %d, want %d",
+				c.name, c.counts, c.nodes, got, c.want)
+		}
+	}
+}
+
 // TestV209SingleNodeMajorityConvergesInOneRun 单节点持有多数 region 时，一条 BALANCE
 // 在当前执行内持续迁移直到极差 <=1：5 个 region 全在本节点，需迁 2 次
 // （5/0 -> 4/1 -> 3/2），语句返回 AffectedRows=2；再执行一次已收敛，返回 0。
