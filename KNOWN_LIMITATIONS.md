@@ -138,12 +138,21 @@
 - **建议**：需要均衡时逐节点执行 `BALANCE` 并观察返回，遇 `region not local` 先 `SHOW REGION ROUTES` 确认该节点视图中的隐式 region（负 region_id）归属，把非本机归属的表先 `SPLIT REGION` 显式化或 `ASSIGN REGION` 收拢到本机后再均衡。**根治方案**：在 `localRegionLoad` 的隐式段补 `regionLocal` 过滤（与显式段对齐），或让 `balanceOnce` 跳过迁移失败候选继续尝试下一个，已排入后续版本线，本条保留至修复发布。
 - **修复状态（v2.0.7，未发布）**：已按根治方案第一条落地——`pkg/sql/balance.go` 的 `localRegionLoad` 隐式段在构造隐式 region ID 后补 `regionLocal(rid)` 过滤，与显式段对齐；本机候选集只保留真正持有的 region。回归用例 `pkg/db/db_m7_test.go::TestM7BalanceSkipsRemoteImplicitRegion`（未切分表 12 行 → `ASSIGN REGION` 给对端 → `BALANCE`）双向验证：回退修复即复现 `region not local` 失败，应用修复通过。升级 v2.0.7 后本节前两句的人工规避（逐节点 `BALANCE` + 手工 `SPLIT REGION` / `ASSIGN REGION` 收拢）不再必要，历史跨节点隐式 region 可原样保留；`balanceOnce` 遇单个 region 迁移失败仍整轮返回错误（仅暴露真实迁移故障，不再是误判）。
 
-### 3.9 手动 `BALANCE` 不保证收敛（v2.0.7 三机复测发现，v2.0.8 仅补收敛度打点）
+### 3.9 手动 `BALANCE` 不保证收敛（v2.0.7 三机复测发现，v2.0.8 补收敛度打点，v2.0.9 已修复）
 
-- **限制描述**：`balanceOnce` 的迁移判据是"本节点 region 数 > 最闲节点 region 数 + 1"，只按 region 计数做差，不看行数分布与历史迁移记录。三机复测（201/202/203）连续 4 轮 `BALANCE` 后，node-a 仍滞留 13 个 region 未向空闲节点摊开；个别轮次返回的迁移条数与 `SHOW REGION ROUTES` 的实际变化也不完全对应。
+- **限制描述（v2.0.8 及之前的行为）**：`balanceOnce` 的迁移判据是"本节点 region 数 > 最闲节点 region 数 + 1"，只按 region 计数做差，不看行数分布与历史迁移记录。三机复测（201/202/203）连续 4 轮 `BALANCE` 后，node-a 仍滞留 13 个 region 未向空闲节点摊开；个别轮次返回的迁移条数与 `SHOW REGION ROUTES` 的实际变化也不完全对应。
 - **影响**：分片布局可能长期偏斜，热点节点读放大与内存占用高于预期；`BALANCE` 返回成功不等于布局已均衡，运维若只看返回码会误判。
-- **建议**：以多轮 `BALANCE` + `SHOW REGION ROUTES` 实际核对为准，不要依赖单轮返回；需要精确布局时用 `SPLIT REGION` / `ASSIGN REGION` 手工收拢。数据一致性不受影响（迁移经 2PC 与路由切换，跨节点迁移数据无损）。
-- **修复状态（v2.0.8）**：本版只落地可观测性——`balanceOnce` 每轮输出各节点 region 数、spread、converged、本轮 action，行为不变；收敛判据本身（含行数加权、多轮单调性）排入 v2.0.9 修复，本条保留至修复发布。
+- **建议**：以多轮 `BALANCE` + `SHOW REGION ROUTES` 实际核对为准，不要依赖单轮返回；需要精确布局时用 `SPLIT REGION` / `ASSIGN REGION` 手工收拢。数据一致性不受影响（迁移经 2PC 与路由切换，跨节点迁移数据无损）。升级 v2.0.9 后单条 `BALANCE` 即可摊平中小规模偏斜，人工收拢只保留给超大偏斜与需要精确布局的场景。
+- **修复状态（v2.0.9，已修复）**：彻底方案是「单条 `BALANCE` 执行内持续迁移 + 本远端统一计数口径」，改动集中在 `pkg/sql/balance.go`：
+  - **单轮内持续迁移**：`balanceOnce` 由「每次执行只迁 1 个 region 就返回」改为执行内循环，每轮取最闲存活节点比较，满足「本节点 region 数 ≤ 最闲节点 region 数 + `balanceConvergedSpread`(=1)」即收敛退出，否则迁出本节点行数最大的 region；循环上限为具名常量 `balanceMaxMigrationsPerRun`，退出原因分 `converged` / `max-migrations` / `migrate-error` / `nothing-to-do` 四类。
+  - **计数口径统一**：新增 `balanceRegionCounts`——显式 region 按 `Node` 归属计数（`Node==""` 视作本节点）；隐式整表 region（`tableID|1<<63`）优先取 `Router.ImplicitRegions()` 已学归属，未学到时退回 `implicitRouteOwner()`（在线节点中 ID 字典序最小者）；已切分表（`HasStoredRegions`）跳过隐式条目，避免 `SPLIT` 后旧隐式归属被重复计成 N+1。`regionCountOnNode` 改写为该口径取数，本节点用「含隐式整表 region 的本地负载」、远端用「只数显式路由」的新旧混算（正是 v2.0.8 及之前判据偏差、node-a 滞留 13 region 的直接原因）不再存在。
+  - **失败语义**：迁移失败立即中止本轮；若失败发生在路由切换之后（增量广播对端不可达），按 `router.FindRegion` 的实际归属判定该条是否已落定，再计入已迁移条数，保证返回值与真实进度一致；`BALANCE` 失败时 `Result.AffectedRows` 仍携带已完成的迁移条数并同时返回错误。v2.0.8 的 `logBalanceRound` 每轮快照保留，新增 `logBalanceSummary` 汇总本轮实际迁移条数、极差、收敛状态与终止原因。
+  - **单轮上限取值（闭式推导）**：设本节点独占 N 个 region、集群 M 个存活节点，收敛要求本节点降到不高于 ⌈N/M⌉；每迁出 1 条，本节点与全局最小值之差最多只减 1，故必需迁移数的硬下界为 k(N,M) = N − ⌈N/M⌉，目标按「最闲优先、并列按节点 ID 升序」交替填谷时实际等于该下界，最坏再多 1 条。三机复现场景 N=14、M=3：k = 14 − 5 = 9（交替填谷 10）。v2.0.9 初版曾取 8（只覆盖 N ≤ 12），连 14/0/0 这个真实复现场景都迁不完、必须靠第二条 `BALANCE` 收尾，故上调为 **32**，等价于覆盖 N ≤ 48。下界一侧的约束：单次迁移 = 全量 region 扫描 + `REGION_PUSH`（数据与路由同批次落盘）+ 路由切换落盘 + 增量广播，属跨节点往返的毫秒~百毫秒级操作，32 条把单条 `BALANCE` 最坏耗时限制在数十次往返（秒级），既不超客户端超时，也不长时间独占 `balanceMu` 阻塞自动均衡 tick 与并发 `BALANCE`。
+  - **回归用例**（`pkg/sql/balance_converge_v209_test.go`，`go test ./pkg/sql -run TestV209`）：`TestV209SingleNodeMajorityConvergesInOneRun`（单条语句内多次迁移收敛）、`TestV209ImplicitRegionCountedPerNode`（隐式整表 region 按归属计、已被 `SPLIT` 的表不重复计）、`TestV209MigrateFailureReturnsMigratedCount`（中途失败返回已迁移条数）、`TestV209_14RegionsSingleNodeConverges`（14/0/0 一条 `BALANCE` 迁 9 条到 5/5/4、二次执行 0 条）、`TestV209MigrationLimitIsBounded`（N=上限+20 时迁移数恰为上限 32、偏斜单调递减）。实测摘要：14/0/0 → `migrated=9 limit=32 spread=1 converged=true nodes={node-a=5,node-b=5,node-c=4}`，二次 `migrated=0`；N=52 → `migrated=32 spread=4 reason=max-migrations`（20/16/16），二次 `migrated=2` 收敛到 18/17/17。
+- **残留边界（v2.0.9 起仍存在）**：
+  - **单轮上限 32**：一条 `BALANCE` 至多迁移 32 个 region，三节点下等价于单节点持有 N ≤ 48 的偏斜可一次摊平；更大偏斜只保证每轮把偏斜单调递减（不来回搬），彻底摊平需要多条 `BALANCE` 或等自动均衡按 tick 继续收敛。
+  - **仍按 region 数加权**：判据是 region 条数，不含行数/字节数权重，一个大 region 与一个小 region 同权，因此「分布均匀」不等于「负载均匀」；行数加权与迁移历史单调性（防抖、防来回搬）未在本版引入，属后续版本范畴。
+  - **单点失败仍整轮中止**：任一 region 迁移失败即中止本轮（返回已迁移条数 + 错误），不会跳过失败候选继续尝试；遇持续失败需先排查归属与连通性，而非依赖多轮重试。
 
 ### 3.10 `DROP REGION` 只回收路由、不删数据（v2.0.8 新增语句的边界）
 

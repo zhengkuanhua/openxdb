@@ -392,6 +392,35 @@ type regionLoad struct {
 	rows int64
 }
 
+// balanceMaxMigrationsPerRun 单条 BALANCE 在一次执行内允许的最大迁移条数（v2.0.9 Q4）。
+//
+// 取值推导（最坏情况迁移数的闭式解，v2.0.9 二轮修正）：
+//   - 设本节点独占 N 个 region、集群有 M 个存活节点。收敛判据是各节点持有数极差
+//     <= balanceConvergedSpread(=1)，由于只有本节点持有可迁条目，本节点最终必须降到
+//     与其它节点相差不超过 1，即不高于 ⌈N/M⌉；
+//   - 每迁出 1 条，本节点减 1、某个远端加 1，本节点与全局最小值之差最多只减 1，
+//     故必须迁出的条数存在硬下界：k(N, M) = N - ⌈N/M⌉；
+//   - 目标选择为「持有数最少的存活节点、并列取候选顺序（节点 ID 升序）靠前者」时，
+//     远端被依次交替填高，实际迁移数等于该下界；若完全交替填谷，最多再多 1 条。
+//     三节点复现场景：N=14、M=3 -> k = 14 - ⌈14/3⌉ = 14 - 5 = 9（交替填谷 10），
+//     即 14/0/0 的偏斜一条 BALANCE 就要迁 9~10 条才摊平；
+//   - 上限的可覆盖范围（M=3）：k(N,3) = N - ⌈N/3⌉ <= 上限，取 32 等价于 N <= 48，
+//     即单节点持有至多 48 个 region 的偏斜能在一条 BALANCE 内彻底收敛。旧值 8 只
+//     覆盖 N <= 12，连 14/0/0 这个真实复现场景都迁不完（必须靠第二条 BALANCE 收尾），
+//     与"一条 BALANCE 应当把偏斜摊平"的语义不符，这是本次上调的直接原因；
+//   - 上限的下界约束：单次迁移 = 全量 region 扫描 + REGION_PUSH（数据与路由同批次
+//     落盘）+ 路由切换落盘 + 增量广播，是跨节点往返的毫秒~百毫秒级操作。32 条把单条
+//     BALANCE 的最坏耗时限制在数十次跨节点往返（秒级），仍在客户端超时之内，也不会
+//     长时间独占 balanceMu 阻塞自动均衡 tick 与并发 BALANCE；
+//   - 超出上限不丢偏斜：每轮都把本节点降到 ⌈N'/M⌉ 附近，偏斜单调递减（不会来回搬），
+//     剩余部分由下一条 BALANCE 或自动均衡下一 tick 继续收敛。
+const balanceMaxMigrationsPerRun = 32
+
+// balanceConvergedSpread 收敛阈值：各节点 region 数极差不超过该值即视为已摊平。
+// 取 1 沿用 BALANCE 既有语义（「本节点 region 数 > 最闲节点 + 1 才迁移」），即容忍
+// 节点间 1 个 region 的粒度差；更细的按行数加权与迁移历史单调性属于后续版本范畴。
+const balanceConvergedSpread = 1
+
 // execBalance BALANCE：手动触发一次负载均衡。
 func (e *Executor) execBalance(sess *Session, s *BalanceStmt) (*Result, error) {
 	// 集群启用判据：管理器存在且注册了至少一个远端节点。
@@ -401,7 +430,9 @@ func (e *Executor) execBalance(sess *Session, s *BalanceStmt) (*Result, error) {
 	}
 	n, err := e.balanceOnce()
 	if err != nil {
-		return nil, err
+		// 中途失败：Result 仍携带已完成的迁移条数（AffectedRows），同时返回错误让
+		// 客户端明确本轮未收敛；收敛打点已在 balanceOnce 内汇总（reason=migrate-error）。
+		return &Result{AffectedRows: n}, err
 	}
 	return &Result{AffectedRows: n}, nil
 }
@@ -452,8 +483,18 @@ func (e *Executor) balanceLoop(interval time.Duration) {
 	}
 }
 
-// balanceOnce 执行一轮均衡：本节点本地 region 数显著多于最闲存活节点时，
-// 迁移行数最大的本地 region 到该目标节点。返回迁移 region 数（0 表示无需迁移）。
+// balanceOnce 执行一轮均衡：把本节点多出的 region 逐个迁往最闲存活节点，直到
+// 各节点 region 数极差 <= balanceConvergedSpread 或本轮迁移数达到
+// balanceMaxMigrationsPerRun 上限。返回本轮实际完成的迁移条数（0 表示无需迁移）。
+//
+// v2.0.9 Q4 修复点：
+//  1. 一轮内持续迁移：v2.0.8 及之前每次调用只迁 1 个 region 就返回，客户端必须反复
+//     执行 BALANCE 才可能摊平，自动均衡也只在每个 tick 迁 1 个，极差下降极慢；
+//  2. 判据与目标选择统一改用 balanceRegionCounts 的真实持有数口径（含隐式整表
+//     region）：旧实现本节点用 localRegionLoad 条数（含隐式 region）、远端用
+//     regionCountOnNode（只数显式路由），两侧口径不一致，判据恒偏向「本节点更多」，
+//     出现「每轮都在迁移但极差不见收敛／迁移条数与实际变化不一致」；
+//  3. 迁移中途失败立即中止，返回已完成的迁移条数（不吞错、不继续尝试其余 region）。
 func (e *Executor) balanceOnce() (int, error) {
 	e.balanceMu.Lock()
 	defer e.balanceMu.Unlock()
@@ -480,33 +521,49 @@ func (e *Executor) balanceOnce() (int, error) {
 	if len(local) == 0 {
 		return 0, nil
 	}
-	// 目标 = 持有 region 数最少的存活节点（第一簇不做跨节点行数查询，用 region 数近似负载）
-	target := candidates[0]
-	minRegions := int(^uint(0) >> 1)
-	counts := map[string]int{e.selfID: len(local)}
-	for _, c := range candidates {
-		cnt := e.regionCountOnNode(c)
-		counts[c] = cnt
-		if cnt < minRegions {
-			minRegions = cnt
-			target = c
-		}
-	}
-	// v2.0.8 Q4：每轮打点收敛度（各节点 region 数 + 极差 + 是否已收敛 + 本轮动作），
-	// 供"BALANCE 多轮后仍不收敛"定位到底是判据未触发还是迁移失败，不改均衡行为。
-	if len(local) <= minRegions+1 {
-		e.logBalanceRound(counts, len(local), minRegions, "skip-no-spread")
-		return 0, nil
-	}
-	// 迁移行数最大的本地 region
+	// 迁移顺序固定为行数降序：先削最重的 region；删除已迁条目后剩余顺序不变。
 	sort.Slice(local, func(i, j int) bool { return local[i].rows > local[j].rows })
-	if err := e.migrateRegion(local[0].rg, target); err != nil {
-		e.logBalanceRound(counts, len(local), minRegions, "migrate-error:"+err.Error())
-		return 0, err
+	counts := e.balanceRegionCounts()
+	migrated := 0
+	for migrated < balanceMaxMigrationsPerRun {
+		// 目标 = 持有 region 数最少的存活节点（第一簇不做跨节点行数查询，用真实
+		// region 持有数近似负载；并列时取候选顺序第一个，结果稳定可复现）。
+		target, minRegions := pickBalanceTarget(candidates, counts)
+		localCount := counts[e.selfID]
+		if localCount <= minRegions+balanceConvergedSpread {
+			e.logBalanceRound(counts, localCount, minRegions, "skip-no-spread")
+			e.logBalanceSummary(migrated, counts, "converged")
+			return migrated, nil
+		}
+		if len(local) == 0 {
+			// 计数口径判定仍有偏斜，但本地已无可迁条目（归属/元数据刚被外部改写）：
+			// 不空转，打点退出，剩余偏斜交下一条 BALANCE 或下一 tick 处理。
+			e.logBalanceRound(counts, localCount, minRegions, "skip-no-local-candidate")
+			e.logBalanceSummary(migrated, counts, "no-local-candidate")
+			return migrated, nil
+		}
+		cur := local[0]
+		e.logBalanceRound(counts, localCount, minRegions,
+			fmt.Sprintf("migrate-region:%d->%s", cur.rg.RegionID, target))
+		if err := e.migrateRegion(cur.rg, target); err != nil {
+			// 迁移可能在路由切换之后才失败（如增量广播时对端不可达）：以路由实际归属
+			// 判断该条是否已落定，保证返回的已迁移条数与真实进度一致。
+			if now, ok := e.router.FindRegion(cur.rg.RegionID); ok && now.Node == target {
+				migrated++
+				counts[e.selfID]--
+				counts[target]++
+			}
+			e.logBalanceSummary(migrated, counts, "migrate-error")
+			return migrated, err
+		}
+		migrated++
+		counts[e.selfID]--
+		counts[target]++
+		local = local[1:]
 	}
-	e.logBalanceRound(counts, len(local), minRegions,
-		fmt.Sprintf("migrate-region:%d->%s", local[0].rg.RegionID, target))
-	return 1, nil
+	// 达到单轮迁移上限：剩余偏斜由下一条 BALANCE / 下一 tick 继续（单调递减，不回摆）。
+	e.logBalanceSummary(migrated, counts, "max-migrations")
+	return migrated, nil
 }
 
 // logBalanceRound v2.0.8 Q4 打点：输出一轮均衡的收敛度快照。
@@ -532,15 +589,127 @@ func (e *Executor) logBalanceRound(counts map[string]int, localCount, minRegions
 		localCount, b.String(), localCount-minRegions, localCount-minRegions <= 1, action)
 }
 
-// regionCountOnNode 路由视图中归属 nodeID 的 region 数。
-func (e *Executor) regionCountOnNode(nodeID string) int {
-	cnt := 0
+// balanceRegionCounts 统计各节点真实持有的 region 数（v2.0.9 Q4 口径统一）。
+//
+// 显式 region 与隐式整表 region 都要计，且本节点与远端节点用同一口径：
+//  1. 路由视图中的 region 按 Node 归属计数，Node=="" 视作本节点（与 regionLocal
+//     同语义：未指派的 region 由本节点持有）；
+//  2. 隐式整表 region（tableID|1<<63）不落盘、不在 AllRegions 内，单独补计：
+//     归属优先取路由视图已学到的映射（Router.implicit，键为 tableID），未学到时
+//     退回 implicitRouteOwner() 的确定性派生规则（节点 ID 字典序最小者），
+//     与 implicitRoutesForViewSync 的声明口径一致；
+//  3. 已切分表（本地有显式分片条目）不再有隐式整表 region，跳过，避免重复计数。
+func (e *Executor) balanceRegionCounts() map[string]int {
+	counts := map[string]int{}
+	seenExplicit := map[storage.ID]bool{}
 	for _, rg := range e.router.AllRegions() {
-		if rg.Node == nodeID {
-			cnt++
+		owner := rg.Node
+		if owner == "" {
+			owner = e.selfID
+		}
+		counts[owner]++
+		seenExplicit[rg.RegionID] = true
+	}
+	countImplicit := func(tid storage.ID, owner string) {
+		if owner == "" {
+			owner = e.selfID
+		}
+		counts[owner]++
+	}
+	learned := e.router.ImplicitRegions()
+	for tid, owner := range learned {
+		if seenExplicit[sharding.ImplicitRegionID(tid)] {
+			continue
+		}
+		// 已切分表：隐式整表 region 被显式分片条目取代，学到的旧归属不再计入，
+		// 否则一条 SPLIT 后会被重复计成 N+1 个 region。
+		if e.router.HasStoredRegions(tid) {
+			continue
+		}
+		countImplicit(tid, owner)
+	}
+	if e.tm == nil {
+		return counts
+	}
+	tx, err := e.tm.Begin()
+	if err != nil {
+		return counts
+	}
+	defer tx.Rollback()
+	tabs, err := loadTables(tx.Get)
+	if err != nil {
+		return counts
+	}
+	defaultOwner := e.implicitRouteOwner()
+	for _, tb := range tabs {
+		if tb == nil || tb.ID == 0 {
+			continue
+		}
+		tid := storage.ID(tb.ID)
+		// 已切分表：隐式整表 region 已不存在，以显式分片条目为准。
+		if e.router.HasStoredRegions(tid) {
+			continue
+		}
+		if _, ok := learned[tid]; ok {
+			continue // 已在上面按学到的归属计过
+		}
+		countImplicit(tid, defaultOwner)
+	}
+	return counts
+}
+
+// pickBalanceTarget 从存活远端候选中选出 region 数最少的节点，返回该节点与本轮最闲
+// 节点的 region 数。并列时取候选顺序靠前者（candidates 来自 ListNodes 的 ID 排序），
+// 保证同一拓扑下目标选择稳定可复现。
+func pickBalanceTarget(candidates []string, counts map[string]int) (string, int) {
+	target := candidates[0]
+	minRegions := counts[target]
+	for _, c := range candidates[1:] {
+		if cnt := counts[c]; cnt < minRegions {
+			minRegions = cnt
+			target = c
 		}
 	}
-	return cnt
+	return target, minRegions
+}
+
+// logBalanceSummary v2.0.9 Q4：汇总一条 BALANCE 的实际迁移条数与终止原因。
+// migrated=本轮实际完成的迁移数；spread=全部计数节点 region 数的极差；
+// reason 取值：converged（已收敛）/ max-migrations（达单轮上限）/
+// migrate-error（迁移失败中止）/ no-local-candidate（无可迁条目）。
+// 与 logBalanceRound 一样只读内存计数，不改变均衡判定与迁移行为。
+func (e *Executor) logBalanceSummary(migrated int, counts map[string]int, reason string) {
+	names := make([]string, 0, len(counts))
+	for n := range counts {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	spread := 0
+	if len(names) > 0 {
+		minCount, maxCount := counts[names[0]], counts[names[0]]
+		for i, n := range names {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			fmt.Fprintf(&b, "%s=%d", n, counts[n])
+			if counts[n] < minCount {
+				minCount = counts[n]
+			}
+			if counts[n] > maxCount {
+				maxCount = counts[n]
+			}
+		}
+		spread = maxCount - minCount
+	}
+	log.Printf("sql: balance summary: migrated=%d limit=%d spread=%d converged=%v reason=%s nodes={%s}",
+		migrated, balanceMaxMigrationsPerRun, spread, spread <= balanceConvergedSpread, reason, b.String())
+}
+
+// regionCountOnNode 归属 nodeID 的真实持有 region 数（与 balanceOnce 判据同口径，
+// 含隐式整表 region）；保留该入口供打点与观测复用。
+func (e *Executor) regionCountOnNode(nodeID string) int {
+	return e.balanceRegionCounts()[nodeID]
 }
 
 // localRegionLoad 收集本节点持有的全部本地 region 负载（显式路由 + 各表隐式单 region）。

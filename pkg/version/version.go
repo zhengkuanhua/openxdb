@@ -7,11 +7,13 @@
 package version
 
 // Version OpenXDB 当前发布版本号（发版唯一改动点）。
-const Version = "v2.0.8"
+// v2.0.8 已发布（含 Q1~Q4 修复线），当前开发线为 v2.0.9（Q4 BALANCE 收敛修复），
+// 故此处随本版一并推进；握手串与 select version() 随常量派生，无需另改。
+const Version = "v2.0.9"
 
 // MySQLServerPrefix MySQL 兼容版本串前缀（mysql CLI 依赖该前缀识别服务端版本）。
 const MySQLServerPrefix = "8.0.36-OpenXDB "
 
-// ServerVersion 服务器版本串：8.0.36-OpenXDB v2.0.5。
+// ServerVersion 服务器版本串：8.0.36-OpenXDB v2.0.9。
 // 握手包与 select version() 共用该串，保证两处口径恒定一致。
 const ServerVersion = MySQLServerPrefix + Version

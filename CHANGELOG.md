@@ -6,6 +6,18 @@ OpenXDB 版本变更记录。
 
 ## Unreleased
 
+- **v2.0.9 (2026-11-27，本地完成，未打 tag、未推送)**：版本口径：承接 v2.0.8，只修复 v2.0.8 遗留的 Q4 `BALANCE` 收敛缺陷（`KNOWN_LIMITATIONS.md` §3.9：三机连续 4 轮 `BALANCE` 后 node-a 仍滞留 13 个 region 未摊平），并同步 `pkg/version/version.go` 版本常量；不引入新特性，不改既有语句语法与既有语句语义。
+  - **Fixed（Q4，P0，单轮只迁 1 条导致多轮 `BALANCE` 不收敛）**：`balanceOnce` 原先每次只挑 1 个本地 region 迁出即返回，而 `BALANCE` 语句只调用一次，偏斜量大时单条语句永远不足以摊平；同时本节点负载（含隐式整表 region）与远端计数（只数显式路由）口径不一致，判据失真使迁移提前停止。
+    - 单轮内持续迁移：`balanceOnce` 改为执行内 `for migrated < balanceMaxMigrationsPerRun` 循环，每轮按统一口径取最闲存活节点比较，满足「本节点 region 数 ≤ 最闲节点 region 数 + `balanceConvergedSpread`(=1)」即收敛退出；退出原因分 `converged` / `max-migrations` / `migrate-error` / `nothing-to-do` 四类回显。
+    - 计数口径统一：新增 `balanceRegionCounts`——显式 region 按 `Node` 归属计数（`Node==""` 视作本节点）；隐式整表 region（`tableID|1<<63`）优先取 `Router.ImplicitRegions()` 已学归属，未学到时退回 `implicitRouteOwner()`（在线节点中 ID 字典序最小者）派生；已切分表（`HasStoredRegions`）跳过隐式条目，避免 `SPLIT` 后被重复计成 N+1。`regionCountOnNode` 改写为该口径取数，本节点与远端统一。
+    - 单轮上限取值（闭式推导）：本节点独占 N 个 region、集群 M 个存活节点，收敛要求本节点降到 ⌈N/M⌉，而每迁出 1 条两者的差值最多只减 1，故必需迁移数硬下界为 k(N,M) = N − ⌈N/M⌉，最坏再多 1 条。三机 14/0/0 需迁 9~10 条，初版取值 8 会留残差；`balanceMaxMigrationsPerRun` 上调为 **32**（等价于 N≤48 的偏斜可一次摊平），单次迁移为全量扫描 + `REGION_PUSH` + 路由切换落盘 + 增量广播，32 条把单条 `BALANCE` 最坏耗时限制在秒级。
+    - 失败语义：迁移失败立即中止本轮；若失败发生在路由切换之后（增量广播对端不可达），按 `router.FindRegion` 实际归属判定该条是否已落定再计入已迁移数；`BALANCE` 失败时 `Result.AffectedRows` 仍携带已迁移条数并同时返回错误。
+    - 收敛度打点：保留 v2.0.8 的 `logBalanceRound` 每轮快照，新增 `logBalanceSummary` 汇总本轮实际迁移条数、region 数极差、收敛状态与终止原因。
+  - **Changed（版本常量）**：`pkg/version/version.go` 的 `Version` 由 `v2.0.8` 同步为 `v2.0.9`（CLI 横幅、握手串 `ServerVersion`、`select version()` 均派生自此常量）；同文件换行符规整为 LF，与仓库其余文件一致。
+  - **回归用例**（`pkg/sql/balance_converge_v209_test.go`（新增），随 `go test ./pkg/sql -run TestV209` 运行）：`TestV209SingleNodeMajorityConvergesInOneRun`、`TestV209ImplicitRegionCountedPerNode`、`TestV209MigrateFailureReturnsMigratedCount`、`TestV209_14RegionsSingleNodeConverges`（14/0/0 一次 `BALANCE` 迁 9 条到 5/5/4、二次执行 0 条）、`TestV209MigrationLimitIsBounded`（N=上限+20 时迁移数恰为上限 32、偏斜单调递减）。实测：14/0/0 → `migrated=9 limit=32 spread=1 converged=true nodes={node-a=5,node-b=5,node-c=4}`，二次 `migrated=0`；N=52 → `migrated=32 spread=4 reason=max-migrations`（20/16/16），二次 `migrated=2` 收敛到 18/17/17。
+  - **测试结论**：`go build ./...`、`go vet ./pkg/sql` 全绿；全仓 `go test ./... -count=1` 连跑 3 轮，三轮均 `exit=0`、零失败用例，耗时依次 98.3s / 97.7s / 91.9s（每轮 22 个包全 `ok`，输出中 `FAIL` / `build failed` / `panic:` 零命中），`pkg/sql` 全量通过（第 3 轮 71.076s），`pkg/version` 无测试文件。v2.0.8 期间曾偶发失败的 `pkg/cluster` `TestNew5ConcurrentGetNoDup` 与 `pkg/db` `TestD44RestartPrunesSupersededRegions`，本轮三轮均未复现，无需单包重跑判定。
+  - **残留边界**：单轮上限 32（N≤48 的偏斜可一次摊平，更大规模只保证逐轮单调递减）；判据仍为 region 数加权，未引入行数/字节数权重与迁移历史单调性，热点少而大 region 场景可能分布均匀但负载不均；单点迁移失败仍整轮中止。
+  - 改动文件：`pkg/sql/balance.go`、`pkg/version/version.go`；用例 `pkg/sql/balance_converge_v209_test.go`（新增）；文档 `KNOWN_LIMITATIONS.md`（§3.9 改写为已修复并写明残留边界）、`CHANGELOG.md`。
 - **v2.0.8 (2026-11-26，已打 tag v2.0.8)**：版本口径：承接 v2.0.7，只收敛 v2.0.7 三节点（201/202/203）真机分片复测暴露的 4 项遗留缺陷，不引入新特性；除 Q2 纠正错误返回值语义外，不改既有语句行为。
   - **Fixed（Q1，P0，多行 INSERT/UPSERT 误报 `duplicate primary key`）**：写入路径的"主键是否已存在"判定此前复用读路径 `getKVCluster`，在 `allow_partial_read=on` 且归属节点不可达时会回退本地副本，本地残留/缺失副本足以让判定失真；同时 `upsertConflicts` 把"任一唯一索引冲突"一律当主键冲突，唯一索引扫描溢出到相邻索引值时会把一个并不存在的主键判成 `duplicate primary key`（真机现象：202 入口多行 INSERT 报主键重复，实际数据已全部写入）。
     - 新增 `getKVClusterStrict` 与 `resolveOwnerForRead(rid, allowPartial)`：写路径唯一性判定恒以 strict 模式走决策链（保留自动重指派，不做部分读回退），读路径 `resolveReadOwner` 仍按 `allow_partial_read` 的既有语义。
