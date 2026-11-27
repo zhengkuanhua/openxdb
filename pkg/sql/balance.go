@@ -713,8 +713,22 @@ func (e *Executor) regionCountOnNode(nodeID string) int {
 }
 
 // localRegionLoad 收集本节点持有的全部本地 region 负载（显式路由 + 各表隐式单 region）。
+//
+// v2.0.9 P1（B1）修复点：两段候选按 regionID 统一去重。
+// 隐式整表 region（tableID|1<<63）被 UpsertRegion 登记进路由视图后，RegionsOf 仍按
+// len==1 && !Explicit 返回同 ID 的隐式条目，于是显式段（遍历 AllRegions）与隐式段
+// （遍历表目录）各自 append 一次，产生两条同 regionID 的候选。首条迁出后，路由已切到
+// 目标节点，重复副本仍留在候选切片里，migrateRegion 的 regionLocal 复核失败并返回
+// "region not local"，使整轮 BALANCE 以错误中止（已迁移条数虽正确返回，但客户端拿到
+// 报错，且本轮剩余偏斜不再处理）。去重后同 region 只参与一次迁移决策。
+//
+// 去重顺序：显式段在前，故同 ID 优先保留路由视图里的条目（带 Node/StartKey/State），
+// 隐式段合成的条目（StartKey/EndKey 为 nil、Node 恒为空）被丢弃。
 func (e *Executor) localRegionLoad() ([]regionLoad, error) {
 	var out []regionLoad
+	// candidates 记录两段产出的候选总条数（去重前），用于打点区分「候选数」与「唯一数」。
+	candidates := 0
+	seen := make(map[storage.ID]bool)
 	for _, rg := range e.router.AllRegions() {
 		if !e.regionLocal(rg.RegionID) {
 			continue
@@ -723,10 +737,15 @@ func (e *Executor) localRegionLoad() ([]regionLoad, error) {
 		if meta == nil {
 			continue
 		}
+		candidates++
+		if seen[rg.RegionID] {
+			continue
+		}
 		n, err := e.countRegionRows(meta, rg)
 		if err != nil {
 			return nil, err
 		}
+		seen[rg.RegionID] = true
 		out = append(out, regionLoad{rg: rg, rows: n})
 	}
 	// 未显式分片表的隐式单 region（不落盘，AllRegions 不含）
@@ -753,12 +772,25 @@ func (e *Executor) localRegionLoad() ([]regionLoad, error) {
 			if !ok {
 				continue
 			}
+			candidates++
+			// 该 rid 已由显式段收录（隐式 ID 已被 UpsertRegion 登记进路由视图）：
+			// 丢弃此处合成的重复候选，避免同一 region 被迁两次导致整轮中止。
+			if seen[rid] {
+				continue
+			}
 			n, err := e.countRegionRows(tb, rg)
 			if err != nil {
 				return nil, err
 			}
+			seen[rid] = true
 			out = append(out, regionLoad{rg: rg, rows: n})
 		}
+	}
+	if candidates > 0 {
+		// 打点：候选总数 vs 去重后唯一数。二者不一致即为 B1 的重复候选现场，
+		// deduped>0 说明显式段与隐式段命中了同一 regionID。
+		log.Printf("sql: balance local candidates: candidates=%d unique=%d deduped=%d",
+			candidates, len(out), candidates-len(out))
 	}
 	return out, nil
 }

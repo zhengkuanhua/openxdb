@@ -472,3 +472,100 @@ func TestV209MigrationLimitIsBounded(t *testing.T) {
 			v209Spread(counts, "node-a", "node-b", "node-c"), sp)
 	}
 }
+
+// TestV209LocalRegionLoadDedupesAcrossSegments（v2.0.9 P1 / B1）同一 region 同时出现
+// 在显式段与隐式段时必须按 regionID 去重；首条迁出后不得再因重复副本触发
+// "region not local"，让整轮 BALANCE 以错误中止。
+//
+// 现场成因：隐式整表 region（tableID|1<<63）被 UpsertRegion 登记进路由视图后，
+// RegionsOf 仍返回 len==1 && Explicit==false 的同 ID 条目，显式段（遍历 AllRegions）
+// 与隐式段（遍历表目录）各入选一次；首条迁出、路由切到目标节点后，重复副本仍在候选
+// 切片里，migrateRegion 的 regionLocal 复核失败，整轮报错中止。
+func TestV209LocalRegionLoadDedupesAcrossSegments(t *testing.T) {
+	addrB := v209StartNode(t, "node-b")
+	eng, ex := v209Env(t, "node-a", v209Peer{id: "node-b", addr: addrB})
+
+	// logs 不切分 -> 1 个隐式整表 region（行数最大，迁移序第一位）；
+	// users 切 2 个边界 -> 3 个显式 region，合计 4 个 region。
+	v209CreateSplit(t, eng, "logs", 20, nil)
+	v209CreateSplit(t, eng, "users", 9, []int64{3, 6})
+	if got := v209RegionCount(t, eng, "users"); got != 3 {
+		t.Fatalf("precondition: users regions = %d, want 3", got)
+	}
+
+	// 复现 B1 的重复现场：隐式整表 region 已登记进路由视图，但 Node 仍为空
+	// （相当于上一次迁移在切换归属前中断留下的条目）。
+	rs, err := eng.ListRegions("logs")
+	if err != nil || len(rs) == 0 {
+		t.Fatalf("ListRegions(logs): rs=%v err=%v", rs, err)
+	}
+	tid := rs[0].TableID
+	rid := sharding.ImplicitRegionID(tid)
+	if err := ex.router.UpsertRegion(sharding.RegionInfo{
+		RegionID: rid,
+		TableID:  tid,
+		State:    sharding.StateActive,
+	}); err != nil {
+		t.Fatalf("UpsertRegion(implicit %d): %v", rid, err)
+	}
+
+	local, err := ex.localRegionLoad()
+	if err != nil {
+		t.Fatalf("localRegionLoad: %v", err)
+	}
+	// 未去重时这里会是 5 条（logs 出现两次）；修复后必须为 4 条唯一候选。
+	if len(local) != 4 {
+		t.Fatalf("localRegionLoad = %d entries, want 4 (按 regionID 去重)", len(local))
+	}
+	ids := make(map[uint64]int, len(local))
+	for _, l := range local {
+		ids[uint64(l.rg.RegionID)]++
+	}
+	if len(ids) != len(local) {
+		t.Fatalf("localRegionLoad 含重复 regionID: %v", ids)
+	}
+	if ids[uint64(rid)] != 1 {
+		t.Fatalf("隐式 region %d 出现 %d 次, want 1", rid, ids[uint64(rid)])
+	}
+
+	// 单轮收敛 4/0 -> 2/2，共迁 2 条；关键是不得返回 "region not local"。
+	wantMigrated := v209BalanceNeed(4, 2)
+	n, err := ex.balanceOnce()
+	if err != nil {
+		t.Fatalf("balanceOnce: %v (重复候选应已被去重，不得整轮中止)", err)
+	}
+	if n != wantMigrated {
+		t.Fatalf("balanceOnce migrated = %d, want %d", n, wantMigrated)
+	}
+	counts := ex.balanceRegionCounts()
+	if sp := v209Spread(counts, "node-a", "node-b"); sp > balanceConvergedSpread {
+		t.Fatalf("spread after balanceOnce = %d, want <= %d (counts=%v)", sp, balanceConvergedSpread, counts)
+	}
+	// 隐式 region 已迁出本节点：不再出现在本地候选里。
+	again, err := ex.localRegionLoad()
+	if err != nil {
+		t.Fatalf("localRegionLoad after migrate: %v", err)
+	}
+	for _, l := range again {
+		if l.rg.RegionID == rid {
+			t.Fatalf("隐式 region %d 迁出后仍留在本地候选", rid)
+		}
+	}
+	// 语句级复验：真机复验里的 ERROR 1045: region not local 不得再出现；
+	// 已收敛时 BALANCE 返回 0 行。
+	res, err := eng.Execute("BALANCE")
+	if err != nil {
+		t.Fatalf("BALANCE: %v (不得再返回 region not local)", err)
+	}
+	if res == nil || res.AffectedRows != 0 {
+		t.Fatalf("BALANCE migrated = %v, want 0 (已收敛)", res)
+	}
+	// 迁移只切路由、不删条目、不丢数据。
+	if got := v209RegionCount(t, eng, "users"); got != 3 {
+		t.Fatalf("explicit region count = %d, want 3 (路由切换不删条目)", got)
+	}
+	r := v209MustExec(t, eng, "SELECT COUNT(*) FROM logs")
+	if len(r.Rows) != 1 || r.Rows[0][0].I != 20 {
+		t.Fatalf("logs row count after migrate = %v, want 20", r.Rows)
+	}
+}
