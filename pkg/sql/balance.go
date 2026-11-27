@@ -870,10 +870,48 @@ func (e *Executor) regionMigrationCount(rid storage.ID) int {
 	return len(e.recentMigrationsLocked(rid, time.Now()))
 }
 
-// logBalanceRound v2.0.8 Q4 打点：输出一轮均衡的收敛度快照。
+// balanceCountSpan 计算一组节点 region 计数的统一统计口径（v2.0.9 P3 / 缺陷 B3）。
 //
-// 字段含义：self=本节点 region 数；各节点 region 数；spread=本轮参与比较的极差
-// （本节点 - 最闲节点）；converged=极差是否已在不迁移阈值内（<=1）；action=本轮动作。
+// 返回值全部只由 counts 推导，与调用点无关：
+//   - min/max：全部计数节点 region 数的最小值与最大值；
+//   - spread ：全局极差 max-min（**唯一**是 spread 的语义，两处打点一致）；
+//   - localGap：本节点 region 数与最小值的差（本节点相对最闲节点超出的量）。
+//
+// v2.0.8 及之前两处打点都叫 spread 但语义不同（round 是本节点-最闲节点，summary
+// 是全节点极差），运维按同一字段名读数会误判收敛，故抽出本函数统一口径。
+func balanceCountSpan(counts map[string]int, selfID string) (minCount, maxCount, spread, localGap int) {
+	if len(counts) == 0 {
+		return 0, 0, 0, 0
+	}
+	first := true
+	for _, c := range counts {
+		if first {
+			minCount, maxCount, first = c, c, false
+			continue
+		}
+		if c < minCount {
+			minCount = c
+		}
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+	spread = maxCount - minCount
+	localGap = counts[selfID] - minCount
+	return minCount, maxCount, spread, localGap
+}
+
+// logBalanceRound v2.0.8 Q4 打点（v2.0.9 P3 统一字段口径）：输出一轮均衡的收敛度快照。
+//
+// 字段含义（与 logBalanceSummary 完全同义）：
+//   - local：本节点 region 数；
+//   - min/max：全部计数节点 region 数的最小值 / 最大值；
+//   - spread：**全局极差** max-min（不再表示"本节点-最闲节点"）；
+//   - local_gap：本节点与候选最闲节点之差 local-minRegions，即本轮是否继续迁移的判据；
+//   - converged：全局极差是否已收敛（spread <= balanceConvergedSpread）；
+//   - local_converged：本节点判据是否已满足（local_gap <= balanceConvergedSpread）；
+//   - action：本轮动作；nodes：各节点 region 数。
+//
 // 打点只读路由视图，不改变均衡判定与迁移行为。
 func (e *Executor) logBalanceRound(counts map[string]int, localCount, minRegions int, action string) {
 	// 节点按名字排序，保证同一拓扑下日志可比对。
@@ -889,8 +927,11 @@ func (e *Executor) logBalanceRound(counts map[string]int, localCount, minRegions
 		}
 		fmt.Fprintf(&b, "%s=%d", n, counts[n])
 	}
-	log.Printf("sql: balance round: local=%d nodes={%s} spread=%d converged=%v action=%s",
-		localCount, b.String(), localCount-minRegions, localCount-minRegions <= 1, action)
+	minCount, maxCount, spread, _ := balanceCountSpan(counts, e.selfID)
+	localGap := localCount - minRegions
+	log.Printf("sql: balance round: local=%d min=%d max=%d local_gap=%d spread=%d converged=%v local_converged=%v action=%s nodes={%s}",
+		localCount, minCount, maxCount, localGap, spread,
+		spread <= balanceConvergedSpread, localGap <= balanceConvergedSpread, action, b.String())
 }
 
 // balanceRegionCounts 统计各节点真实持有的 region 数（v2.0.9 Q4 口径统一）。
@@ -978,7 +1019,10 @@ func pickBalanceTarget(candidates []string, counts map[string]int) (string, int)
 }
 
 // logBalanceSummary v2.0.9 Q4：汇总一条 BALANCE 的实际迁移条数与终止原因。
-// migrated=本轮实际完成的迁移数；spread=全部计数节点 region 数的极差；
+//
+// v2.0.9 P3 起字段口径与 logBalanceRound 完全一致：migrated=本轮实际完成的迁移数；
+// min/max=全部计数节点 region 数的最小 / 最大值；spread=**全局极差** max-min；
+// local_gap=本节点与最小值之差；converged=spread <= balanceConvergedSpread。
 // reason 取值：converged（已收敛）/ max-migrations（达单轮上限）/
 // migrate-error（迁移失败中止）/ no-local-candidate（无可迁条目）。
 // 与 logBalanceRound 一样只读内存计数，不改变均衡判定与迁移行为。
@@ -989,25 +1033,16 @@ func (e *Executor) logBalanceSummary(migrated int, counts map[string]int, reason
 	}
 	sort.Strings(names)
 	var b strings.Builder
-	spread := 0
-	if len(names) > 0 {
-		minCount, maxCount := counts[names[0]], counts[names[0]]
-		for i, n := range names {
-			if i > 0 {
-				b.WriteString(",")
-			}
-			fmt.Fprintf(&b, "%s=%d", n, counts[n])
-			if counts[n] < minCount {
-				minCount = counts[n]
-			}
-			if counts[n] > maxCount {
-				maxCount = counts[n]
-			}
+	for i, n := range names {
+		if i > 0 {
+			b.WriteString(",")
 		}
-		spread = maxCount - minCount
+		fmt.Fprintf(&b, "%s=%d", n, counts[n])
 	}
-	log.Printf("sql: balance summary: migrated=%d limit=%d spread=%d converged=%v reason=%s nodes={%s}",
-		migrated, balanceMaxMigrationsPerRun, spread, spread <= balanceConvergedSpread, reason, b.String())
+	minCount, maxCount, spread, localGap := balanceCountSpan(counts, e.selfID)
+	log.Printf("sql: balance summary: migrated=%d limit=%d min=%d max=%d local_gap=%d spread=%d converged=%v reason=%s nodes={%s}",
+		migrated, balanceMaxMigrationsPerRun, minCount, maxCount, localGap, spread,
+		spread <= balanceConvergedSpread, reason, b.String())
 }
 
 // regionCountOnNode 归属 nodeID 的真实持有 region 数（与 balanceOnce 判据同口径，
